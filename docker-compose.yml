@@ -1,0 +1,74 @@
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: doc2md-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.api
+    container_name: doc2md-api
+    ports:
+      - "8000:8000"
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+      - CELERY_TASK_DEFAULT_QUEUE=doc2md
+      - CELERY_WORKER_NAME=doc2md-worker
+      - ENVIRONMENT=development
+      - LOG_LEVEL=INFO
+      - MAX_FILE_SIZE_MB=50
+      - CONVERSION_TIMEOUT_SECONDS=300
+      - TEMP_STORAGE_PATH=/tmp/doc2md
+      - RESULT_TTL_SECONDS=3600
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./tmp:/tmp/doc2md
+      - ./api:/app/api
+      - ./shared:/app/shared
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.worker
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+      - CELERY_TASK_DEFAULT_QUEUE=doc2md
+      - CELERY_WORKER_NAME=doc2md-worker
+      - ENVIRONMENT=development
+      - LOG_LEVEL=INFO
+      - MAX_FILE_SIZE_MB=50
+      - CONVERSION_TIMEOUT_SECONDS=300
+      - TEMP_STORAGE_PATH=/tmp/doc2md
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./tmp:/tmp/doc2md
+      - ./workers:/app/workers
+      - ./shared:/app/shared
+    deploy:
+      replicas: 2
+    restart: unless-stopped
+
+volumes:
+  redis_data:
