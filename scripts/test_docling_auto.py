@@ -11,8 +11,8 @@ from pathlib import Path
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
-from shared.pdf_splitter import PDFSplitter
-from workers.converter import DoclingConverter
+from backend.shared.pdf_splitter import PDFSplitter
+from backend.workers.converter import DoclingConverter
 
 def main():
     print("=" * 80)

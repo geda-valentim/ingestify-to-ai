@@ -33,7 +33,7 @@ def test_docling_conversion():
 
     # Verificar se PDFSplitter funciona
     try:
-        from shared.pdf_splitter import PDFSplitter
+        from backend.shared.pdf_splitter import PDFSplitter
         print("✓ PDFSplitter importado com sucesso")
     except ImportError as e:
         print(f"❌ PDFSplitter não disponível: {e}")

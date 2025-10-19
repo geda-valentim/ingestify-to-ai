@@ -1,6 +1,6 @@
-# Doc2MD - API de Conversão de Documentos para Markdown
+# Doc2MD - Plataforma de Conversão de Documentos para Markdown
 
-API assíncrona para conversão de documentos e URLs para formato Markdown usando Docling.
+Plataforma full-stack para conversão de documentos e URLs para formato Markdown usando Docling. Inclui interface web Next.js e API REST assíncrona.
 
 ## 📋 Visão Geral
 
@@ -26,35 +26,50 @@ Com Doc2MD, você transforma documentos complexos em Markdown estruturado, otimi
 
 ## 🏗️ Arquitetura
 
-### Componentes
+### Componentes (Monorepo)
 
 ```
-┌─────────────┐
-│   Cliente   │
-└──────┬──────┘
-       │
-       ▼
-┌─────────────────┐
-│   API FastAPI   │ ◄─── Recebe requisições e retorna job_id
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│  Redis (Broker) │ ◄─── Fila de tarefas
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│ Workers Celery  │ ◄─── Processam conversões com Docling
-│  (escaláveis)   │
-└─────────────────┘
+┌─────────────────────┐
+│  Frontend Next.js   │ ◄─── Interface web (React)
+│   (localhost:3000)  │
+└─────────┬───────────┘
+          │
+          ▼
+┌─────────────────────┐
+│   API FastAPI       │ ◄─── REST API (localhost:8000)
+│   (backend/api/)    │      Recebe requisições e retorna job_id
+└─────────┬───────────┘
+          │
+          ▼
+┌─────────────────────┐
+│  Redis + ES         │ ◄─── Broker, cache e busca
+│                     │
+└─────────┬───────────┘
+          │
+          ▼
+┌─────────────────────┐
+│  Workers Celery     │ ◄─── Processam conversões com Docling
+│  (backend/workers/) │      (escaláveis)
+└─────────────────────┘
 ```
 
 ### Stack Tecnológica
 
+**Frontend:**
+- **Next.js 15** - Framework React com App Router
+- **React 19** - UI library
+- **TypeScript** - Type safety
+- **Tailwind CSS** - Styling
+- **TanStack Query** - Data fetching
+- **Zustand** - State management
+- **shadcn/ui** - Component library
+
+**Backend:**
 - **FastAPI** - Framework web assíncrono e moderno
 - **Celery** - Sistema de filas distribuído para processamento assíncrono
 - **Redis** - Message broker e cache de resultados
+- **Elasticsearch** - Full-text search
+- **MySQL** - Database (users, jobs, api keys)
 - **Docling** - Motor de conversão de documentos
 - **Docker & Docker Compose** - Containerização e orquestração
 - **Pydantic** - Validação e serialização de dados
@@ -212,63 +227,87 @@ Health check da API.
 
 ### Estrutura de Containers
 
+- **frontend** - Next.js web app (porta 3000)
 - **api** - API FastAPI (porta 8000)
-- **worker** - Workers Celery (escalável)
+- **worker** - Workers Celery (escalável, 2 réplicas por padrão)
 - **redis** - Message broker e cache (porta 6379)
+- **elasticsearch** - Search engine (porta 9200)
 
 ### Comandos
 
 ```bash
-# Iniciar todos os serviços
-docker-compose up -d
+# Iniciar todos os serviços (stack completo)
+docker compose up -d --build
+
+# Acesse:
+# - Frontend: http://localhost:3000
+# - API: http://localhost:8000
+# - API Docs: http://localhost:8000/docs
 
 # Escalar workers
-docker-compose up -d --scale worker=5
+docker compose up -d --scale worker=5
 
 # Ver logs
-docker-compose logs -f api
-docker-compose logs -f worker
+docker compose logs -f frontend
+docker compose logs -f api
+docker compose logs -f worker
+
+# Reconstruir após mudanças
+docker compose down
+docker compose up -d --build
 
 # Parar serviços
-docker-compose down
+docker compose down
 ```
 
-## 📂 Estrutura do Projeto
+## 📂 Estrutura do Projeto (Monorepo)
 
 ```
 doc2md/
-├── api/
-│   ├── __init__.py
-│   ├── main.py              # Aplicação FastAPI
-│   ├── models.py            # Modelos Pydantic
-│   ├── routes.py            # Definição de rotas
-│   └── dependencies.py      # Dependências e injeção
+├── frontend/                # 🎨 Next.js Frontend
+│   ├── app/                 # Next.js App Router
+│   ├── components/          # React components
+│   ├── lib/                 # API client & utilities
+│   ├── hooks/               # Custom hooks
+│   ├── types/               # TypeScript types
+│   ├── package.json
+│   ├── next.config.ts
+│   └── .env.local
 │
-├── workers/
-│   ├── __init__.py
-│   ├── celery_app.py        # Configuração Celery
-│   ├── converter.py         # Lógica de conversão Docling
-│   ├── sources.py           # Handlers de fontes (file, url, gdrive, dropbox)
-│   └── tasks.py             # Definição de tasks Celery
-│
-├── shared/
-│   ├── __init__.py
-│   ├── config.py            # Configurações compartilhadas
-│   ├── schemas.py           # Schemas compartilhados
-│   └── utils.py             # Funções utilitárias
+├── backend/                 # 🐍 Python Backend
+│   ├── api/
+│   │   ├── main.py          # Aplicação FastAPI
+│   │   ├── routes.py        # Document conversion endpoints
+│   │   ├── auth_routes.py   # Authentication
+│   │   └── apikey_routes.py # API key management
+│   ├── workers/
+│   │   ├── celery_app.py    # Configuração Celery
+│   │   ├── converter.py     # Lógica de conversão Docling
+│   │   ├── sources.py       # Handlers (file, url, gdrive, dropbox)
+│   │   └── tasks.py         # Celery tasks
+│   ├── shared/
+│   │   ├── config.py        # Settings
+│   │   ├── schemas.py       # Pydantic models
+│   │   ├── database.py      # SQLAlchemy setup
+│   │   ├── models.py        # Database models
+│   │   ├── auth.py          # JWT authentication
+│   │   ├── redis_client.py  # Redis operations
+│   │   ├── elasticsearch_client.py  # Search client
+│   │   └── pdf_splitter.py  # PDF processing
+│   ├── tests/               # Unit tests
+│   ├── requirements.txt
+│   └── pytest.ini
 │
 ├── docker/
-│   ├── Dockerfile.api       # Container da API
-│   ├── Dockerfile.worker    # Container dos workers
-│   └── docker-compose.yml   # Orquestração
+│   ├── Dockerfile.frontend  # Next.js container
+│   ├── Dockerfile.api       # FastAPI container
+│   └── Dockerfile.worker    # Celery worker container
 │
-├── tests/
-│   ├── test_api.py
-│   └── test_converter.py
-│
-├── requirements.txt         # Dependências Python
-├── .env.example            # Exemplo de variáveis de ambiente
+├── docs/                    # Documentation
+├── scripts/                 # Utility scripts
+├── docker-compose.yml       # Full stack orchestration
 ├── .gitignore
+├── CLAUDE.md               # AI coding assistant guide
 └── README.md
 ```
 
@@ -276,20 +315,36 @@ doc2md/
 
 ### Variáveis de Ambiente
 
+**Frontend (.env.local)**
+```bash
+NEXT_PUBLIC_API_URL=http://localhost:8000
+```
+
+**Backend (.env)**
 ```bash
 # API
 API_HOST=0.0.0.0
 API_PORT=8000
-API_WORKERS=4
+
+# Database
+DATABASE_URL=mysql+pymysql://user:password@localhost:3306/doc2md
 
 # Redis
 REDIS_HOST=redis
 REDIS_PORT=6379
 REDIS_DB=0
 
+# Elasticsearch
+ELASTICSEARCH_URL=http://localhost:9200
+
 # Celery
 CELERY_BROKER_URL=redis://redis:6379/0
 CELERY_RESULT_BACKEND=redis://redis:6379/1
+
+# JWT Authentication
+SECRET_KEY=your-secret-key-here
+ALGORITHM=HS256
+ACCESS_TOKEN_EXPIRE_MINUTES=30
 
 # Conversão
 MAX_FILE_SIZE_MB=50
@@ -303,7 +358,6 @@ DROPBOX_APP_SECRET=your_app_secret
 
 # Storage
 RESULT_TTL_SECONDS=3600
-CLEANUP_INTERVAL_HOURS=24
 ```
 
 ## 🔒 Autenticação
@@ -334,27 +388,56 @@ Acesse: http://localhost:5555
 
 ### Instalação Local
 
+**Pré-requisitos:**
+- Python 3.10+
+- Node.js 20+
+- Redis
+- MySQL (ou use Docker para databases)
+
+**Backend:**
 ```bash
 # Criar ambiente virtual
 python -m venv venv
 source venv/bin/activate  # Linux/Mac
-# ou
-venv\Scripts\activate  # Windows
 
 # Instalar dependências
-pip install -r requirements.txt
+pip install -r backend/requirements.txt
 
-# Executar API
-uvicorn api.main:app --reload
+# Executar API (porta 8080)
+./run_api.sh
 
-# Executar worker
-celery -A workers.celery_app worker --loglevel=info
+# Executar worker (terminal separado)
+./run_worker.sh
+```
+
+**Frontend:**
+```bash
+cd frontend
+
+# Instalar dependências
+npm install
+
+# Executar dev server
+npm run dev
+# Acesse: http://localhost:3000
+```
+
+**Com Docker (Recomendado):**
+```bash
+# Stack completo
+docker compose up -d --build
 ```
 
 ### Testes
 
 ```bash
+# Backend
+cd backend
 pytest tests/ -v
+
+# Frontend
+cd frontend
+npm test
 ```
 
 ## 📝 Licença

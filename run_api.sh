@@ -6,7 +6,7 @@ echo "🚀 Starting Doc2MD API on port 8080..."
 echo ""
 echo "📋 Prerequisites:"
 echo "   - Redis running on localhost:6379"
-echo "   - Python dependencies installed (pip install -r requirements.txt)"
+echo "   - Python dependencies installed (pip install -r backend/requirements.txt)"
 echo ""
 echo "🔗 Access:"
 echo "   API: http://localhost:8080"
@@ -31,4 +31,4 @@ mkdir -p /tmp/doc2md
 
 # Run API
 cd /var/www/doc2md
-uvicorn api.main:app --host 0.0.0.0 --port 8080 --reload
+uvicorn backend.api.main:app --host 0.0.0.0 --port 8080 --reload

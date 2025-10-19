@@ -10,7 +10,7 @@ from pathlib import Path
 # Adicionar pasta shared ao path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from shared.pdf_splitter import PDFSplitter
+from backend.shared.pdf_splitter import PDFSplitter
 
 def test_pdf_split():
     """Testa a divisão do PDF AI-50p.pdf"""

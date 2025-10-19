@@ -1,4 +1,28 @@
 services:
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.11.0
+    container_name: doc2md-elasticsearch
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - "ES_JAVA_OPTS=-Xms512m -Xmx1g"
+      - bootstrap.memory_lock=true
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    mem_limit: 1g
+    ports:
+      - "9200:9200"
+    volumes:
+      - elasticsearch_data:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9200/_cluster/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    restart: unless-stopped
+
   redis:
     image: redis:7-alpine
     container_name: doc2md-redis
@@ -34,14 +58,18 @@ services:
       - CONVERSION_TIMEOUT_SECONDS=300
       - TEMP_STORAGE_PATH=/tmp/doc2md
       - RESULT_TTL_SECONDS=3600
+      - DATABASE_URL=${DATABASE_URL:-mysql+pymysql://root:root@host.docker.internal:3306/doc2md}
+      - ELASTICSEARCH_URL=${ELASTICSEARCH_URL:-http://host.docker.internal:9200}
     depends_on:
       redis:
         condition: service_healthy
     volumes:
       - ./tmp:/tmp/doc2md
-      - ./api:/app/api
-      - ./shared:/app/shared
+      - ./backend/api:/app/api
+      - ./backend/shared:/app/shared
     restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
 
   worker:
     build:
@@ -59,16 +87,34 @@ services:
       - MAX_FILE_SIZE_MB=50
       - CONVERSION_TIMEOUT_SECONDS=300
       - TEMP_STORAGE_PATH=/tmp/doc2md
+      - DATABASE_URL=${DATABASE_URL:-mysql+pymysql://root:root@host.docker.internal:3306/doc2md}
+      - ELASTICSEARCH_URL=${ELASTICSEARCH_URL:-http://host.docker.internal:9200}
     depends_on:
       redis:
         condition: service_healthy
     volumes:
       - ./tmp:/tmp/doc2md
-      - ./workers:/app/workers
-      - ./shared:/app/shared
+      - ./backend/workers:/app/workers
+      - ./backend/shared:/app/shared
     deploy:
       replicas: 2
     restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  frontend:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.frontend
+    container_name: doc2md-frontend
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:8000
+    depends_on:
+      - api
+    restart: unless-stopped
 
 volumes:
+  elasticsearch_data:
   redis_data:

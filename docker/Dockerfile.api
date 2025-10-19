@@ -8,7 +8,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements
-COPY requirements.txt .
+COPY backend/requirements.txt .
 
 # Install Python dependencies with cache mount
 # Isso vai cachear downloads de packages grandes (PyTorch ~888MB)
@@ -16,9 +16,9 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     pip install -r requirements.txt
 
 # Copy application code
-COPY api/ ./api/
-COPY shared/ ./shared/
-COPY workers/ ./workers/
+COPY backend/api/ ./api/
+COPY backend/shared/ ./shared/
+COPY backend/workers/ ./workers/
 
 # Create temp directory
 RUN mkdir -p /tmp/doc2md/uploads

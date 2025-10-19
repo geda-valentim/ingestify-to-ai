@@ -6,7 +6,7 @@ echo "⚙️  Starting Celery Worker..."
 echo ""
 echo "📋 Prerequisites:"
 echo "   - Redis running on localhost:6379"
-echo "   - Python dependencies installed (pip install -r requirements.txt)"
+echo "   - Python dependencies installed (pip install -r backend/requirements.txt)"
 echo ""
 
 # Check if Redis is running
@@ -27,7 +27,7 @@ mkdir -p /tmp/doc2md
 
 # Run worker with isolated queue and unique hostname
 cd /var/www/doc2md
-celery -A workers.celery_app worker \
+celery -A backend.workers.celery_app worker \
     --loglevel=info \
     --concurrency=2 \
     -Q doc2md \

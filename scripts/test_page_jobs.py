@@ -14,7 +14,7 @@ from typing import Dict, List
 # Adicionar pasta shared ao path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from shared.pdf_splitter import PDFSplitter
+from backend.shared.pdf_splitter import PDFSplitter
 
 # Cores
 class Colors:

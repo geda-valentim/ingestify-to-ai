@@ -4,15 +4,20 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Doc2MD is an asynchronous API for converting documents (PDF, DOCX, HTML, etc.) to Markdown format using Docling. The system uses a distributed architecture with FastAPI, Celery workers, and Redis for scalable document processing.
+Doc2MD is a full-stack document conversion platform with a Next.js frontend and Python backend API. The system converts documents (PDF, DOCX, HTML, etc.) to Markdown format using Docling, with a distributed architecture using FastAPI, Celery workers, and Redis for scalable document processing.
+
+**Monorepo Structure:**
+- **frontend/** - Next.js 15 + React 19 web application
+- **backend/** - Python FastAPI + Celery worker backend
 
 ## Architecture
 
-### Three-Tier System
+### Four-Tier System
 
-1. **API Layer** ([api/](api/)) - FastAPI REST endpoints that receive requests and return job IDs
-2. **Message Broker** - Redis handles task queuing (Celery) and result caching
-3. **Worker Layer** ([workers/](workers/)) - Celery workers process conversions with Docling in parallel
+1. **Frontend Layer** ([frontend/](frontend/)) - Next.js web application for document uploads and viewing results
+2. **API Layer** ([backend/api/](backend/api/)) - FastAPI REST endpoints that receive requests and return job IDs
+3. **Message Broker** - Redis handles task queuing (Celery) and result caching
+4. **Worker Layer** ([backend/workers/](backend/workers/)) - Celery workers process conversions with Docling in parallel
 
 ### Key Design: Hierarchical Job System
 
@@ -43,8 +48,12 @@ This architecture enables:
 
 ### Start Services
 ```bash
-# Full stack with Docker Compose
+# Full stack with Docker Compose (recommended)
 docker compose up -d --build
+# Services:
+# - Frontend: http://localhost:3000
+# - API: http://localhost:8000
+# - API Docs: http://localhost:8000/docs
 
 # Scale workers for heavy loads
 docker compose up -d --scale worker=5
@@ -53,11 +62,14 @@ docker compose up -d --scale worker=5
 # Terminal 1: Redis
 docker run -p 6379:6379 redis:7-alpine
 
-# Terminal 2: API
-uvicorn api.main:app --reload --host 0.0.0.0 --port 8000
+# Terminal 2: Frontend
+cd frontend && npm run dev
 
-# Terminal 3: Worker
-celery -A workers.celery_app worker --loglevel=info
+# Terminal 3: API
+./run_api.sh  # Runs on port 8080
+
+# Terminal 4: Worker
+./run_worker.sh
 ```
 
 ### Logs & Monitoring
@@ -96,9 +108,52 @@ docker compose up -d --build
 ## Code Structure
 
 ```
-doc2md/
+doc2md/                          # Monorepo root
 ├── README.md                    # Main documentation
 ├── CLAUDE.md                    # This file - Claude Code guide
+├── docker-compose.yml           # Full stack orchestration
+├── .gitignore                   # Git ignore (merged frontend + backend)
+│
+├── frontend/                    # 🎨 Next.js Frontend
+│   ├── app/                     # Next.js App Router
+│   ├── components/              # React components
+│   ├── lib/                     # Utilities and API client
+│   ├── hooks/                   # Custom React hooks
+│   ├── types/                   # TypeScript types
+│   ├── package.json
+│   ├── next.config.ts
+│   ├── tailwind.config.ts
+│   └── .env.local               # Frontend environment
+│
+├── backend/                     # 🐍 Python Backend
+│   ├── api/                     # 🌐 FastAPI layer
+│   │   ├── main.py              # App initialization, CORS
+│   │   ├── routes.py            # Document conversion endpoints
+│   │   ├── auth_routes.py       # Authentication endpoints
+│   │   └── apikey_routes.py     # API key management
+│   ├── workers/                 # ⚙️ Celery workers
+│   │   ├── celery_app.py        # Celery config
+│   │   ├── tasks.py             # Task definitions
+│   │   ├── converter.py         # Docling integration
+│   │   └── sources.py           # Source handlers
+│   ├── shared/                  # 🔧 Shared utilities
+│   │   ├── config.py            # Environment settings
+│   │   ├── schemas.py           # Pydantic models
+│   │   ├── redis_client.py      # Redis operations
+│   │   ├── pdf_splitter.py      # PDF splitting
+│   │   ├── database.py          # SQLAlchemy setup
+│   │   ├── models.py            # Database models
+│   │   ├── auth.py              # Authentication utilities
+│   │   └── elasticsearch_client.py  # Elasticsearch client
+│   ├── tests/                   # ✅ Unit tests
+│   ├── requirements.txt         # Python dependencies
+│   └── pytest.ini               # Pytest configuration
+│
+├── docker/                      # 🐳 Docker files
+│   ├── Dockerfile.api
+│   ├── Dockerfile.worker
+│   └── Dockerfile.frontend
+│
 ├── docs/                        # 📚 Documentation
 │   ├── SPECS.md                 # API specifications
 │   ├── RF.md                    # Functional requirements
@@ -110,46 +165,39 @@ doc2md/
 │   ├── CHANGELOG.md             # Version history
 │   ├── DOCKER_OPTIMIZATION.md   # Docker tuning guide
 │   └── TEST_RESULTS.md          # Test reports
+│
 ├── scripts/                     # 🛠️ Utility scripts
 │   ├── README.md                # Scripts documentation
-│   ├── tests/                   # Test scripts (shell)
-│   │   ├── test_pages.sh
-│   │   └── test_page_endpoints.sh
-│   ├── docker-build.sh
-│   ├── docker-clean.sh
-│   └── test_*.py                # Test scripts (Python)
-├── api/                         # 🌐 FastAPI layer
-│   ├── main.py                  # App initialization, CORS
-│   └── routes.py                # All API endpoints
-├── workers/                     # ⚙️ Celery workers
-│   ├── celery_app.py            # Celery config
-│   ├── tasks.py                 # Task definitions
-│   ├── converter.py             # Docling integration
-│   └── sources.py               # Source handlers
-├── shared/                      # 🔧 Shared utilities
-│   ├── config.py                # Environment settings
-│   ├── schemas.py               # Pydantic models
-│   ├── redis_client.py          # Redis operations
-│   └── pdf_splitter.py          # PDF splitting
-├── docker/                      # 🐳 Docker files
-│   ├── Dockerfile.api
-│   └── Dockerfile.worker
-├── tests/                       # ✅ Unit tests
-├── tmp/                         # 📁 Temporary files (gitignored)
-└── .env                         # Environment variables (gitignored)
+│   ├── test_*.py                # Test scripts (Python)
+│   └── tests/                   # Test scripts (shell)
+│
+└── tmp/                         # 📁 Temporary files (gitignored)
 ```
 
-### Shared Layer ([shared/](shared/))
+### Frontend Layer ([frontend/](frontend/))
+- **app/** - Next.js App Router pages and layouts
+- **components/** - Reusable React components (shadcn/ui + custom)
+- **lib/** - API client, utilities, state management (Zustand)
+- **hooks/** - Custom React hooks
+- Built with: Next.js 15, React 19, TypeScript, Tailwind CSS, TanStack Query
+
+### Backend Shared Layer ([backend/shared/](backend/shared/))
 - **config.py** - Settings from environment variables (Pydantic Settings)
 - **schemas.py** - All Pydantic models for requests/responses
 - **redis_client.py** - Redis operations for job status, results, and page tracking
 - **pdf_splitter.py** - PDF page splitting logic using PyPDF2
+- **database.py** - SQLAlchemy database setup
+- **models.py** - Database models (User, Job, Page, APIKey)
+- **auth.py** - JWT authentication utilities
+- **elasticsearch_client.py** - Elasticsearch client for search
 
-### API Layer ([api/](api/))
+### Backend API Layer ([backend/api/](backend/api/))
 - **main.py** - FastAPI app initialization, CORS, exception handlers
-- **routes.py** - All API endpoints (convert, job status, results, health)
+- **routes.py** - Document conversion endpoints (convert, job status, results)
+- **auth_routes.py** - User registration, login, profile
+- **apikey_routes.py** - API key creation, listing, deletion
 
-### Worker Layer ([workers/](workers/))
+### Backend Worker Layer ([backend/workers/](backend/workers/))
 - **celery_app.py** - Celery configuration and initialization
 - **tasks.py** - Core task definitions:
   - `process_conversion` - Main conversion task, handles PDF splitting decision
@@ -200,7 +248,11 @@ Each source type (file, url, gdrive, dropbox) has a dedicated handler implementi
 
 ## Configuration
 
-Environment variables are loaded via Pydantic Settings in [shared/config.py](shared/config.py):
+### Frontend Environment ([frontend/.env.local](frontend/.env.local))
+- `NEXT_PUBLIC_API_URL` - Backend API URL (default: http://localhost:8000)
+
+### Backend Environment
+Environment variables are loaded via Pydantic Settings in [backend/shared/config.py](backend/shared/config.py):
 
 **Critical settings:**
 - `REDIS_HOST`, `REDIS_PORT` - Redis connection
@@ -301,8 +353,15 @@ When testing conversions:
 
 ## Docker Structure
 
+- **docker/Dockerfile.frontend** - Frontend container with Next.js (multi-stage build)
 - **docker/Dockerfile.api** - API container with FastAPI + uvicorn
 - **docker/Dockerfile.worker** - Worker container with Celery + Docling dependencies (includes libpoppler-cpp-dev, tesseract-ocr)
-- **docker-compose.yml** - Orchestrates redis, api, and worker services
+- **docker-compose.yml** - Orchestrates all services: elasticsearch, redis, frontend, api, and worker
 
 Workers can be scaled independently: `docker compose up -d --scale worker=N`
+
+**Service Ports:**
+- Frontend: 3000
+- API: 8000
+- Redis: 6379
+- Elasticsearch: 9200

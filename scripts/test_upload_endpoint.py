@@ -52,7 +52,7 @@ class MockRedis:
 def test_upload_flow():
     """Testa o fluxo de upload e criação de job"""
 
-    from shared.redis_client import RedisClient
+    from backend.shared.redis_client import RedisClient
     import json
 
     print("=" * 80)

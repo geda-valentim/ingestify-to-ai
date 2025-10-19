@@ -21,7 +21,7 @@ def test_celery_setup():
     # 1. Import Celery app
     print("1. Importando Celery app...")
     try:
-        from workers.celery_app import celery_app
+        from backend.workers.celery_app import celery_app
         print(f"   ✓ Celery app importado: {celery_app.main}")
         print(f"   ✓ Broker: {celery_app.conf.broker_url}")
         print(f"   ✓ Backend: {celery_app.conf.result_backend}")
@@ -108,7 +108,7 @@ def test_celery_setup():
     # 6. Teste de signature
     print("6. Testando task signatures...")
     try:
-        from workers.tasks import process_conversion, split_pdf_task
+        from backend.workers.tasks import process_conversion, split_pdf_task
 
         # Criar signature sem executar
         sig1 = process_conversion.s(

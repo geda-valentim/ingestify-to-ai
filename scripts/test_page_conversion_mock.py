@@ -79,7 +79,7 @@ def test_page_conversion():
     print()
 
     # Importar PDFSplitter
-    from shared.pdf_splitter import PDFSplitter
+    from backend.shared.pdf_splitter import PDFSplitter
 
     # Localizar PDF
     pdf_path = Path(__file__).parent.parent / "AI-50p.pdf"

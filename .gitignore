@@ -73,3 +73,32 @@ test_*.pdf
 
 # Claude Code
 .claude/
+CLAUDE.md
+
+# Node.js / Frontend
+node_modules/
+/.pnp
+.pnp.js
+.yarn/install-state.gz
+/coverage
+package-lock.json
+
+# Next.js
+/.next/
+/out/
+/build
+
+# TypeScript
+*.tsbuildinfo
+next-env.d.ts
+
+# Vercel
+.vercel
+
+# Debug logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Misc
+*.pem
