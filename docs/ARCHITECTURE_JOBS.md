@@ -286,7 +286,7 @@ Consulta resultado de UMA página específica
 
 ```bash
 # Exemplo
-curl http://localhost:8000/jobs/page-1-abc/result
+curl http://localhost:8080/jobs/page-1-abc/result
 
 # Response
 {

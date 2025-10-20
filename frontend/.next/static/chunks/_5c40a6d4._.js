@@ -172,7 +172,9 @@ if (typeof globalThis.$RefreshHelpers$ === 'object' && globalThis.$RefreshHelper
 
 __turbopack_context__.s([
     "cn",
-    ()=>cn
+    ()=>cn,
+    "formatApiError",
+    ()=>formatApiError
 ]);
 var __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$clsx$2f$dist$2f$clsx$2e$mjs__$5b$app$2d$client$5d$__$28$ecmascript$29$__ = __turbopack_context__.i("[project]/node_modules/clsx/dist/clsx.mjs [app-client] (ecmascript)");
 var __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$tailwind$2d$merge$2f$dist$2f$bundle$2d$mjs$2e$mjs__$5b$app$2d$client$5d$__$28$ecmascript$29$__ = __turbopack_context__.i("[project]/node_modules/tailwind-merge/dist/bundle-mjs.mjs [app-client] (ecmascript)");
@@ -183,6 +185,36 @@ function cn() {
         inputs[_key] = arguments[_key];
     }
     return (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$tailwind$2d$merge$2f$dist$2f$bundle$2d$mjs$2e$mjs__$5b$app$2d$client$5d$__$28$ecmascript$29$__["twMerge"])((0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$clsx$2f$dist$2f$clsx$2e$mjs__$5b$app$2d$client$5d$__$28$ecmascript$29$__["clsx"])(inputs));
+}
+function formatApiError(error) {
+    let fallbackMessage = arguments.length > 1 && arguments[1] !== void 0 ? arguments[1] : "An error occurred";
+    var _error_response_data, _error_response;
+    // Check for standard error response with detail
+    if (error === null || error === void 0 ? void 0 : (_error_response = error.response) === null || _error_response === void 0 ? void 0 : (_error_response_data = _error_response.data) === null || _error_response_data === void 0 ? void 0 : _error_response_data.detail) {
+        const detail = error.response.data.detail;
+        // If detail is a string, return it
+        if (typeof detail === "string") {
+            return detail;
+        }
+        // If detail is an array (Pydantic validation errors)
+        if (Array.isArray(detail)) {
+            return detail.map((err)=>{
+                var _err_loc;
+                // Format: "field: error message"
+                const field = ((_err_loc = err.loc) === null || _err_loc === void 0 ? void 0 : _err_loc.slice(1).join(".")) || "field";
+                return "".concat(field, ": ").concat(err.msg);
+            }).join(", ");
+        }
+        // If detail is an object, stringify it
+        if (typeof detail === "object") {
+            return JSON.stringify(detail);
+        }
+    }
+    // Check for error message
+    if ((error === null || error === void 0 ? void 0 : error.message) && typeof error.message === "string") {
+        return error.message;
+    }
+    return fallbackMessage;
 }
 if (typeof globalThis.$RefreshHelpers$ === 'object' && globalThis.$RefreshHelpers !== null) {
     __turbopack_context__.k.registerExports(__turbopack_context__.m, globalThis.$RefreshHelpers$);

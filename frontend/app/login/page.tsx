@@ -6,6 +6,7 @@ import Link from "next/link";
 import { useMutation } from "@tanstack/react-query";
 import { authApi } from "@/lib/api";
 import { useAuthStore } from "@/lib/store/auth";
+import { formatApiError } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -37,7 +38,7 @@ export default function LoginPage() {
       router.push("/dashboard");
     },
     onError: (error: any) => {
-      setError(error.response?.data?.detail || "Login failed. Please try again.");
+      setError(formatApiError(error, "Login failed. Please try again."));
     },
   });
 

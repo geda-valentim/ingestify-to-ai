@@ -1,4 +1,4 @@
-// File: /var/www/doc2md_front/app/jobs/page.tsx
+// File: /home/ingestify-to-ai/frontend/app/jobs/page.tsx
 import * as entry from '../../../../app/jobs/page.js'
 import type { ResolvingMetadata, ResolvingViewport } from 'next/dist/lib/metadata/types/metadata-interface.js'
 

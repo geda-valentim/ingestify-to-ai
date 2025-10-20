@@ -167,7 +167,9 @@ function useToast() {
 
 __turbopack_context__.s([
     "cn",
-    ()=>cn
+    ()=>cn,
+    "formatApiError",
+    ()=>formatApiError
 ]);
 var __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$clsx$2f$dist$2f$clsx$2e$mjs__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__ = __turbopack_context__.i("[project]/node_modules/clsx/dist/clsx.mjs [app-ssr] (ecmascript)");
 var __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$tailwind$2d$merge$2f$dist$2f$bundle$2d$mjs$2e$mjs__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__ = __turbopack_context__.i("[project]/node_modules/tailwind-merge/dist/bundle-mjs.mjs [app-ssr] (ecmascript)");
@@ -175,6 +177,33 @@ var __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$tailwind$2d$
 ;
 function cn(...inputs) {
     return (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$tailwind$2d$merge$2f$dist$2f$bundle$2d$mjs$2e$mjs__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["twMerge"])((0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$clsx$2f$dist$2f$clsx$2e$mjs__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["clsx"])(inputs));
+}
+function formatApiError(error, fallbackMessage = "An error occurred") {
+    // Check for standard error response with detail
+    if (error?.response?.data?.detail) {
+        const detail = error.response.data.detail;
+        // If detail is a string, return it
+        if (typeof detail === "string") {
+            return detail;
+        }
+        // If detail is an array (Pydantic validation errors)
+        if (Array.isArray(detail)) {
+            return detail.map((err)=>{
+                // Format: "field: error message"
+                const field = err.loc?.slice(1).join(".") || "field";
+                return `${field}: ${err.msg}`;
+            }).join(", ");
+        }
+        // If detail is an object, stringify it
+        if (typeof detail === "object") {
+            return JSON.stringify(detail);
+        }
+    }
+    // Check for error message
+    if (error?.message && typeof error.message === "string") {
+        return error.message;
+    }
+    return fallbackMessage;
 }
 }),
 "[project]/components/ui/toast.tsx [app-ssr] (ecmascript)", ((__turbopack_context__) => {

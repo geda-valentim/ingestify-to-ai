@@ -1,3 +1,6 @@
+# Python 3.13+ compatibility - setuptools provides distutils
+setuptools>=75.0.0
+
 fastapi==0.104.1
 uvicorn[standard]==0.24.0
 celery==5.3.4
@@ -41,6 +44,7 @@ pymysql>=1.1.0
 alembic>=1.13.0
 
 # Authentication & Security
+bcrypt>=4.0.0
 python-jose[cryptography]>=3.3.0
 passlib[bcrypt]>=1.7.4
 

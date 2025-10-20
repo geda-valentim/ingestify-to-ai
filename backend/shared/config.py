@@ -17,13 +17,13 @@ class Settings(BaseSettings):
     # Celery Configuration
     celery_broker_url: str = "redis://redis:6379/0"
     celery_result_backend: str = "redis://redis:6379/1"
-    celery_task_default_queue: str = "doc2md"  # Namespace para isolar filas
-    celery_worker_name: str = "doc2md-worker"  # Hostname único
+    celery_task_default_queue: str = "ingestify"  # Namespace para isolar filas
+    celery_worker_name: str = "ingestify-worker"  # Hostname único
 
     # Conversion Settings
     max_file_size_mb: int = 50
     conversion_timeout_seconds: int = 300
-    temp_storage_path: str = "/tmp/doc2md"
+    temp_storage_path: str = "/tmp/ingestify"
 
     # Docling Performance Settings
     docling_enable_ocr: bool = False  # Disable for digital PDFs (10x faster)
@@ -42,7 +42,7 @@ class Settings(BaseSettings):
     dropbox_app_secret: str = ""
 
     # Database (MySQL)
-    database_url: str = "mysql+pymysql://root:root@localhost/doc2md"
+    database_url: str = "mysql+pymysql://root:root@localhost/ingestify"
 
     # Elasticsearch
     elasticsearch_url: str = "http://elasticsearch:9200"

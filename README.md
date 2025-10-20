@@ -1,10 +1,10 @@
-# Doc2MD - Plataforma de Conversão de Documentos para Markdown
+# Ingestify - Plataforma de Conversão de Documentos para Markdown
 
-Plataforma full-stack para conversão de documentos e URLs para formato Markdown usando Docling. Inclui interface web Next.js e API REST assíncrona.
+Plataforma full-stack para conversão de documentos e URLs para formato Markdown usando Docling. Inclui interface web Next.js e API REST assíncrona em arquitetura monorepo.
 
 ## 📋 Visão Geral
 
-O Doc2MD é uma API REST que permite converter diversos tipos de documentos (PDF, DOCX, HTML, etc.) para Markdown. A conversão é processada de forma assíncrona através de workers distribuídos, permitindo escalabilidade e processamento em paralelo.
+O Ingestify é uma API REST que permite converter diversos tipos de documentos (PDF, DOCX, HTML, etc.) para Markdown. A conversão é processada de forma assíncrona através de workers distribuídos, permitindo escalabilidade e processamento em paralelo.
 
 ### Por que Markdown?
 
@@ -22,7 +22,7 @@ Trabalhar com PDFs e documentos complexos em pipelines de IA apresenta desafios 
 - ✅ Facilita pré-processamento para fine-tuning
 - ✅ Formato universal, leve e versionável
 
-Com Doc2MD, você transforma documentos complexos em Markdown estruturado, otimizado para engenharia de contexto, sistemas RAG e treinamento de modelos.
+Com Ingestify, você transforma documentos complexos em Markdown estruturado, otimizado para engenharia de contexto, sistemas RAG e treinamento de modelos.
 
 ## 🏗️ Arquitetura
 
@@ -36,7 +36,7 @@ Com Doc2MD, você transforma documentos complexos em Markdown estruturado, otimi
           │
           ▼
 ┌─────────────────────┐
-│   API FastAPI       │ ◄─── REST API (localhost:8000)
+│   API FastAPI       │ ◄─── REST API (localhost:8080)
 │   (backend/api/)    │      Recebe requisições e retorna job_id
 └─────────┬───────────┘
           │
@@ -119,14 +119,14 @@ Endpoint unificado que detecta automaticamente o tipo de fonte e realiza a conve
 
 **Upload de Arquivo:**
 ```bash
-curl -X POST http://localhost:8000/convert \
+curl -X POST http://localhost:8080/convert \
   -F "file=@document.pdf" \
   -F "source_type=file"
 ```
 
 **Conversão de URL:**
 ```bash
-curl -X POST http://localhost:8000/convert \
+curl -X POST http://localhost:8080/convert \
   -H "Content-Type: application/json" \
   -d '{
     "source_type": "url",
@@ -136,7 +136,7 @@ curl -X POST http://localhost:8000/convert \
 
 **Google Drive:**
 ```bash
-curl -X POST http://localhost:8000/convert \
+curl -X POST http://localhost:8080/convert \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer YOUR_TOKEN" \
   -d '{
@@ -147,7 +147,7 @@ curl -X POST http://localhost:8000/convert \
 
 **Dropbox:**
 ```bash
-curl -X POST http://localhost:8000/convert \
+curl -X POST http://localhost:8080/convert \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer YOUR_TOKEN" \
   -d '{
@@ -241,8 +241,8 @@ docker compose up -d --build
 
 # Acesse:
 # - Frontend: http://localhost:3000
-# - API: http://localhost:8000
-# - API Docs: http://localhost:8000/docs
+# - API: http://localhost:8080
+# - API Docs: http://localhost:8080/docs
 
 # Escalar workers
 docker compose up -d --scale worker=5
@@ -263,7 +263,7 @@ docker compose down
 ## 📂 Estrutura do Projeto (Monorepo)
 
 ```
-doc2md/
+ingestify-to-ai/
 ├── frontend/                # 🎨 Next.js Frontend
 │   ├── app/                 # Next.js App Router
 │   ├── components/          # React components
@@ -317,7 +317,7 @@ doc2md/
 
 **Frontend (.env.local)**
 ```bash
-NEXT_PUBLIC_API_URL=http://localhost:8000
+NEXT_PUBLIC_API_URL=http://localhost:8080
 ```
 
 **Backend (.env)**
@@ -327,7 +327,7 @@ API_HOST=0.0.0.0
 API_PORT=8000
 
 # Database
-DATABASE_URL=mysql+pymysql://user:password@localhost:3306/doc2md
+DATABASE_URL=mysql+pymysql://user:password@localhost:3306/ingestify
 
 # Redis
 REDIS_HOST=redis
@@ -349,7 +349,7 @@ ACCESS_TOKEN_EXPIRE_MINUTES=30
 # Conversão
 MAX_FILE_SIZE_MB=50
 CONVERSION_TIMEOUT_SECONDS=300
-TEMP_STORAGE_PATH=/tmp/doc2md
+TEMP_STORAGE_PATH=/tmp/ingestify
 
 # Integrações
 GOOGLE_DRIVE_CREDENTIALS_PATH=/secrets/gdrive.json
@@ -389,7 +389,7 @@ Acesse: http://localhost:5555
 ### Instalação Local
 
 **Pré-requisitos:**
-- Python 3.10+
+- Python 3.13+ (ou 3.10+, mas 3.13+ é recomendado)
 - Node.js 20+
 - Redis
 - MySQL (ou use Docker para databases)
@@ -400,7 +400,7 @@ Acesse: http://localhost:5555
 python -m venv venv
 source venv/bin/activate  # Linux/Mac
 
-# Instalar dependências
+# Instalar dependências (setuptools incluído para compatibilidade Python 3.13+)
 pip install -r backend/requirements.txt
 
 # Executar API (porta 8080)

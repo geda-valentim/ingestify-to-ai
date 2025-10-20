@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { useMutation } from "@tanstack/react-query";
 import { authApi } from "@/lib/api";
+import { formatApiError } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -34,9 +35,7 @@ export default function RegisterPage() {
       }, 2000);
     },
     onError: (error: any) => {
-      setError(
-        error.response?.data?.detail || "Registration failed. Please try again."
-      );
+      setError(formatApiError(error, "Registration failed. Please try again."));
     },
   });
 

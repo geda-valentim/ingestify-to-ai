@@ -4,18 +4,32 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Doc2MD is a full-stack document conversion platform with a Next.js frontend and Python backend API. The system converts documents (PDF, DOCX, HTML, etc.) to Markdown format using Docling, with a distributed architecture using FastAPI, Celery workers, and Redis for scalable document processing.
+**Ingestify** is a full-stack document conversion platform with a Next.js frontend and Python backend API. The system converts documents (PDF, DOCX, HTML, etc.) to Markdown format using Docling, with a distributed architecture using FastAPI, Celery workers, and Redis for scalable document processing.
 
 **Monorepo Structure:**
 - **frontend/** - Next.js 15 + React 19 web application
-- **backend/** - Python FastAPI + Celery worker backend
+- **backend/** - Python FastAPI + Celery worker backend (Clean Architecture)
 
 ## Architecture
 
-### Four-Tier System
+### Backend: Clean Architecture
+
+O backend segue **Clean Architecture** (Uncle Bob) com separação clara de responsabilidades:
+
+```
+backend/
+├── domain/           # 🎯 Entities, Value Objects, Business Rules
+├── application/      # 📋 Use Cases, DTOs, Ports (interfaces)
+├── infrastructure/   # 🔧 Repositories, Adapters (MySQL, Redis, Celery)
+└── presentation/     # 🌐 API Controllers, Schemas
+```
+
+**Veja [backend/docs/CLEAN_ARCHITECTURE.md](backend/docs/CLEAN_ARCHITECTURE.md) para detalhes completos.**
+
+### Four-Tier System (Infraestrutura)
 
 1. **Frontend Layer** ([frontend/](frontend/)) - Next.js web application for document uploads and viewing results
-2. **API Layer** ([backend/api/](backend/api/)) - FastAPI REST endpoints that receive requests and return job IDs
+2. **API Layer** ([backend/presentation/](backend/presentation/)) - FastAPI REST endpoints (delegates to Use Cases)
 3. **Message Broker** - Redis handles task queuing (Celery) and result caching
 4. **Worker Layer** ([backend/workers/](backend/workers/)) - Celery workers process conversions with Docling in parallel
 
@@ -46,29 +60,45 @@ This architecture enables:
 
 ## Development Commands
 
+### Environment Setup
+```bash
+# Frontend environment
+cp frontend/.env.example frontend/.env.local
+# Edit NEXT_PUBLIC_API_URL if needed (default: http://localhost:8000)
+
+# Backend environment (optional, has sensible defaults)
+# Environment variables are defined in backend/shared/config.py
+# Override via docker-compose.yml or .env file
+```
+
 ### Start Services
 ```bash
-# Full stack with Docker Compose (recommended)
+# Full stack with Docker Compose (recommended for production-like environment)
 docker compose up -d --build
 # Services:
 # - Frontend: http://localhost:3000
 # - API: http://localhost:8000
 # - API Docs: http://localhost:8000/docs
 
+# Development mode with docker-compose.dev.yml (faster iteration)
+docker compose -f docker-compose.dev.yml up -d
+
 # Scale workers for heavy loads
 docker compose up -d --scale worker=5
 
-# Development mode (local, requires Redis)
-# Terminal 1: Redis
-docker run -p 6379:6379 redis:7-alpine
+# Local development (hybrid - services in Docker, code running locally)
+# Terminal 1: Start infrastructure services only
+docker compose up -d redis elasticsearch
 
-# Terminal 2: Frontend
+# Terminal 2: Frontend (with hot reload)
 cd frontend && npm run dev
+# Access: http://localhost:3000
 
-# Terminal 3: API
+# Terminal 3: API (with auto-reload)
 ./run_api.sh  # Runs on port 8080
+# Access: http://localhost:8080/docs
 
-# Terminal 4: Worker
+# Terminal 4: Worker (for background processing)
 ./run_worker.sh
 ```
 
@@ -86,19 +116,42 @@ curl http://localhost:8000/health
 
 ### Testing
 ```bash
-# Run tests
+# Backend tests
+cd backend
 pytest tests/ -v
 
-# Test conversion
+# Interactive API testing (recommended)
+python scripts/test_cli.py
+
+# Test PDF splitting (standalone, no Docker)
+python scripts/test_pdf_split.py
+
+# Test Docling conversion (standalone)
+python scripts/test_docling_conversion.py
+
+# Simulate hierarchical job workflow
+python scripts/test_page_jobs.py
+
+# Test conversion via curl
 curl -X POST http://localhost:8000/convert \
   -F "source_type=file" \
   -F "file=@test.pdf"
+
+# Shell-based endpoint tests
+./scripts/tests/test_pages.sh
+./scripts/tests/test_page_endpoints.sh
 ```
 
-### Rebuild
+### Rebuild & Scripts
 ```bash
-# Quick rebuild
+# Quick rebuild (recommended)
 ./rebuild.sh
+
+# Start all services
+./start.sh
+
+# Test authentication
+./test_auth.sh
 
 # Or manually
 docker compose down
@@ -194,8 +247,15 @@ doc2md/                          # Monorepo root
 ### Backend API Layer ([backend/api/](backend/api/))
 - **main.py** - FastAPI app initialization, CORS, exception handlers
 - **routes.py** - Document conversion endpoints (convert, job status, results)
-- **auth_routes.py** - User registration, login, profile
+- **auth_routes.py** - User registration, login, profile (JWT-based)
 - **apikey_routes.py** - API key creation, listing, deletion
+
+**Authentication:**
+The system supports two authentication methods:
+1. **JWT tokens** - For user sessions (login/register via auth_routes.py)
+2. **API keys** - For programmatic access (managed via apikey_routes.py)
+
+Test authentication: `./test_auth.sh`
 
 ### Backend Worker Layer ([backend/workers/](backend/workers/))
 - **celery_app.py** - Celery configuration and initialization
@@ -252,6 +312,9 @@ Each source type (file, url, gdrive, dropbox) has a dedicated handler implementi
 - `NEXT_PUBLIC_API_URL` - Backend API URL (default: http://localhost:8000)
 
 ### Backend Environment
+
+**Python Version**: 3.13+ (with `setuptools>=75.0.0` for `distutils` compatibility)
+
 Environment variables are loaded via Pydantic Settings in [backend/shared/config.py](backend/shared/config.py):
 
 **Critical settings:**
@@ -326,11 +389,31 @@ Health check showing Redis connection and worker count.
 
 ## Testing Strategy
 
+### Interactive CLI Testing (Recommended)
+The project includes `scripts/test_cli.py` - a comprehensive interactive testing tool with:
+- Colored terminal output for better readability
+- Full API endpoint coverage (upload, status, results, pages)
+- Real-time job monitoring with progress updates
+- Automated full-flow testing
+- Health checks and diagnostics
+
+```bash
+python scripts/test_cli.py
+# Select from 7 interactive options for testing different flows
+```
+
+### Manual Testing
 When testing conversions:
 1. Start with small documents to verify basic flow
 2. Test multi-page PDFs (≥2 pages) to verify parallel processing
 3. Check individual page results via `/jobs/{page_job_id}/result`
 4. Monitor worker logs for parallel execution
+
+### Standalone Component Testing
+Test individual components without full Docker stack:
+- `scripts/test_pdf_split.py` - PDF splitting logic only
+- `scripts/test_docling_conversion.py` - Docling conversion with optimization benchmarks
+- `scripts/test_page_jobs.py` - Job hierarchy simulation with Redis
 
 ## Common Tasks
 
@@ -357,11 +440,103 @@ When testing conversions:
 - **docker/Dockerfile.api** - API container with FastAPI + uvicorn
 - **docker/Dockerfile.worker** - Worker container with Celery + Docling dependencies (includes libpoppler-cpp-dev, tesseract-ocr)
 - **docker-compose.yml** - Orchestrates all services: elasticsearch, redis, frontend, api, and worker
+- **docker-compose.dev.yml** - Development-optimized compose file
 
 Workers can be scaled independently: `docker compose up -d --scale worker=N`
 
 **Service Ports:**
 - Frontend: 3000
-- API: 8000
+- API: 8000 (Dockerized) / 8080 (local via run_api.sh)
 - Redis: 6379
 - Elasticsearch: 9200
+- MySQL: 3306
+
+**Database:**
+- MySQL database for persistent storage (users, jobs, pages, API keys)
+- See `backend/shared/models.py` for database schema
+- Elasticsearch for full-text search and document indexing
+
+## Troubleshooting
+
+### Worker not processing jobs
+```bash
+# Check if workers are running
+docker compose ps worker
+
+# View worker logs for errors
+docker compose logs -f worker
+
+# Check Redis connection
+docker compose exec redis redis-cli ping
+
+# Restart workers
+docker compose restart worker
+```
+
+### Jobs stuck in "processing" state
+```bash
+# Check worker logs for errors
+docker compose logs worker --tail=100
+
+# Check if job exists in Redis
+docker compose exec redis redis-cli keys "job:*"
+
+# Verify Celery queue
+docker compose exec worker celery -A workers.celery_app inspect active
+```
+
+### Frontend can't connect to API
+```bash
+# Check API is running
+curl http://localhost:8000/health
+
+# Verify NEXT_PUBLIC_API_URL in frontend/.env.local
+cat frontend/.env.local
+
+# Check CORS settings in backend/api/main.py
+```
+
+### Slow PDF processing
+- Disable OCR for digital PDFs (`DOCLING_ENABLE_OCR=False`)
+- Disable table recognition if not needed (`DOCLING_ENABLE_TABLE_STRUCTURE=False`)
+- Ensure V2 backend is enabled (`DOCLING_USE_V2_BACKEND=True`)
+- Scale workers: `docker compose up -d --scale worker=5`
+
+### Database connection errors
+```bash
+# Check MySQL is running
+docker compose ps mysql
+
+# Verify DATABASE_URL in config
+# Check backend/shared/config.py for connection string
+
+# View database logs
+docker compose logs mysql
+```
+
+## Documentation Organization
+
+**IMPORTANT: All documentation (.md) files MUST be created in the respective `/docs` folders:**
+
+- **General project documentation** → `/docs/` (root level)
+  - Examples: SPECS.md, RF.md, RNF.md, ARCHITECTURE_JOBS.md, TASKS.md, etc.
+
+- **Frontend-specific documentation** → `/frontend/docs/`
+  - Examples: Component guides, frontend architecture, UI patterns, etc.
+
+- **Backend-specific documentation** → `/backend/docs/`
+  - Examples: Clean Architecture, API design, domain models, use cases, etc.
+
+- **Subdirectory documentation** → `{subdirectory}/docs/`
+  - Examples: `/backend/domain/docs/`, `/backend/application/docs/`, etc.
+  - Each major module can have its own docs folder for detailed documentation
+
+**Never create .md files directly in the root or in subdirectories without using the appropriate `/docs` folder.**
+
+**Exception:** README.md and CLAUDE.md files at the root level are acceptable as they serve as entry points.
+
+# important-instruction-reminders
+Do what has been asked; nothing more, nothing less.
+NEVER create files unless they're absolutely necessary for achieving your goal.
+ALWAYS prefer editing an existing file to creating a new one.
+NEVER proactively create documentation files (*.md) or README files. Only create documentation files if explicitly requested by the User.

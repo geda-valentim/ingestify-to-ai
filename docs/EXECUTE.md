@@ -49,7 +49,7 @@ Você deve ver 3 serviços rodando:
 ### 1. Health Check
 
 ```bash
-curl http://localhost:8000/health
+curl http://localhost:8080/health
 ```
 
 Resposta esperada:
@@ -68,7 +68,7 @@ Resposta esperada:
 
 ### 2. Documentação Interativa
 
-Abra no navegador: http://localhost:8000/docs
+Abra no navegador: http://localhost:8080/docs
 
 Você verá a interface Swagger com todos os endpoints para testar interativamente!
 
@@ -87,7 +87,7 @@ Conteúdo aqui.
 Mais conteúdo." > teste.md
 
 # Enviar para conversão
-curl -X POST http://localhost:8000/convert \
+curl -X POST http://localhost:8080/convert \
   -F "source_type=file" \
   -F "file=@teste.md"
 ```
@@ -106,13 +106,13 @@ Resposta:
 
 ```bash
 # Substitua JOB_ID pelo valor recebido acima
-curl http://localhost:8000/jobs/JOB_ID
+curl http://localhost:8080/jobs/JOB_ID
 ```
 
 ### 5. Obter Resultado
 
 ```bash
-curl http://localhost:8000/jobs/JOB_ID/result
+curl http://localhost:8080/jobs/JOB_ID/result
 ```
 
 ## 📊 Ver Logs
@@ -167,7 +167,7 @@ Edite `docker-compose.yml` e mude a porta:
 ```yaml
 api:
   ports:
-    - "8001:8000"  # Usar 8001 ao invés de 8000
+    - "8001:8080"  # Usar 8001 ao invés de 8000
 ```
 
 Então reinicie:
@@ -207,7 +207,7 @@ docker compose logs worker
 2. Executar `docker compose up -d --build`
 3. Aguardar ~30 segundos
 4. Testar health check
-5. Abrir http://localhost:8000/docs
+5. Abrir http://localhost:8080/docs
 6. Fazer upload de um arquivo de teste
 7. Consultar status e resultado
 

@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import { jobsApi } from "@/lib/api";
 import { useAuthStore } from "@/lib/store/auth";
+import { formatApiError } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -143,7 +144,7 @@ export default function JobStatusPage({ params }: PageProps) {
     onError: (error: any) => {
       toast({
         title: "Error deleting job",
-        description: error.response?.data?.detail || "Failed to delete job",
+        description: formatApiError(error, "Failed to delete job"),
         variant: "destructive",
       });
     },
@@ -162,7 +163,7 @@ export default function JobStatusPage({ params }: PageProps) {
     onError: (error: any) => {
       toast({
         title: "Retry failed",
-        description: error.response?.data?.detail || "Failed to retry page",
+        description: formatApiError(error, "Failed to retry page"),
         variant: "destructive",
       });
     },

@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Optional
 
 # Configurações
-API_BASE_URL = "http://localhost:8000"
+API_BASE_URL = "http://localhost:8080"
 PDF_PATH = Path(__file__).parent.parent / "AI-50p.pdf"
 
 # Cores para output

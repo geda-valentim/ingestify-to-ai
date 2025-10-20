@@ -231,21 +231,21 @@ Agora é possível:
 
 ```bash
 # 1. Upload PDF multi-página
-curl -X POST http://localhost:8000/convert \
+curl -X POST http://localhost:8080/convert \
   -F "source_type=file" \
   -F "file=@sample.pdf"
 
 # Response: {"job_id": "main-job-uuid", ...}
 
 # 2. Consultar status do main job (ver child jobs)
-curl http://localhost:8000/jobs/{main-job-uuid}
+curl http://localhost:8080/jobs/{main-job-uuid}
 
 # 3. Listar page jobs
-curl http://localhost:8000/jobs/{main-job-uuid}/pages
+curl http://localhost:8080/jobs/{main-job-uuid}/pages
 
 # 4. Consultar resultado de página individual
-curl http://localhost:8000/jobs/{page-job-uuid}/result
+curl http://localhost:8080/jobs/{page-job-uuid}/result
 
 # 5. Consultar resultado final merged
-curl http://localhost:8000/jobs/{main-job-uuid}/result
+curl http://localhost:8080/jobs/{main-job-uuid}/result
 ```

@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Form
 from sqlalchemy.orm import Session
 from datetime import timedelta
 
@@ -70,17 +70,17 @@ async def register(user_data: UserCreate, db: Session = Depends(get_db)):
 
 
 @router.post("/login", response_model=Token)
-async def login(credentials: UserLogin, db: Session = Depends(get_db)):
+async def login(
+    username: str = Form(...),
+    password: str = Form(...),
+    db: Session = Depends(get_db)
+):
     """
-    Login with username/email and password
+    Login with username/email and password (OAuth2 compatible)
 
-    ## Request Body:
-    ```json
-    {
-      "username": "testuser",  // or email
-      "password": "Test123"
-    }
-    ```
+    ## Request Body (form-urlencoded):
+    - username: testuser (or email)
+    - password: Test123
 
     ## Returns:
     ```json
@@ -99,7 +99,7 @@ async def login(credentials: UserLogin, db: Session = Depends(get_db)):
     ## Errors:
     - 401: Invalid credentials
     """
-    user = authenticate_user(db, credentials.username, credentials.password)
+    user = authenticate_user(db, username, password)
 
     if not user:
         raise HTTPException(

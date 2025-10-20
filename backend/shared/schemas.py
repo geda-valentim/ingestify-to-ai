@@ -156,7 +156,7 @@ class UserCreate(BaseModel):
     """Schema for user registration"""
     email: str = Field(..., example="user@example.com")
     username: str = Field(..., min_length=3, max_length=50, example="testuser")
-    password: str = Field(..., min_length=6, example="Test123")
+    password: str = Field(..., min_length=8, max_length=20, example="SecurePass123")
 
 
 class UserLogin(BaseModel):
