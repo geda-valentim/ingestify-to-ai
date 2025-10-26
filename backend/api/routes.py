@@ -190,6 +190,227 @@ async def upload_and_convert(
     )
 
 
+@router.post("/transcribe", response_model=JobCreatedResponse, summary="Transcrever áudio para texto")
+async def transcribe_audio(
+    file: UploadFile = File(..., description="Arquivo de áudio (MP3, WAV, M4A, FLAC, OGG, etc.)"),
+    name: Optional[str] = Form(None, description="Nome de identificação (opcional, padrão: nome do arquivo)"),
+    language: Optional[str] = Form(None, description="Código do idioma (ex: 'en', 'pt'). Auto-detectar se não fornecido"),
+    include_timestamps: bool = Form(True, description="Incluir marcadores de tempo na transcrição"),
+    include_word_timestamps: bool = Form(False, description="Incluir timestamps em nível de palavra (mais detalhado)"),
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Transcrever áudio para texto usando Whisper
+
+    Este endpoint é dedicado exclusivamente para transcrição de áudio.
+    Suporta múltiplos formatos de áudio e retorna transcrição em formato Markdown.
+
+    ## Parâmetros:
+    - `file`: Arquivo de áudio para transcrição
+    - `name`: Nome de identificação opcional
+    - `language`: Código de idioma ISO 639-1 (ex: 'en', 'pt', 'es'). Auto-detecta se não fornecido
+    - `include_timestamps`: Adicionar marcadores de tempo [MM:SS] na transcrição
+    - `include_word_timestamps`: Adicionar timestamps em cada palavra (mais detalhado)
+
+    ## Formatos suportados
+    MP3, WAV, M4A, FLAC, OGG, OPUS, WEBM, WMA, AAC
+
+    ## Limite de tamanho
+    Até 50MB (configurável via MAX_AUDIO_FILE_SIZE_MB)
+
+    ## Retorno
+    Retorna imediatamente um `job_id` para consultar o progresso via `/jobs/{job_id}`
+
+    ## Exemplo:
+    ```bash
+    curl -X POST http://localhost:8080/transcribe \\
+      -F "file=@meeting.mp3" \\
+      -F "language=pt" \\
+      -F "include_timestamps=true"
+    ```
+
+    ## Resultado
+    O resultado estará disponível em `/jobs/{job_id}/result` e incluirá:
+    - Transcrição completa em markdown
+    - Timestamps (se solicitado)
+    - Idioma detectado
+    - Duração do áudio
+    - Contagem de palavras
+    """
+    # Check if audio transcription is enabled
+    if not settings.enable_audio_transcription:
+        raise HTTPException(
+            status_code=503,
+            detail="Audio transcription is currently disabled"
+        )
+
+    redis_client = get_redis_client()
+
+    # Read file contents
+    file_contents = await file.read()
+    filename = file.filename
+    file_size_mb = len(file_contents) / (1024 * 1024)
+    file_size_bytes = len(file_contents)
+
+    # Validate audio file size
+    max_size_mb = settings.max_audio_file_size_mb
+    if file_size_mb > max_size_mb:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Arquivo de áudio muito grande: {file_size_mb:.2f}MB. Máximo: {max_size_mb}MB"
+        )
+
+    # Validate audio MIME type
+    mime_type = file.content_type or "application/octet-stream"
+    audio_mime_types = [
+        "audio/mpeg",  # MP3
+        "audio/mp3",
+        "audio/wav",
+        "audio/wave",
+        "audio/x-wav",
+        "audio/m4a",
+        "audio/x-m4a",
+        "audio/mp4",  # M4A alternative
+        "audio/flac",
+        "audio/ogg",
+        "audio/opus",
+        "audio/webm",
+        "audio/wma",
+        "audio/x-ms-wma",
+        "audio/aac",
+        "audio/x-aac"
+    ]
+
+    # Also check file extension as backup
+    audio_extensions = ['.mp3', '.wav', '.m4a', '.flac', '.ogg', '.opus', '.webm', '.wma', '.aac', '.oga', '.spx']
+    file_ext = filename.lower()[filename.rfind('.'):] if '.' in filename else ''
+
+    if mime_type not in audio_mime_types and file_ext not in audio_extensions:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Formato de áudio não suportado. MIME type: {mime_type}, Extensão: {file_ext}. "
+                   f"Formatos aceitos: MP3, WAV, M4A, FLAC, OGG, OPUS, WEBM, WMA, AAC"
+        )
+
+    logger.info(f"Audio file uploaded: {filename} ({file_size_mb:.2f}MB, {mime_type})")
+
+    # Generate job ID
+    job_id = uuid4()
+    created_at = datetime.utcnow()
+
+    # Determine job name
+    job_name = name if name else filename
+
+    # Store initial job status in Redis
+    redis_client.set_job_status(
+        job_id=str(job_id),
+        job_type="main",
+        status="queued",
+        progress=0,
+        name=job_name,
+    )
+
+    # Set job ownership
+    redis_client.set_job_owner(str(job_id), current_user.id)
+    redis_client.add_job_to_user(current_user.id, str(job_id))
+
+    # Create Job record in MySQL
+    try:
+        db_job = Job(
+            id=str(job_id),
+            user_id=current_user.id,
+            filename=filename,
+            source_type="audio",
+            file_size_bytes=file_size_bytes,
+            mime_type=mime_type,
+            status=DBJobStatus.PENDING,
+            job_type="MAIN",
+            created_at=created_at,
+        )
+        db.add(db_job)
+        db.commit()
+        logger.info(f"Audio transcription job {job_id} created in MySQL")
+    except Exception as e:
+        logger.error(f"Error creating audio job in MySQL: {e}", exc_info=True)
+        db.rollback()
+
+    logger.info(f"AUDIO TRANSCRIPTION JOB created: {job_id} | user: {current_user.username}")
+
+    # Save audio file temporarily
+    try:
+        from workers.tasks import process_conversion
+        from pathlib import Path
+
+        temp_dir = Path(settings.temp_storage_path) / "audio" / str(job_id)
+        temp_dir.mkdir(parents=True, exist_ok=True)
+        temp_file_path = temp_dir / filename
+
+        with open(temp_file_path, "wb") as f:
+            f.write(file_contents)
+
+        logger.info(f"Audio file saved to: {temp_file_path}")
+
+        # Build audio transcription options
+        options = {
+            "language": language,
+            "include_timestamps": include_timestamps,
+            "include_word_timestamps": include_word_timestamps,
+            "is_audio": True  # Flag to indicate this is audio transcription
+        }
+
+        # Enqueue task (use 'file' source type since audio is already saved locally)
+        process_conversion.delay(
+            job_id=str(job_id),
+            source_type="file",
+            source=str(temp_file_path),
+            options=options,
+        )
+        logger.info(f"AUDIO JOB {job_id} enqueued to Celery successfully")
+
+    except ImportError as e:
+        logger.error(f"Celery tasks not available: {e}")
+        redis_client.set_job_status(
+            job_id=str(job_id),
+            job_type="main",
+            status="failed",
+            progress=0,
+            error="Celery workers não disponíveis"
+        )
+        # Update MySQL
+        try:
+            db_job.status = DBJobStatus.FAILED
+            db_job.error_message = "Celery workers não disponíveis"
+            db.commit()
+        except Exception:
+            db.rollback()
+        raise HTTPException(status_code=503, detail="Sistema de processamento indisponível")
+    except Exception as e:
+        logger.error(f"Error enqueueing audio job {job_id}: {e}", exc_info=True)
+        redis_client.set_job_status(
+            job_id=str(job_id),
+            job_type="main",
+            status="failed",
+            progress=0,
+            error=str(e)
+        )
+        # Update MySQL
+        try:
+            db_job.status = DBJobStatus.FAILED
+            db_job.error_message = str(e)
+            db.commit()
+        except Exception:
+            db.rollback()
+        raise HTTPException(status_code=500, detail=f"Erro ao criar job de transcrição: {str(e)}")
+
+    return JobCreatedResponse(
+        job_id=job_id,
+        status="queued",
+        created_at=created_at,
+        message="Job de transcrição de áudio enfileirado para processamento"
+    )
+
+
 @router.post("/convert", response_model=JobCreatedResponse)
 async def convert_document(
     source_type: str = Form(

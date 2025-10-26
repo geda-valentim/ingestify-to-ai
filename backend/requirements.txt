@@ -50,3 +50,11 @@ passlib[bcrypt]>=1.7.4
 
 # Elasticsearch
 elasticsearch>=8.11.0,<9.0.0
+
+# Audio transcription - multiple providers supported
+# Default: faster-whisper (recommended, 4-5x faster)
+faster-whisper>=1.0.0  # Recommended: Optimized Whisper using CTranslate2
+# openai-whisper>=20240930  # Fallback: Original OpenAI Whisper implementation (slow to compile)
+openai>=1.0.0  # Optional: For openai-api provider (cloud-based)
+pydub>=0.25.1  # Audio file handling and metadata extraction
+ffmpeg-python>=0.2.0  # Audio format conversion support

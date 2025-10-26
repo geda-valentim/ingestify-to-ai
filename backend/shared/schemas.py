@@ -30,6 +30,12 @@ class ConversionOptions(BaseModel):
     extract_metadata: bool = True
     chunk_size: Optional[int] = None
 
+    # Audio transcription options
+    include_timestamps: bool = True  # Include timestamp markers in transcription
+    include_word_timestamps: bool = False  # Include word-level timestamps (more detailed)
+    audio_language: Optional[str] = None  # Language code (e.g., 'en', 'pt'). Auto-detect if None
+    transcriber_provider: Optional[str] = None  # Override default provider: faster-whisper, openai-whisper, openai-api
+
 
 class ConvertRequest(BaseModel):
     source_type: Literal["file", "url", "gdrive", "dropbox"]

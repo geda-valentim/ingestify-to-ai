@@ -30,6 +30,16 @@ class Settings(BaseSettings):
     docling_enable_table_structure: bool = True  # Disable if no tables needed
     docling_use_v2_backend: bool = True  # Use beta backend (10x faster)
 
+    # Audio Transcription Settings
+    audio_transcriber_provider: str = "faster-whisper"  # faster-whisper, openai-whisper, openai-api
+    whisper_model: str = "turbo"  # tiny, base, small, medium, large, turbo
+    whisper_device: str = "cpu"  # cpu or cuda
+    whisper_compute_type: str = "int8"  # int8, float16, float32 (for faster-whisper)
+    enable_audio_transcription: bool = True  # Feature flag to enable/disable audio transcription
+    max_audio_file_size_mb: int = 50  # Maximum audio file size
+    max_audio_duration_seconds: int = 3600  # Maximum audio duration (1 hour)
+    openai_api_key: str = ""  # Required for openai-api provider
+
     # Storage Settings
     result_ttl_seconds: int = 3600
     cleanup_interval_hours: int = 24

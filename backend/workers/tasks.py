@@ -108,7 +108,146 @@ def process_conversion(
         logger.info(f"[MAIN JOB {job_id}] File downloaded: {file_path}")
         redis_client.update_job_progress(job_id, 20)
 
-        # 2. Check if PDF needs splitting
+        # 2. Check if this is an audio file for transcription
+        is_audio = options.get('is_audio', False) or source_type == 'audio'
+        audio_extensions = ['.mp3', '.wav', '.m4a', '.flac', '.ogg', '.opus', '.webm', '.wma', '.aac', '.oga', '.spx']
+        file_ext = file_path.suffix.lower()
+
+        if is_audio or file_ext in audio_extensions:
+            logger.info(f"[MAIN JOB {job_id}] Audio file detected - transcribing with Whisper")
+
+            try:
+                from workers.audio import get_audio_transcriber
+
+                # Get transcriber (respects provider configuration)
+                provider_override = options.get('transcriber_provider')
+                transcriber = get_audio_transcriber(force_provider=provider_override)
+
+                logger.info(f"[MAIN JOB {job_id}] Using transcriber provider: {transcriber.__class__.__name__}")
+
+                # Update progress
+                redis_client.update_job_progress(job_id, 30)
+
+                # Transcribe audio
+                transcription_options = {
+                    'language': options.get('audio_language') or options.get('language'),
+                    'include_word_timestamps': options.get('include_word_timestamps', False),
+                    'temperature': options.get('temperature', 0.0),
+                    'beam_size': options.get('beam_size', 5)
+                }
+
+                result = transcriber.transcribe(file_path, transcription_options)
+
+                logger.info(
+                    f"[MAIN JOB {job_id}] Transcription complete: "
+                    f"{result['word_count']} words, {result['duration']:.2f}s, "
+                    f"language={result['language']}"
+                )
+                redis_client.update_job_progress(job_id, 70)
+
+                # Format as markdown
+                include_timestamps = options.get('include_timestamps', True)
+                markdown_content = transcriber.format_as_markdown(result, include_timestamps)
+
+                # Store result in Redis
+                result_with_markdown = {
+                    'markdown': markdown_content,
+                    'metadata': {
+                        'language': result['language'],
+                        'duration': result['duration'],
+                        'word_count': result['word_count'],
+                        'char_count': result['char_count'],
+                        'provider': result.get('provider', 'unknown'),
+                        'model': result.get('model', 'unknown')
+                    }
+                }
+                redis_client.set_job_result(job_id, result_with_markdown)
+                redis_client.update_job_progress(job_id, 80)
+
+                # Store result in Elasticsearch
+                db = SessionLocal()
+                try:
+                    job = db.query(Job).filter(Job.id == job_id).first()
+                    filename = job.filename if job else None
+                    user_id = job.user_id if job else None
+                finally:
+                    db.close()
+
+                es_success = es_client.store_job_result(
+                    job_id=job_id,
+                    markdown_content=markdown_content,
+                    user_id=user_id,
+                    filename=filename,
+                    total_pages=None,  # Audio files don't have pages
+                    metadata=result_with_markdown['metadata']
+                )
+
+                if es_success:
+                    logger.info(f"[MAIN JOB {job_id}] Result stored in Elasticsearch")
+                else:
+                    logger.warning(f"[MAIN JOB {job_id}] Failed to store result in Elasticsearch")
+
+                redis_client.update_job_progress(job_id, 90)
+
+                # Update MySQL with completion
+                db = SessionLocal()
+                try:
+                    job = db.query(Job).filter(Job.id == job_id).first()
+                    if job:
+                        job.status = JobStatus.COMPLETED
+                        job.completed_at = datetime.utcnow()
+                        job.char_count = result['char_count']
+                        job.has_elasticsearch_result = es_success
+                        db.commit()
+                        logger.info(f"[MAIN JOB {job_id}] MySQL updated with completion")
+                except Exception as e:
+                    logger.error(f"[MAIN JOB {job_id}] MySQL update error: {e}")
+                finally:
+                    db.close()
+
+                # Mark as completed
+                redis_client.set_job_status(
+                    job_id=job_id,
+                    job_type="main",
+                    status="completed",
+                    progress=100,
+                    completed_at=datetime.utcnow()
+                )
+
+                logger.info(f"[MAIN JOB {job_id}] ✓ Audio transcription completed successfully")
+                return
+
+            except Exception as e:
+                logger.error(f"[MAIN JOB {job_id}] Audio transcription failed: {e}", exc_info=True)
+
+                # Update Redis
+                redis_client.set_job_status(
+                    job_id=job_id,
+                    job_type="main",
+                    status="failed",
+                    progress=0,
+                    error=str(e),
+                    completed_at=datetime.utcnow()
+                )
+
+                # Update MySQL
+                db = SessionLocal()
+                try:
+                    job = db.query(Job).filter(Job.id == job_id).first()
+                    if job:
+                        job.status = JobStatus.FAILED
+                        job.error_message = str(e)
+                        job.completed_at = datetime.utcnow()
+                        db.commit()
+                except Exception as db_error:
+                    logger.error(f"[MAIN JOB {job_id}] MySQL update error: {db_error}")
+                finally:
+                    db.close()
+
+                logger.error(f"[MAIN JOB {job_id}] ✗ Audio transcription failed")
+                raise
+
+        # 3. Check if PDF needs splitting
         if should_split_pdf(file_path, min_pages=2):
             logger.info(f"[MAIN JOB {job_id}] PDF multi-page detected - creating split job")
 
