@@ -17,6 +17,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { AlertCircle, Loader2 } from "lucide-react";
 
 export default function RegisterPage() {
   const router = useRouter();
@@ -35,7 +36,7 @@ export default function RegisterPage() {
       }, 2000);
     },
     onError: (error: any) => {
-      setError(formatApiError(error, "Registration failed. Please try again."));
+      setError(formatApiError(error));
     },
   });
 
@@ -74,8 +75,12 @@ export default function RegisterPage() {
         <form onSubmit={handleSubmit}>
           <CardContent className="space-y-4">
             {error && (
-              <div className="rounded-md bg-destructive/10 border border-destructive/20 p-3 text-sm text-destructive">
-                {error}
+              <div className="rounded-md bg-destructive/10 border border-destructive/20 p-3 text-sm text-destructive flex items-start gap-2 animate-in slide-in-from-top-2">
+                <AlertCircle className="h-4 w-4 mt-0.5 flex-shrink-0" />
+                <div className="flex-1">
+                  <p className="font-medium">Registration Failed</p>
+                  <p className="text-xs mt-1 opacity-90">{error}</p>
+                </div>
               </div>
             )}
             <div className="space-y-2">
@@ -85,7 +90,10 @@ export default function RegisterPage() {
                 type="email"
                 placeholder="Enter your email"
                 value={email}
-                onChange={(e) => setEmail(e.target.value)}
+                onChange={(e) => {
+                  setEmail(e.target.value);
+                  if (error) setError("");
+                }}
                 required
               />
             </div>
@@ -96,7 +104,10 @@ export default function RegisterPage() {
                 type="text"
                 placeholder="Choose a username"
                 value={username}
-                onChange={(e) => setUsername(e.target.value)}
+                onChange={(e) => {
+                  setUsername(e.target.value);
+                  if (error) setError("");
+                }}
                 required
                 minLength={3}
                 maxLength={50}
@@ -109,7 +120,10 @@ export default function RegisterPage() {
                 type="password"
                 placeholder="Create a password"
                 value={password}
-                onChange={(e) => setPassword(e.target.value)}
+                onChange={(e) => {
+                  setPassword(e.target.value);
+                  if (error) setError("");
+                }}
                 required
                 minLength={6}
               />
@@ -124,7 +138,14 @@ export default function RegisterPage() {
               className="w-full"
               disabled={registerMutation.isPending}
             >
-              {registerMutation.isPending ? "Creating account..." : "Sign Up"}
+              {registerMutation.isPending ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Creating account...
+                </>
+              ) : (
+                "Sign Up"
+              )}
             </Button>
             <p className="text-sm text-center text-muted-foreground">
               Already have an account?{" "}

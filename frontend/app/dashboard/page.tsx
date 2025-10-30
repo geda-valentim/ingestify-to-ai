@@ -28,6 +28,7 @@ import type { SourceType } from "@/types/api";
 export default function DashboardPage() {
   const router = useRouter();
   const { user, clearAuth } = useAuthStore();
+  const token = useAuthStore((state) => state.token);
   const isAuthenticated = useAuthStore((state) => state.token !== null && state.user !== null);
   const hasHydrated = useAuthStore((state) => state._hasHydrated);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
@@ -45,8 +46,8 @@ export default function DashboardPage() {
     }
   }, [isAuthenticated, hasHydrated, router]);
 
-  const convertMutation = useMutation({
-    mutationFn: jobsApi.convert,
+  const uploadMutation = useMutation({
+    mutationFn: (file: File) => jobsApi.upload(file, token!),
     onSuccess: (data) => {
       setUploadSuccess(data.job_id);
       // Clear all forms
@@ -71,40 +72,25 @@ export default function DashboardPage() {
 
   const handleFileUpload = () => {
     if (!selectedFile) return;
-    convertMutation.mutate({
-      source_type: "file",
-      file: selectedFile,
-      name: customName || undefined,
-    });
+    uploadMutation.mutate(selectedFile);
   };
 
   const handleUrlConvert = () => {
     if (!urlSource) return;
-    convertMutation.mutate({
-      source_type: "url",
-      source: urlSource,
-      name: customName || undefined,
-    });
+    // URL conversion not yet implemented in API
+    alert("URL conversion coming soon!");
   };
 
   const handleGdriveConvert = () => {
     if (!gdriveSource || !gdriveToken) return;
-    convertMutation.mutate({
-      source_type: "gdrive",
-      source: gdriveSource,
-      name: customName || undefined,
-      authToken: gdriveToken,
-    });
+    // Google Drive conversion not yet implemented in API
+    alert("Google Drive conversion coming soon!");
   };
 
   const handleDropboxConvert = () => {
     if (!dropboxSource || !dropboxToken) return;
-    convertMutation.mutate({
-      source_type: "dropbox",
-      source: dropboxSource,
-      name: customName || undefined,
-      authToken: dropboxToken,
-    });
+    // Dropbox conversion not yet implemented in API
+    alert("Dropbox conversion coming soon!");
   };
 
   if (!user) {
@@ -127,7 +113,7 @@ export default function DashboardPage() {
             </div>
             <div className="flex items-center space-x-4">
               <span className="text-sm text-muted-foreground">
-                Welcome, <span className="font-medium text-foreground">{user.username}</span>
+                Welcome, <span className="font-medium text-foreground">{user.name}</span>
               </span>
               <Button
                 variant="outline"
@@ -177,7 +163,7 @@ export default function DashboardPage() {
                 </div>
               )}
 
-              {convertMutation.isError && (
+              {uploadMutation.isError && (
                 <div className="rounded-md bg-destructive/10 border border-destructive/20 p-4 text-sm text-destructive">
                   Conversion failed. Please try again.
                 </div>
@@ -224,11 +210,11 @@ export default function DashboardPage() {
 
                   <Button
                     onClick={handleFileUpload}
-                    disabled={!selectedFile || convertMutation.isPending}
+                    disabled={!selectedFile || uploadMutation.isPending}
                     className="w-full"
                     size="lg"
                   >
-                    {convertMutation.isPending ? "Converting..." : "Convert to Markdown"}
+                    {uploadMutation.isPending ? "Converting..." : "Convert to Markdown"}
                   </Button>
                 </TabsContent>
 
@@ -261,11 +247,11 @@ export default function DashboardPage() {
 
                   <Button
                     onClick={handleUrlConvert}
-                    disabled={!urlSource || convertMutation.isPending}
+                    disabled={!urlSource || uploadMutation.isPending}
                     className="w-full"
                     size="lg"
                   >
-                    {convertMutation.isPending ? "Converting..." : "Convert from URL"}
+                    {uploadMutation.isPending ? "Converting..." : "Convert from URL"}
                   </Button>
                 </TabsContent>
 
@@ -312,11 +298,11 @@ export default function DashboardPage() {
 
                   <Button
                     onClick={handleGdriveConvert}
-                    disabled={!gdriveSource || !gdriveToken || convertMutation.isPending}
+                    disabled={!gdriveSource || !gdriveToken || uploadMutation.isPending}
                     className="w-full"
                     size="lg"
                   >
-                    {convertMutation.isPending ? "Converting..." : "Convert from Google Drive"}
+                    {uploadMutation.isPending ? "Converting..." : "Convert from Google Drive"}
                   </Button>
                 </TabsContent>
 
@@ -363,11 +349,11 @@ export default function DashboardPage() {
 
                   <Button
                     onClick={handleDropboxConvert}
-                    disabled={!dropboxSource || !dropboxToken || convertMutation.isPending}
+                    disabled={!dropboxSource || !dropboxToken || uploadMutation.isPending}
                     className="w-full"
                     size="lg"
                   >
-                    {convertMutation.isPending ? "Converting..." : "Convert from Dropbox"}
+                    {uploadMutation.isPending ? "Converting..." : "Convert from Dropbox"}
                   </Button>
                 </TabsContent>
               </Tabs>

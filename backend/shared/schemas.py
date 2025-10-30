@@ -23,12 +23,31 @@ class JobStatus(str, Enum):
     CANCELLED = "cancelled"   # Cancelado
 
 
+class DoclingPreset(str, Enum):
+    """
+    Docling conversion quality/speed presets
+
+    - FAST: Fastest conversion, text-only (no OCR, no images) - ~35s/MB
+    - BALANCED: Moderate speed with image extraction - ~70-105s/MB
+    - QUALITY: Full features including OCR for scanned documents - ~350s/MB
+    """
+    FAST = "fast"           # OCR: Off, Images: Off, Tables: On  (~35s/MB)
+    BALANCED = "balanced"   # OCR: Off, Images: On, Tables: On   (~70-105s/MB)
+    QUALITY = "quality"     # OCR: On, Images: On, Tables: On    (~350s/MB)
+
+
 class ConversionOptions(BaseModel):
     format: str = "markdown"
     include_images: bool = True
     preserve_tables: bool = True
     extract_metadata: bool = True
     chunk_size: Optional[int] = None
+
+    # Docling quality/speed preset (for PDF conversion only)
+    docling_preset: Optional[DoclingPreset] = Field(
+        default=DoclingPreset.FAST,
+        description="Quality/speed preset for PDF conversion: fast (~35s/MB), balanced (~70-105s/MB), quality (~350s/MB)"
+    )
 
     # Audio transcription options
     include_timestamps: bool = True  # Include timestamp markers in transcription

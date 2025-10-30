@@ -44,7 +44,7 @@ services:
       dockerfile: docker/Dockerfile.api
     container_name: ingestify-api
     ports:
-      - "8000:8080"
+      - "8000:8000"
     environment:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
@@ -55,9 +55,9 @@ services:
       - ENVIRONMENT=development
       - LOG_LEVEL=INFO
       - MAX_FILE_SIZE_MB=50
-      - CONVERSION_TIMEOUT_SECONDS=300
+      - CONVERSION_TIMEOUT_SECONDS=600
       - TEMP_STORAGE_PATH=/tmp/ingestify
-      - RESULT_TTL_SECONDS=3600
+      - RESULT_TTL_SECONDS=14400
       - DATABASE_URL=${DATABASE_URL:-mysql+pymysql://root:root@host.docker.internal:3306/ingestify}
       - ELASTICSEARCH_URL=${ELASTICSEARCH_URL:-http://host.docker.internal:9200}
     depends_on:
@@ -85,8 +85,9 @@ services:
       - ENVIRONMENT=development
       - LOG_LEVEL=INFO
       - MAX_FILE_SIZE_MB=50
-      - CONVERSION_TIMEOUT_SECONDS=300
+      - CONVERSION_TIMEOUT_SECONDS=600
       - TEMP_STORAGE_PATH=/tmp/ingestify
+      - RESULT_TTL_SECONDS=14400
       - DATABASE_URL=${DATABASE_URL:-mysql+pymysql://root:root@host.docker.internal:3306/ingestify}
       - ELASTICSEARCH_URL=${ELASTICSEARCH_URL:-http://host.docker.internal:9200}
     depends_on:
@@ -97,7 +98,7 @@ services:
       - ./backend/workers:/app/workers
       - ./backend/shared:/app/shared
     deploy:
-      replicas: 2
+      replicas: 5
     restart: unless-stopped
     extra_hosts:
       - "host.docker.internal:host-gateway"

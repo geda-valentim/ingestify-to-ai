@@ -35,6 +35,10 @@ settings = get_settings()
 async def upload_and_convert(
     file: UploadFile = File(..., description="Arquivo para conversão (PDF, DOCX, HTML, etc.)"),
     name: Optional[str] = Form(None, description="Nome de identificação (opcional, padrão: nome do arquivo)"),
+    docling_preset: Optional[str] = Form(
+        "fast",
+        description="Quality/speed preset for PDF conversion: 'fast' (~35s/MB, text-only), 'balanced' (~70-105s/MB, with images), 'quality' (~350s/MB, with OCR)"
+    ),
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
 ):
@@ -47,6 +51,13 @@ async def upload_and_convert(
     ## Parâmetros:
     - `file`: Arquivo para upload
     - `name`: Nome de identificação opcional (se não fornecido, usa o nome do arquivo)
+    - `docling_preset`: Quality/speed preset (apenas para PDFs):
+      - **fast** (padrão): Conversão rápida, apenas texto (~35s/MB)
+        - OCR: Desligado | Images: Desligadas | Tables: Ligadas
+      - **balanced**: Velocidade moderada, extrai imagens (~70-105s/MB)
+        - OCR: Desligado | Images: Ligadas | Tables: Ligadas
+      - **quality**: Máxima qualidade, inclui OCR para documentos escaneados (~350s/MB)
+        - OCR: Ligado | Images: Ligadas | Tables: Ligadas
 
     ## Formatos suportados
     PDF, DOCX, DOC, HTML, PPTX, XLSX, RTF, ODT
@@ -54,11 +65,18 @@ async def upload_and_convert(
     ## Retorno
     Retorna imediatamente um `job_id` para consultar o progresso via `/jobs/{job_id}`
 
-    ## Exemplo com nome customizado:
+    ## Exemplos:
     ```bash
-    curl -X POST http://localhost:8080/upload \
-      -F "file=@documento.pdf" \
-      -F "name=Relatório Mensal 2025"
+    # Fast mode (default)
+    curl -X POST http://localhost:8000/upload \
+      -H "X-API-Key: your-api-key" \
+      -F "file=@documento.pdf"
+
+    # Quality mode with OCR
+    curl -X POST http://localhost:8000/upload \
+      -H "X-API-Key: your-api-key" \
+      -F "file=@documento_escaneado.pdf" \
+      -F "docling_preset=quality"
     ```
     """
     redis_client = get_redis_client()
@@ -143,7 +161,7 @@ async def upload_and_convert(
             job_id=str(job_id),
             source_type="file",
             source=str(temp_file_path),
-            options={},
+            options={"docling_preset": docling_preset},
         )
         logger.info(f"MAIN JOB {job_id} enqueued to Celery successfully")
 

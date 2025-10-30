@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     # Docling Performance Settings
     docling_enable_ocr: bool = False  # Disable for digital PDFs (10x faster)
     docling_enable_table_structure: bool = True  # Disable if no tables needed
+    docling_enable_images: bool = False  # Disable image extraction for speed (text-only conversion)
     docling_use_v2_backend: bool = True  # Use beta backend (10x faster)
 
     # Audio Transcription Settings

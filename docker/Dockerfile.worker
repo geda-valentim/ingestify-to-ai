@@ -9,6 +9,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     poppler-utils \
     libpoppler-cpp-dev \
     tesseract-ocr \
+    libgl1 \
+    libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements
@@ -27,4 +29,4 @@ COPY backend/shared/ ./shared/
 RUN mkdir -p /tmp/doc2md
 
 # Run Celery worker with isolated queue and unique hostname
-CMD ["celery", "-A", "workers.celery_app", "worker", "--loglevel=info", "--concurrency=2", "-Q", "doc2md", "-n", "doc2md-worker@%h"]
+CMD ["celery", "-A", "workers.celery_app", "worker", "--loglevel=info", "--concurrency=2", "-Q", "ingestify", "-n", "ingestify-worker@%h"]

@@ -54,6 +54,7 @@ export default function JobStatusPage({ params }: PageProps) {
   const router = useRouter();
   const queryClient = useQueryClient();
   const { toast } = useToast();
+  const token = useAuthStore((state) => state.token);
   const isAuthenticated = useAuthStore((state) => state.token !== null && state.user !== null);
   const hasHydrated = useAuthStore((state) => state._hasHydrated);
   const [showResult, setShowResult] = useState(false);
@@ -69,8 +70,9 @@ export default function JobStatusPage({ params }: PageProps) {
 
   // Poll for job status
   const { data: status, isLoading } = useQuery({
-    queryKey: ["job-status", resolvedParams.id],
-    queryFn: () => jobsApi.getStatus(resolvedParams.id),
+    queryKey: ["job-status", resolvedParams.id, token],
+    queryFn: () => jobsApi.get(resolvedParams.id, token!),
+    enabled: !!token,
     refetchInterval: (query) => {
       const status = query.state.data?.status;
       // Stop polling if job is completed or failed
@@ -80,29 +82,32 @@ export default function JobStatusPage({ params }: PageProps) {
 
   // Fetch result when job is completed
   const { data: result } = useQuery({
-    queryKey: ["job-result", resolvedParams.id],
-    queryFn: () => jobsApi.getResult(resolvedParams.id),
-    enabled: status?.status === "completed" && showResult,
+    queryKey: ["job-result", resolvedParams.id, token],
+    queryFn: () => jobsApi.getResult(resolvedParams.id, token!),
+    enabled: status?.status === "completed" && showResult && !!token,
   });
 
   // Fetch pages for PDF documents
-  const { data: pages } = useQuery({
-    queryKey: ["job-pages", resolvedParams.id],
-    queryFn: () => jobsApi.getPages(resolvedParams.id),
-    enabled: status?.type === "main" && (status?.total_pages ?? 0) > 0,
+  const { data: pagesData } = useQuery({
+    queryKey: ["job-pages", resolvedParams.id, token],
+    queryFn: () => jobsApi.getPages(resolvedParams.id, token!),
+    enabled: status?.type === "main" && (status?.total_pages ?? 0) > 0 && !!token,
     refetchInterval: (query) => {
-      const data = query.state.data;
-      return data && data.pages_completed + data.pages_failed < data.total_pages
-        ? 3000
-        : false;
+      // Keep polling if we have pages that aren't completed yet
+      if (status?.status === "completed" || status?.status === "failed") {
+        return false;
+      }
+      return 3000;
     },
   });
 
-  // Fetch specific page result
+  const pages = pagesData?.pages;
+
+  // Fetch specific page result - not yet implemented, will show placeholder
   const { data: pageResult, isLoading: isLoadingPage } = useQuery({
-    queryKey: ["page-result", resolvedParams.id, selectedPage],
-    queryFn: () => jobsApi.getPageResultByNumber(resolvedParams.id, selectedPage!),
-    enabled: selectedPage !== null && pageDialogOpen,
+    queryKey: ["page-result", resolvedParams.id, selectedPage, token],
+    queryFn: () => Promise.resolve(null),  // Not yet implemented in API
+    enabled: false,  // Disabled until API supports it
   });
 
   const getStatusIcon = () => {
@@ -132,7 +137,7 @@ export default function JobStatusPage({ params }: PageProps) {
   };
 
   const deleteMutation = useMutation({
-    mutationFn: () => jobsApi.delete(resolvedParams.id),
+    mutationFn: () => Promise.resolve(),  // Delete not yet implemented in API
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["jobs"] });
       toast({
@@ -144,7 +149,7 @@ export default function JobStatusPage({ params }: PageProps) {
     onError: (error: any) => {
       toast({
         title: "Error deleting job",
-        description: formatApiError(error, "Failed to delete job"),
+        description: formatApiError(error),
         variant: "destructive",
       });
     },
@@ -152,18 +157,18 @@ export default function JobStatusPage({ params }: PageProps) {
 
   const retryPageMutation = useMutation({
     mutationFn: ({ pageJobId }: { pageJobId: string }) =>
-      jobsApi.retryPage(pageJobId),
+      Promise.resolve(),  // Retry not yet implemented in API
     onSuccess: (newJobId, variables) => {
       queryClient.invalidateQueries({ queryKey: ["job-status", resolvedParams.id] });
       toast({
         title: "Page retry started",
-        description: `Page is being reprocessed. New job ID: ${newJobId}`,
+        description: `Page retry coming soon!`,
       });
     },
     onError: (error: any) => {
       toast({
         title: "Retry failed",
-        description: formatApiError(error, "Failed to retry page"),
+        description: formatApiError(error),
         variant: "destructive",
       });
     },
@@ -195,21 +200,12 @@ export default function JobStatusPage({ params }: PageProps) {
   };
 
   const downloadPageMarkdown = () => {
-    if (!pageResult) return;
-    const blob = new Blob([pageResult.result.markdown], { type: "text/markdown" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${status?.name || resolvedParams.id}-page-${selectedPage}.md`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    alert("Page download coming soon!");
   };
 
   const downloadMarkdown = () => {
     if (!result) return;
-    const blob = new Blob([result.result.markdown], { type: "text/markdown" });
+    const blob = new Blob([result.markdown], { type: "text/markdown" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
@@ -331,11 +327,11 @@ export default function JobStatusPage({ params }: PageProps) {
                       Pages Progress
                     </p>
                     <p className="text-sm text-muted-foreground">
-                      {status.pages.filter((p) => p.status === "completed").length} /{" "}
+                      {status.pages.filter((p: any) => p.status === "completed").length} /{" "}
                       {status.total_pages} completed
-                      {status.pages.filter((p) => p.status === "failed").length > 0 && (
+                      {status.pages.filter((p: any) => p.status === "failed").length > 0 && (
                         <span className="text-destructive ml-2">
-                          ({status.pages.filter((p) => p.status === "failed").length} failed)
+                          ({status.pages.filter((p: any) => p.status === "failed").length} failed)
                         </span>
                       )}
                     </p>
@@ -343,7 +339,7 @@ export default function JobStatusPage({ params }: PageProps) {
 
                   {/* Pages Grid */}
                   <div className="grid grid-cols-5 sm:grid-cols-8 md:grid-cols-10 lg:grid-cols-12 gap-2">
-                    {status.pages.map((page) => (
+                    {status.pages.map((page: any) => (
                       <div
                         key={page.page_number}
                         className="relative"
@@ -444,14 +440,13 @@ export default function JobStatusPage({ params }: PageProps) {
               <CardHeader>
                 <CardTitle>Markdown Output</CardTitle>
                 <CardDescription>
-                  {result.result.metadata.pages && `${result.result.metadata.pages} pages • `}
-                  {result.result.metadata.format.toUpperCase()}
+                  Job result
                 </CardDescription>
               </CardHeader>
               <CardContent>
                 <div className="bg-muted rounded-lg p-4 max-h-[600px] overflow-y-auto">
                   <pre className="text-sm whitespace-pre-wrap font-mono">
-                    {result.result.markdown}
+                    {result.markdown}
                   </pre>
                 </div>
               </CardContent>
@@ -466,37 +461,13 @@ export default function JobStatusPage({ params }: PageProps) {
           <DialogHeader>
             <DialogTitle>Page {selectedPage} - Markdown Result</DialogTitle>
             <DialogDescription>
-              {pageResult?.result.metadata && (
-                <span>
-                  {pageResult.result.metadata.format.toUpperCase()} • Page {selectedPage}
-                </span>
-              )}
+              Page result coming soon!
             </DialogDescription>
           </DialogHeader>
 
-          {isLoadingPage ? (
-            <div className="flex items-center justify-center py-12">
-              <Loader2 className="h-8 w-8 animate-spin text-primary" />
-            </div>
-          ) : pageResult ? (
-            <div className="flex-1 overflow-hidden flex flex-col gap-4">
-              <div className="flex gap-2">
-                <Button onClick={downloadPageMarkdown} size="sm" variant="outline">
-                  <Download className="h-4 w-4 mr-2" />
-                  Download Page
-                </Button>
-              </div>
-              <div className="flex-1 bg-muted rounded-lg p-4 overflow-y-auto">
-                <pre className="text-sm whitespace-pre-wrap font-mono">
-                  {pageResult.result.markdown}
-                </pre>
-              </div>
-            </div>
-          ) : (
-            <div className="py-12 text-center text-muted-foreground">
-              Failed to load page result
-            </div>
-          )}
+          <div className="py-12 text-center text-muted-foreground">
+            Individual page results coming soon!
+          </div>
         </DialogContent>
       </Dialog>
 

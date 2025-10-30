@@ -28,6 +28,7 @@ import { formatDistanceToNow } from "date-fns";
 export default function ApiKeysPage() {
   const router = useRouter();
   const queryClient = useQueryClient();
+  const token = useAuthStore((state) => state.token);
   const isAuthenticated = useAuthStore((state) => state.token !== null && state.user !== null);
   const hasHydrated = useAuthStore((state) => state._hasHydrated);
   const [showCreateForm, setShowCreateForm] = useState(false);
@@ -43,32 +44,32 @@ export default function ApiKeysPage() {
   }, [isAuthenticated, hasHydrated, router]);
 
   const { data: apiKeys, isLoading } = useQuery({
-    queryKey: ["api-keys"],
-    queryFn: apiKeysApi.list,
+    queryKey: ["api-keys", token],
+    queryFn: () => apiKeysApi.list(token!),
+    enabled: !!token,
   });
 
   const createMutation = useMutation({
-    mutationFn: apiKeysApi.create,
+    mutationFn: (data: { name: string }) => apiKeysApi.create(data, token!),
     onSuccess: (data) => {
       setCreatedKey(data.api_key);
       setNewKeyName("");
       setExpiresInDays(30);
       setShowCreateForm(false);
-      queryClient.invalidateQueries({ queryKey: ["api-keys"] });
+      queryClient.invalidateQueries({ queryKey: ["api-keys", token] });
     },
   });
 
   const revokeMutation = useMutation({
-    mutationFn: apiKeysApi.revoke,
+    mutationFn: (id: string) => apiKeysApi.delete(id, token!),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["api-keys"] });
+      queryClient.invalidateQueries({ queryKey: ["api-keys", token] });
     },
   });
 
   const handleCreateKey = () => {
     createMutation.mutate({
       name: newKeyName,
-      expires_in_days: expiresInDays || null,
     });
   };
 

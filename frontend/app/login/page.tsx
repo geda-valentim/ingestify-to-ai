@@ -18,6 +18,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { AlertCircle, Loader2 } from "lucide-react";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -33,19 +34,19 @@ export default function LoginPage() {
       localStorage.setItem("auth_token", data.access_token);
 
       // Get user info with the token now in localStorage
-      const userResponse = await authApi.me();
-      setAuth(userResponse, data.access_token);
+      const userResponse = await authApi.getProfile(data.access_token);
+      setAuth(data.access_token, userResponse);
       router.push("/dashboard");
     },
     onError: (error: any) => {
-      setError(formatApiError(error, "Login failed. Please try again."));
+      setError(formatApiError(error));
     },
   });
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
-    loginMutation.mutate({ username, password });
+    loginMutation.mutate({ email: username, password });
   };
 
   return (
@@ -62,8 +63,12 @@ export default function LoginPage() {
         <form onSubmit={handleSubmit}>
           <CardContent className="space-y-4">
             {error && (
-              <div className="rounded-md bg-destructive/10 border border-destructive/20 p-3 text-sm text-destructive">
-                {error}
+              <div className="rounded-md bg-destructive/10 border border-destructive/20 p-3 text-sm text-destructive flex items-start gap-2 animate-in slide-in-from-top-2">
+                <AlertCircle className="h-4 w-4 mt-0.5 flex-shrink-0" />
+                <div className="flex-1">
+                  <p className="font-medium">Login Failed</p>
+                  <p className="text-xs mt-1 opacity-90">{error}</p>
+                </div>
               </div>
             )}
             <div className="space-y-2">
@@ -73,7 +78,10 @@ export default function LoginPage() {
                 type="text"
                 placeholder="Enter your username or email"
                 value={username}
-                onChange={(e) => setUsername(e.target.value)}
+                onChange={(e) => {
+                  setUsername(e.target.value);
+                  if (error) setError("");
+                }}
                 required
               />
             </div>
@@ -84,7 +92,10 @@ export default function LoginPage() {
                 type="password"
                 placeholder="Enter your password"
                 value={password}
-                onChange={(e) => setPassword(e.target.value)}
+                onChange={(e) => {
+                  setPassword(e.target.value);
+                  if (error) setError("");
+                }}
                 required
               />
             </div>
@@ -95,7 +106,14 @@ export default function LoginPage() {
               className="w-full"
               disabled={loginMutation.isPending}
             >
-              {loginMutation.isPending ? "Signing in..." : "Sign In"}
+              {loginMutation.isPending ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Signing in...
+                </>
+              ) : (
+                "Sign In"
+              )}
             </Button>
             <p className="text-sm text-center text-muted-foreground">
               Don&apos;t have an account?{" "}

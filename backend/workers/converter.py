@@ -9,13 +9,14 @@ logger = logging.getLogger(__name__)
 class DoclingConverter:
     """Wrapper for Docling document converter"""
 
-    def __init__(self, enable_ocr: bool = False, enable_table_structure: bool = True):
+    def __init__(self, enable_ocr: bool = False, enable_table_structure: bool = True, enable_images: bool = False):
         """
         Initialize Docling converter with optimizations
 
         Args:
             enable_ocr: Enable OCR for scanned documents (slower, disable for digital PDFs)
             enable_table_structure: Enable table structure recognition (disable if no tables needed)
+            enable_images: Enable image extraction and processing (slower, disable for text-only conversion)
         """
         try:
             from docling.document_converter import DocumentConverter, PdfFormatOption, InputFormat
@@ -42,6 +43,7 @@ class DoclingConverter:
             pipeline_options = PdfPipelineOptions()
             pipeline_options.do_ocr = enable_ocr  # Disable OCR for speed (digital PDFs only)
             pipeline_options.do_table_structure = enable_table_structure  # Disable if no tables
+            pipeline_options.generate_picture_images = enable_images  # Disable image extraction for speed
 
             # Use optimized PDF backend if available
             if backend:
@@ -63,7 +65,7 @@ class DoclingConverter:
                     }
                 )
 
-            logger.info(f"Docling converter initialized (OCR={enable_ocr}, Tables={enable_table_structure}, Backend={backend_name})")
+            logger.info(f"Docling converter initialized (OCR={enable_ocr}, Tables={enable_table_structure}, Images={enable_images}, Backend={backend_name})")
         except ImportError as e:
             logger.error(f"Failed to import Docling: {e}")
             self.converter = None
@@ -184,15 +186,42 @@ extracted using Docling.
 _converter: DoclingConverter = None
 
 
-def get_converter() -> DoclingConverter:
-    """Get or create converter instance with settings from config"""
-    global _converter
-    if _converter is None:
-        from shared.config import get_settings
-        settings = get_settings()
+def get_converter(preset: str = None) -> DoclingConverter:
+    """
+    Get or create converter instance with settings from config or preset
 
-        _converter = DoclingConverter(
-            enable_ocr=settings.docling_enable_ocr,
-            enable_table_structure=settings.docling_enable_table_structure,
-        )
-    return _converter
+    Args:
+        preset: Optional preset name ('fast', 'balanced', 'quality')
+                If None, uses config defaults
+
+    Returns:
+        DoclingConverter instance
+    """
+    from shared.config import get_settings
+    settings = get_settings()
+
+    # Determine settings based on preset or config
+    if preset == "fast":
+        enable_ocr = False
+        enable_images = False
+        enable_table_structure = True
+    elif preset == "balanced":
+        enable_ocr = False
+        enable_images = True
+        enable_table_structure = True
+    elif preset == "quality":
+        enable_ocr = True
+        enable_images = True
+        enable_table_structure = True
+    else:
+        # Use config defaults
+        enable_ocr = settings.docling_enable_ocr
+        enable_images = settings.docling_enable_images
+        enable_table_structure = settings.docling_enable_table_structure
+
+    # Always create new instance for different presets
+    return DoclingConverter(
+        enable_ocr=enable_ocr,
+        enable_table_structure=enable_table_structure,
+        enable_images=enable_images,
+    )

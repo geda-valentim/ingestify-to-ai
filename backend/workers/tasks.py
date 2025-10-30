@@ -60,9 +60,12 @@ def process_conversion(
 
     redis_client = get_redis_client()
     es_client = get_es_client()
-    converter = get_converter()
 
-    logger.info(f"[MAIN JOB {job_id}] Starting conversion: {source_type}")
+    # Get preset from options
+    preset = options.get('docling_preset') if options else None
+    converter = get_converter(preset=preset)
+
+    logger.info(f"[MAIN JOB {job_id}] Starting conversion: {source_type} (preset={preset})")
 
     # Update MySQL: Set job to processing
     db = SessionLocal()
