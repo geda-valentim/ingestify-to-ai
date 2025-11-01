@@ -812,8 +812,18 @@ async def get_job_status(
     job_id: str,
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
+    page_limit: Optional[int] = None,
+    page_offset: int = 0,
 ):
-    """Consultar status de qualquer tipo de job (main, split, page, merge)"""
+    """
+    Consultar status de qualquer tipo de job (main, split, page, merge)
+
+    ## Pagination for pages list:
+    - `page_limit`: Maximum number of pages to return (default: all pages)
+    - `page_offset`: Number of pages to skip (default: 0)
+
+    Example: GET /jobs/{job_id}?page_limit=50&page_offset=0
+    """
     redis_client = get_redis_client()
 
     # Get job status from Redis (real-time data)
@@ -845,8 +855,8 @@ async def get_job_status(
         if "completed_at" in status_data and status_data["completed_at"]:
             completed_at = datetime.fromisoformat(status_data["completed_at"])
 
-    # Get job type
-    job_type = status_data.get("type", "main")
+    # Get job type (convert to lowercase for schema validation)
+    job_type = status_data.get("type", "main").lower()
 
     # Build response based on job type
     response_data = {
@@ -893,8 +903,13 @@ async def get_job_status(
             # Add detailed page status for each page
             pages_status_dict = {}  # Use dict for fast lookup by page number
 
-            # Try MySQL first
-            db_pages = db.query(Page).filter(Page.job_id == job_id).order_by(Page.page_number).all()
+            # Try MySQL first with pagination
+            query = db.query(Page).filter(Page.job_id == job_id).order_by(Page.page_number)
+
+            if page_limit is not None:
+                query = query.limit(page_limit).offset(page_offset)
+
+            db_pages = query.all()
 
             if db_pages:
                 # Use MySQL data
@@ -933,9 +948,17 @@ async def get_job_status(
                             "retry_count": 0,  # Redis doesn't track retry count
                         }
 
-            # Build complete pages list with placeholders for all pages
+            # Build complete pages list with placeholders
+            # If pagination is enabled, only include pages in the requested range
+            if page_limit is not None:
+                start_page = page_offset + 1
+                end_page = min(page_offset + page_limit, total_pages)
+            else:
+                start_page = 1
+                end_page = total_pages
+
             pages_status_list = []
-            for page_num in range(1, total_pages + 1):
+            for page_num in range(start_page, end_page + 1):
                 if page_num in pages_status_dict:
                     pages_status_list.append(pages_status_dict[page_num])
                 else:
@@ -949,9 +972,11 @@ async def get_job_status(
                         "retry_count": 0,
                     })
 
-            # Calculate actual counts from the pages list
-            pages_completed = sum(1 for p in pages_status_list if p["status"] == "completed")
-            pages_failed = sum(1 for p in pages_status_list if p["status"] == "failed")
+            # Only recalculate counts if not already set from database
+            # (pagination would make these counts wrong)
+            if not db_job or not db_job.total_pages:
+                pages_completed = sum(1 for p in pages_status_list if p["status"] == "completed")
+                pages_failed = sum(1 for p in pages_status_list if p["status"] == "failed")
 
             response_data["pages_completed"] = pages_completed
             response_data["pages_failed"] = pages_failed
@@ -1523,7 +1548,7 @@ async def list_jobs(
     limit: int = 50,
     offset: int = 0,
     status: Optional[str] = None,
-    job_type: Optional[str] = None,
+    job_type: str = "main",
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
 ):
@@ -1534,16 +1559,19 @@ async def list_jobs(
     - `limit`: Número máximo de jobs a retornar (padrão: 50, máximo: 100)
     - `offset`: Quantidade de jobs a pular (paginação)
     - `status`: Filtrar por status: queued, processing, completed, failed
-    - `job_type`: Filtrar por tipo: main, page, split, merge
+    - `job_type`: Filtrar por tipo (padrão: "main" - apenas jobs principais)
+      - "main": Jobs principais do usuário (recomendado)
+      - "page": Jobs de página individual
+      - "all": Todos os tipos de jobs
 
     ## Retorno:
     Lista de jobs com seus IDs, status e informações básicas
 
     ## Exemplos:
-    - `/jobs` - Lista todos os jobs
-    - `/jobs?job_type=main` - Apenas jobs principais (recomendado)
-    - `/jobs?status=processing` - Apenas jobs em processamento
-    - `/jobs?job_type=main&status=completed&limit=10` - Últimos 10 jobs principais completados
+    - `/jobs` - Lista apenas jobs principais (padrão)
+    - `/jobs?job_type=all` - Lista todos os tipos de jobs
+    - `/jobs?status=processing` - Apenas jobs principais em processamento
+    - `/jobs?status=completed&limit=10` - Últimos 10 jobs principais completados
     """
     redis_client = get_redis_client()
 
@@ -1569,8 +1597,9 @@ async def list_jobs(
         for job_id in user_job_ids:
             status_data = redis_client.get_job_status(job_id)
             if status_data:
-                # Filter by job_type if specified
-                if job_type and status_data.get("type") != job_type:
+                # Filter by job_type (skip if not "all" and doesn't match)
+                job_data_type = status_data.get("type", "main").lower()
+                if job_type != "all" and job_data_type != job_type:
                     continue
 
                 # Filter by status if specified
@@ -1582,7 +1611,7 @@ async def list_jobs(
 
                 job_info = {
                     "job_id": job_id,
-                    "type": status_data.get("type", "main"),
+                    "type": job_data_type,
                     "status": status_data.get("status"),
                     "progress": status_data.get("progress", 0),
                     "name": db_job.name if db_job and db_job.name else status_data.get("name"),

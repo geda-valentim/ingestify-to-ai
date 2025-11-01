@@ -50,6 +50,8 @@ export default function JobsListPage() {
   const [statusFilter, setStatusFilter] = useState<JobStatus | "all">("all");
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [jobToDelete, setJobToDelete] = useState<string | null>(null);
+  const [page, setPage] = useState(0);
+  const PAGE_SIZE = 20;
 
   useEffect(() => {
     if (hasHydrated && !isAuthenticated) {
@@ -57,16 +59,30 @@ export default function JobsListPage() {
     }
   }, [isAuthenticated, hasHydrated, router]);
 
-  const { data: jobs, isLoading, error } = useQuery({
-    queryKey: ["jobs", statusFilter, token],
-    queryFn: () => jobsApi.list(token!),
+  // Reset page when filter changes
+  useEffect(() => {
+    setPage(0);
+  }, [statusFilter]);
+
+  const { data: jobsData, isLoading, error } = useQuery({
+    queryKey: ["jobs", statusFilter, page, token],
+    queryFn: () => jobsApi.list(token!, {
+      limit: PAGE_SIZE,
+      offset: page * PAGE_SIZE,
+      status: statusFilter === "all" ? undefined : statusFilter,
+      job_type: "main",
+    }),
     refetchInterval: 10000, // Refresh every 10 seconds
     enabled: !!token,
   });
 
-  const { data: searchResults, isLoading: isSearching } = useQuery({
+  const { data: searchData, isLoading: isSearching } = useQuery({
     queryKey: ["search", searchQuery, token],
-    queryFn: () => jobsApi.list(token!),
+    queryFn: () => jobsApi.list(token!, {
+      limit: 100,
+      offset: 0,
+      job_type: "main",
+    }),
     enabled: searchQuery.length > 0 && !!token,
   });
 
@@ -102,7 +118,13 @@ export default function JobsListPage() {
     }
   };
 
+  const jobs = jobsData?.jobs || [];
+  const searchResults = searchData?.jobs || [];
+  const total = jobsData?.total || 0;
   const displayJobs = searchQuery ? searchResults : jobs;
+  const totalPages = Math.ceil(total / PAGE_SIZE);
+  const hasNextPage = page < totalPages - 1;
+  const hasPrevPage = page > 0;
 
   const formatDate = (dateString: string | undefined) => {
     if (!dateString) return "Unknown";
@@ -279,6 +301,40 @@ export default function JobsListPage() {
                 <FileText className="h-12 w-12 mx-auto mb-4 opacity-50" />
                 <p>No jobs found</p>
                 {searchQuery && <p className="text-sm mt-2">Try a different search query</p>}
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Pagination Controls */}
+          {!searchQuery && total > 0 && (
+            <Card>
+              <CardContent className="py-4">
+                <div className="flex items-center justify-between">
+                  <div className="text-sm text-muted-foreground">
+                    Showing {page * PAGE_SIZE + 1} - {Math.min((page + 1) * PAGE_SIZE, total)} of {total} jobs
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setPage(p => Math.max(0, p - 1))}
+                      disabled={!hasPrevPage || isLoading}
+                    >
+                      Previous
+                    </Button>
+                    <div className="text-sm text-muted-foreground px-2">
+                      Page {page + 1} of {totalPages}
+                    </div>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setPage(p => p + 1)}
+                      disabled={!hasNextPage || isLoading}
+                    >
+                      Next
+                    </Button>
+                  </div>
+                </div>
               </CardContent>
             </Card>
           )}

@@ -1,8 +1,8 @@
 import os
+import subprocess
 from pathlib import Path
 from typing import List, Tuple, Optional
 import logging
-from PyPDF2 import PdfReader, PdfWriter
 from shared.minio_client import get_minio_client
 
 logger = logging.getLogger(__name__)
@@ -26,8 +26,16 @@ class PDFSplitter:
     def get_page_count(self, pdf_path: Path) -> int:
         """Retorna número de páginas do PDF"""
         try:
-            reader = PdfReader(str(pdf_path))
-            return len(reader.pages)
+            result = subprocess.run(
+                ['qpdf', '--show-npages', str(pdf_path)],
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            return int(result.stdout.strip())
+        except subprocess.CalledProcessError as e:
+            logger.error(f"Erro ao contar páginas com qpdf: {e.stderr}")
+            raise
         except Exception as e:
             logger.error(f"Erro ao contar páginas: {e}")
             raise
@@ -35,6 +43,7 @@ class PDFSplitter:
     def split_pdf(self, pdf_path: Path, job_id: Optional[str] = None, upload_to_minio: bool = True) -> List[Tuple[int, Path, Optional[str]]]:
         """
         Divide PDF em páginas individuais e opcionalmente faz upload para MinIO
+        Usa qpdf para evitar explosão de tamanho dos arquivos.
 
         Args:
             pdf_path: Caminho do PDF original
@@ -47,28 +56,31 @@ class PDFSplitter:
         if not self.is_pdf(pdf_path):
             raise ValueError(f"Arquivo não é PDF: {pdf_path}")
 
-        logger.info(f"Dividindo PDF: {pdf_path}")
+        logger.info(f"Dividindo PDF com qpdf: {pdf_path}")
 
         try:
-            reader = PdfReader(str(pdf_path))
-            total_pages = len(reader.pages)
-
+            total_pages = self.get_page_count(pdf_path)
             logger.info(f"PDF tem {total_pages} páginas")
 
             page_files = []
             minio_client = get_minio_client() if upload_to_minio else None
 
-            for page_num in range(total_pages):
-                # Criar writer para página única
-                writer = PdfWriter()
-                writer.add_page(reader.pages[page_num])
-
-                # Salvar página individual localmente
-                page_filename = f"page_{page_num + 1:04d}.pdf"
+            for page_num in range(1, total_pages + 1):
+                # Salvar página individual usando qpdf
+                page_filename = f"page_{page_num:04d}.pdf"
                 page_path = self.temp_dir / page_filename
 
-                with open(page_path, 'wb') as output_file:
-                    writer.write(output_file)
+                # Usar qpdf para extrair página (remove objetos não utilizados)
+                try:
+                    subprocess.run(
+                        ['qpdf', str(pdf_path), '--pages', '.', f'{page_num}-{page_num}', '--', str(page_path)],
+                        capture_output=True,
+                        text=True,
+                        check=True
+                    )
+                except subprocess.CalledProcessError as e:
+                    logger.error(f"Erro ao extrair página {page_num} com qpdf: {e.stderr}")
+                    raise
 
                 # Upload para MinIO se habilitado
                 minio_path = None
@@ -82,15 +94,15 @@ class PDFSplitter:
                             content_type="application/pdf",
                         )
                         minio_path = minio_object_name
-                        logger.debug(f"Página {page_num + 1} enviada para MinIO: {minio_path}")
+                        logger.debug(f"Página {page_num} enviada para MinIO: {minio_path}")
                     except Exception as e:
-                        logger.error(f"Erro ao enviar página {page_num + 1} para MinIO: {e}")
+                        logger.error(f"Erro ao enviar página {page_num} para MinIO: {e}")
                         # Continua mesmo com erro no MinIO
 
-                page_files.append((page_num + 1, page_path, minio_path))
-                logger.debug(f"Página {page_num + 1}/{total_pages} salva: {page_path}")
+                page_files.append((page_num, page_path, minio_path))
+                logger.debug(f"Página {page_num}/{total_pages} salva: {page_path}")
 
-            logger.info(f"PDF dividido em {len(page_files)} páginas")
+            logger.info(f"PDF dividido em {len(page_files)} páginas com qpdf")
             return page_files
 
         except Exception as e:
@@ -100,6 +112,7 @@ class PDFSplitter:
     def extract_single_page(self, pdf_path: Path, page_number: int, job_id: Optional[str] = None, upload_to_minio: bool = True) -> Tuple[Path, Optional[str]]:
         """
         Extrai uma página específica do PDF e opcionalmente faz upload para MinIO
+        Usa qpdf para evitar explosão de tamanho dos arquivos.
 
         Args:
             pdf_path: Caminho do PDF original
@@ -113,25 +126,29 @@ class PDFSplitter:
         if not self.is_pdf(pdf_path):
             raise ValueError(f"Arquivo não é PDF: {pdf_path}")
 
-        logger.info(f"Extraindo página {page_number} de {pdf_path}")
+        logger.info(f"Extraindo página {page_number} de {pdf_path} com qpdf")
 
         try:
-            reader = PdfReader(str(pdf_path))
-            total_pages = len(reader.pages)
+            total_pages = self.get_page_count(pdf_path)
 
             if page_number < 1 or page_number > total_pages:
                 raise ValueError(f"Número de página inválido: {page_number}. PDF tem {total_pages} páginas.")
 
-            # Criar writer para página única (page_number é 1-indexed, mas reader.pages é 0-indexed)
-            writer = PdfWriter()
-            writer.add_page(reader.pages[page_number - 1])
-
-            # Salvar página individual localmente
+            # Salvar página individual usando qpdf
             page_filename = f"page_{page_number:04d}.pdf"
             page_path = self.temp_dir / page_filename
 
-            with open(page_path, 'wb') as output_file:
-                writer.write(output_file)
+            # Usar qpdf para extrair página (remove objetos não utilizados)
+            try:
+                subprocess.run(
+                    ['qpdf', str(pdf_path), '--pages', '.', f'{page_number}-{page_number}', '--', str(page_path)],
+                    capture_output=True,
+                    text=True,
+                    check=True
+                )
+            except subprocess.CalledProcessError as e:
+                logger.error(f"Erro ao extrair página {page_number} com qpdf: {e.stderr}")
+                raise
 
             # Upload para MinIO se habilitado
             minio_path = None
@@ -150,7 +167,7 @@ class PDFSplitter:
                 except Exception as e:
                     logger.error(f"Erro ao enviar página {page_number} para MinIO: {e}")
 
-            logger.info(f"Página {page_number} extraída: {page_path}")
+            logger.info(f"Página {page_number} extraída com qpdf: {page_path}")
             return page_path, minio_path
 
         except Exception as e:
@@ -210,9 +227,14 @@ def should_split_pdf(file_path: Path, min_pages: int = 2) -> bool:
         return False
 
     try:
-        reader = PdfReader(str(file_path))
-        page_count = len(reader.pages)
+        result = subprocess.run(
+            ['qpdf', '--show-npages', str(file_path)],
+            capture_output=True,
+            text=True,
+            check=True
+        )
+        page_count = int(result.stdout.strip())
         return page_count >= min_pages
     except Exception as e:
-        logger.warning(f"Erro ao verificar PDF: {e}")
+        logger.warning(f"Erro ao verificar PDF com qpdf: {e}")
         return False

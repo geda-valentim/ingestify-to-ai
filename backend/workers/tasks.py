@@ -9,6 +9,7 @@ Hierarquia:
 """
 
 from celery import Task
+from celery.exceptions import SoftTimeLimitExceeded
 from pathlib import Path
 from datetime import datetime
 from uuid import uuid4
@@ -342,6 +343,47 @@ def process_conversion(
 
         return {"job_id": job_id, "status": "completed"}
 
+    except SoftTimeLimitExceeded:
+        # Gracefully handle soft timeout - mark as failed and retry
+        logger.warning(f"[MAIN JOB {job_id}] Soft timeout exceeded - marking as failed for retry")
+
+        error_msg = f"Task exceeded soft time limit ({settings.conversion_timeout_seconds - 30}s)"
+
+        # Update Redis
+        redis_client.set_job_status(
+            job_id=job_id,
+            job_type="main",
+            status="failed",
+            progress=0,
+            error=error_msg,
+            completed_at=datetime.utcnow(),
+        )
+
+        # Update MySQL
+        db = SessionLocal()
+        try:
+            job = db.query(Job).filter(Job.id == job_id).first()
+            if job:
+                job.status = JobStatus.FAILED
+                job.error_message = error_msg
+                job.completed_at = datetime.utcnow()
+                db.commit()
+        except Exception as e:
+            logger.error(f"[MAIN JOB {job_id}] MySQL update error on timeout: {e}")
+        finally:
+            db.close()
+
+        # Cleanup temp files
+        try:
+            temp_dir = Path(settings.temp_storage_path) / job_id
+            if temp_dir.exists():
+                shutil.rmtree(temp_dir, ignore_errors=True)
+        except Exception:
+            pass
+
+        # Retry with backoff
+        raise self.retry(countdown=60 * (2 ** self.request.retries))
+
     except Exception as exc:
         logger.error(f"[MAIN JOB {job_id}] Failed: {exc}", exc_info=True)
 
@@ -667,6 +709,53 @@ def convert_page_task(
             redis_client.add_child_job(parent_job_id, "merge", merge_job_id)
 
         return {"page_job_id": page_job_id, "page_number": page_number, "status": "completed"}
+
+    except SoftTimeLimitExceeded:
+        # Gracefully handle soft timeout - mark as failed and retry
+        logger.warning(f"[PAGE JOB {page_job_id}] Page {page_number} soft timeout exceeded - marking as failed for retry")
+
+        error_msg = f"Page conversion exceeded soft time limit ({settings.conversion_timeout_seconds - 30}s)"
+
+        # Update Redis
+        redis_client.set_job_status(
+            job_id=page_job_id,
+            job_type="page",
+            status="failed",
+            parent_job_id=parent_job_id,
+            page_number=page_number,
+            error=error_msg,
+            completed_at=datetime.utcnow(),
+        )
+
+        # Update MySQL
+        db = SessionLocal()
+        try:
+            from shared.models import Page as PageModel
+            page = db.query(PageModel).filter(
+                PageModel.job_id == parent_job_id,
+                PageModel.page_number == page_number
+            ).first()
+            if page:
+                page.status = JobStatus.FAILED
+                page.error_message = error_msg
+                db.commit()
+
+            # Update parent job pages_failed count
+            parent_job = db.query(Job).filter(Job.id == parent_job_id).first()
+            if parent_job:
+                failed_count = db.query(PageModel).filter(
+                    PageModel.job_id == parent_job_id,
+                    PageModel.status == JobStatus.FAILED
+                ).count()
+                parent_job.pages_failed = failed_count
+                db.commit()
+        except Exception as e:
+            logger.error(f"[PAGE JOB {page_job_id}] MySQL update error on timeout: {e}")
+        finally:
+            db.close()
+
+        # Retry with backoff
+        raise self.retry(exc=SoftTimeLimitExceeded(), countdown=30 * (2 ** self.request.retries))
 
     except Exception as exc:
         logger.error(f"[PAGE JOB {page_job_id}] Page {page_number} failed: {exc}", exc_info=True)

@@ -3,6 +3,7 @@ PDF Analysis Service - Domain logic for PDF analysis
 
 Determina se um PDF deve ser dividido em páginas para processamento paralelo
 """
+import subprocess
 from pathlib import Path
 from typing import Optional
 
@@ -87,7 +88,7 @@ class PDFAnalysisService:
     @staticmethod
     def count_pdf_pages(file_path: Path) -> Optional[int]:
         """
-        Conta número de páginas de um PDF
+        Conta número de páginas de um PDF usando qpdf
 
         Args:
             file_path: Caminho do arquivo PDF
@@ -96,12 +97,15 @@ class PDFAnalysisService:
             Número de páginas ou None se falhar
         """
         try:
-            from PyPDF2 import PdfReader
-
-            reader = PdfReader(str(file_path))
-            return len(reader.pages)
+            result = subprocess.run(
+                ['qpdf', '--show-npages', str(file_path)],
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            return int(result.stdout.strip())
         except Exception:
-            # Fallback: try with pdfplumber
+            # Fallback: try with pdfplumber if available
             try:
                 import pdfplumber
                 with pdfplumber.open(str(file_path)) as pdf:
