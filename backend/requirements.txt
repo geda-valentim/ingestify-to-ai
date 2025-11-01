@@ -19,7 +19,8 @@ beautifulsoup4>=4.12.3,<5.0.0
 requests>=2.32.2,<3.0.0
 
 # PDF processing
-PyPDF2==3.0.1
+# PyPDF2==3.0.1  # REMOVIDO: Substituído por qpdf (ferramenta de sistema) para evitar explosão de tamanho ao dividir PDFs
+# qpdf instalado via apt-get nos Dockerfiles
 
 # Google Drive integration
 google-api-python-client==2.108.0

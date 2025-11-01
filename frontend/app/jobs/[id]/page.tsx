@@ -57,6 +57,7 @@ import {
 } from "@/components/ui/tooltip";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
 import { formatDistanceToNow } from "date-fns";
 import { useToast } from "@/hooks/use-toast";
 import dynamic from "next/dynamic";
@@ -94,6 +95,7 @@ export default function JobStatusPage({ params }: PageProps) {
   const [activeTab, setActiveTab] = useState<"pdf" | "markdown">("pdf");
   const [numPdfPages, setNumPdfPages] = useState<number>(0);
   const [pdfError, setPdfError] = useState<string | null>(null);
+  const [selectedPages, setSelectedPages] = useState<Set<number>>(new Set());
 
   useEffect(() => {
     if (hasHydrated && !isAuthenticated) {
@@ -156,6 +158,39 @@ export default function JobStatusPage({ params }: PageProps) {
     onError: (error: any) => {
       toast({
         title: "Retry failed",
+        description: formatApiError(error),
+        variant: "destructive",
+      });
+    },
+  });
+
+  // Bulk retry mutation
+  const bulkRetryMutation = useMutation({
+    mutationFn: async (pageNumbers: number[]) => {
+      const results = await Promise.allSettled(
+        pageNumbers.map(pageNumber =>
+          jobsApi.retryPage(resolvedParams.id, pageNumber, token!)
+        )
+      );
+      return results;
+    },
+    onSuccess: (results) => {
+      const succeeded = results.filter(r => r.status === 'fulfilled').length;
+      const failed = results.filter(r => r.status === 'rejected').length;
+
+      queryClient.invalidateQueries({ queryKey: ["job-status", resolvedParams.id] });
+      queryClient.invalidateQueries({ queryKey: ["job-pages", resolvedParams.id] });
+
+      setSelectedPages(new Set()); // Clear selection
+
+      toast({
+        title: "Bulk retry completed",
+        description: `${succeeded} pages queued for retry${failed > 0 ? `, ${failed} failed` : ''}`,
+      });
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Bulk retry failed",
         description: formatApiError(error),
         variant: "destructive",
       });
@@ -230,6 +265,34 @@ export default function JobStatusPage({ params }: PageProps) {
       jobId: resolvedParams.id,
       pageNumber: page.page_number
     });
+  };
+
+  const togglePageSelection = (pageNumber: number) => {
+    setSelectedPages(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(pageNumber)) {
+        newSet.delete(pageNumber);
+      } else {
+        newSet.add(pageNumber);
+      }
+      return newSet;
+    });
+  };
+
+  const selectAllFailedPages = () => {
+    const failedPageNumbers = pages
+      .filter((p: PageInfo) => p.status === "failed" && p.retry_count < 3)
+      .map((p: PageInfo) => p.page_number);
+    setSelectedPages(new Set(failedPageNumbers));
+  };
+
+  const deselectAll = () => {
+    setSelectedPages(new Set());
+  };
+
+  const handleBulkRetry = () => {
+    if (selectedPages.size === 0) return;
+    bulkRetryMutation.mutate(Array.from(selectedPages));
   };
 
   const downloadMarkdown = () => {
@@ -480,76 +543,136 @@ export default function JobStatusPage({ params }: PageProps) {
                 <CardHeader className="pb-3">
                   <CardTitle className="text-base">Pages ({pages.length})</CardTitle>
                   <CardDescription className="text-xs">
-                    Click to view content
+                    {selectedPages.size > 0
+                      ? `${selectedPages.size} page${selectedPages.size > 1 ? 's' : ''} selected`
+                      : 'Click to view content'}
                   </CardDescription>
                 </CardHeader>
+
+                {/* Bulk Actions */}
+                {pages.filter((p: PageInfo) => p.status === "failed").length > 0 && (
+                  <CardContent className="pt-0 pb-3 space-y-2">
+                    <div className="flex gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={selectAllFailedPages}
+                        className="flex-1 text-xs h-8"
+                      >
+                        Select All Failed
+                      </Button>
+                      {selectedPages.size > 0 && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={deselectAll}
+                          className="flex-1 text-xs h-8"
+                        >
+                          Deselect All
+                        </Button>
+                      )}
+                    </div>
+                    {selectedPages.size > 0 && (
+                      <Button
+                        onClick={handleBulkRetry}
+                        disabled={bulkRetryMutation.isPending}
+                        size="sm"
+                        className="w-full text-xs h-8"
+                      >
+                        <RotateCw className={`h-3 w-3 mr-2 ${bulkRetryMutation.isPending ? 'animate-spin' : ''}`} />
+                        Retry {selectedPages.size} Selected Page{selectedPages.size > 1 ? 's' : ''}
+                      </Button>
+                    )}
+                  </CardContent>
+                )}
+
                 <CardContent className="space-y-1 max-h-[400px] overflow-y-auto">
                   {pages.map((page: PageInfo) => {
                     const isRetryDisabled = page.retry_count >= 3;
                     const canRetry = page.status === "failed" && !isRetryDisabled;
                     const isSelected = selectedPage?.page_number === page.page_number;
+                    const isChecked = selectedPages.has(page.page_number);
 
                     return (
                       <Tooltip key={page.page_number}>
                         <TooltipTrigger asChild>
-                          <button
-                            onClick={() => handlePageClick(page)}
-                            disabled={
-                              page.status !== "completed" && page.status !== "failed"
-                            }
+                          <div
                             className={`
-                              w-full flex items-center justify-between p-2 rounded-lg border transition-all text-left
+                              w-full flex items-center gap-2 p-2 rounded-lg border transition-all
                               ${isSelected ? "border-primary bg-primary/10" : "border-border"}
+                              ${isChecked ? "bg-blue-500/10 border-blue-500/50" : ""}
                               ${
                                 page.status === "completed"
                                   ? "hover:bg-green-500/10 hover:border-green-500/50"
                                   : page.status === "failed"
                                   ? "hover:bg-red-500/10 hover:border-red-500/50"
-                                  : "opacity-60 cursor-not-allowed"
+                                  : "opacity-60"
                               }
                             `}
                           >
-                            <div className="flex items-center gap-2 flex-1 min-w-0">
-                              <div className="flex-shrink-0">
-                                {page.status === "completed" && (
-                                  <CheckCircle2 className="h-4 w-4 text-green-600 dark:text-green-400" />
+                            {/* Checkbox for failed pages */}
+                            {page.status === "failed" && !isRetryDisabled && (
+                              <Checkbox
+                                checked={isChecked}
+                                onCheckedChange={() => togglePageSelection(page.page_number)}
+                                onClick={(e) => e.stopPropagation()}
+                                className="flex-shrink-0"
+                              />
+                            )}
+
+                            {/* Page Button */}
+                            <button
+                              onClick={() => handlePageClick(page)}
+                              disabled={
+                                page.status !== "completed" && page.status !== "failed"
+                              }
+                              className="flex-1 flex items-center justify-between text-left min-w-0"
+                            >
+                              <div className="flex items-center gap-2 flex-1 min-w-0">
+                                <div className="flex-shrink-0">
+                                  {page.status === "completed" && (
+                                    <CheckCircle2 className="h-4 w-4 text-green-600 dark:text-green-400" />
+                                  )}
+                                  {page.status === "failed" && (
+                                    <XCircle className="h-4 w-4 text-red-600 dark:text-red-400" />
+                                  )}
+                                  {page.status === "processing" && (
+                                    <Loader2 className="h-4 w-4 text-blue-600 dark:text-blue-400 animate-spin" />
+                                  )}
+                                  {page.status === "queued" && (
+                                    <Clock className="h-4 w-4 text-yellow-600 dark:text-yellow-400" />
+                                  )}
+                                  {page.status === "pending" && (
+                                    <Clock className="h-4 w-4 text-gray-600 dark:text-gray-400" />
+                                  )}
+                                </div>
+                                <span className="text-sm font-medium truncate">
+                                  Page {page.page_number}
+                                </span>
+                              </div>
+                              <div className="flex items-center gap-2 flex-shrink-0">
+                                {page.retry_count > 0 && (
+                                  <Badge variant="secondary" className="h-5 px-1.5 text-[10px]">
+                                    {page.retry_count}/3
+                                  </Badge>
                                 )}
-                                {page.status === "failed" && (
-                                  <XCircle className="h-4 w-4 text-red-600 dark:text-red-400" />
-                                )}
-                                {page.status === "processing" && (
-                                  <Loader2 className="h-4 w-4 text-blue-600 dark:text-blue-400 animate-spin" />
-                                )}
-                                {page.status === "queued" && (
-                                  <Clock className="h-4 w-4 text-yellow-600 dark:text-yellow-400" />
+                                {canRetry && (
+                                  <button
+                                    onClick={(e) => handleRetryPage(page, e)}
+                                    disabled={retryPageMutation.isPending || isRetryDisabled}
+                                    className="p-1 hover:bg-destructive/20 rounded transition-colors"
+                                    title="Retry this page"
+                                  >
+                                    <RotateCw
+                                      className={`h-3 w-3 text-destructive ${
+                                        retryPageMutation.isPending ? "animate-spin" : ""
+                                      }`}
+                                    />
+                                  </button>
                                 )}
                               </div>
-                              <span className="text-sm font-medium truncate">
-                                Page {page.page_number}
-                              </span>
-                            </div>
-                            <div className="flex items-center gap-2 flex-shrink-0">
-                              {page.retry_count > 0 && (
-                                <Badge variant="secondary" className="h-5 px-1.5 text-[10px]">
-                                  {page.retry_count}/3
-                                </Badge>
-                              )}
-                              {canRetry && (
-                                <button
-                                  onClick={(e) => handleRetryPage(page, e)}
-                                  disabled={retryPageMutation.isPending || isRetryDisabled}
-                                  className="p-1 hover:bg-destructive/20 rounded transition-colors"
-                                  title="Retry this page"
-                                >
-                                  <RotateCw
-                                    className={`h-3 w-3 text-destructive ${
-                                      retryPageMutation.isPending ? "animate-spin" : ""
-                                    }`}
-                                  />
-                                </button>
-                              )}
-                            </div>
-                          </button>
+                            </button>
+                          </div>
                         </TooltipTrigger>
                         <TooltipContent side="right" className="max-w-xs">
                           <div className="space-y-1">

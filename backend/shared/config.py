@@ -45,6 +45,15 @@ class Settings(BaseSettings):
     result_ttl_seconds: int = 3600
     cleanup_interval_hours: int = 24
 
+    # Monitoring & Recovery Settings
+    monitoring_enabled: bool = True  # Enable/disable automatic monitoring
+    monitoring_stuck_job_threshold_minutes: int = 30  # Mark jobs as stuck after X minutes in "processing"
+    monitoring_cleanup_days: int = 7  # Delete completed jobs from Redis after X days
+    monitoring_auto_retry_enabled: bool = True  # Automatically retry failed pages
+    monitoring_max_retry_count: int = 3  # Maximum retry attempts per page
+    monitoring_check_interval_minutes: int = 5  # How often to run monitoring tasks
+    monitoring_batch_size: int = 100  # Max jobs to process per monitoring cycle
+
     # Google Drive (optional)
     google_drive_credentials_path: str = "/secrets/gdrive.json"
 

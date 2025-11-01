@@ -146,6 +146,45 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
+  beat:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.worker
+    container_name: ingestify-beat
+    command: celery -A workers.celery_app beat --loglevel=info
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+      - CELERY_TASK_DEFAULT_QUEUE=ingestify
+      - CELERY_WORKER_NAME=ingestify-beat
+      - ENVIRONMENT=development
+      - LOG_LEVEL=INFO
+      - DATABASE_URL=${DATABASE_URL:-mysql+pymysql://root:root@host.docker.internal:3306/ingestify}
+      - ELASTICSEARCH_URL=${ELASTICSEARCH_URL:-http://host.docker.internal:9200}
+      - MINIO_ENDPOINT=minio:9000
+      - MINIO_ACCESS_KEY=${MINIO_ROOT_USER:-minioadmin}
+      - MINIO_SECRET_KEY=${MINIO_ROOT_PASSWORD:-minioadmin}
+      - MINIO_SECURE=false
+      # Monitoring settings
+      - MONITORING_ENABLED=true
+      - MONITORING_STUCK_JOB_THRESHOLD_MINUTES=30
+      - MONITORING_CLEANUP_DAYS=7
+      - MONITORING_AUTO_RETRY_ENABLED=true
+      - MONITORING_MAX_RETRY_COUNT=3
+      - MONITORING_CHECK_INTERVAL_MINUTES=5
+      - MONITORING_BATCH_SIZE=100
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./backend/workers:/app/workers
+      - ./backend/shared:/app/shared
+    restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
   frontend:
     build:
       context: .
