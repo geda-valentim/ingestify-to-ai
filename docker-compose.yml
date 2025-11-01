@@ -1,3 +1,7 @@
+# Docker Compose - Base Configuration
+# Dev mode: docker compose up (docker-compose.override.yml is auto-applied)
+# Production: docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+
 services:
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.11.0
@@ -38,6 +42,25 @@ services:
       retries: 5
     restart: unless-stopped
 
+  minio:
+    image: minio/minio:latest
+    container_name: ingestify-minio
+    ports:
+      - "9000:9000"  # API
+      - "9001:9001"  # Web Console
+    volumes:
+      - minio_data:/data
+    environment:
+      - MINIO_ROOT_USER=${MINIO_ROOT_USER:-minioadmin}
+      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD:-minioadmin}
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
   api:
     build:
       context: .
@@ -60,8 +83,18 @@ services:
       - RESULT_TTL_SECONDS=14400
       - DATABASE_URL=${DATABASE_URL:-mysql+pymysql://root:root@host.docker.internal:3306/ingestify}
       - ELASTICSEARCH_URL=${ELASTICSEARCH_URL:-http://host.docker.internal:9200}
+      - MINIO_ENDPOINT=minio:9000
+      - MINIO_ACCESS_KEY=${MINIO_ROOT_USER:-minioadmin}
+      - MINIO_SECRET_KEY=${MINIO_ROOT_PASSWORD:-minioadmin}
+      - MINIO_SECURE=false
+      - MINIO_BUCKET_UPLOADS=ingestify-uploads
+      - MINIO_BUCKET_PAGES=ingestify-pages
+      - MINIO_BUCKET_AUDIO=ingestify-audio
+      - MINIO_BUCKET_RESULTS=ingestify-results
     depends_on:
       redis:
+        condition: service_healthy
+      minio:
         condition: service_healthy
     volumes:
       - ./tmp:/tmp/ingestify
@@ -90,8 +123,18 @@ services:
       - RESULT_TTL_SECONDS=14400
       - DATABASE_URL=${DATABASE_URL:-mysql+pymysql://root:root@host.docker.internal:3306/ingestify}
       - ELASTICSEARCH_URL=${ELASTICSEARCH_URL:-http://host.docker.internal:9200}
+      - MINIO_ENDPOINT=minio:9000
+      - MINIO_ACCESS_KEY=${MINIO_ROOT_USER:-minioadmin}
+      - MINIO_SECRET_KEY=${MINIO_ROOT_PASSWORD:-minioadmin}
+      - MINIO_SECURE=false
+      - MINIO_BUCKET_UPLOADS=ingestify-uploads
+      - MINIO_BUCKET_PAGES=ingestify-pages
+      - MINIO_BUCKET_AUDIO=ingestify-audio
+      - MINIO_BUCKET_RESULTS=ingestify-results
     depends_on:
       redis:
+        condition: service_healthy
+      minio:
         condition: service_healthy
     volumes:
       - ./tmp:/tmp/ingestify
@@ -110,8 +153,9 @@ services:
     container_name: ingestify-frontend
     ports:
       - "3000:3000"
-    environment:
-      - NEXT_PUBLIC_API_URL=http://localhost:8080
+    # API URL is dynamically detected from window.location (see frontend/lib/api.ts)
+    # environment:
+    #   - NEXT_PUBLIC_API_URL=http://custom-domain:8000  # Uncomment to override
     depends_on:
       - api
     restart: unless-stopped
@@ -119,3 +163,4 @@ services:
 volumes:
   elasticsearch_data:
   redis_data:
+  minio_data:

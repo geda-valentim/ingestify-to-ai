@@ -16,6 +16,7 @@ class JobType(str, Enum):
 
 class JobStatus(str, Enum):
     """Estados possíveis de um job"""
+    PENDING = "pending"       # Pendente (usado internamente)
     QUEUED = "queued"         # Na fila
     PROCESSING = "processing" # Sendo processado
     COMPLETED = "completed"   # Concluído com sucesso
@@ -100,6 +101,8 @@ class PageJobInfo(BaseModel):
     job_id: UUID
     status: JobStatus
     url: str  # URL para consultar resultado: /jobs/{job_id}/result
+    error_message: Optional[str] = None  # Error details for failed pages
+    retry_count: int = 0  # Number of retry attempts (max 3)
 
 
 class JobStatusResponse(BaseModel):

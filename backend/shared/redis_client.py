@@ -408,7 +408,7 @@ class RedisClient:
 
     def verify_job_ownership(self, job_id: str, user_id: str) -> bool:
         """
-        Verify if user owns a job
+        Verify if user owns a job (checks parent job ownership for child jobs)
 
         Args:
             job_id: Job ID
@@ -418,7 +418,18 @@ class RedisClient:
             True if user owns the job, False otherwise
         """
         owner = self.get_job_owner(job_id)
-        return owner == user_id
+        if owner == user_id:
+            return True
+
+        # If job doesn't have owner set, check if it's a child job
+        # by checking its parent job's ownership
+        status_data = self.get_job_status(job_id)
+        if status_data and status_data.get("parent_job_id"):
+            parent_job_id = status_data["parent_job_id"]
+            parent_owner = self.get_job_owner(parent_job_id)
+            return parent_owner == user_id
+
+        return False
 
     def add_job_to_user(self, user_id: str, job_id: str) -> bool:
         """

@@ -61,6 +61,17 @@ class Settings(BaseSettings):
     elasticsearch_password: str = ""
     elasticsearch_verify_certs: bool = False
 
+    # MinIO Object Storage
+    minio_endpoint: str = "minio:9000"  # Internal Docker network address
+    minio_public_endpoint: str = "localhost:9000"  # Public-facing address for URLs
+    minio_access_key: str = "minioadmin"
+    minio_secret_key: str = "minioadmin"
+    minio_secure: bool = False  # True for HTTPS in production
+    minio_bucket_uploads: str = "ingestify-uploads"
+    minio_bucket_pages: str = "ingestify-pages"
+    minio_bucket_audio: str = "ingestify-audio"
+    minio_bucket_results: str = "ingestify-results"
+
     # JWT Authentication
     jwt_secret_key: str = "your-secret-key-change-in-production-min-32-chars"
     jwt_algorithm: str = "HS256"

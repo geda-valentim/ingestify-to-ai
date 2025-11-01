@@ -69,10 +69,16 @@ class Job(Base):
 
     # File information
     filename = Column(String(255))
+    name = Column(String(1000))  # User-friendly job name (up to 1000 chars)
     source_type = Column(String(50))  # file, url, gdrive, dropbox
     source_url = Column(Text)  # For URL/cloud sources
     file_size_bytes = Column(Integer)
     mime_type = Column(String(100))
+    file_checksum = Column(String(64), index=True)  # SHA256 hash for deduplication
+
+    # MinIO storage paths
+    minio_upload_path = Column(String(500))  # Path to uploaded file in MinIO
+    minio_result_path = Column(String(500))  # Path to result markdown in MinIO
 
     # Job status
     status = Column(Enum(JobStatus), default=JobStatus.PENDING, nullable=False, index=True)
@@ -88,7 +94,7 @@ class Job(Base):
     parent_job_id = Column(String(36), ForeignKey("jobs.id", ondelete="CASCADE"))
     job_type = Column(String(20))  # MAIN, SPLIT, PAGE, MERGE, DOWNLOAD
 
-    # Result metadata (content is in Elasticsearch)
+    # Result metadata (content is in Elasticsearch and MySQL for pages)
     char_count = Column(Integer)  # Total characters in result
     has_elasticsearch_result = Column(Boolean, default=False)
 
@@ -123,13 +129,18 @@ class Page(Base):
     page_number = Column(Integer, nullable=False)  # 1-indexed
 
     # Page job reference
-    page_job_id = Column(String(36), ForeignKey("jobs.id", ondelete="SET NULL"))  # Reference to PAGE job
+    page_job_id = Column(String(36))  # Reference to PAGE job (no FK constraint - job may not exist yet)
+
+    # MinIO storage path
+    minio_page_path = Column(String(500))  # Path to split page PDF in MinIO
 
     # Status
     status = Column(Enum(JobStatus), default=JobStatus.PENDING, nullable=False)
     error_message = Column(Text)
+    retry_count = Column(Integer, default=0, nullable=False)  # Track retry attempts (max 3)
 
-    # Result metadata (content is in Elasticsearch)
+    # Result metadata and content
+    markdown_content = Column(Text)  # Full markdown content for this page
     char_count = Column(Integer)
     has_elasticsearch_result = Column(Boolean, default=False)
 

@@ -235,30 +235,42 @@ Health check da API.
 
 ### Comandos
 
+**Modo Desenvolvimento (Padrão - com hot reload):**
 ```bash
-# Iniciar todos os serviços (stack completo)
+# Iniciar todos os serviços em modo desenvolvimento
+# docker-compose.override.yml é aplicado automaticamente!
 docker compose up -d --build
 
 # Acesse:
-# - Frontend: http://localhost:3000
-# - API: http://localhost:8080
-# - API Docs: http://localhost:8080/docs
+# - Frontend: http://localhost:3000 (hot reload ativado!)
+# - API: http://localhost:8000 (hot reload ativado!)
+# - API Docs: http://localhost:8000/docs
 
-# Escalar workers
-docker compose up -d --scale worker=5
-
-# Ver logs
+# Ver logs em tempo real (útil para ver hot reload)
 docker compose logs -f frontend
 docker compose logs -f api
 docker compose logs -f worker
 
-# Reconstruir após mudanças
-docker compose down
-docker compose up -d --build
-
 # Parar serviços
 docker compose down
 ```
+
+**Modo Produção:**
+```bash
+# Iniciar em modo produção (sem hot reload, otimizado)
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+
+# Escalar workers em produção
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --scale worker=5
+
+# Parar serviços
+docker compose -f docker-compose.yml -f docker-compose.prod.yml down
+```
+
+**Hot Reload:**
+- ✅ **Frontend**: Edite arquivos em `frontend/` e veja mudanças instantaneamente
+- ✅ **API**: Edite arquivos em `backend/api/` e veja mudanças instantaneamente
+- ✅ **Workers**: Edite arquivos em `backend/workers/` e workers reiniciam automaticamente
 
 ## 📂 Estrutura do Projeto (Monorepo)
 

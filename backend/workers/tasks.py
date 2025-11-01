@@ -21,6 +21,7 @@ from workers.converter import get_converter
 from workers.sources import get_source_handler
 from shared.redis_client import get_redis_client
 from shared.elasticsearch_client import get_es_client
+from shared.minio_client import get_minio_client
 from shared.database import SessionLocal
 from shared.models import Job, Page, JobStatus
 from shared.config import get_settings
@@ -420,7 +421,7 @@ def split_pdf_task(
         # Split PDF
         temp_dir = Path(settings.temp_storage_path) / parent_job_id / "pages"
         splitter = PDFSplitter(temp_dir)
-        page_files = splitter.split_pdf(Path(file_path))
+        page_files = splitter.split_pdf(Path(file_path), job_id=parent_job_id)
 
         total_pages = len(page_files)
         logger.info(f"[SPLIT JOB {split_job_id}] PDF split into {total_pages} pages")
@@ -441,7 +442,7 @@ def split_pdf_task(
             db.close()
 
         # Create PAGE records in MySQL and PAGE JOBS for each page
-        for page_num, page_file_path in page_files:
+        for page_num, page_file_path, minio_path in page_files:
             page_job_id = str(uuid4())
 
             logger.info(f"[SPLIT JOB {split_job_id}] Creating page job {page_job_id} for page {page_num}")
@@ -455,6 +456,7 @@ def split_pdf_task(
                     job_id=parent_job_id,
                     page_number=page_num,
                     page_job_id=page_job_id,
+                    minio_page_path=minio_path,
                     status=JobStatus.PENDING
                 )
                 db.add(page)
@@ -582,7 +584,23 @@ def convert_page_task(
             metadata=metadata
         )
 
-        # Update MySQL: Mark page as completed
+        # Store page markdown in MinIO
+        minio_result_path = None
+        try:
+            minio_client = get_minio_client()
+            minio_object_name = f"results/{parent_job_id}/page_{page_number:04d}.md"
+            minio_client.upload_file(
+                bucket_name=minio_client.bucket_results,
+                object_name=minio_object_name,
+                file_data=markdown_content.encode('utf-8'),
+                content_type="text/markdown",
+            )
+            minio_result_path = minio_object_name
+            logger.info(f"Page {page_number} markdown uploaded to MinIO: {minio_object_name}")
+        except Exception as e:
+            logger.error(f"Failed to upload page {page_number} markdown to MinIO: {e}")
+
+        # Update MySQL: Mark page as completed with markdown content
         db = SessionLocal()
         try:
             from shared.models import Page as PageModel
@@ -592,6 +610,7 @@ def convert_page_task(
             ).first()
             if page:
                 page.status = JobStatus.COMPLETED
+                page.markdown_content = markdown_content  # NEW: Store markdown in MySQL
                 page.char_count = len(markdown_content)
                 page.has_elasticsearch_result = es_success
                 page.completed_at = datetime.utcnow()
@@ -779,7 +798,23 @@ def process_page(
             metadata=metadata
         )
 
-        # Update MySQL: Mark page as completed
+        # Store page markdown in MinIO
+        minio_result_path = None
+        try:
+            minio_client = get_minio_client()
+            minio_object_name = f"results/{parent_job_id}/page_{page_number:04d}.md"
+            minio_client.upload_file(
+                bucket_name=minio_client.bucket_results,
+                object_name=minio_object_name,
+                file_data=markdown_content.encode('utf-8'),
+                content_type="text/markdown",
+            )
+            minio_result_path = minio_object_name
+            logger.info(f"[RETRY] Page {page_number} markdown uploaded to MinIO: {minio_object_name}")
+        except Exception as e:
+            logger.error(f"[RETRY] Failed to upload page {page_number} markdown to MinIO: {e}")
+
+        # Update MySQL: Mark page as completed with markdown content
         db = SessionLocal()
         try:
             from shared.models import Page as PageModel
@@ -789,6 +824,7 @@ def process_page(
             ).first()
             if page:
                 page.status = JobStatus.COMPLETED
+                page.markdown_content = markdown_content  # NEW: Store markdown in MySQL
                 page.char_count = len(markdown_content)
                 page.has_elasticsearch_result = es_success
                 page.completed_at = datetime.utcnow()

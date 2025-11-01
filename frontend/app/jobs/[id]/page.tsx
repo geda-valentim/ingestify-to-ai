@@ -13,6 +13,13 @@ import {
   FileText,
   Trash2,
   RotateCw,
+  AlertCircle,
+  File,
+  Calendar,
+  Layers,
+  AlertTriangle,
+  Eye,
+  Copy,
 } from "lucide-react";
 import { jobsApi } from "@/lib/api";
 import { useAuthStore } from "@/lib/store/auth";
@@ -42,11 +49,35 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Badge } from "@/components/ui/badge";
 import { formatDistanceToNow } from "date-fns";
 import { useToast } from "@/hooks/use-toast";
+import dynamic from "next/dynamic";
+
+// Dynamically import PDF viewer to avoid canvas module issues
+const PdfViewer = dynamic(
+  () => import("@/components/PdfViewer").then((mod) => ({ default: mod.PdfViewer })),
+  { ssr: false, loading: () => <div className="flex items-center justify-center p-8">Loading PDF viewer...</div> }
+);
 
 interface PageProps {
   params: Promise<{ id: string }>;
+}
+
+interface PageInfo {
+  page_number: number;
+  job_id: string;
+  status: string;
+  url: string;
+  error_message?: string | null;
+  retry_count: number;
 }
 
 export default function JobStatusPage({ params }: PageProps) {
@@ -57,10 +88,12 @@ export default function JobStatusPage({ params }: PageProps) {
   const token = useAuthStore((state) => state.token);
   const isAuthenticated = useAuthStore((state) => state.token !== null && state.user !== null);
   const hasHydrated = useAuthStore((state) => state._hasHydrated);
-  const [showResult, setShowResult] = useState(false);
+
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
-  const [selectedPage, setSelectedPage] = useState<number | null>(null);
-  const [pageDialogOpen, setPageDialogOpen] = useState(false);
+  const [selectedPage, setSelectedPage] = useState<PageInfo | null>(null);
+  const [activeTab, setActiveTab] = useState<"pdf" | "markdown">("pdf");
+  const [numPdfPages, setNumPdfPages] = useState<number>(0);
+  const [pdfError, setPdfError] = useState<string | null>(null);
 
   useEffect(() => {
     if (hasHydrated && !isAuthenticated) {
@@ -75,7 +108,6 @@ export default function JobStatusPage({ params }: PageProps) {
     enabled: !!token,
     refetchInterval: (query) => {
       const status = query.state.data?.status;
-      // Stop polling if job is completed or failed
       return status === "completed" || status === "failed" ? false : 3000;
     },
   });
@@ -84,7 +116,7 @@ export default function JobStatusPage({ params }: PageProps) {
   const { data: result } = useQuery({
     queryKey: ["job-result", resolvedParams.id, token],
     queryFn: () => jobsApi.getResult(resolvedParams.id, token!),
-    enabled: status?.status === "completed" && showResult && !!token,
+    enabled: status?.status === "completed" && !!token,
   });
 
   // Fetch pages for PDF documents
@@ -93,7 +125,6 @@ export default function JobStatusPage({ params }: PageProps) {
     queryFn: () => jobsApi.getPages(resolvedParams.id, token!),
     enabled: status?.type === "main" && (status?.total_pages ?? 0) > 0 && !!token,
     refetchInterval: (query) => {
-      // Keep polling if we have pages that aren't completed yet
       if (status?.status === "completed" || status?.status === "failed") {
         return false;
       }
@@ -101,43 +132,38 @@ export default function JobStatusPage({ params }: PageProps) {
     },
   });
 
-  const pages = pagesData?.pages;
+  const pages = pagesData?.pages || status?.pages || [];
 
-  // Fetch specific page result - not yet implemented, will show placeholder
+  // Fetch specific page result
   const { data: pageResult, isLoading: isLoadingPage } = useQuery({
-    queryKey: ["page-result", resolvedParams.id, selectedPage, token],
-    queryFn: () => Promise.resolve(null),  // Not yet implemented in API
-    enabled: false,  // Disabled until API supports it
+    queryKey: ["page-result", selectedPage?.job_id, token],
+    queryFn: () => jobsApi.getPageResult(selectedPage!.job_id, token!),
+    enabled: !!selectedPage && !!token && selectedPage.status === "completed",
   });
 
-  const getStatusIcon = () => {
-    switch (status?.status) {
-      case "completed":
-        return <CheckCircle2 className="h-12 w-12 text-green-500" />;
-      case "failed":
-        return <XCircle className="h-12 w-12 text-red-500" />;
-      case "processing":
-        return <Loader2 className="h-12 w-12 text-blue-500 animate-spin" />;
-      default:
-        return <Clock className="h-12 w-12 text-yellow-500" />;
-    }
-  };
-
-  const getStatusColor = () => {
-    switch (status?.status) {
-      case "completed":
-        return "text-green-500";
-      case "failed":
-        return "text-red-500";
-      case "processing":
-        return "text-blue-500";
-      default:
-        return "text-yellow-500";
-    }
-  };
+  // Retry mutation with real API
+  const retryPageMutation = useMutation({
+    mutationFn: ({ jobId, pageNumber }: { jobId: string; pageNumber: number }) =>
+      jobsApi.retryPage(jobId, pageNumber, token!),
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["job-status", resolvedParams.id] });
+      queryClient.invalidateQueries({ queryKey: ["job-pages", resolvedParams.id] });
+      toast({
+        title: "Page retry started",
+        description: `Retrying page (attempt ${data.retry_count}/${data.retry_limit})`,
+      });
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Retry failed",
+        description: formatApiError(error),
+        variant: "destructive",
+      });
+    },
+  });
 
   const deleteMutation = useMutation({
-    mutationFn: () => Promise.resolve(),  // Delete not yet implemented in API
+    mutationFn: () => Promise.resolve(),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["jobs"] });
       toast({
@@ -155,24 +181,31 @@ export default function JobStatusPage({ params }: PageProps) {
     },
   });
 
-  const retryPageMutation = useMutation({
-    mutationFn: ({ pageJobId }: { pageJobId: string }) =>
-      Promise.resolve(),  // Retry not yet implemented in API
-    onSuccess: (newJobId, variables) => {
-      queryClient.invalidateQueries({ queryKey: ["job-status", resolvedParams.id] });
-      toast({
-        title: "Page retry started",
-        description: `Page retry coming soon!`,
-      });
-    },
-    onError: (error: any) => {
-      toast({
-        title: "Retry failed",
-        description: formatApiError(error),
-        variant: "destructive",
-      });
-    },
-  });
+  const getStatusIcon = (status?: string) => {
+    switch (status) {
+      case "completed":
+        return <CheckCircle2 className="h-5 w-5 text-green-500" />;
+      case "failed":
+        return <XCircle className="h-5 w-5 text-red-500" />;
+      case "processing":
+        return <Loader2 className="h-5 w-5 text-blue-500 animate-spin" />;
+      default:
+        return <Clock className="h-5 w-5 text-yellow-500" />;
+    }
+  };
+
+  const getStatusColor = (status?: string) => {
+    switch (status) {
+      case "completed":
+        return "text-green-500";
+      case "failed":
+        return "text-red-500";
+      case "processing":
+        return "text-blue-500";
+      default:
+        return "text-yellow-500";
+    }
+  };
 
   const handleDeleteClick = () => {
     setDeleteDialogOpen(true);
@@ -182,25 +215,21 @@ export default function JobStatusPage({ params }: PageProps) {
     deleteMutation.mutate();
   };
 
-  const handlePageClick = (pageNumber: number, pageStatus: string, e: React.MouseEvent) => {
-    // Prevent click if clicking on retry button
-    if ((e.target as HTMLElement).closest('button[data-retry]')) {
-      return;
-    }
-
-    if (pageStatus === "completed") {
-      setSelectedPage(pageNumber);
-      setPageDialogOpen(true);
+  const handlePageClick = (page: PageInfo) => {
+    if (page.status === "completed" || page.status === "failed") {
+      setSelectedPage(page);
+      setPdfError(null);
+      // Set initial tab based on status
+      setActiveTab(page.status === "completed" ? "pdf" : "markdown");
     }
   };
 
-  const handleRetryPage = (pageJobId: string, e: React.MouseEvent) => {
+  const handleRetryPage = (page: PageInfo, e: React.MouseEvent) => {
     e.stopPropagation();
-    retryPageMutation.mutate({ pageJobId });
-  };
-
-  const downloadPageMarkdown = () => {
-    alert("Page download coming soon!");
+    retryPageMutation.mutate({
+      jobId: resolvedParams.id,
+      pageNumber: page.page_number
+    });
   };
 
   const downloadMarkdown = () => {
@@ -216,6 +245,16 @@ export default function JobStatusPage({ params }: PageProps) {
     URL.revokeObjectURL(url);
   };
 
+  const onDocumentLoadSuccess = ({ numPages }: { numPages: number }) => {
+    setNumPdfPages(numPages);
+    setPdfError(null);
+  };
+
+  const onDocumentLoadError = (error: Error) => {
+    console.error("PDF load error:", error);
+    setPdfError("Failed to load PDF. The file may still be processing.");
+  };
+
   if (isLoading) {
     return (
       <div className="flex min-h-screen items-center justify-center">
@@ -224,288 +263,524 @@ export default function JobStatusPage({ params }: PageProps) {
     );
   }
 
-  return (
-    <div className="min-h-screen bg-gradient-to-br from-background via-background to-muted">
-      {/* Header */}
-      <header className="border-b bg-background/95 backdrop-blur">
-        <div className="container mx-auto px-4 py-4">
-          <Button
-            variant="ghost"
-            onClick={() => router.push("/dashboard")}
-            className="mb-2"
-          >
-            <ArrowLeft className="h-4 w-4 mr-2" />
-            Back to Dashboard
-          </Button>
-        </div>
-      </header>
+  const pdfUrl = selectedPage
+    ? `${jobsApi.getPagePdf(resolvedParams.id, selectedPage.page_number)}?t=${Date.now()}`
+    : null;
 
-      {/* Main Content */}
-      <main className="container mx-auto px-4 py-12">
-        <div className="max-w-4xl mx-auto space-y-6">
-          {/* Status Card */}
-          <Card>
-            <CardHeader>
-              <div className="flex items-center justify-between">
-                <div className="flex-1">
-                  <CardTitle>Job Status</CardTitle>
-                  <CardDescription className="mt-1">
-                    {status?.name || `Job ID: ${resolvedParams.id}`}
-                  </CardDescription>
-                </div>
-                <div className="flex items-center gap-3">
-                  {getStatusIcon()}
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="text-destructive hover:text-destructive hover:bg-destructive/10"
-                    onClick={handleDeleteClick}
-                  >
-                    <Trash2 className="h-5 w-5" />
-                  </Button>
+  return (
+    <TooltipProvider>
+      <div className="min-h-screen bg-background">
+        {/* Header */}
+        <header className="border-b bg-background/95 backdrop-blur sticky top-0 z-10">
+          <div className="container mx-auto px-4 py-3">
+            <Button
+              variant="ghost"
+              onClick={() => router.push("/dashboard")}
+              size="sm"
+            >
+              <ArrowLeft className="h-4 w-4 mr-2" />
+              Back to Dashboard
+            </Button>
+          </div>
+        </header>
+
+        {/* Split Layout */}
+        <div className="flex h-[calc(100vh-57px)]">
+          {/* Left Sidebar - 30% */}
+          <aside className="w-[30%] border-r overflow-y-auto p-4 space-y-4">
+            {/* Job Header */}
+            <div>
+              <div className="flex items-center gap-3 mb-2">
+                {getStatusIcon(status?.status)}
+                <div className="flex-1 min-w-0">
+                  <h1 className="text-2xl font-bold truncate">
+                    {status?.name || "Untitled Job"}
+                  </h1>
+                  <p className="text-sm text-muted-foreground truncate">
+                    {resolvedParams.id}
+                  </p>
                 </div>
               </div>
-            </CardHeader>
-            <CardContent className="space-y-6">
-              {/* Status Info */}
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <Badge
+                variant="outline"
+                className={getStatusColor(status?.status)}
+              >
+                {status?.status}
+              </Badge>
+            </div>
+
+            {/* Progress Section */}
+            <Card>
+              <CardHeader className="pb-3">
+                <CardTitle className="text-base">Progress</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
                 <div>
-                  <p className="text-sm text-muted-foreground">Status</p>
-                  <p className={`font-medium capitalize ${getStatusColor()}`}>
-                    {status?.status}
-                  </p>
+                  <div className="flex justify-between text-sm mb-2">
+                    <span className="text-muted-foreground">Overall</span>
+                    <span className="font-medium">{status?.progress}%</span>
+                  </div>
+                  <div className="w-full bg-secondary rounded-full h-2">
+                    <div
+                      className="bg-primary h-2 rounded-full transition-all duration-300"
+                      style={{ width: `${status?.progress || 0}%` }}
+                    />
+                  </div>
                 </div>
-                <div>
-                  <p className="text-sm text-muted-foreground">Progress</p>
-                  <p className="font-medium">{status?.progress}%</p>
-                </div>
-                <div>
-                  <p className="text-sm text-muted-foreground">Created</p>
-                  <p className="font-medium text-sm">
-                    {status?.created_at
-                      ? formatDistanceToNow(new Date(status.created_at), {
-                          addSuffix: true,
-                        })
-                      : "-"}
-                  </p>
-                </div>
-                {status?.completed_at && (
-                  <div>
-                    <p className="text-sm text-muted-foreground">Completed</p>
-                    <p className="font-medium text-sm">
-                      {formatDistanceToNow(new Date(status.completed_at), {
-                        addSuffix: true,
-                      })}
-                    </p>
+
+                {status?.total_pages && status.total_pages > 0 && (
+                  <div className="pt-3 border-t space-y-2">
+                    <div className="flex justify-between text-sm">
+                      <span className="text-muted-foreground">Pages</span>
+                      <span className="font-medium">{status.total_pages} total</span>
+                    </div>
+                    <div className="grid grid-cols-3 gap-2 text-xs">
+                      <div className="text-center p-2 bg-green-500/10 rounded">
+                        <div className="font-semibold text-green-600 dark:text-green-400">
+                          {pages.filter((p: PageInfo) => p.status === "completed").length}
+                        </div>
+                        <div className="text-muted-foreground">Completed</div>
+                      </div>
+                      <div className="text-center p-2 bg-blue-500/10 rounded">
+                        <div className="font-semibold text-blue-600 dark:text-blue-400">
+                          {pages.filter((p: PageInfo) => p.status === "processing").length}
+                        </div>
+                        <div className="text-muted-foreground">Processing</div>
+                      </div>
+                      <div className="text-center p-2 bg-red-500/10 rounded">
+                        <div className="font-semibold text-red-600 dark:text-red-400">
+                          {pages.filter((p: PageInfo) => p.status === "failed").length}
+                        </div>
+                        <div className="text-muted-foreground">Failed</div>
+                      </div>
+                    </div>
                   </div>
                 )}
-              </div>
-
-              {/* Progress Bar */}
-              <div className="space-y-2">
-                <div className="w-full bg-secondary rounded-full h-2">
-                  <div
-                    className="bg-primary h-2 rounded-full transition-all duration-300"
-                    style={{ width: `${status?.progress || 0}%` }}
-                  />
-                </div>
-              </div>
-
-              {/* Error Message */}
-              {status?.error && (
-                <div className="rounded-md bg-destructive/10 border border-destructive/20 p-4 text-sm text-destructive">
-                  <p className="font-medium">Error:</p>
-                  <p className="mt-1">{status.error}</p>
-                </div>
-              )}
-
-              {/* Pages Progress */}
-              {status?.pages && status.pages.length > 0 && (
-                <div className="space-y-3">
-                  <div className="flex items-center justify-between">
-                    <p className="text-sm font-medium">
-                      Pages Progress
-                    </p>
-                    <p className="text-sm text-muted-foreground">
-                      {status.pages.filter((p: any) => p.status === "completed").length} /{" "}
-                      {status.total_pages} completed
-                      {status.pages.filter((p: any) => p.status === "failed").length > 0 && (
-                        <span className="text-destructive ml-2">
-                          ({status.pages.filter((p: any) => p.status === "failed").length} failed)
-                        </span>
-                      )}
-                    </p>
-                  </div>
-
-                  {/* Pages Grid */}
-                  <div className="grid grid-cols-5 sm:grid-cols-8 md:grid-cols-10 lg:grid-cols-12 gap-2">
-                    {status.pages.map((page: any) => (
-                      <div
-                        key={page.page_number}
-                        className="relative"
-                      >
-                        <button
-                          onClick={(e) => handlePageClick(page.page_number, page.status, e)}
-                          disabled={page.status !== "completed" && page.status !== "failed"}
-                          className={`
-                            relative w-full h-10 sm:h-9 md:h-8 rounded border-2 flex items-center justify-center text-xs font-medium transition-all cursor-pointer hover:scale-105 active:scale-95 disabled:cursor-not-allowed disabled:hover:scale-100
-                            ${
-                              page.status === "completed"
-                                ? "bg-green-500/10 border-green-500/50 text-green-700 dark:text-green-400 hover:bg-green-500/20"
-                                : page.status === "failed"
-                                ? "bg-red-500/10 border-red-500/50 text-red-700 dark:text-red-400 hover:bg-red-500/20"
-                                : page.status === "processing"
-                                ? "bg-blue-500/10 border-blue-500/50 text-blue-700 dark:text-blue-400 animate-pulse"
-                                : "bg-yellow-500/10 border-yellow-500/50 text-yellow-700 dark:text-yellow-400 hover:bg-yellow-500/20"
-                            }
-                          `}
-                          title={`Page ${page.page_number}: ${page.status}${page.status === "completed" ? " - Click to view" : page.status === "failed" ? " - Click to retry" : ""}`}
-                        >
-                          {page.page_number}
-
-                          {/* Status indicator */}
-                          <div className="absolute -top-1 -right-1">
-                            {page.status === "completed" && (
-                              <CheckCircle2 className="h-3 w-3 text-green-600 dark:text-green-400" />
-                            )}
-                            {page.status === "failed" && (
-                              <XCircle className="h-3 w-3 text-red-600 dark:text-red-400" />
-                            )}
-                            {page.status === "processing" && (
-                              <Loader2 className="h-3 w-3 text-blue-600 dark:text-blue-400 animate-spin" />
-                            )}
-                            {page.status === "queued" && (
-                              <Clock className="h-3 w-3 text-yellow-600 dark:text-yellow-400" />
-                            )}
-                          </div>
-                        </button>
-
-                        {/* Retry button for failed pages */}
-                        {page.status === "failed" && (
-                          <button
-                            data-retry
-                            onClick={(e) => handleRetryPage(page.job_id, e)}
-                            disabled={retryPageMutation.isPending}
-                            className="absolute -bottom-1 left-1/2 -translate-x-1/2 bg-destructive hover:bg-destructive/90 text-destructive-foreground rounded-full p-0.5 shadow-sm hover:shadow-md transition-all disabled:opacity-50"
-                            title="Retry this page"
-                          >
-                            <RotateCw className={`h-2.5 w-2.5 ${retryPageMutation.isPending ? 'animate-spin' : ''}`} />
-                          </button>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-
-                  {/* Legend */}
-                  <div className="flex flex-wrap gap-4 text-xs text-muted-foreground pt-2 border-t">
-                    <div className="flex items-center gap-1">
-                      <CheckCircle2 className="h-3 w-3 text-green-600 dark:text-green-400" />
-                      <span>Completed</span>
-                    </div>
-                    <div className="flex items-center gap-1">
-                      <Loader2 className="h-3 w-3 text-blue-600 dark:text-blue-400" />
-                      <span>Processing</span>
-                    </div>
-                    <div className="flex items-center gap-1">
-                      <Clock className="h-3 w-3 text-yellow-600 dark:text-yellow-400" />
-                      <span>Queued</span>
-                    </div>
-                    <div className="flex items-center gap-1">
-                      <XCircle className="h-3 w-3 text-red-600 dark:text-red-400" />
-                      <span>Failed</span>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* Actions */}
-              {status?.status === "completed" && (
-                <div className="flex gap-4">
-                  <Button onClick={() => setShowResult(!showResult)} className="flex-1">
-                    <FileText className="h-4 w-4 mr-2" />
-                    {showResult ? "Hide" : "View"} Result
-                  </Button>
-                  <Button onClick={downloadMarkdown} variant="outline">
-                    <Download className="h-4 w-4 mr-2" />
-                    Download
-                  </Button>
-                </div>
-              )}
-            </CardContent>
-          </Card>
-
-          {/* Result Card */}
-          {showResult && result && (
-            <Card>
-              <CardHeader>
-                <CardTitle>Markdown Output</CardTitle>
-                <CardDescription>
-                  Job result
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="bg-muted rounded-lg p-4 max-h-[600px] overflow-y-auto">
-                  <pre className="text-sm whitespace-pre-wrap font-mono">
-                    {result.markdown}
-                  </pre>
-                </div>
               </CardContent>
             </Card>
-          )}
-        </div>
-      </main>
 
-      {/* Page Result Dialog */}
-      <Dialog open={pageDialogOpen} onOpenChange={setPageDialogOpen}>
-        <DialogContent className="max-w-4xl max-h-[80vh] overflow-hidden flex flex-col">
-          <DialogHeader>
-            <DialogTitle>Page {selectedPage} - Markdown Result</DialogTitle>
-            <DialogDescription>
-              Page result coming soon!
-            </DialogDescription>
-          </DialogHeader>
+            {/* Job Details */}
+            <Card>
+              <CardHeader className="pb-3">
+                <CardTitle className="text-base">Details</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3 text-sm">
+                <div className="flex items-start gap-2">
+                  <File className="h-4 w-4 text-muted-foreground mt-0.5" />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-muted-foreground">Type</p>
+                    <p className="font-medium capitalize">{status?.type || "Unknown"}</p>
+                  </div>
+                </div>
 
-          <div className="py-12 text-center text-muted-foreground">
-            Individual page results coming soon!
-          </div>
-        </DialogContent>
-      </Dialog>
+                <div className="flex items-start gap-2">
+                  <Calendar className="h-4 w-4 text-muted-foreground mt-0.5" />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-muted-foreground">Created</p>
+                    <p className="font-medium">
+                      {status?.created_at
+                        ? formatDistanceToNow(new Date(status.created_at), {
+                            addSuffix: true,
+                          })
+                        : "-"}
+                    </p>
+                  </div>
+                </div>
 
-      {/* Delete Confirmation Dialog */}
-      <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Are you sure?</AlertDialogTitle>
-            <AlertDialogDescription>
-              This action cannot be undone. This will permanently delete the job and all its
-              associated data including:
-              <ul className="list-disc list-inside mt-2 space-y-1">
-                <li>Job metadata</li>
-                <li>All pages and content</li>
-                <li>Markdown content</li>
-                <li>Temporary processing data</li>
-              </ul>
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={handleDeleteConfirm}
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-              disabled={deleteMutation.isPending}
-            >
-              {deleteMutation.isPending ? (
+                {status?.started_at && (
+                  <div className="flex items-start gap-2">
+                    <Clock className="h-4 w-4 text-muted-foreground mt-0.5" />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-muted-foreground">Started</p>
+                      <p className="font-medium">
+                        {formatDistanceToNow(new Date(status.started_at), {
+                          addSuffix: true,
+                        })}
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                {status?.completed_at && (
+                  <div className="flex items-start gap-2">
+                    <CheckCircle2 className="h-4 w-4 text-muted-foreground mt-0.5" />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-muted-foreground">Completed</p>
+                      <p className="font-medium">
+                        {formatDistanceToNow(new Date(status.completed_at), {
+                          addSuffix: true,
+                        })}
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                {status?.child_jobs && (
+                  <div className="flex items-start gap-2 pt-3 border-t">
+                    <Layers className="h-4 w-4 text-muted-foreground mt-0.5" />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-muted-foreground mb-1">Child Jobs</p>
+                      <div className="space-y-1 text-xs">
+                        {status.child_jobs.split_job_id && (
+                          <p className="font-mono truncate">
+                            Split: {status.child_jobs.split_job_id}
+                          </p>
+                        )}
+                        {status.child_jobs.merge_job_id && (
+                          <p className="font-mono truncate">
+                            Merge: {status.child_jobs.merge_job_id}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* Error Section */}
+            {status?.error && (
+              <Card className="border-destructive/50">
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-base flex items-center gap-2 text-destructive">
+                    <AlertTriangle className="h-4 w-4" />
+                    Error
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <p className="text-sm text-destructive">{status.error}</p>
+                </CardContent>
+              </Card>
+            )}
+
+            {/* Actions */}
+            <div className="space-y-2">
+              {status?.status === "completed" && (
                 <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Deleting...
+                  <Button onClick={downloadMarkdown} className="w-full" size="sm">
+                    <Download className="h-4 w-4 mr-2" />
+                    Download Markdown
+                  </Button>
                 </>
-              ) : (
-                "Delete"
               )}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-    </div>
+              <Button
+                variant="destructive"
+                className="w-full"
+                onClick={handleDeleteClick}
+                size="sm"
+              >
+                <Trash2 className="h-4 w-4 mr-2" />
+                Delete Job
+              </Button>
+            </div>
+
+            {/* Pages List in Sidebar */}
+            {pages.length > 0 && (
+              <Card>
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-base">Pages ({pages.length})</CardTitle>
+                  <CardDescription className="text-xs">
+                    Click to view content
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-1 max-h-[400px] overflow-y-auto">
+                  {pages.map((page: PageInfo) => {
+                    const isRetryDisabled = page.retry_count >= 3;
+                    const canRetry = page.status === "failed" && !isRetryDisabled;
+                    const isSelected = selectedPage?.page_number === page.page_number;
+
+                    return (
+                      <Tooltip key={page.page_number}>
+                        <TooltipTrigger asChild>
+                          <button
+                            onClick={() => handlePageClick(page)}
+                            disabled={
+                              page.status !== "completed" && page.status !== "failed"
+                            }
+                            className={`
+                              w-full flex items-center justify-between p-2 rounded-lg border transition-all text-left
+                              ${isSelected ? "border-primary bg-primary/10" : "border-border"}
+                              ${
+                                page.status === "completed"
+                                  ? "hover:bg-green-500/10 hover:border-green-500/50"
+                                  : page.status === "failed"
+                                  ? "hover:bg-red-500/10 hover:border-red-500/50"
+                                  : "opacity-60 cursor-not-allowed"
+                              }
+                            `}
+                          >
+                            <div className="flex items-center gap-2 flex-1 min-w-0">
+                              <div className="flex-shrink-0">
+                                {page.status === "completed" && (
+                                  <CheckCircle2 className="h-4 w-4 text-green-600 dark:text-green-400" />
+                                )}
+                                {page.status === "failed" && (
+                                  <XCircle className="h-4 w-4 text-red-600 dark:text-red-400" />
+                                )}
+                                {page.status === "processing" && (
+                                  <Loader2 className="h-4 w-4 text-blue-600 dark:text-blue-400 animate-spin" />
+                                )}
+                                {page.status === "queued" && (
+                                  <Clock className="h-4 w-4 text-yellow-600 dark:text-yellow-400" />
+                                )}
+                              </div>
+                              <span className="text-sm font-medium truncate">
+                                Page {page.page_number}
+                              </span>
+                            </div>
+                            <div className="flex items-center gap-2 flex-shrink-0">
+                              {page.retry_count > 0 && (
+                                <Badge variant="secondary" className="h-5 px-1.5 text-[10px]">
+                                  {page.retry_count}/3
+                                </Badge>
+                              )}
+                              {canRetry && (
+                                <button
+                                  onClick={(e) => handleRetryPage(page, e)}
+                                  disabled={retryPageMutation.isPending || isRetryDisabled}
+                                  className="p-1 hover:bg-destructive/20 rounded transition-colors"
+                                  title="Retry this page"
+                                >
+                                  <RotateCw
+                                    className={`h-3 w-3 text-destructive ${
+                                      retryPageMutation.isPending ? "animate-spin" : ""
+                                    }`}
+                                  />
+                                </button>
+                              )}
+                            </div>
+                          </button>
+                        </TooltipTrigger>
+                        <TooltipContent side="right" className="max-w-xs">
+                          <div className="space-y-1">
+                            <p className="font-semibold">Page {page.page_number}</p>
+                            <p className="text-xs capitalize">Status: {page.status}</p>
+                            {page.retry_count > 0 && (
+                              <p className="text-xs">
+                                Retry attempts: {page.retry_count}/3
+                              </p>
+                            )}
+                            {page.error_message && (
+                              <p className="text-xs text-destructive mt-2">
+                                Error: {page.error_message}
+                              </p>
+                            )}
+                          </div>
+                        </TooltipContent>
+                      </Tooltip>
+                    );
+                  })}
+                </CardContent>
+              </Card>
+            )}
+          </aside>
+
+          {/* Right Panel - 70% - Content Display */}
+          <main className="w-[70%] overflow-hidden flex flex-col">
+            {selectedPage ? (
+              selectedPage.status === "failed" ? (
+                // Failed page error display
+                <div className="flex-1 flex flex-col items-center justify-center p-8 space-y-4">
+                  <AlertCircle className="h-16 w-16 text-destructive" />
+                  <div className="text-center space-y-4">
+                    <div>
+                      <h3 className="text-lg font-semibold mb-2">Page {selectedPage.page_number} Failed</h3>
+                      <div className="bg-destructive/10 border border-destructive/20 rounded-lg p-4 max-w-md mx-auto">
+                        <p className="text-sm text-destructive break-words">
+                          {selectedPage.error_message || "An unknown error occurred"}
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="flex gap-2 justify-center">
+                      {selectedPage.retry_count < 3 && (
+                        <Button
+                          onClick={(e) => handleRetryPage(selectedPage, e)}
+                          disabled={retryPageMutation.isPending}
+                        >
+                          <RotateCw
+                            className={`h-4 w-4 mr-2 ${
+                              retryPageMutation.isPending ? "animate-spin" : ""
+                            }`}
+                          />
+                          Retry Page
+                        </Button>
+                      )}
+                      {selectedPage.error_message && (
+                        <Button
+                          variant="outline"
+                          onClick={() => {
+                            navigator.clipboard.writeText(
+                              `Page ${selectedPage.page_number} Error:\n${selectedPage.error_message}`
+                            );
+                            toast({
+                              title: "Error copied",
+                              description: "Error message copied to clipboard",
+                            });
+                          }}
+                        >
+                          <Copy className="h-4 w-4 mr-2" />
+                          Copy Error
+                        </Button>
+                      )}
+                    </div>
+
+                    {selectedPage.retry_count >= 3 && (
+                      <p className="text-xs text-destructive font-medium">
+                        Maximum retry attempts reached (3/3)
+                      </p>
+                    )}
+
+                    <p className="text-xs text-muted-foreground">
+                      Retry attempt: {selectedPage.retry_count}/3
+                    </p>
+                  </div>
+                </div>
+              ) : (
+                // Completed page content display
+                <div className="flex-1 flex flex-col overflow-hidden p-6">
+                  <div className="mb-4 flex items-center justify-between">
+                    <div>
+                      <h2 className="text-xl font-semibold">Page {selectedPage.page_number}</h2>
+                      <p className="text-sm text-muted-foreground">
+                        View content in PDF or Markdown format
+                      </p>
+                    </div>
+                    {selectedPage.retry_count > 0 && (
+                      <Badge variant="secondary">
+                        Retry {selectedPage.retry_count}/3
+                      </Badge>
+                    )}
+                  </div>
+
+                  <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as "pdf" | "markdown")} className="flex-1 flex flex-col overflow-hidden">
+                    <TabsList className="grid w-full max-w-md grid-cols-2">
+                      <TabsTrigger value="pdf">PDF Preview</TabsTrigger>
+                      <TabsTrigger value="markdown">Markdown</TabsTrigger>
+                    </TabsList>
+
+                    <TabsContent value="pdf" className="flex-1 overflow-hidden mt-4">
+                      <div className="h-full overflow-y-auto border rounded-lg bg-muted/30 p-4">
+                        {pdfUrl ? (
+                          <div className="flex flex-col items-center">
+                            {pdfError ? (
+                              <div className="text-center py-12">
+                                <AlertCircle className="h-12 w-12 text-destructive mx-auto mb-4" />
+                                <p className="text-sm text-muted-foreground">{pdfError}</p>
+                              </div>
+                            ) : (
+                              <PdfViewer
+                                file={pdfUrl}
+                                onLoadSuccess={onDocumentLoadSuccess}
+                                onLoadError={onDocumentLoadError}
+                                pageNumber={1}
+                                renderTextLayer={true}
+                                renderAnnotationLayer={true}
+                                className="mx-auto"
+                                width={typeof window !== 'undefined' ? Math.min(900, window.innerWidth * 0.6) : 900}
+                              />
+                            )}
+                          </div>
+                        ) : (
+                          <div className="text-center py-12">
+                            <p className="text-sm text-muted-foreground">PDF not available</p>
+                          </div>
+                        )}
+                      </div>
+                    </TabsContent>
+
+                    <TabsContent value="markdown" className="flex-1 overflow-hidden mt-4">
+                      <div className="h-full overflow-y-auto border rounded-lg bg-muted/30 p-4">
+                        {isLoadingPage ? (
+                          <div className="py-12 flex items-center justify-center">
+                            <Loader2 className="h-8 w-8 animate-spin text-primary" />
+                          </div>
+                        ) : pageResult ? (
+                          <div className="space-y-4">
+                            <pre className="text-sm whitespace-pre-wrap font-mono">
+                              {pageResult.result.markdown}
+                            </pre>
+                            <Button
+                              variant="outline"
+                              onClick={() => {
+                                const blob = new Blob([pageResult.result.markdown], {
+                                  type: "text/markdown",
+                                });
+                                const url = URL.createObjectURL(blob);
+                                const a = document.createElement("a");
+                                a.href = url;
+                                a.download = `page-${selectedPage?.page_number}.md`;
+                                document.body.appendChild(a);
+                                a.click();
+                                document.body.removeChild(a);
+                                URL.revokeObjectURL(url);
+                              }}
+                            >
+                              <Download className="h-4 w-4 mr-2" />
+                              Download Markdown
+                            </Button>
+                          </div>
+                        ) : (
+                          <div className="py-12 text-center text-muted-foreground">
+                            Failed to load page content
+                          </div>
+                        )}
+                      </div>
+                    </TabsContent>
+                  </Tabs>
+                </div>
+              )
+            ) : (
+              // No page selected - show placeholder
+              <div className="flex-1 flex flex-col items-center justify-center p-8 text-center">
+                <FileText className="h-16 w-16 text-muted-foreground mb-4" />
+                <h3 className="text-lg font-semibold mb-2">No Page Selected</h3>
+                <p className="text-sm text-muted-foreground max-w-md">
+                  {pages.length > 0
+                    ? "Select a page from the sidebar to view its content"
+                    : "No pages available for this job yet"}
+                </p>
+              </div>
+            )}
+          </main>
+        </div>
+
+        {/* Delete Confirmation Dialog */}
+        <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Are you sure?</AlertDialogTitle>
+              <AlertDialogDescription>
+                This action cannot be undone. This will permanently delete the job and all its
+                associated data including:
+                <ul className="list-disc list-inside mt-2 space-y-1">
+                  <li>Job metadata</li>
+                  <li>All pages and content</li>
+                  <li>Markdown content</li>
+                  <li>Temporary processing data</li>
+                </ul>
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction
+                onClick={handleDeleteConfirm}
+                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                disabled={deleteMutation.isPending}
+              >
+                {deleteMutation.isPending ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Deleting...
+                  </>
+                ) : (
+                  "Delete"
+                )}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+      </div>
+    </TooltipProvider>
   );
 }

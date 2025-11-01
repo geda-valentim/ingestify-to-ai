@@ -1,0 +1,46 @@
+# Docker Compose configuration for production
+# Use: docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+
+services:
+  minio:
+    # Production: use secure credentials from environment
+    environment:
+      - MINIO_ROOT_USER=${MINIO_ROOT_USER}
+      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
+    restart: unless-stopped
+
+  api:
+    # Production: no volume mounts, use code baked into image
+    # Remove dev overrides
+    volumes:
+      - ./tmp:/tmp/ingestify
+    command: uvicorn api.main:app --host 0.0.0.0 --port 8000 --workers 4
+    environment:
+      - PYTHONUNBUFFERED=1
+      - LOG_LEVEL=INFO
+    restart: unless-stopped
+
+  worker:
+    # Production: use full worker concurrency
+    volumes:
+      - ./tmp:/tmp/ingestify
+    command: celery -A workers.celery_app worker --loglevel=info --concurrency=4
+    environment:
+      - PYTHONUNBUFFERED=1
+    restart: unless-stopped
+    # Scale workers in production
+    deploy:
+      replicas: 5
+
+  frontend:
+    # Production: use built image, no dev overrides
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.frontend
+    environment:
+      - NODE_ENV=production
+      - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+    restart: unless-stopped
+    # Remove dev volumes and command overrides
+    volumes: []
+    command: []

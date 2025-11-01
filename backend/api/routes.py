@@ -1,4 +1,4 @@
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Header, Body, Depends
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Header, Body, Depends, Request
 from typing import Optional, List
 from uuid import uuid4
 from datetime import datetime
@@ -20,6 +20,7 @@ from shared.schemas import (
 )
 from shared.redis_client import get_redis_client
 from shared.elasticsearch_client import get_es_client
+from shared.minio_client import get_minio_client
 from shared.database import SessionLocal, get_db
 from shared.models import Job, Page, JobStatus as DBJobStatus, User
 from shared.config import get_settings
@@ -79,6 +80,8 @@ async def upload_and_convert(
       -F "docling_preset=quality"
     ```
     """
+    from shared.utils import calculate_file_checksum
+
     redis_client = get_redis_client()
 
     # Read file contents
@@ -96,7 +99,27 @@ async def upload_and_convert(
 
     logger.info(f"File uploaded: {filename} ({file_size_mb:.2f}MB)")
 
-    # Generate job ID
+    # Calculate file checksum for deduplication
+    file_checksum = calculate_file_checksum(file_contents)
+    logger.info(f"File checksum: {file_checksum}")
+
+    # Check if file already processed by this user
+    existing_job = db.query(Job).filter(
+        Job.user_id == current_user.id,
+        Job.file_checksum == file_checksum,
+        Job.job_type == "MAIN"
+    ).first()
+
+    if existing_job:
+        logger.info(f"Duplicate file detected! Returning existing job: {existing_job.id}")
+        return JobCreatedResponse(
+            job_id=existing_job.id,
+            status="queued",  # Use current status from DB
+            created_at=existing_job.created_at,
+            message=f"Arquivo já foi processado anteriormente (job existente: {existing_job.id})"
+        )
+
+    # Generate job ID for new file
     job_id = uuid4()
     created_at = datetime.utcnow()
 
@@ -125,16 +148,18 @@ async def upload_and_convert(
             id=str(job_id),
             user_id=current_user.id,
             filename=filename,
+            name=job_name,  # Save user-friendly name
             source_type="file",
             file_size_bytes=file_size_bytes,
             mime_type=mime_type,
+            file_checksum=file_checksum,  # Save checksum for deduplication
             status=DBJobStatus.PENDING,
             job_type="MAIN",
             created_at=created_at,
         )
         db.add(db_job)
         db.commit()
-        logger.info(f"Job {job_id} created in MySQL")
+        logger.info(f"Job {job_id} created in MySQL with name: {job_name} and checksum: {file_checksum}")
     except Exception as e:
         logger.error(f"Error creating job in MySQL: {e}", exc_info=True)
         db.rollback()
@@ -142,11 +167,35 @@ async def upload_and_convert(
 
     logger.info(f"MAIN JOB created: {job_id} | user: {current_user.username} | source_type: file")
 
-    # Save file temporarily
+    # Save file to MinIO and temporarily to filesystem
     try:
         from workers.tasks import process_conversion
         from pathlib import Path
 
+        # Save to MinIO
+        minio_client = get_minio_client()
+        minio_object_name = f"uploads/{job_id}/{filename}"
+        try:
+            minio_client.upload_file(
+                bucket_name=minio_client.bucket_uploads,
+                object_name=minio_object_name,
+                file_data=file_contents,
+                content_type=file.content_type or "application/octet-stream",
+            )
+            logger.info(f"File uploaded to MinIO: {minio_object_name}")
+
+            # Update MySQL job with MinIO path
+            try:
+                db_job.minio_upload_path = minio_object_name
+                db.commit()
+            except Exception as e:
+                logger.warning(f"Failed to update job MinIO path in MySQL: {e}")
+                db.rollback()
+        except Exception as e:
+            logger.error(f"Failed to upload file to MinIO: {e}")
+            # Continue with filesystem fallback
+
+        # Also save to filesystem temporarily for processing
         temp_dir = Path(settings.temp_storage_path) / "uploads" / str(job_id)
         temp_dir.mkdir(parents=True, exist_ok=True)
         temp_file_path = temp_dir / filename
@@ -154,7 +203,7 @@ async def upload_and_convert(
         with open(temp_file_path, "wb") as f:
             f.write(file_contents)
 
-        logger.info(f"File saved to: {temp_file_path}")
+        logger.info(f"File saved to filesystem: {temp_file_path}")
 
         # Enqueue task
         process_conversion.delay(
@@ -313,7 +362,27 @@ async def transcribe_audio(
 
     logger.info(f"Audio file uploaded: {filename} ({file_size_mb:.2f}MB, {mime_type})")
 
-    # Generate job ID
+    # Calculate file checksum for deduplication
+    file_checksum = calculate_file_checksum(file_contents)
+    logger.info(f"Audio file checksum: {file_checksum}")
+
+    # Check if file already processed by this user
+    existing_job = db.query(Job).filter(
+        Job.user_id == current_user.id,
+        Job.file_checksum == file_checksum,
+        Job.job_type == "MAIN"
+    ).first()
+
+    if existing_job:
+        logger.info(f"Duplicate audio file detected! Returning existing job: {existing_job.id}")
+        return JobCreatedResponse(
+            job_id=existing_job.id,
+            status="queued",
+            created_at=existing_job.created_at,
+            message=f"Arquivo de áudio já foi processado anteriormente (job existente: {existing_job.id})"
+        )
+
+    # Generate job ID for new file
     job_id = uuid4()
     created_at = datetime.utcnow()
 
@@ -339,27 +408,53 @@ async def transcribe_audio(
             id=str(job_id),
             user_id=current_user.id,
             filename=filename,
+            name=job_name,  # Save user-friendly name
             source_type="audio",
             file_size_bytes=file_size_bytes,
             mime_type=mime_type,
+            file_checksum=file_checksum,  # Save checksum for deduplication
             status=DBJobStatus.PENDING,
             job_type="MAIN",
             created_at=created_at,
         )
         db.add(db_job)
         db.commit()
-        logger.info(f"Audio transcription job {job_id} created in MySQL")
+        logger.info(f"Audio transcription job {job_id} created in MySQL with name: {job_name} and checksum: {file_checksum}")
     except Exception as e:
         logger.error(f"Error creating audio job in MySQL: {e}", exc_info=True)
         db.rollback()
 
     logger.info(f"AUDIO TRANSCRIPTION JOB created: {job_id} | user: {current_user.username}")
 
-    # Save audio file temporarily
+    # Save audio file to MinIO and temporarily to filesystem
     try:
         from workers.tasks import process_conversion
         from pathlib import Path
 
+        # Save to MinIO
+        minio_client = get_minio_client()
+        minio_object_name = f"audio/{job_id}/{filename}"
+        try:
+            minio_client.upload_file(
+                bucket_name=minio_client.bucket_audio,
+                object_name=minio_object_name,
+                file_data=file_contents,
+                content_type=file.content_type or "audio/mpeg",
+            )
+            logger.info(f"Audio file uploaded to MinIO: {minio_object_name}")
+
+            # Update MySQL job with MinIO path
+            try:
+                db_job.minio_upload_path = minio_object_name
+                db.commit()
+            except Exception as e:
+                logger.warning(f"Failed to update audio job MinIO path in MySQL: {e}")
+                db.rollback()
+        except Exception as e:
+            logger.error(f"Failed to upload audio file to MinIO: {e}")
+            # Continue with filesystem fallback
+
+        # Also save to filesystem temporarily for processing
         temp_dir = Path(settings.temp_storage_path) / "audio" / str(job_id)
         temp_dir.mkdir(parents=True, exist_ok=True)
         temp_file_path = temp_dir / filename
@@ -367,7 +462,7 @@ async def transcribe_audio(
         with open(temp_file_path, "wb") as f:
             f.write(file_contents)
 
-        logger.info(f"Audio file saved to: {temp_file_path}")
+        logger.info(f"Audio file saved to filesystem: {temp_file_path}")
 
         # Build audio transcription options
         options = {
@@ -510,15 +605,12 @@ async def convert_document(
     if source_type in ["gdrive", "dropbox"] and not authorization:
         raise HTTPException(status_code=401, detail="Authorization header é obrigatório para esta fonte")
 
-    # Generate job ID
-    job_id = uuid4()
-    created_at = datetime.utcnow()
-
     # Read file contents if uploaded
     file_contents = None
     filename = None
     file_size_bytes = 0
     mime_type = None
+    file_checksum = None
 
     if file:
         file_contents = await file.read()
@@ -535,6 +627,30 @@ async def convert_document(
             )
 
         logger.info(f"File uploaded: {filename} ({file_size_mb:.2f}MB)")
+
+        # Calculate file checksum for deduplication
+        file_checksum = calculate_file_checksum(file_contents)
+        logger.info(f"File checksum: {file_checksum}")
+
+        # Check if file already processed by this user
+        existing_job = db.query(Job).filter(
+            Job.user_id == current_user.id,
+            Job.file_checksum == file_checksum,
+            Job.job_type == "MAIN"
+        ).first()
+
+        if existing_job:
+            logger.info(f"Duplicate file detected! Returning existing job: {existing_job.id}")
+            return JobCreatedResponse(
+                job_id=existing_job.id,
+                status="queued",
+                created_at=existing_job.created_at,
+                message=f"Arquivo já foi processado anteriormente (job existente: {existing_job.id})"
+            )
+
+    # Generate job ID for new conversion
+    job_id = uuid4()
+    created_at = datetime.utcnow()
 
     # Determine job name (use provided name or auto-detect)
     if name:
@@ -569,17 +685,20 @@ async def convert_document(
             id=str(job_id),
             user_id=current_user.id,
             filename=filename or job_name,
+            name=job_name,  # Save user-friendly name
             source_type=source_type,
             source_url=source if source_type != "file" else None,
             file_size_bytes=file_size_bytes if file_size_bytes > 0 else None,
             mime_type=mime_type,
+            file_checksum=file_checksum,  # Save checksum for deduplication (only for file uploads)
             status=DBJobStatus.PENDING,
             job_type="MAIN",
             created_at=created_at,
         )
         db.add(db_job)
         db.commit()
-        logger.info(f"Job {job_id} created in MySQL (source_type: {source_type})")
+        checksum_info = f" and checksum: {file_checksum}" if file_checksum else ""
+        logger.info(f"Job {job_id} created in MySQL with name: {job_name} (source_type: {source_type}){checksum_info}")
     except Exception as e:
         logger.error(f"Error creating job in MySQL: {e}", exc_info=True)
         db.rollback()
@@ -605,8 +724,32 @@ async def convert_document(
         if authorization and authorization.startswith("Bearer "):
             task_kwargs["auth_token"] = authorization.replace("Bearer ", "")
 
-        # Save file temporarily if uploaded
+        # Save file to MinIO and temporarily to filesystem if uploaded
         if file_contents:
+            # Save to MinIO
+            minio_client = get_minio_client()
+            minio_object_name = f"uploads/{job_id}/{filename}"
+            try:
+                minio_client.upload_file(
+                    bucket_name=minio_client.bucket_uploads,
+                    object_name=minio_object_name,
+                    file_data=file_contents,
+                    content_type=mime_type or "application/octet-stream",
+                )
+                logger.info(f"File uploaded to MinIO: {minio_object_name}")
+
+                # Update MySQL job with MinIO path
+                try:
+                    db_job.minio_upload_path = minio_object_name
+                    db.commit()
+                except Exception as e:
+                    logger.warning(f"Failed to update job MinIO path in MySQL: {e}")
+                    db.rollback()
+            except Exception as e:
+                logger.error(f"Failed to upload file to MinIO: {e}")
+                # Continue with filesystem fallback
+
+            # Also save to filesystem temporarily for processing
             temp_dir = Path(settings.temp_storage_path) / "uploads" / str(job_id)
             temp_dir.mkdir(parents=True, exist_ok=True)
             temp_file_path = temp_dir / filename
@@ -615,7 +758,7 @@ async def convert_document(
                 f.write(file_contents)
 
             task_kwargs["source"] = str(temp_file_path)
-            logger.info(f"File saved to: {temp_file_path}")
+            logger.info(f"File saved to filesystem: {temp_file_path}")
 
         # Enqueue task
         process_conversion.delay(**task_kwargs)
@@ -746,11 +889,9 @@ async def get_job_status(
 
         if total_pages:
             response_data["total_pages"] = total_pages
-            response_data["pages_completed"] = pages_completed
-            response_data["pages_failed"] = pages_failed
 
             # Add detailed page status for each page
-            pages_status_list = []
+            pages_status_dict = {}  # Use dict for fast lookup by page number
 
             # Try MySQL first
             db_pages = db.query(Page).filter(Page.job_id == job_id).order_by(Page.page_number).all()
@@ -768,28 +909,52 @@ async def get_job_status(
                     }
                     page_status = status_map.get(db_page.status, "pending")
 
-                    pages_status_list.append({
+                    pages_status_dict[db_page.page_number] = {
                         "page_number": db_page.page_number,
                         "job_id": db_page.page_job_id or f"page-{db_page.page_number}",
                         "status": page_status,
                         "url": f"/jobs/{db_page.page_job_id or job_id}/result",
-                    })
+                        "error_message": db_page.error_message,
+                        "retry_count": db_page.retry_count or 0,
+                    }
             else:
                 # Fallback to Redis
                 page_job_ids = redis_client.get_page_jobs(job_id)
                 for page_job_id in page_job_ids:
                     page_status_data = redis_client.get_job_status(page_job_id)
                     if page_status_data:
-                        pages_status_list.append({
-                            "page_number": page_status_data.get("page_number", 0),
+                        page_num = page_status_data.get("page_number", 0)
+                        pages_status_dict[page_num] = {
+                            "page_number": page_num,
                             "job_id": page_job_id,
                             "status": page_status_data.get("status", "pending"),
                             "url": f"/jobs/{page_job_id}/result",
-                        })
+                            "error_message": page_status_data.get("error"),
+                            "retry_count": 0,  # Redis doesn't track retry count
+                        }
 
-                # Sort by page number
-                pages_status_list.sort(key=lambda p: p["page_number"])
+            # Build complete pages list with placeholders for all pages
+            pages_status_list = []
+            for page_num in range(1, total_pages + 1):
+                if page_num in pages_status_dict:
+                    pages_status_list.append(pages_status_dict[page_num])
+                else:
+                    # Add placeholder for pages not yet created
+                    pages_status_list.append({
+                        "page_number": page_num,
+                        "job_id": f"pending-{page_num}",
+                        "status": "queued",
+                        "url": f"/jobs/{job_id}/pages/{page_num}/result",
+                        "error_message": None,
+                        "retry_count": 0,
+                    })
 
+            # Calculate actual counts from the pages list
+            pages_completed = sum(1 for p in pages_status_list if p["status"] == "completed")
+            pages_failed = sum(1 for p in pages_status_list if p["status"] == "failed")
+
+            response_data["pages_completed"] = pages_completed
+            response_data["pages_failed"] = pages_failed
             response_data["pages"] = pages_status_list
 
         # Add child jobs information
@@ -1051,6 +1216,8 @@ async def get_job_pages(
                 job_id=db_page.page_job_id or f"page-{db_page.page_number}",
                 status=page_status,
                 url=f"/jobs/{db_page.page_job_id or job_id}/result",
+                error_message=db_page.error_message,
+                retry_count=db_page.retry_count or 0,
             ))
 
         total_pages = len(db_pages)
@@ -1079,7 +1246,16 @@ async def get_job_pages(
     page_job_ids = redis_client.get_page_jobs(job_id)
 
     if not page_job_ids:
-        raise HTTPException(status_code=404, detail="Page jobs não encontrados")
+        # Edge case: total_pages exists but no page jobs were created
+        # This happens when PDF was processed as a single document without splitting
+        logger.warning(f"Job {job_id} has total_pages={total_pages} but no page jobs found")
+        return JobPagesResponse(
+            job_id=job_id,
+            total_pages=total_pages,
+            pages_completed=0,
+            pages_failed=0,
+            pages=[],
+        )
 
     # Build page info list
     pages_list = []
@@ -1093,6 +1269,8 @@ async def get_job_pages(
                 job_id=page_job_id,
                 status=page_status_data.get("status", "pending"),
                 url=f"/jobs/{page_job_id}/result",
+                error_message=page_status_data.get("error"),
+                retry_count=0,  # Redis doesn't track retry count
             ))
 
     # Sort by page number
@@ -1399,12 +1577,17 @@ async def list_jobs(
                 if status and status_data.get("status") != status:
                     continue
 
+                # Get additional data from MySQL (name, timestamps)
+                db_job = db.query(Job).filter(Job.id == job_id).first()
+
                 job_info = {
                     "job_id": job_id,
                     "type": status_data.get("type", "main"),
                     "status": status_data.get("status"),
                     "progress": status_data.get("progress", 0),
-                    "name": status_data.get("name"),
+                    "name": db_job.name if db_job and db_job.name else status_data.get("name"),
+                    "created_at": db_job.created_at.isoformat() if db_job and db_job.created_at else None,
+                    "completed_at": db_job.completed_at.isoformat() if db_job and db_job.completed_at else None,
                 }
 
                 # Add total_pages for main jobs if available
@@ -1421,8 +1604,8 @@ async def list_jobs(
 
                 jobs_list.append(job_info)
 
-        # Sort by job_id (most recent first, assuming UUID v4 with timestamp component)
-        jobs_list.sort(key=lambda x: x["job_id"], reverse=True)
+        # Sort by created_at (most recent first)
+        jobs_list.sort(key=lambda x: x.get("created_at") or "", reverse=True)
 
         # Apply pagination
         paginated_jobs = jobs_list[offset : offset + limit]
@@ -1576,6 +1759,13 @@ async def retry_failed_page(
                 detail=f"Página {page_number} não está em status 'failed' (status atual: {db_page.status.value})"
             )
 
+        # Check retry limit (max 3 attempts)
+        if db_page.retry_count >= 3:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Limite de tentativas atingido para página {page_number} (3/3 tentativas). Não é possível tentar novamente."
+            )
+
     # Get main job info to access original file
     db_job = db.query(Job).filter(Job.id == job_id).first()
     if not db_job:
@@ -1591,11 +1781,14 @@ async def retry_failed_page(
         # Generate new job ID for the retry
         new_page_job_id = str(uuid.uuid4())
 
-        # Update page status to pending
+        # Update page status to pending and increment retry count
         db_page.status = DBJobStatus.PENDING
         db_page.page_job_id = new_page_job_id
         db_page.error_message = None
+        db_page.retry_count += 1
         db.commit()
+
+        logger.info(f"Retry attempt {db_page.retry_count}/3 for page {page_number}")
 
         # Create Redis status for new page job
         redis_client.set_job_status(
@@ -1636,11 +1829,13 @@ async def retry_failed_page(
         logger.info(f"Page {page_number} of job {job_id} enqueued for retry with new job_id {new_page_job_id}")
 
         return {
-            "message": f"Página {page_number} enfileirada para reprocessamento",
+            "message": f"Página {page_number} enfileirada para reprocessamento (tentativa {db_page.retry_count}/3)",
             "job_id": job_id,
             "page_number": page_number,
             "new_page_job_id": new_page_job_id,
             "status": "queued",
+            "retry_count": db_page.retry_count,
+            "retry_limit": 3,
         }
 
     except ImportError as e:
@@ -1651,6 +1846,81 @@ async def retry_failed_page(
         logger.error(f"Error retrying page {page_number} of job {job_id}: {e}", exc_info=True)
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Erro ao reprocessar página: {str(e)}")
+
+
+@router.get("/jobs/{job_id}/pages/{page_number}/pdf")
+async def get_page_pdf(
+    job_id: str,
+    page_number: int,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """
+    Redirect to MinIO public URL for page PDF (NO AUTH REQUIRED)
+
+    Returns a redirect to the public MinIO URL for a specific page PDF.
+    Dynamically adapts to the request host, so it works from any IP/domain.
+    This endpoint is public to allow PDF viewers to load content without authentication headers.
+
+    ## Parameters:
+    - `job_id`: Main job ID
+    - `page_number`: Page number (1-indexed)
+
+    ## Example:
+    ```
+    GET http://192.168.1.10:8000/jobs/550e8400-e29b-41d4-a716-446655440000/pages/5/pdf
+    -> Redirects to: http://192.168.1.10:9000/ingestify-pages/pages/{job_id}/page_0005.pdf
+    ```
+    """
+    from fastapi.responses import RedirectResponse
+
+    # No authentication required for PDF preview
+
+    # Check if job exists
+    db_job = db.query(Job).filter(Job.id == job_id).first()
+    if not db_job:
+        raise HTTPException(status_code=404, detail="Job não encontrado")
+
+    # Check if page exists
+    db_page = db.query(Page).filter(
+        Page.job_id == job_id,
+        Page.page_number == page_number
+    ).first()
+
+    if not db_page:
+        raise HTTPException(status_code=404, detail=f"Página {page_number} não encontrada")
+
+    # Get MinIO public URL
+    minio_client = get_minio_client()
+
+    # If page has MinIO path stored, use it
+    if db_page.minio_page_path:
+        minio_object_path = db_page.minio_page_path
+    else:
+        # Fallback to expected path pattern
+        minio_object_path = f"pages/{job_id}/page_{page_number:04d}.pdf"
+
+    # Check if file exists in MinIO
+    if not minio_client.file_exists(minio_client.bucket_pages, minio_object_path):
+        raise HTTPException(
+            status_code=404,
+            detail=f"Arquivo PDF da página {page_number} não encontrado no MinIO. O job pode não ter sido dividido em páginas."
+        )
+
+    # Get request host for dynamic URL generation
+    request_host = request.headers.get("host", "localhost:8000")
+
+    # Generate public URL based on request host
+    public_url = minio_client.get_public_url(
+        minio_client.bucket_pages,
+        minio_object_path,
+        request_host=request_host
+    )
+
+    logger.info(f"Redirecting page {page_number} PDF for job {job_id} to MinIO: {public_url} (from host: {request_host})")
+
+    # Redirect to MinIO public URL
+    return RedirectResponse(url=public_url, status_code=307)
 
 
 @router.get("/health", response_model=HealthCheckResponse)

@@ -155,6 +155,7 @@ async def startup_event():
     logger.info(f"Redis host: {settings.redis_host}:{settings.redis_port}")
     logger.info(f"MySQL database: {settings.database_url.split('@')[-1] if '@' in settings.database_url else 'N/A'}")
     logger.info(f"Elasticsearch: {settings.elasticsearch_url}")
+    logger.info(f"MinIO endpoint: {settings.minio_endpoint}")
 
     # Initialize MySQL database (create tables if they don't exist)
     try:
@@ -193,6 +194,24 @@ async def startup_event():
         logger.error(f"✗ Redis connection failed: {e}")
         if settings.environment == "production":
             raise
+
+    # Initialize MinIO and ensure buckets exist
+    try:
+        from shared.minio_client import get_minio_client
+        logger.info("Initializing MinIO object storage...")
+        minio_client = get_minio_client()
+
+        # Test connection
+        if minio_client.health_check():
+            logger.info("✓ MinIO connection OK")
+            logger.info(f"  - Credentials: {settings.minio_access_key} / {'*' * len(settings.minio_secret_key)}")
+            logger.info(f"  - Buckets created: {settings.minio_bucket_uploads}, {settings.minio_bucket_pages}, {settings.minio_bucket_audio}, {settings.minio_bucket_results}")
+        else:
+            logger.warning("✗ MinIO not available (file storage will use filesystem fallback)")
+    except Exception as e:
+        logger.warning(f"✗ MinIO initialization failed: {e}")
+        logger.warning("  Continuing with filesystem storage fallback")
+        # Don't fail - MinIO is optional, we can use filesystem fallback
 
 
 @app.on_event("shutdown")
