@@ -1,8 +1,20 @@
 # Docker Compose - Base Configuration
 # Dev mode: docker compose up (docker-compose.override.yml is auto-applied)
 # Production: docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# Smart Infrastructure Detection:
+#   ./start.sh              # Auto-detect and use shared infrastructure if available
+#   make start              # Same as above
+#   docker compose up       # Start everything (including local infrastructure)
+#   docker compose --profile infra up  # Explicitly start with local infrastructure
 
 services:
+  # ========================================
+  # LOCAL INFRASTRUCTURE (optional)
+  # Use profile "infra" to explicitly start these
+  # Or let start.sh decide automatically
+  # ========================================
+
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.11.0
     container_name: ingestify-elasticsearch
@@ -20,12 +32,16 @@ services:
       - "9200:9200"
     volumes:
       - elasticsearch_data:/usr/share/elasticsearch/data
+    networks:
+      - ingestify-network
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:9200/_cluster/health || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 5
     restart: unless-stopped
+    profiles:
+      - infra
 
   redis:
     image: redis:7-alpine
@@ -35,12 +51,16 @@ services:
     volumes:
       - redis_data:/data
     command: redis-server --appendonly yes
+    networks:
+      - ingestify-network
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
     restart: unless-stopped
+    profiles:
+      - infra
 
   minio:
     image: minio/minio:latest
@@ -54,12 +74,20 @@ services:
       - MINIO_ROOT_USER=${MINIO_ROOT_USER:-minioadmin}
       - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD:-minioadmin}
     command: server /data --console-address ":9001"
+    networks:
+      - ingestify-network
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
       interval: 10s
       timeout: 5s
       retries: 5
     restart: unless-stopped
+    profiles:
+      - infra
+
+  # ========================================
+  # APPLICATION SERVICES
+  # ========================================
 
   api:
     build:
@@ -69,10 +97,11 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+      # Smart host detection: uses service name if in same network, or localhost if external
+      - REDIS_HOST=${REDIS_HOST:-redis}
+      - REDIS_PORT=${REDIS_PORT:-6379}
+      - CELERY_BROKER_URL=${CELERY_BROKER_URL:-redis://${REDIS_HOST:-redis}:6379/0}
+      - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND:-redis://${REDIS_HOST:-redis}:6379/1}
       - CELERY_TASK_DEFAULT_QUEUE=ingestify
       - CELERY_WORKER_NAME=ingestify-worker
       - ENVIRONMENT=development
@@ -82,8 +111,10 @@ services:
       - TEMP_STORAGE_PATH=/tmp/ingestify
       - RESULT_TTL_SECONDS=14400
       - DATABASE_URL=${DATABASE_URL:-mysql+pymysql://root:root@host.docker.internal:3306/ingestify}
-      - ELASTICSEARCH_URL=${ELASTICSEARCH_URL:-http://host.docker.internal:9200}
-      - MINIO_ENDPOINT=minio:9000
+      - ELASTICSEARCH_URL=${ELASTICSEARCH_URL:-http://${ELASTICSEARCH_HOST:-elasticsearch}:9200}
+      - ELASTICSEARCH_HOST=${ELASTICSEARCH_HOST:-elasticsearch}
+      - MINIO_ENDPOINT=${MINIO_HOST:-minio}:9000
+      - MINIO_HOST=${MINIO_HOST:-minio}
       - MINIO_ACCESS_KEY=${MINIO_ROOT_USER:-minioadmin}
       - MINIO_SECRET_KEY=${MINIO_ROOT_PASSWORD:-minioadmin}
       - MINIO_SECURE=false
@@ -91,11 +122,8 @@ services:
       - MINIO_BUCKET_PAGES=ingestify-pages
       - MINIO_BUCKET_AUDIO=ingestify-audio
       - MINIO_BUCKET_RESULTS=ingestify-results
-    depends_on:
-      redis:
-        condition: service_healthy
-      minio:
-        condition: service_healthy
+    networks:
+      - ingestify-network
     volumes:
       - ./tmp:/tmp/ingestify
       - ./backend/api:/app/api
@@ -109,10 +137,10 @@ services:
       context: .
       dockerfile: docker/Dockerfile.worker
     environment:
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+      - REDIS_HOST=${REDIS_HOST:-redis}
+      - REDIS_PORT=${REDIS_PORT:-6379}
+      - CELERY_BROKER_URL=${CELERY_BROKER_URL:-redis://${REDIS_HOST:-redis}:6379/0}
+      - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND:-redis://${REDIS_HOST:-redis}:6379/1}
       - CELERY_TASK_DEFAULT_QUEUE=ingestify
       - CELERY_WORKER_NAME=ingestify-worker
       - ENVIRONMENT=development
@@ -122,8 +150,10 @@ services:
       - TEMP_STORAGE_PATH=/tmp/ingestify
       - RESULT_TTL_SECONDS=14400
       - DATABASE_URL=${DATABASE_URL:-mysql+pymysql://root:root@host.docker.internal:3306/ingestify}
-      - ELASTICSEARCH_URL=${ELASTICSEARCH_URL:-http://host.docker.internal:9200}
-      - MINIO_ENDPOINT=minio:9000
+      - ELASTICSEARCH_URL=${ELASTICSEARCH_URL:-http://${ELASTICSEARCH_HOST:-elasticsearch}:9200}
+      - ELASTICSEARCH_HOST=${ELASTICSEARCH_HOST:-elasticsearch}
+      - MINIO_ENDPOINT=${MINIO_HOST:-minio}:9000
+      - MINIO_HOST=${MINIO_HOST:-minio}
       - MINIO_ACCESS_KEY=${MINIO_ROOT_USER:-minioadmin}
       - MINIO_SECRET_KEY=${MINIO_ROOT_PASSWORD:-minioadmin}
       - MINIO_SECURE=false
@@ -131,11 +161,8 @@ services:
       - MINIO_BUCKET_PAGES=ingestify-pages
       - MINIO_BUCKET_AUDIO=ingestify-audio
       - MINIO_BUCKET_RESULTS=ingestify-results
-    depends_on:
-      redis:
-        condition: service_healthy
-      minio:
-        condition: service_healthy
+    networks:
+      - ingestify-network
     volumes:
       - ./tmp:/tmp/ingestify
       - ./backend/workers:/app/workers
@@ -153,17 +180,19 @@ services:
     container_name: ingestify-beat
     command: celery -A workers.celery_app beat --loglevel=info
     environment:
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+      - REDIS_HOST=${REDIS_HOST:-redis}
+      - REDIS_PORT=${REDIS_PORT:-6379}
+      - CELERY_BROKER_URL=${CELERY_BROKER_URL:-redis://${REDIS_HOST:-redis}:6379/0}
+      - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND:-redis://${REDIS_HOST:-redis}:6379/1}
       - CELERY_TASK_DEFAULT_QUEUE=ingestify
       - CELERY_WORKER_NAME=ingestify-beat
       - ENVIRONMENT=development
       - LOG_LEVEL=INFO
       - DATABASE_URL=${DATABASE_URL:-mysql+pymysql://root:root@host.docker.internal:3306/ingestify}
-      - ELASTICSEARCH_URL=${ELASTICSEARCH_URL:-http://host.docker.internal:9200}
-      - MINIO_ENDPOINT=minio:9000
+      - ELASTICSEARCH_URL=${ELASTICSEARCH_URL:-http://${ELASTICSEARCH_HOST:-elasticsearch}:9200}
+      - ELASTICSEARCH_HOST=${ELASTICSEARCH_HOST:-elasticsearch}
+      - MINIO_ENDPOINT=${MINIO_HOST:-minio}:9000
+      - MINIO_HOST=${MINIO_HOST:-minio}
       - MINIO_ACCESS_KEY=${MINIO_ROOT_USER:-minioadmin}
       - MINIO_SECRET_KEY=${MINIO_ROOT_PASSWORD:-minioadmin}
       - MINIO_SECURE=false
@@ -175,9 +204,8 @@ services:
       - MONITORING_MAX_RETRY_COUNT=3
       - MONITORING_CHECK_INTERVAL_MINUTES=5
       - MONITORING_BATCH_SIZE=100
-    depends_on:
-      redis:
-        condition: service_healthy
+    networks:
+      - ingestify-network
     volumes:
       - ./backend/workers:/app/workers
       - ./backend/shared:/app/shared
@@ -195,11 +223,24 @@ services:
     # API URL is dynamically detected from window.location (see frontend/lib/api.ts)
     # environment:
     #   - NEXT_PUBLIC_API_URL=http://custom-domain:8000  # Uncomment to override
+    networks:
+      - ingestify-network
     depends_on:
       - api
     restart: unless-stopped
 
 volumes:
   elasticsearch_data:
+    name: ingestify-elasticsearch-data
   redis_data:
+    name: ingestify-redis-data
   minio_data:
+    name: ingestify-minio-data
+
+networks:
+  ingestify-network:
+    name: ingestify-network
+    driver: bridge
+    # This network will either:
+    # - Use shared-dev-network if it exists (via start.sh)
+    # - Create a local network if running standalone

@@ -297,7 +297,7 @@ export default function JobStatusPage({ params }: PageProps) {
 
   const downloadMarkdown = () => {
     if (!result) return;
-    const blob = new Blob([result.markdown], { type: "text/markdown" });
+    const blob = new Blob([result.result.markdown], { type: "text/markdown" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;

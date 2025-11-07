@@ -111,6 +111,8 @@ export interface PageJobInfo {
   job_id: string;
   status: JobStatus;
   url: string;
+  error_message?: string | null;
+  retry_count: number;
 }
 
 export interface JobPagesResponse {
@@ -152,4 +154,9 @@ export interface JobsListParams {
 export interface SearchParams {
   query: string;
   limit?: number;
+}
+
+export interface JobsListResponse {
+  jobs: JobStatusResponse[];
+  total: number;
 }
