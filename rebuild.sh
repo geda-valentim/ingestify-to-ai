@@ -5,12 +5,16 @@ echo "  Doc2MD - Rebuild and Start"
 echo "======================================"
 echo ""
 
+# Enable BuildKit for better caching and faster builds
+export DOCKER_BUILDKIT=1
+export COMPOSE_DOCKER_CLI_BUILD=1
+
 echo "Stopping existing containers..."
 sudo docker compose down
 
 echo ""
 echo "Building and starting with updated requirements..."
-sudo docker compose up -d --build
+sudo -E docker compose up -d --build
 
 echo ""
 echo "Waiting for services to initialize..."

@@ -272,6 +272,76 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml down
 - ✅ **API**: Edite arquivos em `backend/api/` e veja mudanças instantaneamente
 - ✅ **Workers**: Edite arquivos em `backend/workers/` e workers reiniciam automaticamente
 
+## 🔗 Infraestrutura Compartilhada (Novo!)
+
+O Ingestify agora suporta **auto-detecção de infraestrutura compartilhada**! Isso significa:
+
+- 🚀 **Zero Configuração**: Funciona automaticamente em qualquer máquina
+- 💾 **Economia de Recursos**: Compartilhe Redis, MinIO e Elasticsearch entre múltiplos projetos
+- ⚡ **Startup Rápido**: Reutilize infraestrutura já rodando
+- 🖥️ **Multi-Máquina**: Mesmos comandos no desktop, laptop ou servidor
+
+### Quick Start - Modo Inteligente (Recomendado)
+
+```bash
+# Simplesmente execute - o script detecta tudo automaticamente!
+./start.sh
+
+# Ou use o Makefile
+make start
+```
+
+O script `start.sh` detecta automaticamente:
+- ✅ Se existe infraestrutura compartilhada rodando → reutiliza
+- ✅ Se não existe → inicia infraestrutura local
+- ✅ Configura tudo automaticamente sem perguntar nada!
+
+### Modo Compartilhado Explícito
+
+```bash
+# Terminal 1: Inicie a infraestrutura compartilhada UMA VEZ
+make infra-start
+# Ou: ./infra.sh start
+
+# Terminal 2: Inicie o Ingestify (detecta e usa infra compartilhada)
+./start.sh
+
+# Terminal 3: Inicie outro projeto (também usa a mesma infra!)
+cd /path/to/outro-projeto
+./start.sh
+```
+
+### Comandos Úteis
+
+```bash
+# Gerenciar infraestrutura compartilhada
+./infra.sh start      # Iniciar
+./infra.sh stop       # Parar
+./infra.sh status     # Ver status
+./infra.sh test       # Testar conectividade
+./infra.sh logs       # Ver logs
+
+# Ou use o Makefile
+make infra-start      # Iniciar infraestrutura
+make infra-stop       # Parar infraestrutura
+make infra-status     # Status
+make infra-logs       # Ver logs
+```
+
+### Benefícios
+
+**Sem Infraestrutura Compartilhada:**
+- Cada projeto usa ~1.2GB RAM (Redis + MinIO + Elasticsearch)
+- 3 projetos = ~3.6GB RAM usado
+
+**Com Infraestrutura Compartilhada:**
+- TODOS os projetos compartilham a mesma infraestrutura
+- 3 projetos = ~1.2GB RAM total (economia de 67%!)
+
+### Documentação Completa
+
+Para mais detalhes, consulte [docs/SHARED_INFRASTRUCTURE.md](docs/SHARED_INFRASTRUCTURE.md)
+
 ## 📂 Estrutura do Projeto (Monorepo)
 
 ```

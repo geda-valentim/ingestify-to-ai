@@ -113,7 +113,7 @@ export default function DashboardPage() {
             </div>
             <div className="flex items-center space-x-4">
               <span className="text-sm text-muted-foreground">
-                Welcome, <span className="font-medium text-foreground">{user.name}</span>
+                Welcome, <span className="font-medium text-foreground">{user.username}</span>
               </span>
               <Button
                 variant="outline"

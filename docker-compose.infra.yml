@@ -1,0 +1,92 @@
+# Docker Compose - Shared Infrastructure
+# This file contains services that can be shared across multiple projects
+# Use profiles to start/stop infrastructure independently
+#
+# Usage:
+#   docker compose -f docker-compose.infra.yml up -d      # Start infrastructure
+#   docker compose -f docker-compose.infra.yml down       # Stop infrastructure
+#   docker compose -f docker-compose.infra.yml ps         # Check status
+
+version: '3.8'
+
+services:
+  # ========================================
+  # SHARED INFRASTRUCTURE
+  # ========================================
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.11.0
+    container_name: shared-elasticsearch
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - "ES_JAVA_OPTS=-Xms512m -Xmx1g"
+      - bootstrap.memory_lock=true
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    mem_limit: 1g
+    ports:
+      - "9200:9200"
+    volumes:
+      - elasticsearch_shared:/usr/share/elasticsearch/data
+    networks:
+      - shared-dev-network
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9200/_cluster/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: shared-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_shared:/data
+    command: redis-server --appendonly yes
+    networks:
+      - shared-dev-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  minio:
+    image: minio/minio:latest
+    container_name: shared-minio
+    ports:
+      - "9000:9000"  # API
+      - "9001:9001"  # Web Console
+    volumes:
+      - minio_shared:/data
+    environment:
+      - MINIO_ROOT_USER=${MINIO_ROOT_USER:-minioadmin}
+      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD:-minioadmin}
+    command: server /data --console-address ":9001"
+    networks:
+      - shared-dev-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  elasticsearch_shared:
+    name: shared-elasticsearch-data
+  redis_shared:
+    name: shared-redis-data
+  minio_shared:
+    name: shared-minio-data
+
+networks:
+  shared-dev-network:
+    name: shared-dev-network
+    driver: bridge
