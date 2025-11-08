@@ -47,7 +47,7 @@ export default function DashboardPage() {
   }, [isAuthenticated, hasHydrated, router]);
 
   const uploadMutation = useMutation({
-    mutationFn: (file: File) => jobsApi.upload(file, token!),
+    mutationFn: (request: { file: File; name?: string }) => jobsApi.upload(request),
     onSuccess: (data) => {
       setUploadSuccess(data.job_id);
       // Clear all forms
@@ -72,7 +72,10 @@ export default function DashboardPage() {
 
   const handleFileUpload = () => {
     if (!selectedFile) return;
-    uploadMutation.mutate(selectedFile);
+    uploadMutation.mutate({
+      file: selectedFile,
+      name: customName || undefined
+    });
   };
 
   const handleUrlConvert = () => {
