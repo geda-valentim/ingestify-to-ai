@@ -1,7 +1,24 @@
-.PHONY: help start stop restart logs status clean infra-start infra-stop infra-status ps build rebuild dev prod scale test
+.PHONY: help start stop restart logs status clean infra-start infra-stop infra-status ps build rebuild dev prod scale test check-services check-redis check-mysql check-elasticsearch check-minio smart-start validate
 
 # Default target
 .DEFAULT_GOAL := help
+
+# ======================================
+# SERVICE CONFIGURATION
+# ======================================
+# Load .env if exists
+-include .env
+export
+
+# Default service hosts (override via .env)
+REDIS_HOST ?= localhost
+REDIS_PORT ?= 6379
+MYSQL_HOST ?= localhost
+MYSQL_PORT ?= 3306
+ELASTICSEARCH_HOST ?= localhost
+ELASTICSEARCH_PORT ?= 9200
+MINIO_HOST ?= localhost
+MINIO_PORT ?= 9000
 
 # ======================================
 # COLORS
@@ -24,11 +41,128 @@ help: ## Show this help message
 		awk 'BEGIN {FS = ":.*?## "}; {printf "  $(CYAN)%-20s$(NC) %s\n", $$1, $$2}'
 	@echo ""
 	@echo "$(YELLOW)Examples:$(NC)"
+	@echo "  make smart-start    # Smart start: only start if services are down"
+	@echo "  make check-services # Check if all services are accessible"
+	@echo "  make validate       # Validate frontend TypeScript"
 	@echo "  make start          # Start with auto-detection"
 	@echo "  make infra-start    # Start shared infrastructure"
 	@echo "  make logs           # View all logs"
 	@echo "  make scale n=10     # Scale workers to 10 replicas"
 	@echo ""
+
+# ======================================
+# SERVICE HEALTH CHECKS
+# ======================================
+check-redis: ## Check if Redis is accessible
+	@printf "$(CYAN)Checking Redis ($(REDIS_HOST):$(REDIS_PORT))...$(NC) "
+	@if nc -z $(REDIS_HOST) $(REDIS_PORT) 2>/dev/null; then \
+		echo "$(GREEN)✓ Connected$(NC)"; \
+		exit 0; \
+	else \
+		echo "$(YELLOW)✗ Not accessible$(NC)"; \
+		exit 1; \
+	fi
+
+check-mysql: ## Check if MySQL is accessible
+	@printf "$(CYAN)Checking MySQL ($(MYSQL_HOST):$(MYSQL_PORT))...$(NC) "
+	@if nc -z $(MYSQL_HOST) $(MYSQL_PORT) 2>/dev/null; then \
+		echo "$(GREEN)✓ Connected$(NC)"; \
+		exit 0; \
+	else \
+		echo "$(YELLOW)✗ Not accessible$(NC)"; \
+		exit 1; \
+	fi
+
+check-elasticsearch: ## Check if Elasticsearch is accessible
+	@printf "$(CYAN)Checking Elasticsearch ($(ELASTICSEARCH_HOST):$(ELASTICSEARCH_PORT))...$(NC) "
+	@if nc -z $(ELASTICSEARCH_HOST) $(ELASTICSEARCH_PORT) 2>/dev/null; then \
+		echo "$(GREEN)✓ Connected$(NC)"; \
+		exit 0; \
+	else \
+		echo "$(YELLOW)✗ Not accessible$(NC)"; \
+		exit 1; \
+	fi
+
+check-minio: ## Check if MinIO is accessible
+	@printf "$(CYAN)Checking MinIO ($(MINIO_HOST):$(MINIO_PORT))...$(NC) "
+	@if nc -z $(MINIO_HOST) $(MINIO_PORT) 2>/dev/null; then \
+		echo "$(GREEN)✓ Connected$(NC)"; \
+		exit 0; \
+	else \
+		echo "$(YELLOW)✗ Not accessible$(NC)"; \
+		exit 1; \
+	fi
+
+check-services: ## Check all services connectivity
+	@echo ""
+	@echo "$(CYAN)=== Service Connectivity Check ===$(NC)"
+	@echo ""
+	@$(MAKE) check-redis || true
+	@$(MAKE) check-mysql || true
+	@$(MAKE) check-elasticsearch || true
+	@$(MAKE) check-minio || true
+	@echo ""
+
+validate: ## Validate frontend TypeScript
+	@echo "$(CYAN)🔍 Validating frontend TypeScript...$(NC)"
+	@./validate-frontend.sh
+
+smart-start: ## Smart start: only start services if not accessible
+	@echo ""
+	@echo "$(CYAN)=== Smart Service Startup ===$(NC)"
+	@echo ""
+	@SERVICE_DOWN=0; \
+	\
+	echo "$(YELLOW)1. Checking if services are accessible...$(NC)"; \
+	if ! $(MAKE) check-redis > /dev/null 2>&1; then \
+		echo "  $(RED)✗ Redis not accessible$(NC)"; \
+		SERVICE_DOWN=1; \
+	else \
+		echo "  $(GREEN)✓ Redis accessible$(NC)"; \
+	fi; \
+	if ! $(MAKE) check-mysql > /dev/null 2>&1; then \
+		echo "  $(RED)✗ MySQL not accessible$(NC)"; \
+		SERVICE_DOWN=1; \
+	else \
+		echo "  $(GREEN)✓ MySQL accessible$(NC)"; \
+	fi; \
+	if ! $(MAKE) check-elasticsearch > /dev/null 2>&1; then \
+		echo "  $(RED)✗ Elasticsearch not accessible$(NC)"; \
+		SERVICE_DOWN=1; \
+	else \
+		echo "  $(GREEN)✓ Elasticsearch accessible$(NC)"; \
+	fi; \
+	if ! $(MAKE) check-minio > /dev/null 2>&1; then \
+		echo "  $(RED)✗ MinIO not accessible$(NC)"; \
+		SERVICE_DOWN=1; \
+	else \
+		echo "  $(GREEN)✓ MinIO accessible$(NC)"; \
+	fi; \
+	\
+	if [ $$SERVICE_DOWN -eq 0 ]; then \
+		echo ""; \
+		echo "$(GREEN)✓ All services are accessible. Nothing to do!$(NC)"; \
+		exit 0; \
+	fi; \
+	\
+	echo ""; \
+	echo "$(YELLOW)2. Checking if Docker containers are running...$(NC)"; \
+	if docker compose ps --services --filter "status=running" 2>/dev/null | grep -q redis; then \
+		echo "  $(GREEN)✓ Docker containers are running$(NC)"; \
+		echo "  $(YELLOW)Tip: Wait a few seconds for services to initialize$(NC)"; \
+		exit 0; \
+	fi; \
+	\
+	echo ""; \
+	echo "$(YELLOW)3. Starting Docker containers...$(NC)"; \
+	docker compose up -d; \
+	\
+	echo ""; \
+	echo "$(GREEN)✓ Services started! Waiting for initialization...$(NC)"; \
+	sleep 5; \
+	\
+	echo ""; \
+	$(MAKE) check-services
 
 # ======================================
 # APPLICATION COMMANDS
