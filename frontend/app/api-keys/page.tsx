@@ -45,12 +45,12 @@ export default function ApiKeysPage() {
 
   const { data: apiKeys, isLoading } = useQuery({
     queryKey: ["api-keys", token],
-    queryFn: () => apiKeysApi.list(token!),
+    queryFn: () => apiKeysApi.list(),
     enabled: !!token,
   });
 
   const createMutation = useMutation({
-    mutationFn: (data: { name: string }) => apiKeysApi.create(data, token!),
+    mutationFn: (data: { name: string }) => apiKeysApi.create(data),
     onSuccess: (data) => {
       setCreatedKey(data.api_key);
       setNewKeyName("");
@@ -61,7 +61,7 @@ export default function ApiKeysPage() {
   });
 
   const revokeMutation = useMutation({
-    mutationFn: (id: string) => apiKeysApi.delete(id, token!),
+    mutationFn: (id: string) => apiKeysApi.revoke(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["api-keys", token] });
     },
