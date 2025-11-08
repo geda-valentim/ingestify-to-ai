@@ -117,11 +117,10 @@ export default function JobsListPage() {
     }
   };
 
-  const jobs = jobsData?.jobs || [];
-  const searchResults = searchData?.jobs || [];
-  const total = jobsData?.total || 0;
+  const jobs = jobsData || [];
+  const searchResults = searchData || [];
   const displayJobs = searchQuery ? searchResults : jobs;
-  const totalPages = Math.ceil(total / PAGE_SIZE);
+  const totalPages = Math.ceil(jobs.length / PAGE_SIZE);
   const hasNextPage = page < totalPages - 1;
   const hasPrevPage = page > 0;
 
@@ -305,12 +304,12 @@ export default function JobsListPage() {
           )}
 
           {/* Pagination Controls */}
-          {!searchQuery && total > 0 && (
+          {!searchQuery && jobs.length > 0 && (
             <Card>
               <CardContent className="py-4">
                 <div className="flex items-center justify-between">
                   <div className="text-sm text-muted-foreground">
-                    Showing {page * PAGE_SIZE + 1} - {Math.min((page + 1) * PAGE_SIZE, total)} of {total} jobs
+                    Showing {page * PAGE_SIZE + 1} - {Math.min((page + 1) * PAGE_SIZE, jobs.length)} of {jobs.length} jobs
                   </div>
                   <div className="flex items-center gap-2">
                     <Button

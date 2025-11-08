@@ -34,8 +34,8 @@ export default function LoginPage() {
       localStorage.setItem("auth_token", data.access_token);
 
       // Get user info with the token now in localStorage
-      const userResponse = await authApi.getProfile(data.access_token);
-      setAuth(data.access_token, userResponse);
+      const userResponse = await authApi.me();
+      setAuth(userResponse, data.access_token);
       router.push("/dashboard");
     },
     onError: (error: any) => {
