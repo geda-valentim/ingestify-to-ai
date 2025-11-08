@@ -106,7 +106,7 @@ export default function JobStatusPage({ params }: PageProps) {
   // Poll for job status
   const { data: status, isLoading } = useQuery({
     queryKey: ["job-status", resolvedParams.id, token],
-    queryFn: () => jobsApi.get(resolvedParams.id, token!),
+    queryFn: () => jobsApi.getStatus(resolvedParams.id),
     enabled: !!token,
     refetchInterval: (query) => {
       const status = query.state.data?.status;
@@ -117,14 +117,14 @@ export default function JobStatusPage({ params }: PageProps) {
   // Fetch result when job is completed
   const { data: result } = useQuery({
     queryKey: ["job-result", resolvedParams.id, token],
-    queryFn: () => jobsApi.getResult(resolvedParams.id, token!),
+    queryFn: () => jobsApi.getResult(resolvedParams.id),
     enabled: status?.status === "completed" && !!token,
   });
 
   // Fetch pages for PDF documents
   const { data: pagesData } = useQuery({
     queryKey: ["job-pages", resolvedParams.id, token],
-    queryFn: () => jobsApi.getPages(resolvedParams.id, token!),
+    queryFn: () => jobsApi.getPages(resolvedParams.id),
     enabled: status?.type === "main" && (status?.total_pages ?? 0) > 0 && !!token,
     refetchInterval: (query) => {
       if (status?.status === "completed" || status?.status === "failed") {
@@ -139,20 +139,20 @@ export default function JobStatusPage({ params }: PageProps) {
   // Fetch specific page result
   const { data: pageResult, isLoading: isLoadingPage } = useQuery({
     queryKey: ["page-result", selectedPage?.job_id, token],
-    queryFn: () => jobsApi.getPageResult(selectedPage!.job_id, token!),
+    queryFn: () => jobsApi.getResult(selectedPage!.job_id),
     enabled: !!selectedPage && !!token && selectedPage.status === "completed",
   });
 
   // Retry mutation with real API
   const retryPageMutation = useMutation({
-    mutationFn: ({ jobId, pageNumber }: { jobId: string; pageNumber: number }) =>
-      jobsApi.retryPage(jobId, pageNumber, token!),
-    onSuccess: (data) => {
+    mutationFn: ({ pageJobId }: { pageJobId: string }) =>
+      jobsApi.retryPage(pageJobId),
+    onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["job-status", resolvedParams.id] });
       queryClient.invalidateQueries({ queryKey: ["job-pages", resolvedParams.id] });
       toast({
         title: "Page retry started",
-        description: `Retrying page (attempt ${data.retry_count}/${data.retry_limit})`,
+        description: `Page queued for retry`,
       });
     },
     onError: (error: any) => {
@@ -166,10 +166,10 @@ export default function JobStatusPage({ params }: PageProps) {
 
   // Bulk retry mutation
   const bulkRetryMutation = useMutation({
-    mutationFn: async (pageNumbers: number[]) => {
+    mutationFn: async (pageJobIds: string[]) => {
       const results = await Promise.allSettled(
-        pageNumbers.map(pageNumber =>
-          jobsApi.retryPage(resolvedParams.id, pageNumber, token!)
+        pageJobIds.map(pageJobId =>
+          jobsApi.retryPage(pageJobId)
         )
       );
       return results;
@@ -262,8 +262,7 @@ export default function JobStatusPage({ params }: PageProps) {
   const handleRetryPage = (page: PageInfo, e: React.MouseEvent) => {
     e.stopPropagation();
     retryPageMutation.mutate({
-      jobId: resolvedParams.id,
-      pageNumber: page.page_number
+      pageJobId: page.job_id
     });
   };
 
@@ -292,7 +291,10 @@ export default function JobStatusPage({ params }: PageProps) {
 
   const handleBulkRetry = () => {
     if (selectedPages.size === 0) return;
-    bulkRetryMutation.mutate(Array.from(selectedPages));
+    const pageJobIds = pages
+      .filter((p: PageInfo) => selectedPages.has(p.page_number))
+      .map((p: PageInfo) => p.job_id);
+    bulkRetryMutation.mutate(pageJobIds);
   };
 
   const downloadMarkdown = () => {
