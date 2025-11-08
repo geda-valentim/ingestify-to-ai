@@ -66,7 +66,7 @@ export default function JobsListPage() {
 
   const { data: jobsData, isLoading, error } = useQuery({
     queryKey: ["jobs", statusFilter, page, token],
-    queryFn: () => jobsApi.list(token!, {
+    queryFn: () => jobsApi.list({
       limit: PAGE_SIZE,
       offset: page * PAGE_SIZE,
       status: statusFilter === "all" ? undefined : statusFilter,
@@ -78,10 +78,9 @@ export default function JobsListPage() {
 
   const { data: searchData, isLoading: isSearching } = useQuery({
     queryKey: ["search", searchQuery, token],
-    queryFn: () => jobsApi.list(token!, {
+    queryFn: () => jobsApi.search({
+      query: searchQuery,
       limit: 100,
-      offset: 0,
-      job_type: "main",
     }),
     enabled: searchQuery.length > 0 && !!token,
   });
