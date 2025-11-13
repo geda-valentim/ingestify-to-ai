@@ -71,8 +71,8 @@ class Settings(BaseSettings):
     elasticsearch_verify_certs: bool = False
 
     # MinIO Object Storage
-    minio_endpoint: str = "minio:9000"  # Internal Docker network address
-    minio_public_endpoint: str = "localhost:9000"  # Public-facing address for URLs
+    minio_endpoint: str = "127.0.0.1:9000"  # MinIO running on local machine
+    minio_public_endpoint: str = "127.0.0.1:9000"  # Public-facing address for URLs
     minio_access_key: str = "minioadmin"
     minio_secret_key: str = "minioadmin"
     minio_secure: bool = False  # True for HTTPS in production
