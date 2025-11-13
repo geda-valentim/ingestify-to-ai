@@ -37,6 +37,7 @@ class MinIOClient:
         self.bucket_pages = settings.minio_bucket_pages
         self.bucket_audio = settings.minio_bucket_audio
         self.bucket_results = settings.minio_bucket_results
+        self.bucket_crawled = settings.minio_bucket_crawled
 
         # Initialize buckets on startup
         self._ensure_buckets_exist()
@@ -49,6 +50,7 @@ class MinIOClient:
             self.bucket_pages,
             self.bucket_audio,
             self.bucket_results,
+            self.bucket_crawled,
         ]
 
         for bucket_name in buckets:
@@ -69,6 +71,7 @@ class MinIOClient:
             self.bucket_uploads,
             self.bucket_pages,
             self.bucket_results,
+            self.bucket_crawled,
             # Note: bucket_audio is intentionally excluded from public access
         ]
 

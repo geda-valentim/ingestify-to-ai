@@ -80,6 +80,36 @@ class Settings(BaseSettings):
     minio_bucket_pages: str = "ingestify-pages"
     minio_bucket_audio: str = "ingestify-audio"
     minio_bucket_results: str = "ingestify-results"
+    minio_bucket_crawled: str = "ingestify-crawled"  # Crawler files storage
+
+    # Crawler Configuration
+    crawler_enabled: bool = True
+    crawler_max_concurrent_downloads: int = 5  # Max parallel file downloads
+    crawler_max_concurrent_assets: int = 10  # Max parallel asset downloads
+    crawler_download_timeout_seconds: int = 60  # Timeout for single file download
+    crawler_user_agent: str = "IngestifyBot/1.0 (+https://ingestify.ai/bot)"
+    crawler_respect_robots_txt: bool = True  # Respect robots.txt rules
+    crawler_rate_limit_per_second: int = 2  # Max requests per second per domain
+
+    # Crawler Engine Defaults
+    crawler_default_engine: str = "beautifulsoup"  # beautifulsoup or playwright
+
+    # Playwright Configuration
+    playwright_headless: bool = True  # Run browser in headless mode
+    playwright_timeout_seconds: int = 30  # Page load timeout
+    playwright_wait_for_selector: str = ""  # Optional: wait for specific selector before extract
+    playwright_browser_type: str = "chromium"  # chromium, firefox, or webkit
+
+    # Proxy Configuration
+    proxy_enabled: bool = False  # Enable proxy support
+    proxy_pool_enabled: bool = False  # Enable proxy pool rotation
+    proxy_rotation_strategy: str = "round_robin"  # round_robin or random
+
+    # Retry Configuration
+    crawler_retry_enabled: bool = True  # Enable automatic retries on failure
+    crawler_max_retries: int = 3  # Maximum retry attempts
+    crawler_retry_delay_base_seconds: int = 5  # Base delay between retries (exponential backoff)
+    crawler_retry_strategy_default: str = "conservative"  # conservative or aggressive
 
     # JWT Authentication
     jwt_secret_key: str = "your-secret-key-change-in-production-min-32-chars"
