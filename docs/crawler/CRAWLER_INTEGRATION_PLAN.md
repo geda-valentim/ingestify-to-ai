@@ -1,10 +1,14 @@
 # Plano de Integração: Web Crawler Agendado
 **Sistema Ingestify - Módulo Crawler**
 
-**Versão:** 1.2 (Atualizado)
+**Versão:** 1.3 (Atualizado)
 **Data:** 2025-01-13
-**Status:** Planejamento - Atualizado com retry inteligente e fallback de engines
-**Changelog:** Adicionado sistema de retry com fallback progressivo de engines
+**Status:** Planejamento - Arquitetura STI (Single Table Inheritance)
+**Changelog:**
+- v1.3: Mudança arquitetural para STI - reuso da tabela jobs existente
+- v1.2: Adicionado sistema de retry com fallback progressivo de engines
+- v1.1: Múltiplas engines e download granular de assets
+- v1.0: Plano inicial
 
 ---
 
@@ -210,118 +214,244 @@ USER → API → Use Case → Domain → Infrastructure → Workers
 
 ## 3. Modelos de Dados
 
-### 3.1 MySQL (Persistência)
+### 3.1 MySQL (Persistência) - STI Pattern
 
-#### Tabela: `crawler_jobs`
-**Configuração de crawler agendado**
+#### 🎯 Decisão Arquitetural: Single Table Inheritance (STI)
 
-| Campo | Tipo | Descrição |
-|-------|------|-----------|
-| `id` | VARCHAR(36) PK | UUID do crawler |
-| `user_id` | VARCHAR(36) FK | Dono do crawler |
-| `name` | VARCHAR(255) | Nome amigável |
-| `url` | TEXT | URL base para crawl |
-| `url_pattern` | TEXT | Padrão normalizado (detecção duplicatas) |
-| `crawler_engine` | ENUM | BEAUTIFULSOUP / PLAYWRIGHT |
-| `use_proxy` | BOOLEAN | Usar proxy |
-| `proxy_config` | JSON | {"host": "...", "port": 8080, "username": "...", "password": "...", "protocol": "http"} |
-| `crawl_type` | ENUM | PAGE_ONLY / PAGE_WITH_ALL / PAGE_WITH_FILTERED / FULL_WEBSITE |
-| `max_depth` | INTEGER | Profundidade de crawl (para FULL_WEBSITE) |
-| `follow_external_links` | BOOLEAN | Seguir links externos |
-| `download_assets` | BOOLEAN | Baixar assets (CSS, JS, images, etc.) |
-| `asset_types` | JSON | ["css", "js", "images", "fonts", "videos"] ou [] para HTML only |
-| `file_extensions` | JSON | ["pdf", "xlsx", "csv"] - arquivos para download |
-| `extension_categories` | JSON | ["documents", "images"] |
-| `pdf_handling` | ENUM | INDIVIDUAL / COMBINED / BOTH |
-| `retry_enabled` | BOOLEAN | Habilitar retries em caso de erro |
-| `max_retries` | INTEGER | Número máximo de retries (default: 3) |
-| `retry_strategy` | JSON | Estratégia de retry (fallback de engines) |
-| `schedule_type` | ENUM | ONE_TIME / RECURRING |
-| `schedule_frequency` | ENUM | HOURLY / DAILY / WEEKLY / MONTHLY / CUSTOM |
-| `cron_expression` | VARCHAR(100) | Expressão cron (para CUSTOM) |
-| `timezone` | VARCHAR(50) | Timezone (default: UTC) |
-| `next_run_at` | DATETIME | Próxima execução |
-| `is_active` | BOOLEAN | Ativo ou pausado |
-| `status` | ENUM | ACTIVE / PAUSED / STOPPED / ERROR |
-| `total_executions` | INTEGER | Total de execuções |
-| `successful_executions` | INTEGER | Execuções bem-sucedidas |
-| `failed_executions` | INTEGER | Execuções com falha |
-| `last_execution_at` | DATETIME | Última execução |
-| `created_at` | DATETIME | Criação |
-| `updated_at` | DATETIME | Última atualização |
+**Estratégia:** Reutilizar tabela `jobs` existente ao invés de criar novas tabelas.
 
-**Relacionamentos:**
-- `user_id` → `users.id` (FK)
-- `crawler_jobs.id` ← `crawler_executions.crawler_job_id` (1:N)
+**Por que STI?**
+- ✅ **DRY**: Reusa 95% da infraestrutura existente (tabela, repositórios, use cases)
+- ✅ **Performance**: Zero JOINs - queries rápidas em tabela única
+- ✅ **Flexibilidade**: JSON permite evoluir schema sem migrations complexas
+- ✅ **Integração Natural**: Crawler pode criar ConversionJobs para páginas baixadas
+- ✅ **Simplicidade**: 1 migration vs 3 migrations
+
+**Trade-off Aceito:**
+- ⚠️ Validação JSON no application layer (Pydantic resolve isso)
+- ⚠️ 2 colunas JSON novas (ambas nullable, zero impacto em jobs existentes)
 
 ---
 
-#### Tabela: `crawler_executions`
-**Histórico de execução de um crawler**
+#### Schema Changes - Apenas 2 Colunas JSON
 
-| Campo | Tipo | Descrição |
-|-------|------|-----------|
-| `id` | VARCHAR(36) PK | UUID da execução |
-| `crawler_job_id` | VARCHAR(36) FK | Crawler que originou |
-| `celery_task_id` | VARCHAR(36) | Task ID do Celery |
-| `status` | ENUM | PENDING / PROCESSING / COMPLETED / FAILED / CANCELLED |
-| `progress` | INTEGER | 0-100% |
-| `pages_discovered` | INTEGER | Páginas descobertas |
-| `pages_downloaded` | INTEGER | Páginas baixadas |
-| `pages_failed` | INTEGER | Páginas com erro |
-| `files_downloaded` | INTEGER | Arquivos baixados |
-| `files_failed` | INTEGER | Arquivos com erro |
-| `total_size_bytes` | INTEGER | Tamanho total (bytes) |
-| `files_by_type` | JSON | {"pdf": 10, "xlsx": 5} |
-| `minio_folder_path` | VARCHAR(500) | Pasta no Min.io |
-| `error_message` | TEXT | Mensagem de erro |
-| `error_count` | INTEGER | Quantidade de erros |
-| `retry_count` | INTEGER | Número de retries executados (default: 0) |
-| `current_retry_attempt` | INTEGER | Tentativa atual (0 = primeira tentativa) |
-| `retry_history` | JSON | Histórico de retries com engines usadas |
-| `engine_used` | ENUM | Engine que finalizou com sucesso (BEAUTIFULSOUP / PLAYWRIGHT) |
-| `proxy_used` | BOOLEAN | Se proxy foi usado na tentativa final |
-| `started_at` | DATETIME | Início |
-| `completed_at` | DATETIME | Fim |
-| `created_at` | DATETIME | Criação |
-| `updated_at` | DATETIME | Última atualização |
+**Tabela `jobs` (EXISTING) - Adicionar:**
 
-**Relacionamentos:**
-- `crawler_job_id` → `crawler_jobs.id` (FK)
-- `crawler_executions.id` ← `crawled_files.execution_id` (1:N)
+```sql
+ALTER TABLE jobs
+ADD COLUMN crawler_config JSON DEFAULT NULL,
+ADD COLUMN crawler_schedule JSON DEFAULT NULL,
+ADD INDEX idx_job_type_status (job_type, status);
+```
 
----
+**Campos Existentes Reutilizados para Crawler:**
 
-#### Tabela: `crawled_files`
-**Arquivo individual baixado durante uma execução**
+| Campo Existente | Uso no Crawler |
+|----------------|----------------|
+| `job_type` | Discriminador polimórfico ("crawler") |
+| `source_url` | URL a crawlear |
+| `status` | Status da execução (pending, processing, completed, failed) |
+| `progress` | Progresso do download (0-100%) |
+| `user_id` | Dono do crawler |
+| `name` | Nome amigável do crawler |
+| `parent_job_id` | Histórico de execuções (cada run = child job) |
+| `created_at`, `started_at`, `completed_at` | Timestamps |
+| `error_message` | Mensagens de erro |
+| `total_pages` | Total de páginas descobertas (reutilizado) |
+| `pages_completed` | Páginas baixadas com sucesso |
+| `pages_failed` | Páginas com erro |
 
-| Campo | Tipo | Descrição |
-|-------|------|-----------|
-| `id` | VARCHAR(36) PK | UUID do arquivo |
-| `execution_id` | VARCHAR(36) FK | Execução que baixou |
-| `url` | TEXT | URL original |
-| `filename` | VARCHAR(255) | Nome do arquivo |
-| `file_type` | VARCHAR(20) | pdf, xlsx, jpg, etc. |
-| `mime_type` | VARCHAR(100) | Content-Type |
-| `size_bytes` | INTEGER | Tamanho |
-| `minio_path` | VARCHAR(500) | Path no Min.io |
-| `minio_bucket` | VARCHAR(100) | Bucket do Min.io |
-| `public_url` | TEXT | URL pública do Min.io |
-| `status` | ENUM | DOWNLOADED / FAILED / SKIPPED |
-| `error_message` | TEXT | Erro (se houver) |
-| `downloaded_at` | DATETIME | Data do download |
+**Novos Campos JSON:**
 
-**Relacionamentos:**
-- `execution_id` → `crawler_executions.id` (FK)
+| Campo JSON | Tipo | Descrição |
+|------------|------|-----------|
+| `crawler_config` | JSON | Configuração de download (mode, extensions, PDF handling, etc.) |
+| `crawler_schedule` | JSON | Configuração de agendamento (frequency, cron, timezone, etc.) |
 
 ---
 
-### 3.2 Elasticsearch (Busca + Analytics)
+#### Estrutura crawler_config (JSON)
 
-#### Index: `crawler-jobs-*`
-**Jobs de crawler indexados para busca**
+```json
+{
+  "mode": "page_only|page_with_all|page_with_filtered|full_website",
+  "extension_selection_mode": "quick_select|individual|custom",
+  "file_extensions": ["pdf", "xlsx", "csv"],
+  "extension_categories": ["documents", "images"],
+  "pdf_handling": "individual|combined|both",
+  "max_depth": 3,
+  "follow_external_links": false,
+  "crawler_engine": "BEAUTIFULSOUP|PLAYWRIGHT",
+  "use_proxy": false,
+  "proxy_config": {
+    "host": "proxy.example.com",
+    "port": 8080,
+    "username": "user",
+    "password": "pass",
+    "protocol": "http"
+  },
+  "download_assets": true,
+  "asset_types": ["css", "js", "images", "fonts", "videos"],
+  "retry_enabled": true,
+  "max_retries": 3,
+  "retry_strategy": [
+    {"attempt": 0, "engine": "BEAUTIFULSOUP", "use_proxy": false, "delay_seconds": 0},
+    {"attempt": 1, "engine": "BEAUTIFULSOUP", "use_proxy": true, "delay_seconds": 5},
+    {"attempt": 2, "engine": "PLAYWRIGHT", "use_proxy": false, "delay_seconds": 10},
+    {"attempt": 3, "engine": "PLAYWRIGHT", "use_proxy": true, "delay_seconds": 15}
+  ]
+}
+```
 
-**Propósito:** Busca fuzzy de URLs, filtros, agregações
+#### Estrutura crawler_schedule (JSON)
+
+```json
+{
+  "type": "one_time|recurring",
+  "run_immediately": true,
+  "scheduled_datetime": "2025-10-25T14:30:00Z",
+  "frequency": "hourly|daily|weekly|monthly|custom",
+  "days_of_week": [1, 3, 5],
+  "days_of_month": [1, 15],
+  "times": ["07:00", "09:00", "12:00"],
+  "cron_expression": "0 7,9,12 * * 1,3,5",
+  "timezone": "America/Sao_Paulo",
+  "next_runs": ["2025-01-20T09:00:00Z", "2025-01-21T09:00:00Z"],
+  "last_run": "2025-01-19T09:00:00Z",
+  "execution_count": 5,
+  "max_executions": 100,
+  "expires_at": "2025-12-31T23:59:59Z"
+}
+```
+
+---
+
+#### Histórico de Execuções via parent_job_id
+
+**Padrão:** Cada execução é um child job do crawler principal
+
+```
+CrawlerJob (id=crawler-1, job_type=CRAWLER)
+  ├── Execution 1 (id=exec-1, parent_job_id=crawler-1, created_at=2025-01-20)
+  ├── Execution 2 (id=exec-2, parent_job_id=crawler-1, created_at=2025-01-21)
+  └── Execution 3 (id=exec-3, parent_job_id=crawler-1, created_at=2025-01-22)
+```
+
+**Consulta de histórico:**
+```sql
+SELECT * FROM jobs
+WHERE parent_job_id = 'crawler-1'
+ORDER BY created_at DESC;
+```
+
+---
+
+#### SQLAlchemy Models (Polymorphic)
+
+```python
+from sqlalchemy import Column, String, Enum, JSON
+from sqlalchemy.orm import declared_attr
+from shared.database import Base
+
+
+class JobTypeEnum(str, enum.Enum):
+    MAIN = "main"
+    SPLIT = "split"
+    PAGE = "page"
+    MERGE = "merge"
+    DOWNLOAD = "download"
+    CRAWLER = "crawler"  # Novo tipo
+
+
+class Job(Base):
+    """Base Job model - Single Table Inheritance root"""
+    __tablename__ = "jobs"
+
+    # Polymorphic configuration
+    __mapper_args__ = {
+        "polymorphic_on": "job_type",
+        "polymorphic_identity": "main",
+        "with_polymorphic": "*",
+    }
+
+    # ... campos existentes ...
+
+    # Novos campos JSON para crawler
+    crawler_config = Column(JSON, nullable=True)
+    crawler_schedule = Column(JSON, nullable=True)
+
+
+class ConversionJob(Job):
+    """Conversion Job - documentos (MAIN, SPLIT, PAGE, MERGE, DOWNLOAD)"""
+    __mapper_args__ = {
+        "polymorphic_identity": "main",
+    }
+    # Sem colunas adicionais - usa apenas campos do Job
+
+
+class CrawlerJob(Job):
+    """Crawler Job - web scraping"""
+    __mapper_args__ = {
+        "polymorphic_identity": "crawler",
+    }
+    # Usa crawler_config e crawler_schedule JSON
+```
+
+**Queries Automáticas:**
+
+```python
+# Query all jobs (mixed types)
+all_jobs = session.query(Job).all()
+# Returns: [ConversionJob(...), CrawlerJob(...), ...]
+
+# Query only crawler jobs (automatic filter)
+crawler_jobs = session.query(CrawlerJob).all()
+# Automatically adds: WHERE job_type = 'crawler'
+
+# Query by JSON field (MySQL 8.0+ JSON support)
+from sqlalchemy import func
+
+scheduled_crawlers = session.query(CrawlerJob).filter(
+    func.json_extract(CrawlerJob.crawler_schedule, '$.type') == 'recurring',
+    func.json_extract(CrawlerJob.crawler_schedule, '$.next_runs[0]') <= datetime.now().isoformat()
+).all()
+```
+
+---
+
+#### Arquivos Crawleados: Reutiliza Tabela `pages`
+
+**Tabela `pages` existente** será reutilizada para armazenar páginas HTML crawleadas.
+
+| Campo Existente | Uso no Crawler |
+|----------------|----------------|
+| `job_id` | FK para CrawlerJob execution |
+| `page_number` | Ordem de descoberta da página |
+| `url` | URL da página crawleada |
+| `status` | Status do download (completed, failed) |
+| `error_message` | Erros no download |
+| `minio_path` | Path do HTML no MinIO |
+| `created_at` | Timestamp |
+
+**Para assets (CSS, JS, images):** Usar MinIO apenas, sem tabela (opcional indexar em Elasticsearch)
+
+---
+
+### 3.2 Elasticsearch (Busca + Analytics) - ⚠️ OPCIONAL
+
+**🎯 Com STI:** Elasticsearch torna-se **opcional** - não é necessário para funcionalidade básica.
+
+**Uso recomendado:**
+- **Projeções/Views** dos dados MySQL para queries complexas
+- Não é source of truth (MySQL é a fonte primária)
+- Adicionar apenas se necessário para performance de busca/analytics
+
+---
+
+#### Index: `crawler-jobs-*` (OPCIONAL)
+**Jobs de crawler indexados para busca avançada**
+
+**Propósito:** Busca fuzzy de URLs, filtros, agregações (se necessário)
 
 **Campos principais:**
 - `job_id` (keyword)
@@ -872,38 +1002,44 @@ GET /crawler-executions-*/_search
 
 ---
 
-## 4. Domain Layer (Entidades e Serviços)
+## 4. Domain Layer (Entidades e Serviços) - STI Pattern
 
 ### 4.1 Entities
 
-#### CrawlerJob
-**Agregado raiz: Configuração de crawler**
+#### CrawlerJob (extends Job)
+**Especialização da entidade Job para crawlers agendados**
 
-**Responsabilidades:**
-- Armazenar configuração de crawl (URL, tipo, filtros, PDFs)
-- Gerenciar agendamento (schedule_type, cron)
-- Controlar estado (ativo, pausado, parado)
-- Rastrear estatísticas (total_executions, success_rate)
+**🎯 Herança STI:**
+```python
+class CrawlerJob(Job):
+    """
+    Extends Job entity with crawler-specific behavior.
+    Uses job_type='crawler' discriminator.
+    """
+    __mapper_args__ = {"polymorphic_identity": "crawler"}
+```
 
-**Métodos principais:**
-- `activate()` - Ativar crawler
-- `pause()` - Pausar crawler (mantém config, não executa)
+**Campos herdados de Job:**
+- `id` - UUID do crawler job
+- `user_id` - Dono do crawler
+- `source_url` - URL a ser crawleada
+- `status` - Status atual (pending, running, completed, failed)
+- `created_at`, `updated_at` - Timestamps
+- `parent_job_id` - Para execuções, aponta para crawler principal
+
+**Campos específicos (JSON):**
+- `crawler_config` - Configuração de crawl (modo, engine, retry)
+- `crawler_schedule` - Agendamento (tipo, cron, próximas execuções)
+
+**Métodos específicos:**
+- `activate()` - Ativar crawler (status = active)
+- `pause()` - Pausar crawler (is_active = False, não executa)
 - `stop()` - Parar permanentemente
-- `update_schedule(cron)` - Atualizar agendamento
-- `record_execution(success)` - Registrar execução
+- `update_schedule(schedule: CrawlerSchedule)` - Atualizar agendamento
+- `schedule_next_execution()` - Criar próxima execução agendada
+- `get_execution_history()` - Buscar jobs filhos (parent_job_id = self.id)
 
----
-
-#### CrawlerExecution
-**Entidade: Execução individual de um crawler**
-
-**Responsabilidades:**
-- Rastrear progresso (0-100%)
-- Contabilizar páginas/arquivos (downloaded, failed)
-- Armazenar resultados (minio_folder_path)
-- Registrar erros
-
-**Métodos principais:**
+**Métodos herdados:**
 - `is_running()` - Verificar se está em execução
 - `is_completed()` - Verificar se finalizou
 - `mark_failed(error)` - Marcar como falho
@@ -911,57 +1047,74 @@ GET /crawler-executions-*/_search
 
 ---
 
-#### CrawledFile
-**Entidade: Arquivo individual baixado**
+#### ⚠️ Execuções e Arquivos: Reuso de Jobs/Pages
 
-**Responsabilidades:**
-- Metadados do arquivo (URL, tipo, tamanho)
-- Path no Min.io e URL pública
-- Status (downloaded, failed, skipped)
+**Crawler Executions:**
+- São **Jobs normais** com `parent_job_id` apontando para o CrawlerJob
+- Cada execução cria um novo Job filho
+- Query: `SELECT * FROM jobs WHERE parent_job_id = 'crawler-uuid'`
+
+**Crawled Files:**
+- HTML pages são armazenados na tabela **pages** existente
+- Assets (CSS, JS, images) são armazenados apenas no **MinIO**
+- Não há necessidade de tabela separada
 
 ---
 
-### 4.2 Value Objects
+### 4.2 Value Objects (Immutable Dataclasses)
 
-#### URLPattern
-**Normalização e detecção de duplicatas**
+#### CrawlerConfig
+**Configuração de crawl (armazenado em JSON)**
 
-**Propósito:** Gerar padrão normalizado de URL para comparação
+```python
+@dataclass(frozen=True)
+class CrawlerConfig:
+    mode: CrawlerMode  # page_only, page_with_all, page_with_filtered, full_website
+    crawler_engine: CrawlerEngine  # BEAUTIFULSOUP, PLAYWRIGHT
+    asset_types: List[AssetType]  # [CSS, JS, IMAGES, etc.]
+    retry_strategy: List[RetryStep]
 
-**Exemplo:**
+    def to_json(self) -> dict:
+        """Serialize to store in jobs.crawler_config"""
+
+    @classmethod
+    def from_json(cls, data: dict) -> "CrawlerConfig":
+        """Deserialize from jobs.crawler_config"""
 ```
-Input: https://Example.com/Page?id=123&sort=desc
-Output (normalized): https://example.com/page?id=*&sort=*
-Pattern: example.com/page?*
-```
 
-**Regras de normalização:**
-- Lowercase domain
-- Remove trailing slash
-- Sort query parameters
-- Substituir valores de params por wildcards (detecção de duplicatas)
-- Remove fragment (#)
+**Validações:**
+- mode: Enum válido
+- asset_types: Lista não vazia se mode != page_only
+- retry_strategy: Lista ordenada por priority
 
 ---
 
 #### CrawlerSchedule
-**Configuração de agendamento**
+**Configuração de agendamento (armazenado em JSON)**
 
-**Responsabilidades:**
-- Validar schedule_type (one_time, recurring)
-- Validar cron expression
-- Calcular next_run_at
-- Conversão de timezone
+```python
+@dataclass(frozen=True)
+class CrawlerSchedule:
+    type: ScheduleType  # one_time, recurring
+    cron_expression: Optional[str]  # Required if recurring
+    timezone: str  # Default: UTC
+    next_runs: List[datetime]  # Próximas 5 execuções
 
----
+    def calculate_next_run(self) -> datetime:
+        """Calculate next execution time from cron"""
 
-#### DownloadConfig
-**Configuração de download**
+    def to_json(self) -> dict:
+        """Serialize to store in jobs.crawler_schedule"""
 
-**Responsabilidades:**
-- Validar crawl_type
-- Validar file_extensions
-- Validar pdf_handling
+    @classmethod
+    def from_json(cls, data: dict) -> "CrawlerSchedule":
+        """Deserialize from jobs.crawler_schedule"""
+```
+
+**Validações:**
+- Validar cron expression (croniter)
+- type=recurring requires cron_expression
+- timezone válido (pytz)
 
 ---
 
@@ -1117,38 +1270,68 @@ Pattern: example.com/page?*
 
 ---
 
-## 6. Infrastructure Layer
+## 6. Infrastructure Layer - STI Pattern (Reuso)
 
-### 6.1 Repositories (MySQL)
+### 6.1 Repositories (MySQL) - ✅ Reuso Total
 
-#### MySQLCrawlerJobRepository
-**Implementação do CrawlerJobRepository**
+#### ✅ Reuso: MySQLJobRepository (Existente)
+**Já suporta polimorfismo via STI - nenhuma mudança necessária**
 
-**Métodos:**
-- `save(crawler_job)` - Criar/atualizar
-- `find_by_id(id)` - Buscar por ID
+**Métodos existentes que funcionam para CrawlerJob:**
+- `save(job)` - Criar/atualizar (funciona para CrawlerJob automaticamente)
+- `find_by_id(id)` - Buscar por ID (retorna CrawlerJob se job_type='crawler')
 - `find_by_user_id(user_id)` - Buscar por usuário
-- `find_by_url_pattern(pattern)` - Buscar por padrão de URL
-- `find_active()` - Buscar ativos (para Celery Beat)
-- `delete(id)` - Deletar (cascade para executions e files)
+- `delete(id)` - Deletar
 
-#### MySQLCrawlerExecutionRepository
-**Implementação do CrawlerExecutionRepository**
+**Métodos novos específicos para crawler:**
+```python
+class MySQLJobRepository(JobRepository):
+    # ... métodos existentes ...
 
-**Métodos:**
-- `save(execution)` - Criar
-- `update(execution)` - Atualizar (progresso, status)
-- `find_by_id(id)` - Buscar por ID
-- `find_by_crawler_job_id(job_id)` - Histórico de execuções
-- `find_running()` - Execuções em andamento
+    def find_crawler_jobs(self, user_id: str, filters: dict) -> List[CrawlerJob]:
+        """Find crawler jobs with optional filters"""
+        query = self.session.query(Job).filter(
+            Job.user_id == user_id,
+            Job.job_type == "crawler"
+        )
+        # Apply filters (status, search, etc.)
+        return query.all()
 
-#### MySQLCrawledFileRepository
-**Implementação do CrawledFileRepository**
+    def find_active_crawlers(self) -> List[CrawlerJob]:
+        """Find active crawlers for Celery Beat scheduling"""
+        return self.session.query(Job).filter(
+            Job.job_type == "crawler",
+            Job.status == "active"
+        ).all()
 
-**Métodos:**
-- `save(file)` - Registrar arquivo baixado
-- `find_by_execution_id(execution_id)` - Arquivos de uma execução
-- `count_by_type(execution_id)` - Contar por tipo (pdf, xlsx, etc.)
+    def find_crawler_executions(self, crawler_job_id: str) -> List[Job]:
+        """Find execution history (jobs with parent_job_id = crawler_job_id)"""
+        return self.session.query(Job).filter(
+            Job.parent_job_id == crawler_job_id
+        ).order_by(Job.created_at.desc()).all()
+```
+
+**🎯 Vantagens STI:**
+- Zero novas tabelas
+- Zero novos repositórios
+- Queries polimórficas automáticas pelo SQLAlchemy
+- Todas as operações CRUD reutilizadas
+
+---
+
+#### ✅ Reuso: MySQLPageRepository (Existente)
+**Já armazena páginas crawleadas - nenhuma mudança necessária**
+
+**Uso para crawler:**
+- HTML pages crawleadas são salvas como **Page** entities
+- `job_id` aponta para o CrawlerJob execution
+- `page_number` pode ser sequencial (1, 2, 3...) ou URL hash
+- `content` armazena HTML source
+
+**Métodos existentes que funcionam:**
+- `save(page)` - Salvar página crawleada
+- `find_by_job_id(job_id)` - Listar páginas de uma execução
+- `count_by_job_id(job_id)` - Contar páginas crawleadas
 
 ---
 
@@ -1841,18 +2024,27 @@ alembic upgrade head
 
 ## 16. Cronograma de Implementação
 
-### Sprint 1 (Semana 1-2): Foundation & Data Models
-**Objetivo:** Estrutura de dados completa
+### Sprint 1 (Semana 1-2): Foundation & Data Models - STI Pattern
+**Objetivo:** Estrutura de dados com reuso máximo (STI)
 
-- ✅ Modelos MySQL (crawler_jobs, crawler_executions, crawled_files)
-- ✅ Migrações Alembic
-- ✅ Elasticsearch indices (crawler-jobs-*, crawler-executions-*, crawler-metrics-*)
-- ✅ Domain entities (CrawlerJob, CrawlerExecution, CrawledFile)
-- ✅ Value Objects (URLPattern, CrawlerSchedule, DownloadConfig)
-- ✅ Domain services (URLNormalizer, DuplicateDetector, ProgressCalculator)
-- ✅ Testes unitários (domain layer)
+**🎯 Mudança arquitetural:** Single Table Inheritance - reuso da tabela `jobs` existente
 
-**Entregável:** Models + migrations funcionando
+**Tarefas:**
+- ✅ **Migration Alembic:** Adicionar 2 colunas JSON (crawler_config, crawler_schedule)
+- ✅ **Domain entities:** CrawlerJob extends Job (polimorfismo STI)
+- ✅ **Value Objects:** CrawlerConfig, CrawlerSchedule (immutable dataclasses)
+- ✅ **Extend JobRepository:** Adicionar métodos find_crawler_jobs(), find_active_crawlers()
+- ✅ **Configurar Alembic:** target_metadata = Base.metadata (SQLAlchemy)
+- ✅ **Testes unitários:** Domain layer (CrawlerJob, value objects)
+
+**Entregável:** STI funcionando + migration aplicada
+
+**📉 Redução de escopo vs plano original:**
+- 3 tabelas novas → 0 tabelas novas (apenas 2 colunas JSON)
+- 3 repositories novos → 0 repositories novos (extensão do existente)
+- 3 indices ES novos → Opcional (projeções/views se necessário)
+
+**Estimativa:** 6-8h (vs 12h do plano original)
 
 ---
 

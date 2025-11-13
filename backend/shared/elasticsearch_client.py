@@ -51,12 +51,40 @@ class ElasticsearchClient:
             }
         }
 
+        # Index for crawler jobs (view/projection for fuzzy URL search)
+        crawler_jobs_mapping = {
+            "mappings": {
+                "properties": {
+                    "job_id": {"type": "keyword"},
+                    "user_id": {"type": "keyword"},
+                    "source_url": {"type": "text"},
+                    "normalized_url": {"type": "keyword"},
+                    "url_pattern": {"type": "keyword"},
+                    "domain": {"type": "keyword"},
+                    "status": {"type": "keyword"},
+                    "crawler_mode": {"type": "keyword"},
+                    "crawler_engine": {"type": "keyword"},
+                    "schedule_type": {"type": "keyword"},
+                    "cron_expression": {"type": "keyword"},
+                    "next_run": {"type": "date"},
+                    "last_execution": {"type": "date"},
+                    "total_executions": {"type": "integer"},
+                    "created_at": {"type": "date"},
+                    "updated_at": {"type": "date"},
+                    "metadata": {"type": "object", "enabled": False}
+                }
+            }
+        }
+
         # Create indices if not exist
         if not self.client.indices.exists(index="job_results"):
             self.client.indices.create(index="job_results", body=job_results_mapping)
 
         if not self.client.indices.exists(index="page_results"):
             self.client.indices.create(index="page_results", body=page_results_mapping)
+
+        if not self.client.indices.exists(index="crawler_jobs"):
+            self.client.indices.create(index="crawler_jobs", body=crawler_jobs_mapping)
 
     # ========== Job Results ==========
 
@@ -280,6 +308,243 @@ class ElasticsearchClient:
             return [hit["_source"] for hit in response["hits"]["hits"]]
         except Exception as e:
             print(f"Error searching pages in ES: {e}")
+            return []
+
+    # ========== Crawler Jobs ==========
+
+    def store_crawler_job(
+        self,
+        job_id: str,
+        user_id: str,
+        source_url: str,
+        normalized_url: str,
+        url_pattern: str,
+        domain: str,
+        status: str,
+        crawler_mode: str,
+        crawler_engine: str,
+        schedule_type: Optional[str] = None,
+        cron_expression: Optional[str] = None,
+        next_run: Optional[datetime] = None,
+        last_execution: Optional[datetime] = None,
+        total_executions: int = 0,
+        created_at: Optional[datetime] = None,
+        updated_at: Optional[datetime] = None,
+        metadata: Optional[Dict[str, Any]] = None
+    ) -> bool:
+        """
+        Store crawler job projection in Elasticsearch for fuzzy URL search.
+
+        This is a view/projection of MySQL data to enable:
+        - Fast fuzzy URL matching
+        - Domain-based searches
+        - URL pattern duplicate detection
+
+        Args:
+            job_id: Crawler job ID
+            user_id: Owner user ID
+            source_url: Original URL
+            normalized_url: Normalized URL for exact matching
+            url_pattern: URL pattern with wildcards for fuzzy matching
+            domain: Extracted domain
+            status: Job status (active, paused, stopped)
+            crawler_mode: Crawler mode (page_only, etc.)
+            crawler_engine: Engine (beautifulsoup, playwright)
+            schedule_type: one_time or recurring
+            cron_expression: Cron expression for recurring jobs
+            next_run: Next scheduled execution
+            last_execution: Last execution timestamp
+            total_executions: Total number of executions
+            created_at: Creation timestamp
+            updated_at: Update timestamp
+            metadata: Additional metadata
+        """
+        try:
+            doc = {
+                "job_id": job_id,
+                "user_id": user_id,
+                "source_url": source_url,
+                "normalized_url": normalized_url,
+                "url_pattern": url_pattern,
+                "domain": domain,
+                "status": status,
+                "crawler_mode": crawler_mode,
+                "crawler_engine": crawler_engine,
+                "schedule_type": schedule_type,
+                "cron_expression": cron_expression,
+                "next_run": next_run,
+                "last_execution": last_execution,
+                "total_executions": total_executions,
+                "created_at": created_at or datetime.utcnow(),
+                "updated_at": updated_at or datetime.utcnow(),
+                "metadata": metadata or {}
+            }
+
+            self.client.index(
+                index="crawler_jobs",
+                id=job_id,
+                document=doc
+            )
+            return True
+        except Exception as e:
+            print(f"Error storing crawler job in ES: {e}")
+            return False
+
+    def get_crawler_job(self, job_id: str) -> Optional[Dict[str, Any]]:
+        """Retrieve crawler job from Elasticsearch"""
+        try:
+            response = self.client.get(index="crawler_jobs", id=job_id)
+            return response["_source"]
+        except NotFoundError:
+            return None
+        except Exception as e:
+            print(f"Error getting crawler job from ES: {e}")
+            return None
+
+    def update_crawler_job(
+        self,
+        job_id: str,
+        updates: Dict[str, Any]
+    ) -> bool:
+        """
+        Update crawler job fields in Elasticsearch
+
+        Args:
+            job_id: Crawler job ID
+            updates: Dictionary of fields to update
+        """
+        try:
+            updates["updated_at"] = datetime.utcnow()
+            self.client.update(
+                index="crawler_jobs",
+                id=job_id,
+                body={"doc": updates}
+            )
+            return True
+        except NotFoundError:
+            print(f"Crawler job {job_id} not found in ES")
+            return False
+        except Exception as e:
+            print(f"Error updating crawler job in ES: {e}")
+            return False
+
+    def delete_crawler_job(self, job_id: str) -> bool:
+        """Delete crawler job from Elasticsearch"""
+        try:
+            self.client.delete(index="crawler_jobs", id=job_id)
+            return True
+        except NotFoundError:
+            return True  # Already deleted
+        except Exception as e:
+            print(f"Error deleting crawler job from ES: {e}")
+            return False
+
+    def search_crawler_jobs_by_url(
+        self,
+        url_query: str,
+        user_id: Optional[str] = None,
+        limit: int = 10
+    ) -> List[Dict[str, Any]]:
+        """
+        Search crawler jobs by URL (fuzzy matching)
+
+        Args:
+            url_query: URL or partial URL to search
+            user_id: Filter by user (optional)
+            limit: Max results
+        """
+        try:
+            must_clauses = [
+                {
+                    "multi_match": {
+                        "query": url_query,
+                        "fields": ["source_url", "normalized_url", "domain"],
+                        "fuzziness": "AUTO"
+                    }
+                }
+            ]
+
+            if user_id:
+                must_clauses.append({"term": {"user_id": user_id}})
+
+            search_query = {
+                "query": {"bool": {"must": must_clauses}},
+                "size": limit,
+                "sort": [{"created_at": "desc"}]
+            }
+
+            response = self.client.search(index="crawler_jobs", body=search_query)
+            return [hit["_source"] for hit in response["hits"]["hits"]]
+        except Exception as e:
+            print(f"Error searching crawler jobs by URL in ES: {e}")
+            return []
+
+    def find_similar_crawler_jobs(
+        self,
+        url_pattern: str,
+        user_id: str,
+        exclude_job_id: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Find crawler jobs with same URL pattern (duplicate detection)
+
+        Args:
+            url_pattern: URL pattern to match
+            user_id: User ID to filter by
+            exclude_job_id: Exclude this job ID from results
+        """
+        try:
+            must_clauses = [
+                {"term": {"url_pattern": url_pattern}},
+                {"term": {"user_id": user_id}}
+            ]
+
+            if exclude_job_id:
+                must_clauses.append({
+                    "bool": {"must_not": {"term": {"job_id": exclude_job_id}}}
+                })
+
+            search_query = {
+                "query": {"bool": {"must": must_clauses}},
+                "size": 100
+            }
+
+            response = self.client.search(index="crawler_jobs", body=search_query)
+            return [hit["_source"] for hit in response["hits"]["hits"]]
+        except Exception as e:
+            print(f"Error finding similar crawler jobs in ES: {e}")
+            return []
+
+    def find_crawler_jobs_by_domain(
+        self,
+        domain: str,
+        user_id: Optional[str] = None,
+        limit: int = 10
+    ) -> List[Dict[str, Any]]:
+        """
+        Find all crawler jobs for a specific domain
+
+        Args:
+            domain: Domain to search for
+            user_id: Filter by user (optional)
+            limit: Max results
+        """
+        try:
+            must_clauses = [{"term": {"domain": domain}}]
+
+            if user_id:
+                must_clauses.append({"term": {"user_id": user_id}})
+
+            search_query = {
+                "query": {"bool": {"must": must_clauses}},
+                "size": limit,
+                "sort": [{"created_at": "desc"}]
+            }
+
+            response = self.client.search(index="crawler_jobs", body=search_query)
+            return [hit["_source"] for hit in response["hits"]["hits"]]
+        except Exception as e:
+            print(f"Error finding crawler jobs by domain in ES: {e}")
             return []
 
     # ========== Health Check ==========

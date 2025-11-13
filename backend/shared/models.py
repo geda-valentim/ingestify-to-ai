@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Boolean, DateTime, ForeignKey, Text, Integer, Enum
+from sqlalchemy import Column, String, Boolean, DateTime, ForeignKey, Text, Integer, Enum, JSON
 from sqlalchemy.orm import relationship
 from datetime import datetime
 import uuid
@@ -18,6 +18,15 @@ class JobStatus(str, enum.Enum):
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
+
+
+class FileStatus(str, enum.Enum):
+    """File status enum for crawled files"""
+    PENDING = "pending"
+    DOWNLOADING = "downloading"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    SKIPPED = "skipped"
 
 
 class User(Base):
@@ -92,7 +101,11 @@ class Job(Base):
 
     # Hierarchical job tracking
     parent_job_id = Column(String(36), ForeignKey("jobs.id", ondelete="CASCADE"))
-    job_type = Column(String(20))  # MAIN, SPLIT, PAGE, MERGE, DOWNLOAD
+    job_type = Column(String(20))  # MAIN, SPLIT, PAGE, MERGE, DOWNLOAD, CRAWLER
+
+    # Crawler-specific fields (STI pattern - only for job_type='crawler')
+    crawler_config = Column(JSON, nullable=True)  # CrawlerConfig (mode, engine, retry, assets, proxy)
+    crawler_schedule = Column(JSON, nullable=True)  # CrawlerSchedule (cron, timezone, next_runs)
 
     # Result metadata (content is in Elasticsearch and MySQL for pages)
     char_count = Column(Integer)  # Total characters in result
@@ -107,6 +120,7 @@ class Job(Base):
     # Relationships
     user = relationship("User", back_populates="jobs")
     pages = relationship("Page", back_populates="job", foreign_keys="Page.job_id", cascade="all, delete-orphan")
+    crawled_files = relationship("CrawledFile", foreign_keys="CrawledFile.execution_id", cascade="all, delete-orphan")
     child_jobs = relationship(
         "Job",
         backref="parent",
@@ -154,3 +168,37 @@ class Page(Base):
 
     def __repr__(self):
         return f"<Page(id={self.id}, job_id={self.job_id}, page_number={self.page_number}, status={self.status})>"
+
+
+class CrawledFile(Base):
+    """CrawledFile model - stores individual files downloaded by crawler"""
+    __tablename__ = "crawled_files"
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    execution_id = Column(String(36), ForeignKey("jobs.id", ondelete="CASCADE", onupdate="CASCADE"), nullable=False, index=True)
+    url = Column(Text, nullable=False)
+    filename = Column(String(512))
+
+    # File metadata
+    file_type = Column(String(50))  # pdf, jpg, css, js, etc.
+    mime_type = Column(String(255))  # application/pdf, image/jpeg, etc.
+    size_bytes = Column(Integer, default=0)
+
+    # MinIO storage
+    minio_path = Column(String(1024))  # crawled/{execution_id}/files/...
+    minio_bucket = Column(String(255), default="ingestify-crawled")
+    public_url = Column(Text)
+
+    # Status tracking
+    status = Column(Enum(FileStatus), default=FileStatus.PENDING, nullable=False, index=True)
+    error_message = Column(Text)
+
+    # Timestamps
+    downloaded_at = Column(DateTime)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+
+    # Relationship
+    execution = relationship("Job", foreign_keys=[execution_id], overlaps="crawled_files")
+
+    def __repr__(self):
+        return f"<CrawledFile(id={self.id}, execution_id={self.execution_id}, filename={self.filename}, status={self.status})>"

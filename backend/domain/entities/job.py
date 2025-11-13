@@ -27,6 +27,7 @@ class JobType(str, Enum):
     PAGE = "page"
     MERGE = "merge"
     DOWNLOAD = "download"
+    CRAWLER = "crawler"  # Crawler agendado (STI pattern)
 
 
 @dataclass

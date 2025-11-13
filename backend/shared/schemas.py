@@ -12,6 +12,7 @@ class JobType(str, Enum):
     PAGE = "page"          # Conversão de página individual
     MERGE = "merge"        # Combinação de páginas
     DOWNLOAD = "download"  # Download de fonte externa
+    CRAWLER = "crawler"    # Crawler agendado (STI pattern)
 
 
 class JobStatus(str, Enum):
