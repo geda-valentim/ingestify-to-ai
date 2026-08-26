@@ -94,10 +94,18 @@ def _create_faster_whisper_transcriber(settings) -> AudioTranscriber:
             "Run: pip install faster-whisper"
         ) from e
 
+    # Device and compute type come from shared.device, never straight from
+    # settings: WHISPER_DEVICE may be empty ("inherit DEVICE"), and a CUDA
+    # device that ctranslate2 cannot actually use has to degrade to CPU.
+    from shared.device import resolve_whisper_compute_type, resolve_whisper_device
+
+    device = resolve_whisper_device()
+    compute_type = resolve_whisper_compute_type(device)
+
     return FasterWhisperTranscriber(
         model_size=settings.whisper_model,
-        device=settings.whisper_device,
-        compute_type=settings.whisper_compute_type
+        device=device,
+        compute_type=compute_type
     )
 
 
@@ -115,9 +123,11 @@ def _create_openai_whisper_transcriber(settings) -> AudioTranscriber:
             "Run: pip install openai-whisper"
         ) from e
 
+    from shared.device import resolve_whisper_device
+
     return OpenAIWhisperTranscriber(
         model_size=settings.whisper_model,
-        device=settings.whisper_device
+        device=resolve_whisper_device()
     )
 
 

@@ -1,11 +1,24 @@
+import logging
+import re
 from functools import lru_cache
 from typing import List
 
-from pydantic import Field, ValidationError, field_validator, model_validator
+from pydantic import Field, ValidationError, ValidationInfo, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+logger = logging.getLogger(__name__)
 
 # Minimum length for the HMAC key used to sign JWTs (HS256).
 JWT_SECRET_MIN_LENGTH = 32
+
+# Accepted values for the single DEVICE knob: auto | cpu | cuda | cuda:N.
+_DEVICE_PATTERN = re.compile(r"^(auto|cpu|cuda(:\d+)?)$")
+
+# Default Florence-2 repo and the commit sha pinned for it. Kept as module
+# constants so the model_validator can tell "still the default pin" from
+# "deliberately re-pinned for another repo".
+DEFAULT_VISION_MODEL_ID = "florence-community/Florence-2-base-ft"
+DEFAULT_VISION_MODEL_REVISION = "0b03b6f15a4a211370fb204aee4e7dd48887ea37"
 
 # Placeholder values that used to ship as defaults in this file. They are now
 # rejected explicitly so an old .env cannot silently reintroduce them.
@@ -72,16 +85,80 @@ class Settings(BaseSettings):
     docling_enable_table_structure: bool = True  # Disable if no tables needed
     docling_enable_images: bool = False  # Disable image extraction for speed (text-only conversion)
     docling_use_v2_backend: bool = True  # Use beta backend (10x faster)
+    # Passed explicitly into docling's AcceleratorOptions(num_threads=...).
+    # NOTE: the name collides with docling's own DOCLING_-prefixed BaseSettings
+    # field, so docling reads the same DOCLING_NUM_THREADS variable. The
+    # collision is benign: both objects resolve to the same number. Exists so
+    # 5 worker replicas x concurrency 2 stop oversubscribing the CPU.
+    docling_num_threads: int = 4
+
+    # Device / GPU
+    # THE single device knob for the whole stack (Docling, Whisper, Florence-2).
+    # Accepted: auto | cpu | cuda | cuda:N.
+    #   auto -> CUDA when torch reports a usable device, else CPU, silently.
+    #   cuda -> hard error when it cannot be satisfied (never a silent downgrade).
+    # Resolution lives in shared/device.py; nothing else may probe torch.
+    # DOCLING_DEVICE is ignored from now on: we pass this value explicitly into
+    # AcceleratorOptions(device=...), and an init kwarg outranks the environment.
+    device: str = "auto"
 
     # Audio Transcription Settings
     audio_transcriber_provider: str = "faster-whisper"  # faster-whisper, openai-whisper, openai-api
     whisper_model: str = "turbo"  # tiny, base, small, medium, large, turbo
-    whisper_device: str = "cpu"  # cpu or cuda
-    whisper_compute_type: str = "int8"  # int8, float16, float32 (for faster-whisper)
+    # CHANGED (was "cpu"): empty means "inherit DEVICE". Any non-empty value is
+    # a per-component override that wins over DEVICE and is logged on every boot.
+    whisper_device: str = ""
+    # CHANGED (was "int8"): empty means "derive from the resolved audio device"
+    # (float16 on cuda, int8 on cpu). Stops a device flip leaving CTranslate2 on
+    # a CPU-shaped int8 quantisation it silently downgrades rather than rejects.
+    whisper_compute_type: str = ""
     enable_audio_transcription: bool = True  # Feature flag to enable/disable audio transcription
     max_audio_file_size_mb: int = 50  # Maximum audio file size
     max_audio_duration_seconds: int = 3600  # Maximum audio duration (1 hour)
     openai_api_key: str = ""  # Required for openai-api provider
+
+    # Vision Settings (Florence-2)
+    # ONE flag covers /images/describe and /images/ocr: they are one model
+    # behind one loader, and two flags would allow a state that cannot exist.
+    enable_image_description: bool = True
+    vision_provider: str = "florence2"  # florence2 | stub
+    # The florence-community conversions are weights-only (safetensors + configs,
+    # no .py files, no `custom_code` tag) and load through transformers' NATIVE
+    # Florence2ForConditionalGeneration - that is what makes trust_remote_code
+    # unnecessary. base-ft (0.23B) over large-ft (0.77B) so a CPU laptop stays
+    # inside the 60s sync budget. Do NOT default this to a microsoft/Florence-2-* repo.
+    vision_model_id: str = DEFAULT_VISION_MODEL_ID
+    # Commit sha, never a branch name. Passed as revision= to every
+    # from_pretrained and snapshot_download call.
+    vision_model_revision: str = DEFAULT_VISION_MODEL_REVISION
+    # Escape hatch for the original microsoft/Florence-2-* repos, which execute
+    # Hub-supplied Python inside the worker process. Never inferred, never
+    # auto-enabled as a retry after a load failure.
+    vision_trust_remote_code: bool = False
+    vision_model_cache_dir: str = "/models/huggingface"
+    # False maps to local_files_only=True on every load (air-gapped / CI).
+    vision_allow_model_download: bool = True
+    # True makes a @worker_process_init handler load the weights up front.
+    vision_preload_model: bool = False
+    # Its own limit: images do NOT inherit max_file_size_mb.
+    vision_max_image_size_mb: int = 10
+    # Decompression-bomb guard. A 10MB PNG can expand to tens of gigabytes, so
+    # the byte limit alone does not protect the worker.
+    vision_max_image_pixels: int = 50_000_000
+    # API-side deadline only; must stay below any reverse-proxy read timeout.
+    vision_request_timeout_seconds: int = 60
+    # Per-task time_limit, deliberately double the request timeout so a request
+    # that 504s leaves a task still running to completion.
+    vision_task_timeout_seconds: int = 120
+    vision_max_new_tokens: int = 1024
+    vision_num_beams: int = 3  # 1 roughly halves CPU latency at some quality cost
+    vision_caption_task: str = "<MORE_DETAILED_CAPTION>"
+    # auto | float32 | float16 | bfloat16. auto = float16 on cuda, float32 on cpu
+    # (float16 on CPU is slow and numerically unstable for this model).
+    vision_torch_dtype: str = "auto"
+    # Dedicated Celery queue: on the shared queue a 60s request would sit behind
+    # a 10-minute PDF merge and 504 for reasons unrelated to vision.
+    vision_queue: str = "ingestify-vision"
 
     # Storage Settings
     result_ttl_seconds: int = 3600
@@ -172,6 +249,74 @@ class Settings(BaseSettings):
                 f"must be at least {JWT_SECRET_MIN_LENGTH} characters"
             )
         return secret
+
+    @field_validator("device")
+    @classmethod
+    def _validate_device(cls, value: str) -> str:
+        device = value.strip().lower()
+        if not _DEVICE_PATTERN.match(device):
+            raise ValueError(
+                f"DEVICE={value!r} is not a valid device. "
+                "Accepted values: 'auto' (CUDA when available, otherwise CPU), "
+                "'cpu', 'cuda', or 'cuda:N' for a specific GPU index."
+            )
+        return device
+
+    @field_validator("whisper_device")
+    @classmethod
+    def _warn_whisper_device_override(cls, value: str, info: ValidationInfo) -> str:
+        # Reconciliation is explicit, not silent: an existing .env keeps its
+        # exact current behaviour AND says so on every boot.
+        device = value.strip()
+        if device:
+            logger.warning(
+                "WHISPER_DEVICE=%s overrides DEVICE=%s for audio transcription only; "
+                "unset it to follow DEVICE",
+                device,
+                info.data.get("device", "auto"),
+            )
+        return device
+
+    @field_validator("whisper_compute_type")
+    @classmethod
+    def _log_whisper_compute_type_override(cls, value: str) -> str:
+        compute_type = value.strip()
+        if compute_type:
+            logger.info(
+                "WHISPER_COMPUTE_TYPE=%s overrides the value derived from the "
+                "resolved audio device; unset it to derive it automatically",
+                compute_type,
+            )
+        return compute_type
+
+    @field_validator("vision_torch_dtype")
+    @classmethod
+    def _validate_vision_torch_dtype(cls, value: str) -> str:
+        dtype = value.strip().lower()
+        allowed = {"auto", "float32", "float16", "bfloat16"}
+        if dtype not in allowed:
+            raise ValueError(
+                f"VISION_TORCH_DTYPE={value!r} is not valid. "
+                f"Accepted values: {', '.join(sorted(allowed))}."
+            )
+        return dtype
+
+    @model_validator(mode="after")
+    def _reject_partial_vision_model_override(self) -> "Settings":
+        # Stops a floating-branch pull sneaking in through a partial override:
+        # a new model id left paired with the pin for the default model.
+        if (
+            self.vision_model_id != DEFAULT_VISION_MODEL_ID
+            and self.vision_model_revision == DEFAULT_VISION_MODEL_REVISION
+        ):
+            raise ValueError(
+                f"VISION_MODEL_ID was changed to {self.vision_model_id} but "
+                "VISION_MODEL_REVISION is still the pin for the default model. "
+                "Look the sha up at "
+                f"https://huggingface.co/{self.vision_model_id}/commits/main "
+                "and set VISION_MODEL_REVISION=<sha>."
+            )
+        return self
 
     @field_validator("minio_access_key", "minio_secret_key")
     @classmethod

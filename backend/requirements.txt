@@ -1,3 +1,22 @@
+# ---------------------------------------------------------------------------
+# BASE dependency set - do NOT install this file directly.
+#
+# torch is never named here, but it arrives transitively via
+# docling -> docling-slim[standard] -> torch. Installed from plain PyPI that
+# resolves to the CUDA build and pulls ~1.66GB of nvidia-* wheels onto a
+# machine that may have no GPU.
+#
+# Install one of these instead - they pin torch to the right index FIRST, so
+# docling's transitive requirement is already satisfied:
+#
+#   backend/requirements-cpu.txt           CPU only (the default)
+#   backend/requirements-vision.txt        CPU + Florence-2 vision extra
+#   backend/requirements-cuda.txt          NVIDIA GPU
+#   backend/requirements-vision-cuda.txt   NVIDIA GPU + Florence-2 vision extra
+#
+# See docs/GPU.md.
+# ---------------------------------------------------------------------------
+
 # Python 3.13+ compatibility - setuptools provides distutils
 setuptools>=75.0.0
 

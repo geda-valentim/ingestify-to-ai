@@ -2,6 +2,14 @@ FROM python:3.13-slim
 
 WORKDIR /app
 
+# Which dependency set to install, and which index to take torch from.
+# The worker image carries the Florence-2 vision extra by default, but on the
+# CPU index: a plain `docker compose build` must not pull CUDA wheels.
+# GPU builds override both via build args - see docker-compose.gpu.yml and
+# docs/GPU.md.
+ARG REQUIREMENTS_FILE=requirements-vision.txt
+ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cpu
+
 # Install system dependencies for Docling
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
@@ -14,13 +22,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     qpdf \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements
-COPY backend/requirements.txt .
+# Copy every requirements file so the `-r` chain inside them resolves
+COPY backend/requirements*.txt ./
 
-# Install Python dependencies with cache mount
-# Isso vai cachear downloads de packages grandes (PyTorch ~888MB)
+# Install Python dependencies with cache mount (requires BuildKit)
 RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install -r requirements.txt
+    pip install --index-url ${TORCH_INDEX_URL} --extra-index-url https://pypi.org/simple \
+                -r ${REQUIREMENTS_FILE}
 
 # Copy application code
 COPY backend/workers/ ./workers/
@@ -28,6 +36,11 @@ COPY backend/shared/ ./shared/
 
 # Create temp directory
 RUN mkdir -p /tmp/doc2md
+
+# HuggingFace cache mount point. Model weights are NEVER baked into the image:
+# compose backs this path with the named volume `hf_cache` so ~0.5GB of
+# Florence-2 weights survive restarts and are shared across replicas.
+RUN mkdir -p /models/huggingface
 
 # Run Celery worker with isolated queue and unique hostname
 CMD ["celery", "-A", "workers.celery_app", "worker", "--loglevel=info", "--concurrency=2", "-Q", "ingestify", "-n", "ingestify-worker@%h"]

@@ -58,6 +58,21 @@ if settings.monitoring_enabled:
 # Auto-discover tasks
 celery_app.autodiscover_tasks(["workers"])
 
+# autodiscover_tasks() only finds modules literally named `tasks`, so the vision
+# tasks must be imported explicitly. Unconditional on purpose: importing them is
+# free (the vision package pulls in no torch, transformers or PIL until a model
+# is actually loaded), and an unregistered task name under task_acks_late +
+# task_reject_on_worker_lost is redelivered forever rather than failing once.
+import workers.vision_tasks  # noqa: F401,E402
+
+# The vision endpoints answer synchronously, so they cannot queue behind the
+# general work: `ingestify` has 10 slots that multi-minute PDF page jobs can all
+# occupy, and a 60s request behind those would time out for reasons that have
+# nothing to do with vision.
+celery_app.conf.task_routes = {
+    "workers.vision_tasks.*": {"queue": settings.vision_queue},
+}
+
 # Explicitly import monitoring tasks to ensure they're registered
 # This is needed because Beat scheduler needs to see these tasks
 if settings.monitoring_enabled:

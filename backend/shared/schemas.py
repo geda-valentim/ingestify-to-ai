@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, HttpUrl, field_validator
+from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator
 from typing import Optional, Literal, List
 from datetime import datetime
 from uuid import UUID
@@ -265,3 +265,170 @@ class APIKeyInfo(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+# ============================================
+# Vision Schemas (Florence-2)
+# ============================================
+
+# Os únicos prompts de caption que um chamador pode pedir. É um `Literal`
+# fechado de propósito: o valor vai direto para o modelo, e uma string livre
+# aqui seria injeção de prompt no Florence-2.
+VISION_CAPTION_TASKS = (
+    "<MORE_DETAILED_CAPTION>",
+    "<DETAILED_CAPTION>",
+    "<CAPTION>",
+)
+
+
+def _default_caption_task() -> str:
+    """
+    Default de `ImageDescribeRequest.task`, vindo de `VISION_CAPTION_TASK`.
+
+    O `in VISION_CAPTION_TASKS` não é paranoia: o default de um campo `Literal`
+    é validado quando o modelo é construído (import time). Sem essa guarda, um
+    `VISION_CAPTION_TASK=<OD>` no ambiente derrubaria a API inteira no import
+    com um erro de Pydantic, em vez de simplesmente ser ignorado no default.
+    """
+    from shared.config import get_settings
+
+    configured = get_settings().vision_caption_task
+    return configured if configured in VISION_CAPTION_TASKS else VISION_CAPTION_TASKS[0]
+
+
+DEFAULT_VISION_CAPTION_TASK = _default_caption_task()
+
+
+class VisionModelInfo(BaseModel):
+    """Qual modelo, em qual revisão e em qual device produziu esta resposta."""
+
+    # `model_id` colide com o namespace protegido `model_` do Pydantic v2, que
+    # emitiria um warning e o carregaria para o schema OpenAPI publicado.
+    model_config = ConfigDict(protected_namespaces=())
+
+    model_id: str
+    revision: str
+    device: str
+    dtype: str
+
+
+class ImageDescribeRequest(BaseModel):
+    """Corpo JSON de `POST /images/describe`."""
+
+    image_base64: str = Field(
+        ...,
+        description=(
+            "Imagem em base64. Um prefixo `data:image/png;base64,` é aceito e "
+            "removido. Formatos: PNG, JPEG, WEBP, BMP, GIF, TIFF."
+        ),
+    )
+    filename: Optional[str] = Field(
+        None, description="Nome de identificação opcional (usado no job e no storage)."
+    )
+    task: Literal[
+        "<MORE_DETAILED_CAPTION>",
+        "<DETAILED_CAPTION>",
+        "<CAPTION>",
+    ] = Field(
+        DEFAULT_VISION_CAPTION_TASK,
+        description="Prompt de caption do Florence-2.",
+    )
+
+
+class ImageOcrRequest(BaseModel):
+    """
+    Corpo JSON de `POST /images/ocr`.
+
+    Sem campo `task`: OCR é sempre `<OCR_WITH_REGION>`, não é escolha do
+    chamador.
+    """
+
+    image_base64: str = Field(
+        ...,
+        description=(
+            "Imagem em base64. Um prefixo `data:image/png;base64,` é aceito e "
+            "removido. Formatos: PNG, JPEG, WEBP, BMP, GIF, TIFF."
+        ),
+    )
+    filename: Optional[str] = Field(None, description="Nome de identificação opcional.")
+
+
+class OcrLine(BaseModel):
+    """Uma linha detectada pelo `<OCR_WITH_REGION>` do Florence-2."""
+
+    text: str
+
+    # Coordenadas absolutas, em pixels da imagem original, e `float` de
+    # propósito: apertar para `int` na fronteira de serialização apenas
+    # converteria uma surpresa de dados do modelo em um 500 (mesmo princípio
+    # de `PageJobInfo.job_id`).
+    quad_box: List[float] = Field(
+        ...,
+        description="8 valores: x1,y1,x2,y2,x3,y3,x4,y4 (pixels da imagem original).",
+    )
+    bbox: List[float] = Field(
+        ...,
+        description="4 valores derivados do quad_box: x_min,y_min,x_max,y_max.",
+    )
+
+
+class _ImageEchoResponse(BaseModel):
+    """
+    Campos comuns às respostas de visão.
+
+    `image_base64` é a re-codificação dos bytes exatos que o chamador enviou: a
+    API guarda os bytes originais em memória e nunca os passa pelo worker nem
+    pelo PIL, então o echo é idêntico byte a byte por construção.
+    """
+
+    job_id: str
+    status: Literal["completed"]
+    image_base64: str
+    image_mime_type: str
+    image_bytes: int
+    image_sha256: str
+    width: int
+    height: int
+    model: VisionModelInfo
+    duration_ms: int
+
+
+class ImageDescribeResponse(_ImageEchoResponse):
+    """Resposta de `POST /images/describe` e `/images/describe/upload`."""
+
+    description: str
+    task: str
+
+
+class ImageOcrResponse(_ImageEchoResponse):
+    """Resposta de `POST /images/ocr` e `/images/ocr/upload`."""
+
+    # Uma imagem sem texto detectável é 200 com `text: ""` e `lines: []`.
+    text: str
+    lines: List[OcrLine]
+
+
+class VisionCapabilitiesResponse(BaseModel):
+    """
+    Resposta de `GET /images/capabilities`.
+
+    Respondida pelo worker de visão, não pela API: a única resposta que vale
+    alguma coisa descreve o processo que realmente carrega o modelo.
+    """
+
+    model_config = ConfigDict(protected_namespaces=())
+
+    enabled: bool
+    provider: str
+    model_id: str
+    revision: str
+    device_requested: str
+    device_resolved: str
+    torch_available: bool
+    cuda_available: bool
+    cuda_device_name: Optional[str] = None
+    dependencies_installed: bool
+    model_downloaded: bool
+    model_loaded: bool
+    trust_remote_code: bool
+    reason: Optional[str] = None

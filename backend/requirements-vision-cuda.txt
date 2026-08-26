@@ -1,0 +1,20 @@
+# ---------------------------------------------------------------------------
+# Ingestify - vision extra (Florence-2), NVIDIA CUDA build (OPT-IN)
+# ---------------------------------------------------------------------------
+# Install with:
+#     pip install -r backend/requirements-vision-cuda.txt
+#
+# Identical to requirements-vision.txt except that it takes torch from the CUDA
+# index. Used by docker-compose.gpu.yml via the REQUIREMENTS_FILE build arg.
+# See docs/GPU.md.
+# ---------------------------------------------------------------------------
+
+-r requirements-cuda.txt
+
+transformers>=4.56.0,<6.0.0
+pillow>=10.4.0,<12.0.0
+
+# Only needed if you set VISION_TRUST_REMOTE_CODE=true to load an original
+# microsoft/Florence-2-* repo. The default model does not need them.
+# timm>=1.0.0,<2.0.0
+# einops>=0.8.0

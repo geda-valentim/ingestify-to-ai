@@ -1,0 +1,55 @@
+# Docker Compose - NVIDIA GPU overlay (OPT-IN)
+#
+#   docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build
+#   make gpu
+#
+# Host prerequisites (see docs/GPU.md):
+#   - NVIDIA driver installed on the host
+#   - nvidia-container-toolkit installed
+#   - sudo nvidia-ctk runtime configure --runtime=docker && sudo systemctl restart docker
+#
+# ---------------------------------------------------------------------------
+# Why the GPU declaration lives ONLY here and never in docker-compose.yml
+# ---------------------------------------------------------------------------
+# (a) On a host without nvidia-container-toolkit, Compose HARD-FAILS at
+#     container create with:
+#         could not select device driver "nvidia" with capabilities: [[gpu]]
+#     That is a start failure, not a graceful degrade. A plain
+#     `docker compose up` must work on a laptop with no GPU.
+#
+# (b) Compose merges `deploy.resources.reservations.devices` by REPLACING the
+#     list. A GPU block in the base file could not be switched off by omission
+#     in an overlay - there would be no way back to CPU.
+# ---------------------------------------------------------------------------
+
+services:
+  worker-vision:
+    build:
+      args:
+        # Swaps the CPU torch index for the CUDA one at build time.
+        # cu129 (not cu130) keeps torch on the nvidia-*-cu12 wheels that
+        # ctranslate2 / faster-whisper links against, while still covering
+        # Blackwell. See backend/requirements-cuda.txt.
+        REQUIREMENTS_FILE: requirements-vision-cuda.txt
+        TORCH_INDEX_URL: https://download.pytorch.org/whl/cu129
+    environment:
+      # Explicit, not `auto`: a GPU that cannot be satisfied must be a hard
+      # error here, never a silent downgrade to CPU.
+      - DEVICE=cuda
+    deploy:
+      replicas: 1
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  worker:
+    environment:
+      # Deliberate. `replicas: 5` x `--concurrency=2` = 10 processes, each
+      # resolving auto -> cuda:0 and each allocating its own CUDA context plus
+      # docling layout/table weights: a near-certain OOM on one consumer GPU.
+      # Moving docling/whisper onto the GPU is a separate, deliberate change
+      # that must come with reduced replicas and concurrency. See docs/GPU.md.
+      - DEVICE=cpu
