@@ -204,7 +204,7 @@ infra-start: ## Start shared infrastructure (Redis, MinIO, Elasticsearch)
 	@echo "$(GREEN)✅ Shared infrastructure started!$(NC)"
 	@echo "   Redis:         localhost:6379"
 	@echo "   MinIO:         http://localhost:9000"
-	@echo "   MinIO UI:      http://localhost:9001 (minioadmin/minioadmin)"
+	@echo "   MinIO UI:      http://localhost:9001 (credentials: MINIO_ROOT_USER / MINIO_ROOT_PASSWORD in .env)"
 	@echo "   Elasticsearch: http://localhost:9200"
 	@echo ""
 

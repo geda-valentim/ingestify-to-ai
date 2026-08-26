@@ -1,5 +1,47 @@
-from pydantic_settings import BaseSettings
 from functools import lru_cache
+from typing import List
+
+from pydantic import Field, ValidationError, field_validator, model_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Minimum length for the HMAC key used to sign JWTs (HS256).
+JWT_SECRET_MIN_LENGTH = 32
+
+# Placeholder values that used to ship as defaults in this file. They are now
+# rejected explicitly so an old .env cannot silently reintroduce them.
+_INSECURE_SECRETS = {
+    "your-secret-key-change-in-production-min-32-chars",
+    "change-me",
+    "changeme",
+    "secret",
+}
+
+_INSECURE_MINIO_CREDENTIALS = {"minioadmin"}
+
+# Actionable setup instructions, shown when a required setting is missing or invalid.
+# Keys are Settings field names.
+_SETUP_HINTS = {
+    "jwt_secret_key": (
+        "JWT_SECRET_KEY is required and must be at least "
+        f"{JWT_SECRET_MIN_LENGTH} characters.\n"
+        "    Generate one with:  openssl rand -hex 32\n"
+        "    Then set it in your .env file (see .env.example):\n"
+        "        JWT_SECRET_KEY=<generated value>"
+    ),
+    "minio_access_key": (
+        "MINIO_ACCESS_KEY is required (no default is provided).\n"
+        "    It must match the MinIO server's MINIO_ROOT_USER.\n"
+        "    Set it in your .env file (see .env.example):\n"
+        "        MINIO_ACCESS_KEY=<minio root user>"
+    ),
+    "minio_secret_key": (
+        "MINIO_SECRET_KEY is required (no default is provided).\n"
+        "    It must match the MinIO server's MINIO_ROOT_PASSWORD.\n"
+        "    Generate one with:  openssl rand -hex 24\n"
+        "    Then set it in your .env file (see .env.example):\n"
+        "        MINIO_SECRET_KEY=<generated value>"
+    ),
+}
 
 
 class Settings(BaseSettings):
@@ -73,8 +115,10 @@ class Settings(BaseSettings):
     # MinIO Object Storage
     minio_endpoint: str = "127.0.0.1:9000"  # MinIO running on local machine
     minio_public_endpoint: str = "127.0.0.1:9000"  # Public-facing address for URLs
-    minio_access_key: str = "minioadmin"
-    minio_secret_key: str = "minioadmin"
+    # REQUIRED - intentionally no default so a missing value fails at startup
+    # instead of silently falling back to the well-known "minioadmin" credentials.
+    minio_access_key: str = Field(..., min_length=1)
+    minio_secret_key: str = Field(..., min_length=1)
     minio_secure: bool = False  # True for HTTPS in production
     minio_bucket_uploads: str = "ingestify-uploads"
     minio_bucket_pages: str = "ingestify-pages"
@@ -82,12 +126,25 @@ class Settings(BaseSettings):
     minio_bucket_results: str = "ingestify-results"
 
     # JWT Authentication
-    jwt_secret_key: str = "your-secret-key-change-in-production-min-32-chars"
+    # REQUIRED - intentionally no default. A hardcoded default here would be a
+    # published signing key: anyone with the source could forge valid tokens.
+    jwt_secret_key: str = Field(..., min_length=JWT_SECRET_MIN_LENGTH)
     jwt_algorithm: str = "HS256"
     jwt_expiration_minutes: int = 60  # 1 hour
 
     # Authentication
     auth_enabled: bool = True  # Feature flag to enable/disable auth
+
+    # CORS
+    # Comma-separated list of origins allowed to call the API from a browser.
+    # Defaults cover local development only (Next.js frontend on :3000 and the
+    # API's own docs on :8000 in Docker / :8080 via run_api.sh).
+    # Production MUST override this with the real frontend origin(s).
+    cors_allowed_origins: str = (
+        "http://localhost:3000,http://127.0.0.1:3000,"
+        "http://localhost:8000,http://127.0.0.1:8000,"
+        "http://localhost:8080,http://127.0.0.1:8080"
+    )
 
     # Rate Limiting
     rate_limit_per_minute: int = 10
@@ -96,12 +153,90 @@ class Settings(BaseSettings):
     environment: str = "development"
     log_level: str = "INFO"
 
-    class Config:
-        env_file = ".env"
-        case_sensitive = False
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        case_sensitive=False,
+        extra="ignore",
+    )
+
+    @field_validator("jwt_secret_key")
+    @classmethod
+    def _validate_jwt_secret_key(cls, value: str) -> str:
+        secret = value.strip()
+        if secret.lower() in _INSECURE_SECRETS:
+            raise ValueError(
+                "refuses to use a well-known placeholder value"
+            )
+        if len(secret) < JWT_SECRET_MIN_LENGTH:
+            raise ValueError(
+                f"must be at least {JWT_SECRET_MIN_LENGTH} characters"
+            )
+        return secret
+
+    @field_validator("minio_access_key", "minio_secret_key")
+    @classmethod
+    def _validate_minio_credentials(cls, value: str) -> str:
+        credential = value.strip()
+        if not credential:
+            raise ValueError("must not be empty")
+        return credential
+
+    @model_validator(mode="after")
+    def _reject_default_minio_credentials_in_production(self) -> "Settings":
+        # The well-known "minioadmin" credentials are tolerated for local
+        # development (the dev MinIO container is provisioned with them) but
+        # never in production.
+        if self.environment.strip().lower() == "production":
+            for field in ("minio_access_key", "minio_secret_key"):
+                if getattr(self, field).lower() in _INSECURE_MINIO_CREDENTIALS:
+                    raise ValueError(
+                        f"{field.upper()} uses the default MinIO credential "
+                        "'minioadmin', which is not allowed when "
+                        "ENVIRONMENT=production. Rotate the MinIO credentials "
+                        "and update MINIO_ROOT_USER / MINIO_ROOT_PASSWORD and "
+                        f"{field.upper()}."
+                    )
+        return self
+
+    @property
+    def cors_origins(self) -> List[str]:
+        """CORS allowlist parsed from the comma-separated setting."""
+        return [
+            origin.strip()
+            for origin in self.cors_allowed_origins.split(",")
+            if origin.strip()
+        ]
+
+
+def _format_settings_error(exc: ValidationError) -> str:
+    """Turn a Pydantic ValidationError into actionable setup instructions."""
+    lines = [
+        "Invalid application configuration - refusing to start.",
+        "",
+    ]
+    for error in exc.errors():
+        loc = error.get("loc") or ()
+        field = str(loc[0]) if loc else ""
+        message = error.get("msg", "invalid value")
+        hint = _SETUP_HINTS.get(field)
+        if hint:
+            lines.append(f"  - {hint}")
+        elif field:
+            lines.append(f"  - {field.upper()}: {message}")
+        else:
+            # Model-level validation error (no field location).
+            lines.append(f"  - {message.removeprefix('Value error, ')}")
+        lines.append("")
+    lines.append(
+        "See .env.example for the full list of required environment variables."
+    )
+    return "\n".join(lines)
 
 
 @lru_cache()
 def get_settings() -> Settings:
     """Get cached settings instance"""
-    return Settings()
+    try:
+        return Settings()
+    except ValidationError as exc:
+        raise RuntimeError(_format_settings_error(exc)) from exc

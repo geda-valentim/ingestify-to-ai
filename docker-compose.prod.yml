@@ -16,6 +16,9 @@ services:
       - ./tmp:/tmp/ingestify
     command: uvicorn api.main:app --host 0.0.0.0 --port 8000 --workers 4
     environment:
+      # Overrides ENVIRONMENT=development from the base file. Without this the
+      # global exception handler returns raw exception text to clients.
+      - ENVIRONMENT=production
       - PYTHONUNBUFFERED=1
       - LOG_LEVEL=INFO
     restart: unless-stopped
@@ -26,11 +29,20 @@ services:
       - ./tmp:/tmp/ingestify
     command: celery -A workers.celery_app worker --loglevel=info --concurrency=4
     environment:
+      - ENVIRONMENT=production
       - PYTHONUNBUFFERED=1
     restart: unless-stopped
     # Scale workers in production
     deploy:
       replicas: 5
+
+  beat:
+    # Celery Beat inherits ENVIRONMENT=development from the base file otherwise,
+    # which would bypass the production-only credential checks in shared/config.py
+    environment:
+      - ENVIRONMENT=production
+      - PYTHONUNBUFFERED=1
+    restart: unless-stopped
 
   frontend:
     # Production: use built image, no dev overrides

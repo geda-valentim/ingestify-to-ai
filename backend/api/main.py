@@ -116,12 +116,21 @@ def custom_openapi():
 app.openapi = custom_openapi
 
 # Configure CORS
+# Explicit allowlist: "*" combined with allow_credentials=True is rejected by
+# browsers and would expose credentialed endpoints to any origin.
+# The allowlist comes from CORS_ALLOWED_ORIGINS (comma-separated); its default
+# covers local development only - production must set the real frontend origin.
+cors_origins = settings.cors_origins
+logger.info(f"CORS allowed origins: {cors_origins}")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Configure properly in production
+    allow_origins=cors_origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    # Methods actually exposed by the API (plus the CORS preflight verb).
+    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+    # Headers the frontend / API clients actually send.
+    allow_headers=["Authorization", "Content-Type", "Accept", "X-API-Key"],
 )
 
 
