@@ -31,6 +31,13 @@ echo -e "${BLUE}  Ingestify - Smart Startup${NC}"
 echo -e "${BLUE}======================================${NC}"
 echo ""
 
+# Read a key's current value from .env, if the file already has one.
+# start.sh regenerates .env on every run; secrets must survive that.
+env_value() {
+    [ -f .env ] || return 0
+    grep -E "^$1=" .env | tail -n1 | cut -d= -f2-
+}
+
 # Function to check if a container is running
 is_container_running() {
     docker ps --format '{{.Names}}' | grep -q "^$1$"
@@ -87,13 +94,30 @@ if is_container_running "$SHARED_REDIS" && \
     # Ensure shared network exists and connect to it
     ensure_shared_network
 
+    # Preserve secrets already in .env; only generate what is missing.
+    # JWT_SECRET_KEY is required by shared/config.py - the API will refuse to
+    # start without it, so a fresh clone must get a real one here.
+    JWT_SECRET_KEY="$(env_value JWT_SECRET_KEY)"
+    if [ -z "$JWT_SECRET_KEY" ]; then
+        JWT_SECRET_KEY="$(openssl rand -hex 32)"
+        echo -e "${YELLOW}🔑 Generated a new JWT_SECRET_KEY in .env${NC}"
+    fi
+
+    MINIO_ROOT_USER="$(env_value MINIO_ROOT_USER)"
+    MINIO_ROOT_PASSWORD="$(env_value MINIO_ROOT_PASSWORD)"
+    : "${MINIO_ROOT_USER:=minioadmin}"
+    : "${MINIO_ROOT_PASSWORD:=minioadmin}"
+
     # Create .env file with shared infra settings
     cat > .env << EOF
 REDIS_HOST=$REDIS_HOST
 MINIO_HOST=$MINIO_HOST
 ELASTICSEARCH_HOST=$ELASTICSEARCH_HOST
-MINIO_ROOT_USER=minioadmin
-MINIO_ROOT_PASSWORD=minioadmin
+MINIO_ROOT_USER=$MINIO_ROOT_USER
+MINIO_ROOT_PASSWORD=$MINIO_ROOT_PASSWORD
+MINIO_ACCESS_KEY=$MINIO_ROOT_USER
+MINIO_SECRET_KEY=$MINIO_ROOT_PASSWORD
+JWT_SECRET_KEY=$JWT_SECRET_KEY
 EOF
 
     # Connect ingestify network to shared network if not already connected
@@ -143,12 +167,19 @@ elif is_container_running "ingestify-minio"; then
 fi
 
 if [ -n "$MINIO_CONTAINER" ]; then
+    # Resolve credentials here too: the .env block above only runs on the
+    # shared-infrastructure path, so these may still be unset.
+    MINIO_ROOT_USER="${MINIO_ROOT_USER:-$(env_value MINIO_ROOT_USER)}"
+    MINIO_ROOT_PASSWORD="${MINIO_ROOT_PASSWORD:-$(env_value MINIO_ROOT_PASSWORD)}"
+    : "${MINIO_ROOT_USER:=minioadmin}"
+    : "${MINIO_ROOT_PASSWORD:=minioadmin}"
+
     # Wait for MinIO to be ready
     sleep 2
 
     # Create buckets
     docker exec $MINIO_CONTAINER sh -c "
-        mc alias set local http://localhost:9000 minioadmin minioadmin 2>/dev/null || true
+        mc alias set local http://localhost:9000 '"$MINIO_ROOT_USER"' '"$MINIO_ROOT_PASSWORD"' 2>/dev/null || true
         mc mb local/ingestify-uploads 2>/dev/null || true
         mc mb local/ingestify-pages 2>/dev/null || true
         mc mb local/ingestify-audio 2>/dev/null || true
