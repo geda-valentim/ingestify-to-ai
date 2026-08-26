@@ -8,28 +8,34 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **Monorepo Structure:**
 - **frontend/** - Next.js 15 + React 19 web application
-- **backend/** - Python FastAPI + Celery worker backend (Clean Architecture)
+- **backend/** - Python FastAPI + Celery worker backend
 
 ## Architecture
 
-### Backend: Clean Architecture
+### Backend: layered, not hexagonal
 
-O backend segue **Clean Architecture** (Uncle Bob) com separação clara de responsabilidades:
+O backend é organizado em três pacotes, e a dependência flui numa direção só:
 
 ```
 backend/
-├── domain/           # 🎯 Entities, Value Objects, Business Rules
-├── application/      # 📋 Use Cases, DTOs, Ports (interfaces)
-├── infrastructure/   # 🔧 Repositories, Adapters (MySQL, Redis, Celery)
-└── presentation/     # 🌐 API Controllers, Schemas
+├── api/          # 🌐 Rotas FastAPI, autorização (deps.py), schemas de request/response
+├── workers/      # ⚙️ Tasks Celery: conversão, split, merge, monitoring
+└── shared/       # 🔧 Config, models SQLAlchemy, clientes (Redis, MinIO, Elasticsearch)
 ```
 
-**Veja [backend/docs/CLEAN_ARCHITECTURE.md](backend/docs/CLEAN_ARCHITECTURE.md) para detalhes completos.**
+`api/` e `workers/` dependem de `shared/`; `shared/` não depende de nenhum dos dois.
+
+> **Nota histórica:** o repositório já teve `domain/`, `application/`, `infrastructure/`
+> e `presentation/` seguindo Clean Architecture. Essas camadas nunca foram ligadas —
+> nenhum módulo vivo as importava, e nem eram copiadas para as imagens Docker. Foram
+> removidas em 2026-08-26 após duas análises independentes; ver
+> [docs/specs/0001-remover-clean-architecture-morta.md](docs/specs/0001-remover-clean-architecture-morta.md).
+> Para recuperá-las: `git show 9b6b876:backend/domain/...`
 
 ### Four-Tier System (Infraestrutura)
 
 1. **Frontend Layer** ([frontend/](frontend/)) - Next.js web application for document uploads and viewing results
-2. **API Layer** ([backend/presentation/](backend/presentation/)) - FastAPI REST endpoints (delegates to Use Cases)
+2. **API Layer** ([backend/api/](backend/api/)) - FastAPI REST endpoints
 3. **Message Broker** - Redis handles task queuing (Celery) and result caching
 4. **Worker Layer** ([backend/workers/](backend/workers/)) - Celery workers process conversions with Docling in parallel
 
@@ -549,10 +555,10 @@ docker compose logs mysql
   - Examples: Component guides, frontend architecture, UI patterns, etc.
 
 - **Backend-specific documentation** → `/backend/docs/`
-  - Examples: Clean Architecture, API design, domain models, use cases, etc.
+  - Examples: API design, job pipeline, authorization model, etc.
 
 - **Subdirectory documentation** → `{subdirectory}/docs/`
-  - Examples: `/backend/domain/docs/`, `/backend/application/docs/`, etc.
+  - Examples: `/backend/api/docs/`, `/backend/workers/docs/`, etc.
   - Each major module can have its own docs folder for detailed documentation
 
 **Never create .md files directly in the root or in subdirectories without using the appropriate `/docs` folder.**

@@ -267,6 +267,12 @@ class TestFrontendCallSitesResolve:
     """
 
     def test_the_client_is_where_we_think_it_is(self):
+        # The api image does not ship the frontend, so absence of the whole
+        # frontend tree means "not in this checkout", not "moved". Only a
+        # present frontend that has lost api.ts is a real failure.
+        if not API_CLIENT.parent.parent.exists():
+            pytest.skip("frontend not present in this checkout (e.g. inside the api image)")
+
         assert API_CLIENT.exists(), (
             f"{API_CLIENT} moved. Point this test at the new location - do not "
             f"delete it, it is the only automated link between the two sides."
