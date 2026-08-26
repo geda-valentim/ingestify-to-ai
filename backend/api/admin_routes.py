@@ -35,13 +35,23 @@ settings = get_settings()
 router = APIRouter(prefix="/admin", tags=["Admin & Monitoring"])
 
 
-# Simple admin check (you can enhance this with proper role-based auth)
 def require_admin(current_user=Depends(get_current_active_user)):
     """
-    Dependency to check if user is admin
-    For now, all authenticated users are considered admins
-    TODO: Add is_admin field to User model and check it here
+    Dependency that restricts an endpoint to administrators.
+
+    Raises:
+        HTTPException 403: If the authenticated user is not an admin
     """
+    if not getattr(current_user, "is_admin", False):
+        logger.warning(
+            f"[ADMIN] Access denied to {current_user.email} "
+            f"(user is not an administrator)"
+        )
+        raise HTTPException(
+            status_code=403,
+            detail="Acesso negado: privilégios de administrador necessários"
+        )
+
     return current_user
 
 
@@ -59,7 +69,7 @@ async def get_stats(admin_user=Depends(require_admin)) -> Dict[str, Any]:
         # Add Redis info
         redis_client = get_redis_client()
         try:
-            redis_info = redis_client.redis.info()
+            redis_info = redis_client.client.info()
             stats["redis"] = {
                 "connected_clients": redis_info.get("connected_clients", 0),
                 "used_memory_human": redis_info.get("used_memory_human", "unknown"),

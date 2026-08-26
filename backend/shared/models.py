@@ -29,6 +29,8 @@ class User(Base):
     username = Column(String(100), unique=True, nullable=False, index=True)
     hashed_password = Column(String(255), nullable=False)
     is_active = Column(Boolean, default=True, nullable=False)
+    # Admin flag - grants access to /admin/* endpoints. Promote users with scripts/make_admin.py
+    is_admin = Column(Boolean, default=False, server_default="0", nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
