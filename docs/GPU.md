@@ -541,11 +541,27 @@ pip list 2>/dev/null | grep -E "^(torch|nvidia|triton)"
 Cold start: the model was not cached or not loaded. The work is still running — poll the
 `poll_url` in the 504 body. Then run `make vision-download` so it does not happen again.
 
-### `/images/capabilities` reports `"reason": "no vision worker responded within 10s"`
+### `/images/capabilities` reports `"reason": "no vision worker heartbeat in the last 45s"`
 
-`worker-vision` is down or not consuming `ingestify-vision`. `docker compose ps` and
-`make logs-vision`. This endpoint returns `200` with the bad news rather than `5xx` on purpose —
-an ops probe must not fail just because the thing it probes is down.
+`worker-vision` is down, or it is up but not consuming `ingestify-vision`. `docker compose ps`
+and `make logs-vision`. This endpoint returns `200` with the bad news rather than `5xx` on
+purpose — an ops probe must not fail just because the thing it probes is down.
+
+**This means what it says, including while the worker is busy.** The answer comes from a
+heartbeat each vision worker republishes to Redis every 15s from a background thread (TTL 45s),
+*not* from a task queued on `ingestify-vision`. A queued probe used to sit behind an inference of
+up to `VISION_TASK_TIMEOUT_SECONDS`, so the endpoint reported "no vision worker" whenever a
+worker was there and working — and polling it piled probes onto the single vision slot, starving
+the inference it was supposed to be diagnosing. So:
+
+| what you see                                            | what it means                                   |
+|---------------------------------------------------------|-------------------------------------------------|
+| `dependencies_installed: true`                            | a vision worker is alive — busy or idle          |
+| `dependencies_installed: false` + `no vision worker heartbeat` | nobody is consuming `ingestify-vision`     |
+| `dependencies_installed: false` + `missing dependencies: …`    | the worker is alive without the vision extra |
+
+Only a process actually started with `-Q ingestify-vision` publishes, so the five general
+`worker` replicas cannot make this look healthy.
 
 ### `WHISPER_DEVICE` changed meaning
 

@@ -30,6 +30,17 @@ from shared.config import get_settings
 
 logger = logging.getLogger(__name__)
 
+# Single key, shared by every vision worker: the endpoint answers "what can this
+# deployment do", not "how many workers are up". Last writer wins, and the
+# survivors keep it alive when one of several dies.
+#
+# Key AND lifetime live together, here, because the writer (the vision worker)
+# and the reader (`GET /images/capabilities`) are different processes that must
+# not be able to disagree about how long a statement stays true. The worker
+# republishes at a third of this; the reader rejects anything older than it.
+VISION_HEARTBEAT_KEY = "vision:worker:heartbeat"
+VISION_HEARTBEAT_TTL_SECONDS = 45
+
 
 class RedisClient:
     def __init__(self, client=None):
@@ -298,6 +309,65 @@ class RedisClient:
                 return False
 
         return True
+
+    # ============================================
+    # Vision worker heartbeat
+    # ============================================
+
+    def set_vision_heartbeat(self, payload: Dict[str, Any], ttl_seconds: int) -> bool:
+        """
+        Publish what the calling vision worker can do, under a TTL.
+
+        A TTL is not an optimisation here, it is the whole design: this key is
+        the ONLY evidence ``GET /images/capabilities`` has that a vision worker
+        exists, and a record without an expiry would keep describing a worker
+        that died. The writer republishes well inside ``ttl_seconds``; when it
+        stops, the key goes, and absence means "no worker" — which is exactly
+        how the endpoint reads it.
+
+        Args:
+            payload: The capabilities report, including ``published_at``.
+            ttl_seconds: How long this statement stays believable.
+
+        Returns:
+            True if written.
+        """
+        try:
+            self.client.set(
+                VISION_HEARTBEAT_KEY, json.dumps(payload), ex=int(ttl_seconds)
+            )
+            return True
+        except Exception as e:
+            logger.warning("Failed to publish the vision worker heartbeat: %s", e)
+            return False
+
+    def get_vision_heartbeat(self) -> Optional[Dict[str, Any]]:
+        """
+        The most recent vision worker heartbeat, or None.
+
+        None covers three cases the caller must treat identically — no worker
+        ever ran, the last one died more than a TTL ago, or the record is
+        unreadable — because none of them is evidence that vision works.
+
+        Returns:
+            The decoded report, or None.
+        """
+        try:
+            raw = self.client.get(VISION_HEARTBEAT_KEY)
+        except Exception as e:
+            logger.warning("Failed to read the vision worker heartbeat: %s", e)
+            return None
+
+        if not raw:
+            return None
+
+        try:
+            payload = json.loads(raw)
+        except (ValueError, TypeError) as e:
+            logger.warning("Vision worker heartbeat is not decodable JSON: %s", e)
+            return None
+
+        return payload if isinstance(payload, dict) else None
 
     # ============================================
     # Job Ownership (User Isolation)
