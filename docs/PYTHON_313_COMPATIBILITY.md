@@ -8,7 +8,11 @@ This project is compatible with Python 3.13 and later versions. Previously, the 
 
 ### 1. Updated Requirements
 
-Added `setuptools>=75.0.0` to `backend/requirements.txt`:
+Added `setuptools>=75.0.0` to the shared package list, today
+[`backend/requirements-base.txt`](../backend/requirements-base.txt) — it was in
+`backend/requirements.txt` until that name became a one-line alias for the CPU set. Every
+`requirements-*.txt` pulls the base in, so the pin applies to all install paths:
+
 ```txt
 # Python 3.13+ compatibility - setuptools provides distutils
 setuptools>=75.0.0

@@ -235,15 +235,20 @@ class TestWhisperDevice:
         self, settings_override, with_cuda, monkeypatch, caplog
     ):
         """faster-whisper on CUDA dies with `Unable to load libcudnn_ops.so.9`;
-        a logged CPU fallback beats a 500 on every transcription."""
+        a logged CPU fallback beats a 500 on every transcription.
+
+        Note the device count of 2: the capability, not the GPU count, is what
+        decides. The full matrix lives in test_device_whisper_guard.py."""
         settings_override(DEVICE="cuda", WHISPER_DEVICE="")
         fake_ct2 = types.ModuleType("ctranslate2")
-        fake_ct2.get_cuda_device_count = lambda: 0
+        fake_ct2.get_cuda_device_count = lambda: 2
+        fake_ct2.get_supported_compute_types = lambda device: set()
         monkeypatch.setitem(sys.modules, "ctranslate2", fake_ct2)
+        monkeypatch.setattr("shared.device._cudnn9_load_error", lambda: None)
 
         with caplog.at_level(logging.WARNING, logger="shared.device"):
             assert resolve_whisper_device() == "cpu"
-        assert "ctranslate2 reports no CUDA device" in caplog.text
+        assert "ctranslate2 offers no CUDA compute type" in caplog.text
 
     def test_cuda_is_kept_when_ctranslate2_can_use_it(
         self, settings_override, with_cuda, monkeypatch
@@ -251,7 +256,9 @@ class TestWhisperDevice:
         settings_override(DEVICE="cuda", WHISPER_DEVICE="")
         fake_ct2 = types.ModuleType("ctranslate2")
         fake_ct2.get_cuda_device_count = lambda: 1
+        fake_ct2.get_supported_compute_types = lambda device: {"float16"}
         monkeypatch.setitem(sys.modules, "ctranslate2", fake_ct2)
+        monkeypatch.setattr("shared.device._cudnn9_load_error", lambda: None)
 
         assert resolve_whisper_device() == "cuda"
 

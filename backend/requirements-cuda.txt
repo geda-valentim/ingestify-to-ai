@@ -31,4 +31,4 @@ torchvision==0.28.0
 nvidia-cublas-cu12
 nvidia-cudnn-cu12>=9.0,<10.0
 
--r requirements.txt
+-r requirements-base.txt

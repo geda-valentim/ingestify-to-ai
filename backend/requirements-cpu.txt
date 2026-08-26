@@ -2,7 +2,8 @@
 # Ingestify - CPU dependency set (THE DEFAULT)
 # ---------------------------------------------------------------------------
 # Install with:
-#     pip install -r backend/requirements-cpu.txt
+#     pip install -r backend/requirements.txt        # this file, via an alias
+#     pip install -r backend/requirements-cpu.txt    # or name it explicitly
 #
 # Why this file exists
 # --------------------
@@ -12,11 +13,27 @@
 # drags ~1.66GB of `nvidia-*` + `triton` wheels (~3.4GB installed) onto every
 # Linux machine - including a laptop with no GPU at all.
 #
-# `--extra-index-url` does NOT fix this: the same torch version exists on both
-# indexes and pip is free to take either. The only reliable mechanism is a
-# PRIMARY `--index-url` pointing at the PyTorch CPU index, with PyPI demoted to
-# the extra index, plus an explicit torch pin so docling's transitive
-# requirement is already satisfied by the time docling is resolved.
+# How the pin below actually wins - the accurate version
+# -----------------------------------------------------
+# pip does NOT rank indexes. Candidates from `--index-url` and from every
+# `--extra-index-url` are merged into ONE flat namespace and the best candidate
+# is chosen by version, not by which index it came from. pip's own docs say so,
+# and it is why `--extra-index-url` is a dependency-confusion footgun.
+#
+# What makes the choice deterministic here is the explicit `torch==2.13.0`
+# below plus PEP 440 local-version ordering: the PyTorch CPU index publishes
+# `2.13.0+cpu`, PyPI publishes `2.13.0`, and a version with a local segment
+# sorts ABOVE the same public version. So `2.13.0+cpu` is the highest candidate
+# matching `==2.13.0` and it wins wherever both indexes are visible. The pin is
+# a top-level requirement, so docling's transitive `torch>=2.2.2,<3.0.0` can
+# only be satisfied by that same resolved distribution.
+#
+# The PRIMARY `--index-url` is still the right shape, for two reasons that are
+# NOT "pip prefers it": the `+cpu` wheels exist ONLY on the PyTorch index, so it
+# has to be configured at all; and making it primary keeps the CUDA-flavoured
+# PyPI wheel out of the default search path instead of relying on the merge
+# above to break the tie. PyPI stays as the extra index because everything else
+# in requirements-base.txt (fastapi, celery, docling, ...) lives only there.
 #
 # The result is the same upstream torch version as the CUDA build - identical
 # Python code, different compute backend.
@@ -28,4 +45,4 @@
 torch==2.13.0
 torchvision==0.28.0
 
--r requirements.txt
+-r requirements-base.txt

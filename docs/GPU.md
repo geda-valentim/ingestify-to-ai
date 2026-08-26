@@ -2,8 +2,10 @@
 
 **Short version: you do not need a GPU, and the default install will not download one's worth of drivers.**
 
-A plain `pip install -r backend/requirements-cpu.txt` or a plain `docker compose up -d --build`
+A plain `pip install -r backend/requirements.txt` or a plain `docker compose up -d --build`
 gives you a fully working stack on a laptop with integrated graphics, with **zero CUDA wheels**.
+The obvious command is the correct one by construction — `requirements.txt` is a one-line alias
+for the CPU set, so you cannot fall into the CUDA build by not having read this page.
 Everything on this page is opt-in, and opting in takes two deliberate steps that are hard to do
 by accident.
 
@@ -90,30 +92,48 @@ index, and no `nvidia-*` wheel is downloaded.
 ```bash
 python -m venv .venv && source .venv/bin/activate
 
-# CPU, no vision:
-pip install -r backend/requirements-cpu.txt
+# CPU, no vision — the default. requirements.txt is an alias of requirements-cpu.txt:
+pip install -r backend/requirements.txt
 
 # CPU, with Florence-2 image description and OCR:
 pip install -r backend/requirements-vision.txt
 ```
 
-> **Never run `pip install -r backend/requirements.txt` directly.** That file is the shared base
-> and does not pin torch. torch arrives through it transitively
-> (`docling` → `docling-slim[standard]` → `torch>=2.2.2,<3.0.0`), and from plain PyPI that
-> resolves to the **CUDA** build: roughly 1.66 GB of `nvidia-*` and `triton` wheels, about
-> 3.4 GB installed, on a machine that may have no GPU at all. The `-cpu` / `-vision` files exist
-> precisely to stop that, by putting the CPU index first and pinning torch before docling is
-> resolved. `--extra-index-url` is **not** enough here: the same torch version exists on both
-> indexes and pip is free to take either.
+> **`backend/requirements.txt` is safe to install.** It used to be the shared base that pinned
+> no torch, which made the obvious command the wrong one; it is now a one-line alias for
+> [`requirements-cpu.txt`](../backend/requirements-cpu.txt). The shared package list moved to
+> [`requirements-base.txt`](../backend/requirements-base.txt) — **that** is the one you must not
+> install directly.
+>
+> Why it matters: torch arrives transitively (`docling` → `docling-slim[standard]` →
+> `torch>=2.2.2,<3.0.0`), and from plain PyPI that resolves to the **CUDA** build — roughly
+> 1.66 GB of `nvidia-*` and `triton` wheels, about 3.4 GB installed, on a machine that may have
+> no GPU at all. Measured with `pip install --dry-run --report` on a clean 3.12 venv:
+> `requirements-base.txt` resolves 194 packages, `torch 2.13.0` (CUDA) and 16 `nvidia-*`/`triton`
+> wheels **including `nvidia-cudnn-cu13`** — the exact cu13 tree that breaks CTranslate2 (see
+> [§7](#7-troubleshooting)); `requirements.txt` resolves 175 packages, `torch 2.13.0+cpu` and
+> zero `nvidia-*` wheels.
+>
+> How the `-cpu` / `-cuda` files force the right build: they configure a PyTorch index and pin
+> `torch==2.13.0` at top level, so docling's transitive requirement can only resolve to that
+> distribution. Note that pip does **not** rank indexes — candidates from `--index-url` and every
+> `--extra-index-url` land in one flat namespace and the best *version* wins. What breaks the tie
+> is PEP 440 local-version ordering: `2.13.0+cpu` sorts above `2.13.0`. The primary
+> `--index-url` is still the right shape because the `+cpu` wheels exist only on the PyTorch
+> index, and because making it primary keeps the CUDA-flavoured PyPI wheel out of the default
+> search path instead of leaning on that tie-break. The reasoning is spelled out in
+> [`requirements-cpu.txt`](../backend/requirements-cpu.txt).
 
-### The four dependency files
+### The dependency files
 
 | File | Torch index | Vision extra | Use when |
 |---|---|---|---|
-| [`requirements-cpu.txt`](../backend/requirements-cpu.txt) | CPU | no | Default. API, beat, any CPU host. |
+| [`requirements.txt`](../backend/requirements.txt) | CPU | no | **The default.** One-line alias of `requirements-cpu.txt`. |
+| [`requirements-cpu.txt`](../backend/requirements-cpu.txt) | CPU | no | Same set, named explicitly. API, beat, any CPU host. |
 | [`requirements-vision.txt`](../backend/requirements-vision.txt) | CPU | yes | Default for the worker images. |
 | [`requirements-cuda.txt`](../backend/requirements-cuda.txt) | cu129 | no | GPU host, no vision. |
 | [`requirements-vision-cuda.txt`](../backend/requirements-vision-cuda.txt) | cu129 | yes | GPU host running Florence-2. |
+| [`requirements-base.txt`](../backend/requirements-base.txt) | none | no | Shared package list. **Never install directly.** |
 
 Expected sizes: CPU install lands site-packages around **2.6 GB** and the API image around
 **3.2 GB**. The CUDA install adds roughly **2.5 GB** on top.
@@ -481,13 +501,21 @@ CTranslate2 (faster-whisper) cannot find the cu12 cuDNN 9 layout. Either you bui
 cu13 index, or `nvidia-cudnn-cu12` is missing. Rebuild with the default
 `TORCH_INDEX_URL=https://download.pytorch.org/whl/cu129`.
 
-The stack now guards against this: `resolve_whisper_device()` checks
-`ctranslate2.get_cuda_device_count()` before handing faster-whisper a CUDA device, and falls back
-to CPU with a logged `WARNING` rather than 500-ing every transcription. Look for:
+The stack guards against this: `resolve_whisper_device()` runs a real capability probe before
+handing faster-whisper a CUDA device, and falls back to CPU with a logged `WARNING` naming the
+reason rather than 500-ing every transcription. The probe is three checks — `import ctranslate2`,
+then `ctranslate2.get_supported_compute_types("cuda")` (which initialises the CUDA backend and
+enumerates what the device can actually compute), then a `ctypes.CDLL` of `libcudnn_ops.so.9`
+itself. It deliberately does **not** use `get_cuda_device_count()`: that binds to
+`cudaGetDeviceCount()` and only counts visible GPUs, so on any host with an NVIDIA driver it
+returns ≥ 1 and would never fire. See
+[spec 0002](specs/0002-dispositivo-unico-e-migracao-do-whisper.md). Look for:
 
 ```
-WARNING audio: falling back to cpu - ctranslate2 reports no CUDA device
-        (the CUDA build ships nvidia-cudnn-cu12; see backend/requirements-cuda.txt)
+WARNING audio: falling back to cpu - libcudnn_ops.so.9 cannot be loaded (...).
+        Transcription would otherwise fail on every request. Install the CUDA
+        build (pip install -r backend/requirements-cuda.txt), which pins the
+        cu12 cuDNN 9 layout ctranslate2 needs; see docs/GPU.md.
 ```
 
 ### `CUDA out of memory`, or conversions failing with `Failed to convert document`
@@ -498,8 +526,10 @@ Almost always too many processes on one GPU. Check, in order: is `worker` pinned
 
 ### `pip install` still pulls `nvidia-*` wheels
 
-You installed `backend/requirements.txt` directly, or an install path in your own tooling still
-points at it. Use `requirements-cpu.txt` / `requirements-vision.txt`. Verify with:
+You installed `backend/requirements-base.txt` directly, or an install path in your own tooling
+still points at it. (Before the rename, `requirements.txt` *was* that base file — a stale script
+carrying the old semantics is the usual cause.) Use `requirements.txt` / `requirements-cpu.txt` /
+`requirements-vision.txt`. Verify with:
 
 ```bash
 pip list 2>/dev/null | grep -E "^(torch|nvidia|triton)"
@@ -537,6 +567,20 @@ is never invisible:
 WARNING WHISPER_DEVICE=cpu overrides DEVICE=cuda for audio transcription only;
         unset it to follow DEVICE
 ```
+
+That WARNING only reaches people who *set* the variable — i.e. exactly the people for whom
+nothing changed. `WHISPER_DEVICE` did not exist before this change, so the affected population is
+everyone who has it **unset**. They get their own line, once, the first time the audio device is
+resolved:
+
+```
+WARNING audio: transcription now runs on cuda because WHISPER_DEVICE is unset and
+        DEVICE=auto. This CHANGED: WHISPER_DEVICE used not to exist and audio was
+        hardcoded to cpu. Set WHISPER_DEVICE=cpu to keep the old behaviour.
+```
+
+You will see at most one of the two. Full rationale in
+[spec 0002](specs/0002-dispositivo-unico-e-migracao-do-whisper.md).
 
 `WHISPER_COMPUTE_TYPE` changed the same way: empty now derives `float16` on CUDA and `int8` on
 CPU, which closes the trap where flipping only the device leaves CTranslate2 on a CPU-shaped

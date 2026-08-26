@@ -457,6 +457,38 @@ class TestDescribeHappyPath:
         assert body["image_bytes"] == len(PNG_BYTES)
         assert len(body["image_sha256"]) == 64
 
+    def test_line_wrapped_base64_is_accepted(self, app, db, users, dispatch):
+        """
+        MIME-style base64 wraps at 64/76 columns, and that is what every
+        command-line encoder produces: `base64 foto.png`, `openssl base64`,
+        Python's `base64.encodebytes`, Java's `Base64.getMimeEncoder()`.
+
+        `b64decode(validate=True)` rejects the newlines, so a caller who pasted
+        the output of any of those was told their perfectly valid base64 was
+        invalid. The whitespace has to be stripped before validating.
+        """
+        wrapped = base64.encodebytes(PNG_BYTES).decode("ascii")
+        assert "\n" in wrapped.strip(), "fixture must actually be wrapped"
+
+        response = _post_json(app, "/images/describe", {"image_base64": wrapped}, user=users)
+
+        assert response.status_code == 200, response.body
+        assert base64.b64decode(response.json()["image_base64"]) == PNG_BYTES
+
+    def test_a_line_wrapped_data_uri_is_accepted_too(self, app, db, users, dispatch):
+        """The two tolerances compose: a data: header *and* wrapped payload."""
+        wrapped = base64.encodebytes(PNG_BYTES).decode("ascii")
+
+        response = _post_json(
+            app,
+            "/images/describe",
+            {"image_base64": f"data:image/png;base64,{wrapped}"},
+            user=users,
+        )
+
+        assert response.status_code == 200, response.body
+        assert base64.b64decode(response.json()["image_base64"]) == PNG_BYTES
+
     def test_a_data_uri_prefix_is_accepted(self, app, db, users, dispatch):
         """Every `canvas.toDataURL()` and `FileReader` produces one."""
         response = _post_json(
@@ -597,6 +629,146 @@ class TestOcrHappyPath:
         _post_json(app, "/images/ocr", {"image_base64": PNG_B64, "task": "<CAPTION>"}, user=users)
 
         assert "task" not in fake.calls[0]
+
+
+# ---------------------------------------------------------------------------
+# The route and the task have to agree - and nothing else in this file checks
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def eager_vision(monkeypatch, fake_redis):
+    """
+    Run the REAL Celery task in-process, backed by the stub provider.
+
+    This is the one seam in this file that does NOT replace
+    `_dispatch_vision_task`. Everywhere else the task contract is written down
+    twice - once in `workers/vision_tasks.py` and once in `DESCRIBE_PAYLOAD` /
+    `OCR_PAYLOAD` - and nothing forces the two copies to agree. Renaming the
+    `image_path` kwarg, or the `description` key of the returned payload, would
+    500 every `/images/*` request in production while every mocked test here
+    stayed green.
+
+    So: Celery in eager mode (the task runs inline, no broker, no worker),
+    `VISION_PROVIDER=stub` (a real ImageDescriber with deterministic output and
+    no torch), and fakeredis behind the status/result writes the task performs
+    through its own import of `shared.redis_client`. Route, task, factory and
+    describer are all real; the assertions are on the HTTP body.
+    """
+    import shared.redis_client as redis_module
+    from shared.config import get_settings
+    from workers.celery_app import celery_app
+    from workers.vision.factory import reset_image_describer
+
+    # The task imports get_redis_client from the module at call time, so this
+    # is the seam that keeps the status/result writes off a live server.
+    monkeypatch.setattr(redis_module, "get_redis_client", lambda: fake_redis)
+    monkeypatch.setattr(get_settings(), "vision_provider", "stub")
+
+    previous_eager = celery_app.conf.task_always_eager
+    celery_app.conf.task_always_eager = True
+    reset_image_describer()
+    try:
+        yield fake_redis
+    finally:
+        celery_app.conf.task_always_eager = previous_eager
+        reset_image_describer()
+
+
+class TestRouteAndTaskAgree:
+    """
+    End-to-end through the real task: HTTP -> route -> Celery -> vision_tasks
+    -> factory -> StubDescriber -> HTTP body.
+
+    The stub's output is derived from the image dimensions, so a 1x1 PNG gives
+    exactly one answer and there is no canned payload to drift out of date.
+    """
+
+    def test_describe_traverses_the_real_task(self, app, db, users, eager_vision):
+        response = _post_json(
+            app,
+            "/images/describe",
+            {"image_base64": PNG_B64, "filename": "foto.png"},
+            user=users,
+        )
+
+        assert response.status_code == 200, response.body
+        body = response.json()
+        # Produced by StubDescriber.describe() from the real 1x1 PNG - which is
+        # only reachable if the route's kwargs match the task's signature.
+        assert body["description"] == "A stub description of a 1x1 image."
+        assert body["task"] == "<MORE_DETAILED_CAPTION>"
+        assert body["width"] == 1 and body["height"] == 1
+        assert body["status"] == "completed"
+        assert body["job_id"] == db.query(Job).one().id
+        # The factory answered with the configured provider, not another one.
+        assert body["model"]["model_id"] == "stub"
+        assert body["model"]["revision"] == "stub"
+        assert body["model"]["device"] == "cpu"
+        assert body["model"]["dtype"] == "float32"
+        assert base64.b64decode(body["image_base64"]) == PNG_BYTES
+
+    def test_the_caption_task_reaches_the_describer(self, app, db, users, eager_vision):
+        """`task` is the third kwarg of `describe_image_task`; it travels too."""
+        response = _post_json(
+            app,
+            "/images/describe",
+            {"image_base64": PNG_B64, "task": "<CAPTION>"},
+            user=users,
+        )
+
+        assert response.status_code == 200, response.body
+        assert response.json()["task"] == "<CAPTION>"
+
+    def test_ocr_traverses_the_real_task(self, app, db, users, eager_vision):
+        response = _post_json(app, "/images/ocr", {"image_base64": PNG_B64}, user=users)
+
+        assert response.status_code == 200, response.body
+        body = response.json()
+        assert body["text"] == "stub line one\nstub line two"
+        assert [line["text"] for line in body["lines"]] == [
+            "stub line one",
+            "stub line two",
+        ]
+        assert len(body["lines"][0]["quad_box"]) == 8
+        assert len(body["lines"][0]["bbox"]) == 4
+        assert body["model"]["model_id"] == "stub"
+
+    def test_the_task_records_the_job_it_finished(self, app, db, users, eager_vision):
+        """
+        `_set_status` and `_store_result` are what make the 504-then-poll
+        fallback real: without them a timed-out request would find nothing at
+        `/jobs/{job_id}/result` even though the task completed.
+        """
+        response = _post_json(app, "/images/describe", {"image_base64": PNG_B64}, user=users)
+
+        job_id = response.json()["job_id"]
+        assert eager_vision.get_job_status(job_id)["status"] == "completed"
+        stored = eager_vision.get_job_result(job_id)
+        assert stored["description"] == "A stub description of a 1x1 image."
+        assert stored["job_id"] == job_id
+
+    def test_a_describer_failure_travels_back_as_its_own_status(
+        self, app, db, users, eager_vision, monkeypatch
+    ):
+        """
+        A typed VisionError is *returned* by the task, not raised, so that it
+        survives the Celery JSON result serializer. This drives the real return
+        path rather than injecting the dict the API expects to see.
+        """
+        from workers.vision.errors import VisionModelLoadError
+        from workers.vision.stub_describer import StubDescriber
+
+        def boom(self, image_path, options=None):
+            raise VisionModelLoadError("the stub refused to load")
+
+        monkeypatch.setattr(StubDescriber, "describe", boom)
+
+        response = _post_json(app, "/images/describe", {"image_base64": PNG_B64}, user=users)
+
+        assert response.status_code == 503
+        assert response.detail["error_code"] == "VISION_MODEL_LOAD_FAILED"
+        assert "the stub refused to load" in response.detail["message"]
+        assert response.detail["job_id"] == db.query(Job).one().id
 
 
 # ---------------------------------------------------------------------------
@@ -775,25 +947,11 @@ class TestVisionUnavailable:
         assert response.detail["message"] == message
         assert response.detail["job_id"] == db.query(Job).one().id
 
-    def test_a_worker_side_pixel_bomb_rejection_keeps_its_422(self, app, db, users, install_dispatch):
-        """
-        The decompression-bomb guard lives where PIL lives - in the worker. Its
-        HTTP status has to survive the trip, or a 10MB PNG that expands to
-        30GB would look like a server bug.
-        """
-        install_dispatch(
-            result={
-                "ok": False,
-                "error_code": "IMAGE_TOO_LARGE",
-                "http_status": 422,
-                "detail": "A imagem excede VISION_MAX_IMAGE_PIXELS.",
-            }
-        )
-
-        response = _post_json(app, "/images/describe", {"image_base64": PNG_B64}, user=users)
-
-        assert response.status_code == 422
-        assert response.detail["error_code"] == "IMAGE_TOO_LARGE"
+    # The decompression-bomb rejection used to be "covered" here by injecting a
+    # canned {"error_code": "IMAGE_TOO_LARGE", "http_status": 422} dict - which
+    # is the relay above, parametrized once more, and which never touched the
+    # guard. Deleting the guard outright left it green. The real thing is now
+    # exercised against real PIL in `test_vision_image_guard.py`.
 
     def test_missing_celery_tasks_are_a_503_not_a_500(self, app, db, users, install_dispatch):
         """The API image does not carry the worker's dependencies by design."""
