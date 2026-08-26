@@ -26,7 +26,6 @@ from shared.database import SessionLocal
 from shared.redis_client import get_redis_client
 from shared.auth import get_current_active_user
 from workers.monitoring import detect_stuck_jobs, auto_retry_failed_pages, cleanup_old_jobs
-from workers.tasks import convert_page_task
 from uuid import uuid4
 
 logger = logging.getLogger(__name__)
