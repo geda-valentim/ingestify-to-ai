@@ -76,7 +76,7 @@ export default function JobsListPage() {
     enabled: !!token,
   });
 
-  const { data: searchData, isLoading: isSearching } = useQuery({
+  const { data: searchData, isLoading: isSearching, error: searchError } = useQuery({
     queryKey: ["search", searchQuery, token],
     queryFn: () => jobsApi.search({
       query: searchQuery,
@@ -86,7 +86,9 @@ export default function JobsListPage() {
   });
 
   const deleteMutation = useMutation({
-    mutationFn: (jobId: string) => Promise.resolve(), // Delete not implemented yet
+    // This was `() => Promise.resolve()`, so every delete reported success and
+    // deleted nothing. `jobsApi.delete` hits the live `DELETE /jobs/{job_id}`.
+    mutationFn: (jobId: string) => jobsApi.delete(jobId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["jobs"] });
       toast({
@@ -117,14 +119,20 @@ export default function JobsListPage() {
     }
   };
 
-  const jobs = jobsData || [];
-  const searchResults = searchData || [];
-  const displayJobs = searchQuery ? searchResults : jobs;
-  const totalPages = Math.ceil(jobs.length / PAGE_SIZE);
+  // `GET /jobs` answers `{total, limit, offset, jobs}`. `jobs` is only the
+  // current page; `total` is the full filtered count and is what the pager
+  // must count against - `jobs.length` would cap the pager at one page.
+  const jobs = jobsData?.jobs ?? [];
+  const totalJobs = jobsData?.total ?? 0;
+  const searchResults = searchData?.results ?? [];
+  const isSearchMode = searchQuery.length > 0;
+  const firstShown = totalJobs === 0 ? 0 : page * PAGE_SIZE + 1;
+  const lastShown = page * PAGE_SIZE + jobs.length;
+  const totalPages = Math.max(1, Math.ceil(totalJobs / PAGE_SIZE));
   const hasNextPage = page < totalPages - 1;
   const hasPrevPage = page > 0;
 
-  const formatDate = (dateString: string | undefined) => {
+  const formatDate = (dateString: string | null | undefined) => {
     if (!dateString) return "Unknown";
     try {
       const date = new Date(dateString);
@@ -223,13 +231,80 @@ export default function JobsListPage() {
               </CardContent>
             </Card>
           )}
+          {searchError && (
+            <Card className="border-destructive">
+              <CardContent className="py-6 text-center text-destructive">
+                <XCircle className="h-12 w-12 mx-auto mb-4" />
+                <p className="font-semibold">Search failed</p>
+                <p className="text-sm mt-2">
+                  {searchError instanceof Error ? searchError.message : "Unknown error"}
+                </p>
+              </CardContent>
+            </Card>
+          )}
           {isLoading || isSearching ? (
             <div className="flex justify-center py-12">
               <Loader2 className="h-8 w-8 animate-spin text-primary" />
             </div>
-          ) : displayJobs && displayJobs.length > 0 ? (
+          ) : isSearchMode ? (
+            /*
+             * Search hits are rendered as hits, not as job cards.
+             *
+             * `GET /search` returns matches inside indexed document content:
+             * filename, size, and the snippet that matched. It carries no
+             * `status`/`progress`/`name`, and the previous code rendered those
+             * fields anyway - producing blank titles and 0% progress bars on
+             * every result. Making the server synthesize them would mean a
+             * Redis lookup per hit and would silently drop any document whose
+             * Redis key had expired, i.e. exactly the old documents search
+             * exists to find. So the UI shows what a hit actually is.
+             */
+            searchResults.length > 0 ? (
+              <div className="space-y-4">
+                {searchResults.map((hit) => (
+                  <Card
+                    key={hit.job_id}
+                    className="hover:shadow-md transition-shadow cursor-pointer"
+                    onClick={() => router.push(`/jobs/${hit.job_id}`)}
+                  >
+                    <CardHeader>
+                      <CardTitle className="text-lg flex items-center gap-2">
+                        <FileText className="h-5 w-5" />
+                        {hit.filename || hit.job_id}
+                      </CardTitle>
+                      <CardDescription className="mt-1 flex flex-wrap gap-x-4">
+                        <span>Created {formatDate(hit.created_at ?? undefined)}</span>
+                        {typeof hit.total_pages === "number" && (
+                          <span>{hit.total_pages} pages</span>
+                        )}
+                        {typeof hit.char_count === "number" && (
+                          <span>{hit.char_count.toLocaleString()} characters</span>
+                        )}
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                      <p className="text-sm text-muted-foreground line-clamp-3">
+                        {hit.preview}
+                      </p>
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
+            ) : (
+              <Card>
+                <CardContent className="py-12 text-center text-muted-foreground">
+                  <Search className="h-12 w-12 mx-auto mb-4 opacity-50" />
+                  <p>No documents match “{searchQuery}”</p>
+                  <p className="text-sm mt-2">
+                    Search looks inside converted content, so only finished
+                    conversions can match.
+                  </p>
+                </CardContent>
+              </Card>
+            )
+          ) : jobs.length > 0 ? (
             <div className="space-y-4">
-              {displayJobs.map((job) => (
+              {jobs.map((job) => (
                 <Card
                   key={job.job_id}
                   className="hover:shadow-md transition-shadow cursor-pointer"
@@ -298,18 +373,17 @@ export default function JobsListPage() {
               <CardContent className="py-12 text-center text-muted-foreground">
                 <FileText className="h-12 w-12 mx-auto mb-4 opacity-50" />
                 <p>No jobs found</p>
-                {searchQuery && <p className="text-sm mt-2">Try a different search query</p>}
               </CardContent>
             </Card>
           )}
 
           {/* Pagination Controls */}
-          {!searchQuery && jobs.length > 0 && (
+          {!isSearchMode && jobs.length > 0 && (
             <Card>
               <CardContent className="py-4">
                 <div className="flex items-center justify-between">
                   <div className="text-sm text-muted-foreground">
-                    Showing {page * PAGE_SIZE + 1} - {Math.min((page + 1) * PAGE_SIZE, jobs.length)} of {jobs.length} jobs
+                    Showing {firstShown} - {lastShown} of {totalJobs} jobs
                   </div>
                   <div className="flex items-center gap-2">
                     <Button

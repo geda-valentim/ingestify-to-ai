@@ -78,7 +78,8 @@ interface PageProps {
 
 interface PageInfo {
   page_number: number;
-  job_id: string;
+  // Null until the split task has created this page's job - see PageJobInfo.
+  job_id: string | null;
   status: string;
   url: string;
   error_message?: string | null;
@@ -143,8 +144,14 @@ export default function JobStatusPage({ params }: PageProps) {
   // Fetch specific page result
   const { data: pageResult, isLoading: isLoadingPage } = useQuery({
     queryKey: ["page-result", selectedPage?.job_id, token],
-    queryFn: () => jobsApi.getResult(selectedPage!.job_id),
-    enabled: !!selectedPage && !!token && selectedPage.status === "completed",
+    queryFn: () => jobsApi.getResult(selectedPage!.job_id!),
+    // A page with no job id has nothing to fetch (it is not "completed" either,
+    // but the id is what the request needs, so gate on it explicitly).
+    enabled:
+      !!selectedPage &&
+      !!selectedPage.job_id &&
+      !!token &&
+      selectedPage.status === "completed",
   });
 
   // Fetch the short-lived presigned URL for the selected page's PDF.
@@ -176,9 +183,11 @@ export default function JobStatusPage({ params }: PageProps) {
   const isPdfUrlUsable = () => pdfUrlExpiresAt - Date.now() > PDF_URL_EXPIRY_MARGIN_MS;
 
   // Retry mutation with real API
+  // Retry is addressed by page number on the main job, not by the failed page's
+  // own job id: `POST /jobs/{pageJobId}/retry` is not a route and always 404'd.
   const retryPageMutation = useMutation({
-    mutationFn: ({ pageJobId }: { pageJobId: string }) =>
-      jobsApi.retryPage(pageJobId),
+    mutationFn: ({ pageNumber }: { pageNumber: number }) =>
+      jobsApi.retryPage(resolvedParams.id, pageNumber),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["job-status", resolvedParams.id] });
       queryClient.invalidateQueries({ queryKey: ["job-pages", resolvedParams.id] });
@@ -198,10 +207,10 @@ export default function JobStatusPage({ params }: PageProps) {
 
   // Bulk retry mutation
   const bulkRetryMutation = useMutation({
-    mutationFn: async (pageJobIds: string[]) => {
+    mutationFn: async (pageNumbers: number[]) => {
       const results = await Promise.allSettled(
-        pageJobIds.map(pageJobId =>
-          jobsApi.retryPage(pageJobId)
+        pageNumbers.map(pageNumber =>
+          jobsApi.retryPage(resolvedParams.id, pageNumber)
         )
       );
       return results;
@@ -230,7 +239,9 @@ export default function JobStatusPage({ params }: PageProps) {
   });
 
   const deleteMutation = useMutation({
-    mutationFn: () => Promise.resolve(),
+    // Same stub as the jobs list had: it resolved, toasted "deleted", and left
+    // the job in place. `DELETE /jobs/{job_id}` is live and does the work.
+    mutationFn: () => jobsApi.delete(resolvedParams.id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["jobs"] });
       toast({
@@ -294,7 +305,7 @@ export default function JobStatusPage({ params }: PageProps) {
   const handleRetryPage = (page: PageInfo, e: React.MouseEvent) => {
     e.stopPropagation();
     retryPageMutation.mutate({
-      pageJobId: page.job_id
+      pageNumber: page.page_number
     });
   };
 
@@ -323,10 +334,10 @@ export default function JobStatusPage({ params }: PageProps) {
 
   const handleBulkRetry = () => {
     if (selectedPages.size === 0) return;
-    const pageJobIds = pages
+    const pageNumbers = pages
       .filter((p: PageInfo) => selectedPages.has(p.page_number))
-      .map((p: PageInfo) => p.job_id);
-    bulkRetryMutation.mutate(pageJobIds);
+      .map((p: PageInfo) => p.page_number);
+    bulkRetryMutation.mutate(pageNumbers);
   };
 
   const downloadMarkdown = () => {

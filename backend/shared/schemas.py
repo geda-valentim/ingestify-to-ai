@@ -98,7 +98,23 @@ class ChildJobs(BaseModel):
 class PageJobInfo(BaseModel):
     """Informação de um page job"""
     page_number: int
-    job_id: UUID
+
+    # `None` while the page job does not exist yet.
+    #
+    # `total_pages` is published (Redis + MySQL) by the split task *before* the
+    # loop that inserts the page rows one commit at a time, so between those two
+    # moments the API knows how many pages there are but not their job ids. This
+    # field used to be `UUID` and the routes filled the gap with fabricated ids
+    # ("pending-3", "page-3"): every one of them failed Pydantic validation and
+    # FastAPI turned the failure into a 500, so GET /jobs/{id} was unusable for
+    # the whole split window - a window that grows with the page count.
+    #
+    # `Optional[str]`, not `Optional[UUID]`: job ids are opaque strings
+    # everywhere else in this system (path params are `job_id: str`, `Job.id` is
+    # a `String(36)` column). Parsing them into UUIDs at the serialization
+    # boundary alone buys no safety and only converts data surprises into 500s.
+    job_id: Optional[str] = None
+
     status: JobStatus
     url: str  # URL para consultar resultado: /jobs/{job_id}/result
     error_message: Optional[str] = None  # Error details for failed pages
