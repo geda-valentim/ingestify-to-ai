@@ -10,6 +10,7 @@ import type {
   JobStatusResponse,
   JobResultResponse,
   JobPagesResponse,
+  PagePdfUrlResponse,
   ConvertRequest,
   UploadRequest,
   JobsListParams,
@@ -269,8 +270,27 @@ export const jobsApi = {
     return data.new_job_id || data.job_id;
   },
 
-  getPagePdf(jobId: string, pageNumber: number): string {
-    return `${API_URL}/jobs/${jobId}/pages/${pageNumber}/pdf`;
+  /**
+   * Ask the API for a short-lived presigned URL for a page's PDF.
+   *
+   * The endpoint is authenticated (it used to be public, which leaked every
+   * user's PDFs to anyone holding a job id) and answers JSON rather than a
+   * redirect - a redirect could not carry this Authorization header to the
+   * object storage, and the caller needs to know when the URL expires.
+   *
+   * The returned `url` must be handed to the PDF viewer untouched: the query
+   * string is part of the signature.
+   */
+  async getPagePdf(jobId: string, pageNumber: number): Promise<PagePdfUrlResponse> {
+    const response = await fetch(`${API_URL}/jobs/${jobId}/pages/${pageNumber}/pdf`, {
+      headers: getHeaders(true),
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to get page PDF URL: ${response.statusText}`);
+    }
+
+    return response.json();
   },
 };
 

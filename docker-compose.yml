@@ -115,6 +115,10 @@ services:
       - ELASTICSEARCH_HOST=${ELASTICSEARCH_HOST:-elasticsearch}
       - MINIO_ENDPOINT=${MINIO_HOST:-minio}:9000
       - MINIO_HOST=${MINIO_HOST:-minio}
+      # Endereço do MinIO visto pelo NAVEGADOR. Presigned URLs são assinadas
+      # sobre o Host, então isto precisa ser o host:port que o browser usa.
+      # Vazio (default) = derivado do host da requisição + porta 9000.
+      - MINIO_PUBLIC_ENDPOINT=${MINIO_PUBLIC_ENDPOINT:-}
       - MINIO_ACCESS_KEY=${MINIO_ROOT_USER:?MINIO_ROOT_USER is required - set it in .env (see .env.example)}
       - MINIO_SECRET_KEY=${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD is required - set it in .env (see .env.example)}
       - JWT_SECRET_KEY=${JWT_SECRET_KEY:?JWT_SECRET_KEY is required - generate one with 'openssl rand -hex 32' and set it in .env}

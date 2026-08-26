@@ -123,6 +123,21 @@ export interface JobPagesResponse {
   pages: PageJobInfo[];
 }
 
+/**
+ * Short-lived, presigned URL for a page PDF.
+ *
+ * The URL points straight at object storage and is signed for a few minutes -
+ * it must be fetched as-is: appending anything (a cache-busting `?t=`, for
+ * example) invalidates the signature. Refetch once `expires_at` has passed.
+ */
+export interface PagePdfUrlResponse {
+  job_id: string;
+  page_number: number;
+  url: string;
+  expires_in: number;
+  expires_at: string;
+}
+
 export interface HealthCheckResponse {
   status: "healthy" | "degraded" | "unhealthy";
   version: string;

@@ -68,6 +68,10 @@ const PdfViewer = dynamic(
   { ssr: false, loading: () => <div className="flex items-center justify-center p-8">Loading PDF viewer...</div> }
 );
 
+// A presigned PDF URL is only good for a few minutes. Stop trusting it slightly
+// before the server's expiry so a load never starts against a dying URL.
+const PDF_URL_EXPIRY_MARGIN_MS = 10_000;
+
 interface PageProps {
   params: Promise<{ id: string }>;
 }
@@ -142,6 +146,34 @@ export default function JobStatusPage({ params }: PageProps) {
     queryFn: () => jobsApi.getResult(selectedPage!.job_id),
     enabled: !!selectedPage && !!token && selectedPage.status === "completed",
   });
+
+  // Fetch the short-lived presigned URL for the selected page's PDF.
+  // The endpoint is authenticated, so this can no longer be a URL built inline:
+  // it is a request whose answer expires. gcTime is 0 so a URL is never served
+  // from cache after the viewer stops using it - paging back to a page always
+  // asks for a fresh one instead of handing the viewer a dead URL.
+  const {
+    data: pdfUrlData,
+    isFetching: isFetchingPdfUrl,
+    isError: isPdfUrlError,
+    refetch: refetchPdfUrl,
+  } = useQuery({
+    queryKey: ["page-pdf-url", resolvedParams.id, selectedPage?.page_number, token],
+    queryFn: () => jobsApi.getPagePdf(resolvedParams.id, selectedPage!.page_number),
+    enabled: !!selectedPage && !!token && selectedPage.status === "completed",
+    staleTime: 0,
+    gcTime: 0,
+    retry: 1,
+    // A new URL means a new `file` prop, which makes the viewer re-download the
+    // PDF. Refresh only when it is actually needed (page change, tab change,
+    // load failure), never just because the window regained focus.
+    refetchOnWindowFocus: false,
+  });
+
+  // Treat a URL that is about to expire as already gone: it would only fail
+  // halfway through loading. Margin absorbs clock skew and slow requests.
+  const pdfUrlExpiresAt = pdfUrlData ? Date.parse(pdfUrlData.expires_at) : 0;
+  const isPdfUrlUsable = () => pdfUrlExpiresAt - Date.now() > PDF_URL_EXPIRY_MARGIN_MS;
 
   // Retry mutation with real API
   const retryPageMutation = useMutation({
@@ -317,7 +349,23 @@ export default function JobStatusPage({ params }: PageProps) {
 
   const onDocumentLoadError = (error: Error) => {
     console.error("PDF load error:", error);
+    // A presigned URL that died while the viewer was open fails here (storage
+    // answers 403, not 404). Get a fresh one instead of showing an error.
+    if (pdfUrlData && !isPdfUrlUsable()) {
+      refetchPdfUrl();
+      return;
+    }
     setPdfError("Failed to load PDF. The file may still be processing.");
+  };
+
+  const handleTabChange = (value: string) => {
+    setActiveTab(value as "pdf" | "markdown");
+    // Coming back to the PDF tab after sitting on Markdown past the TTL: the
+    // cached URL is dead, so ask for another one before rendering the viewer.
+    if (value === "pdf" && !isPdfUrlUsable() && !isFetchingPdfUrl) {
+      setPdfError(null);
+      refetchPdfUrl();
+    }
   };
 
   if (isLoading) {
@@ -328,9 +376,9 @@ export default function JobStatusPage({ params }: PageProps) {
     );
   }
 
-  const pdfUrl = selectedPage
-    ? `${jobsApi.getPagePdf(resolvedParams.id, selectedPage.page_number)}?t=${Date.now()}`
-    : null;
+  // No cache-buster: the query string is part of the presigned signature, and
+  // appending to it turns every request into a 403.
+  const pdfUrl = selectedPage && pdfUrlData && isPdfUrlUsable() ? pdfUrlData.url : null;
 
   return (
     <TooltipProvider>
@@ -778,7 +826,7 @@ export default function JobStatusPage({ params }: PageProps) {
                     )}
                   </div>
 
-                  <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as "pdf" | "markdown")} className="flex-1 flex flex-col overflow-hidden">
+                  <Tabs value={activeTab} onValueChange={handleTabChange} className="flex-1 flex flex-col overflow-hidden">
                     <TabsList className="grid w-full max-w-md grid-cols-2">
                       <TabsTrigger value="pdf">PDF Preview</TabsTrigger>
                       <TabsTrigger value="markdown">Markdown</TabsTrigger>
@@ -786,25 +834,29 @@ export default function JobStatusPage({ params }: PageProps) {
 
                     <TabsContent value="pdf" className="flex-1 overflow-hidden mt-4">
                       <div className="h-full overflow-y-auto border rounded-lg bg-muted/30 p-4">
-                        {pdfUrl ? (
+                        {pdfError || isPdfUrlError ? (
+                          <div className="text-center py-12">
+                            <AlertCircle className="h-12 w-12 text-destructive mx-auto mb-4" />
+                            <p className="text-sm text-muted-foreground">
+                              {pdfError || "Failed to load PDF. Please try again."}
+                            </p>
+                          </div>
+                        ) : !pdfUrl && (isFetchingPdfUrl || !pdfUrlData) ? (
+                          <div className="py-12 flex items-center justify-center">
+                            <Loader2 className="h-8 w-8 animate-spin text-primary" />
+                          </div>
+                        ) : pdfUrl ? (
                           <div className="flex flex-col items-center">
-                            {pdfError ? (
-                              <div className="text-center py-12">
-                                <AlertCircle className="h-12 w-12 text-destructive mx-auto mb-4" />
-                                <p className="text-sm text-muted-foreground">{pdfError}</p>
-                              </div>
-                            ) : (
-                              <PdfViewer
-                                file={pdfUrl}
-                                onLoadSuccess={onDocumentLoadSuccess}
-                                onLoadError={onDocumentLoadError}
-                                pageNumber={1}
-                                renderTextLayer={true}
-                                renderAnnotationLayer={true}
-                                className="mx-auto"
-                                width={typeof window !== 'undefined' ? Math.min(900, window.innerWidth * 0.6) : 900}
-                              />
-                            )}
+                            <PdfViewer
+                              file={pdfUrl}
+                              onLoadSuccess={onDocumentLoadSuccess}
+                              onLoadError={onDocumentLoadError}
+                              pageNumber={1}
+                              renderTextLayer={true}
+                              renderAnnotationLayer={true}
+                              className="mx-auto"
+                              width={typeof window !== 'undefined' ? Math.min(900, window.innerWidth * 0.6) : 900}
+                            />
                           </div>
                         ) : (
                           <div className="text-center py-12">

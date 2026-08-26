@@ -1,13 +1,20 @@
 import io
-import json
 import logging
-from typing import Optional, BinaryIO
+from typing import Dict, Optional, BinaryIO, Tuple
 from datetime import timedelta
 from minio import Minio
 from minio.error import S3Error
 from shared.config import get_settings
 
 logger = logging.getLogger(__name__)
+
+# Porta em que o MinIO publica a API S3. Usada apenas quando o endpoint público
+# não está configurado e precisamos derivá-lo do host da requisição.
+MINIO_API_PORT = 9000
+
+# Região assumida quando o servidor não informa nenhuma. É o default do MinIO e
+# entra no cálculo da assinatura das URLs pré-assinadas.
+DEFAULT_REGION = "us-east-1"
 
 
 class MinIOClient:
@@ -38,9 +45,13 @@ class MinIOClient:
         self.bucket_audio = settings.minio_bucket_audio
         self.bucket_results = settings.minio_bucket_results
 
+        # Clientes usados apenas para assinar URLs para o navegador, indexados
+        # por (endpoint, região). Ver `get_presigned_url`.
+        self._signing_clients: Dict[Tuple[str, str], Minio] = {}
+
         # Initialize buckets on startup
         self._ensure_buckets_exist()
-        self._set_public_read_policies()
+        self._enforce_private_bucket_policies()
 
     def _ensure_buckets_exist(self):
         """Create buckets if they don't exist"""
@@ -62,37 +73,50 @@ class MinIOClient:
                 logger.error(f"Error ensuring bucket {bucket_name} exists: {e}")
                 raise
 
-    def _set_public_read_policies(self):
-        """Set public read access policy for buckets"""
-        # Buckets that should be publicly accessible
-        public_buckets = [
+    def _enforce_private_bucket_policies(self):
+        """
+        Garante que nenhum bucket seja legível anonimamente.
+
+        Até esta versão, uploads/pages/results recebiam uma policy de
+        `s3:GetObject` para `Principal: *` a cada inicialização do cliente: os
+        documentos originais, as páginas em PDF e os markdowns convertidos eram
+        lidos por qualquer pessoa que soubesse (ou adivinhasse) o caminho —
+        `pages/{job_id}/page_{n:04d}.pdf` é previsível. O acesso agora é sempre
+        por URL pré-assinada com TTL curto (ver `get_presigned_url`).
+
+        Apenas remover o código não revoga a policy já gravada num MinIO em
+        execução, por isso a policy é **ativamente apagada** no startup. A
+        operação é idempotente: `NoSuchBucketPolicy` significa que o bucket já
+        está privado. Falhas nunca sobem — o comportamento é o mesmo do método
+        que este substituiu (logar e continuar), para não derrubar a aplicação
+        quando o MinIO está indisponível.
+        """
+        private_buckets = [
             self.bucket_uploads,
             self.bucket_pages,
             self.bucket_results,
-            # Note: bucket_audio is intentionally excluded from public access
+            self.bucket_audio,
         ]
 
-        for bucket_name in public_buckets:
+        for bucket_name in private_buckets:
             try:
-                # Define policy for public read access
-                policy = {
-                    "Version": "2012-10-17",
-                    "Statement": [
-                        {
-                            "Effect": "Allow",
-                            "Principal": {"AWS": "*"},
-                            "Action": ["s3:GetObject"],
-                            "Resource": [f"arn:aws:s3:::{bucket_name}/*"]
-                        }
-                    ]
-                }
-
-                # Set bucket policy
-                self.client.set_bucket_policy(bucket_name, json.dumps(policy))
-                logger.info(f"Set public read policy for bucket: {bucket_name}")
+                self.client.delete_bucket_policy(bucket_name)
+                logger.info(
+                    f"Removed anonymous read policy from MinIO bucket: {bucket_name} "
+                    f"(access is now via presigned URLs only)"
+                )
             except S3Error as e:
-                logger.warning(f"Failed to set public policy for {bucket_name}: {e}")
-                # Don't raise - this is not critical, presigned URLs can still be used
+                if e.code in ("NoSuchBucketPolicy", "NoSuchBucket"):
+                    logger.debug(f"MinIO bucket {bucket_name} has no public policy to remove")
+                else:
+                    logger.warning(
+                        f"Failed to remove public policy from {bucket_name}: {e}. "
+                        f"The bucket may still be anonymously readable - check it manually."
+                    )
+            except Exception as e:  # MinIO fora do ar, DNS, timeout...
+                logger.warning(
+                    f"Could not verify/remove public policy for {bucket_name}: {e}"
+                )
 
     def health_check(self) -> bool:
         """Check MinIO connection by listing buckets"""
@@ -265,65 +289,133 @@ class MinIOClient:
         except S3Error:
             return False
 
+    def browser_endpoint(self, request_host: Optional[str] = None) -> str:
+        """
+        Endereço do MinIO **do ponto de vista do navegador**.
+
+        Isto não é um detalhe cosmético: a assinatura SigV4 de uma URL
+        pré-assinada cobre o header `Host`. Se a URL for assinada para o
+        endpoint interno (`minio:9000`) e o navegador buscá-la em outro host, a
+        assinatura não confere e o MinIO responde 403 em todo PDF.
+
+        Precedência:
+        1. `MINIO_PUBLIC_ENDPOINT`, quando definido explicitamente no ambiente.
+           É o único valor correto atrás de proxy reverso, com TLS ou em porta
+           diferente da 9000, e por isso ganha de tudo.
+        2. O host da requisição com a porta da API S3 (mesmo comportamento
+           dinâmico do antigo `get_public_url`): serve o acesso por IP de LAN
+           (`http://192.168.1.10:3000` -> `192.168.1.10:9000`) sem configuração.
+        3. O default do settings (`127.0.0.1:9000`), que cobre tanto o
+           docker-compose (a porta 9000 é publicada no host) quanto o
+           `run_api.sh` local.
+        """
+        settings = get_settings()
+
+        configured = (settings.minio_public_endpoint or "").strip()
+        # `model_fields_set` distingue "veio do ambiente" de "é o default do
+        # settings"; o `configured` extra tolera a variável presente e vazia
+        # (docker-compose repassa `MINIO_PUBLIC_ENDPOINT=${...:-}`).
+        if configured and "minio_public_endpoint" in settings.model_fields_set:
+            return configured
+
+        if request_host:
+            host_without_port = request_host.split(":")[0]
+            if host_without_port:
+                return f"{host_without_port}:{MINIO_API_PORT}"
+
+        return settings.minio_public_endpoint
+
+    def _bucket_region(self, bucket_name: str) -> str:
+        """
+        Região usada para assinar. Vem do servidor (via o cliente interno, que é
+        o único garantidamente acessível a partir da API) e é cacheada pelo
+        próprio SDK. Em caso de dúvida, o default do MinIO.
+        """
+        try:
+            return self.client._get_region(bucket_name) or DEFAULT_REGION
+        except Exception as e:  # pragma: no cover - depende de MinIO ao vivo
+            logger.warning(
+                f"Could not determine region for bucket {bucket_name}, "
+                f"falling back to {DEFAULT_REGION}: {e}"
+            )
+            return DEFAULT_REGION
+
+    def _client_for_signing(self, endpoint: str, bucket_name: str) -> Minio:
+        """
+        Cliente cujo endpoint é o que o navegador vai usar.
+
+        `region` é passada explicitamente de propósito: sem ela o SDK faria um
+        `GetBucketLocation` contra este endpoint, que pode não ser alcançável a
+        partir do servidor (ex.: `127.0.0.1:9000` dentro do container da API).
+        """
+        settings = get_settings()
+
+        # Endpoint interno == endpoint do navegador (caso do run_api.sh local e
+        # dos testes): reaproveita o cliente principal, sem cliente extra.
+        if endpoint == settings.minio_endpoint:
+            return self.client
+
+        region = self._bucket_region(bucket_name)
+        cache_key = (endpoint, region)
+        client = self._signing_clients.get(cache_key)
+        if client is None:
+            client = Minio(
+                endpoint=endpoint,
+                access_key=settings.minio_access_key,
+                secret_key=settings.minio_secret_key,
+                secure=settings.minio_secure,
+                region=region,
+            )
+            self._signing_clients[cache_key] = client
+            logger.info(f"Created MinIO signing client for endpoint {endpoint} (region {region})")
+
+        return client
+
     def get_presigned_url(
         self,
         bucket_name: str,
         object_name: str,
         expires: timedelta = timedelta(hours=1),
+        request_host: Optional[str] = None,
     ) -> str:
         """
         Generate a presigned URL for temporary access to a file
+
+        A URL é assinada para o endpoint que o **navegador** vai usar (ver
+        `browser_endpoint`), e não para o endpoint interno do MinIO.
 
         Args:
             bucket_name: Name of the bucket
             object_name: Object name in MinIO
             expires: Expiration time (default: 1 hour)
+            request_host: Host da requisição HTTP (header `Host`), usado para
+                derivar o endpoint público quando `MINIO_PUBLIC_ENDPOINT` não
+                está configurado.
 
         Returns:
             str: Presigned URL
+
+        Notas para quem consome:
+            - A query string faz parte da assinatura. Acrescentar qualquer
+              parâmetro (um cache-buster `?t=...`, por exemplo) invalida a URL.
         """
+        endpoint = self.browser_endpoint(request_host)
+
         try:
-            url = self.client.presigned_get_object(
+            client = self._client_for_signing(endpoint, bucket_name)
+            url = client.presigned_get_object(
                 bucket_name=bucket_name,
                 object_name=object_name,
                 expires=expires,
             )
-            logger.info(f"Generated presigned URL: {bucket_name}/{object_name}")
+            logger.info(
+                f"Generated presigned URL for {bucket_name}/{object_name} "
+                f"(endpoint {endpoint}, expires in {int(expires.total_seconds())}s)"
+            )
             return url
         except S3Error as e:
             logger.error(f"Failed to generate presigned URL: {e}")
             raise
-
-    def get_public_url(self, bucket_name: str, object_name: str, request_host: str = None) -> str:
-        """
-        Get public URL for a file (works if bucket has public read policy)
-
-        Args:
-            bucket_name: Name of the bucket
-            object_name: Object name in MinIO
-            request_host: Optional host from request (e.g., "example.com:8000", "192.168.1.10:8000")
-                         If provided, uses same host but with MinIO port (9000)
-
-        Returns:
-            str: Public URL accessible from outside Docker network
-        """
-        settings = get_settings()
-
-        # Determine endpoint to use
-        if request_host:
-            # Extract host without port and use MinIO port
-            host_without_port = request_host.split(':')[0]
-            public_endpoint = f"{host_without_port}:9000"
-        else:
-            # Use configured public endpoint
-            public_endpoint = settings.minio_public_endpoint
-
-        # Construct public URL
-        # Format: http://public-endpoint/bucket-name/object-name
-        protocol = "https" if settings.minio_secure else "http"
-        url = f"{protocol}://{public_endpoint}/{bucket_name}/{object_name}"
-
-        return url
 
     def list_objects(self, bucket_name: str, prefix: str = "") -> list:
         """

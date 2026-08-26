@@ -1,7 +1,7 @@
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Header, Body, Depends, Request
 from typing import Optional, List
 from uuid import uuid4
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 import logging
 
 from shared.schemas import (
@@ -24,6 +24,7 @@ from shared.minio_client import get_minio_client
 from shared.database import SessionLocal, get_db
 from shared.models import Job, Page, JobStatus as DBJobStatus, User
 from shared.config import get_settings
+from shared.utils import calculate_file_checksum
 from shared.auth import get_current_active_user
 from api.deps import get_owned_job, get_owned_page_or_none
 from sqlalchemy.orm import Session
@@ -31,6 +32,18 @@ from sqlalchemy.orm import Session
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["Conversion"])
 settings = get_settings()
+
+# Validade da URL pré-assinada do PDF de uma página.
+#
+# 15 minutos é o meio-termo entre dois erros: um TTL curto demais faz o PDF
+# falhar no meio do carregamento (arquivos grandes, conexão ruim, o pdf.js
+# refazendo requisições de range) e obriga o usuário a recarregar; um TTL longo
+# transforma a URL — que trafega em JSON, fica no histórico do navegador, em
+# logs de proxy e no Referer — num link público de longa duração, que é
+# exatamente o problema que estamos fechando. 15 min cobre com folga o
+# carregamento e a leitura de uma página, e o front pede outra URL ao trocar de
+# página, então a renovação é transparente.
+PAGE_PDF_URL_TTL_SECONDS = 15 * 60
 
 
 @router.post("/upload", response_model=JobCreatedResponse, summary="Upload e converter arquivo")
@@ -81,8 +94,6 @@ async def upload_and_convert(
       -F "docling_preset=quality"
     ```
     """
-    from shared.utils import calculate_file_checksum
-
     redis_client = get_redis_client()
 
     # Read file contents
@@ -1880,49 +1891,58 @@ async def retry_failed_page(
         raise HTTPException(status_code=500, detail=f"Erro ao reprocessar página: {str(e)}")
 
 
-@router.get("/jobs/{job_id}/pages/{page_number}/pdf")
+@router.get("/jobs/{job_id}/pages/{page_number}/pdf", summary="URL temporária do PDF de uma página")
 async def get_page_pdf(
     job_id: str,
     page_number: int,
     request: Request,
-    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+    db_page: Optional[Page] = Depends(get_owned_page_or_none),
 ):
     """
-    Redirect to MinIO public URL for page PDF (NO AUTH REQUIRED)
+    Devolve uma **URL pré-assinada de curta duração** para o PDF de uma página.
 
-    Returns a redirect to the public MinIO URL for a specific page PDF.
-    Dynamically adapts to the request host, so it works from any IP/domain.
-    This endpoint is public to allow PDF viewers to load content without authentication headers.
+    ## Autenticação
+    Obrigatória. Só o dono do job (verificado no MySQL) recebe a URL; jobs de
+    outros usuários retornam 404, igual aos demais endpoints de job.
 
-    ## Parameters:
-    - `job_id`: Main job ID
-    - `page_number`: Page number (1-indexed)
+    Este endpoint já foi público e redirecionava (307) para uma URL pública do
+    MinIO — quem tivesse um UUID de job lia o PDF de qualquer usuário. Agora o
+    bucket é privado e o acesso é sempre por URL assinada com TTL curto.
 
-    ## Example:
+    ## Parâmetros:
+    - `job_id`: ID do job principal
+    - `page_number`: Número da página (1-indexed)
+
+    ## Retorno (JSON, não é mais um redirect):
+    ```json
+    {
+      "job_id": "550e8400-e29b-41d4-a716-446655440000",
+      "page_number": 5,
+      "url": "http://127.0.0.1:9000/ingestify-pages/pages/<job_id>/page_0005.pdf?X-Amz-...",
+      "expires_in": 900,
+      "expires_at": "2026-08-26T12:15:00+00:00"
+    }
     ```
-    GET http://192.168.1.10:8000/jobs/550e8400-e29b-41d4-a716-446655440000/pages/5/pdf
-    -> Redirects to: http://192.168.1.10:9000/ingestify-pages/pages/{job_id}/page_0005.pdf
-    ```
+
+    - `url`: URL assinada, para ser buscada **diretamente** pelo navegador. Não
+      aceita header `Authorization` (e não precisa dele).
+    - `expires_in`: validade em segundos a partir de agora.
+    - `expires_at`: instante de expiração em UTC (ISO-8601). O cliente deve
+      pedir uma URL nova depois disso em vez de reutilizar a antiga.
+
+    Um redirect não serviria: o header `Authorization` do chamador não sobrevive
+    ao salto para o MinIO, e o cliente precisa saber quando a URL expira.
+
+    ## Atenção
+    A query string faz parte da assinatura — acrescentar qualquer parâmetro
+    (`?t=<timestamp>`, por exemplo) invalida a URL e gera 403 no MinIO.
     """
-    from fastapi.responses import RedirectResponse
-
-    # No authentication required for PDF preview
-
-    # Check if job exists
-    db_job = db.query(Job).filter(Job.id == job_id).first()
-    if not db_job:
-        raise HTTPException(status_code=404, detail="Job não encontrado")
-
-    # Check if page exists
-    db_page = db.query(Page).filter(
-        Page.job_id == job_id,
-        Page.page_number == page_number
-    ).first()
-
+    # Ownership já validada em get_owned_page_or_none -> get_owned_job
+    # (MySQL como fonte da verdade).
     if not db_page:
         raise HTTPException(status_code=404, detail=f"Página {page_number} não encontrada")
 
-    # Get MinIO public URL
     minio_client = get_minio_client()
 
     # If page has MinIO path stored, use it
@@ -1939,20 +1959,40 @@ async def get_page_pdf(
             detail=f"Arquivo PDF da página {page_number} não encontrado no MinIO. O job pode não ter sido dividido em páginas."
         )
 
-    # Get request host for dynamic URL generation
-    request_host = request.headers.get("host", "localhost:8000")
+    # O host da requisição serve para descobrir o endereço do MinIO visível pelo
+    # navegador quando MINIO_PUBLIC_ENDPOINT não está configurado. A assinatura
+    # cobre esse host, por isso ele precisa ser o mesmo que o navegador usará.
+    request_host = request.headers.get("host")
 
-    # Generate public URL based on request host
-    public_url = minio_client.get_public_url(
-        minio_client.bucket_pages,
-        minio_object_path,
-        request_host=request_host
+    expires = timedelta(seconds=PAGE_PDF_URL_TTL_SECONDS)
+    expires_at = datetime.now(timezone.utc) + expires
+
+    try:
+        presigned_url = minio_client.get_presigned_url(
+            minio_client.bucket_pages,
+            minio_object_path,
+            expires=expires,
+            request_host=request_host,
+        )
+    except Exception as e:
+        logger.error(
+            f"Failed to sign URL for page {page_number} of job {job_id}: {e}",
+            exc_info=True,
+        )
+        raise HTTPException(status_code=503, detail="Armazenamento de arquivos indisponível")
+
+    logger.info(
+        f"Issued presigned PDF URL for page {page_number} of job {job_id} "
+        f"to user {current_user.id} (ttl {PAGE_PDF_URL_TTL_SECONDS}s)"
     )
 
-    logger.info(f"Redirecting page {page_number} PDF for job {job_id} to MinIO: {public_url} (from host: {request_host})")
-
-    # Redirect to MinIO public URL
-    return RedirectResponse(url=public_url, status_code=307)
+    return {
+        "job_id": job_id,
+        "page_number": page_number,
+        "url": presigned_url,
+        "expires_in": PAGE_PDF_URL_TTL_SECONDS,
+        "expires_at": expires_at.isoformat(),
+    }
 
 
 @router.get("/health", response_model=HealthCheckResponse)

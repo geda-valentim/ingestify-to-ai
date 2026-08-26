@@ -444,17 +444,36 @@ assim que `require_admin` passasse a lê-la.
   produção o handler global de exceções devolvia `str(exc)` cru ao cliente. **Corrigido** para
   api, worker e beat.
 
-### 11.4 🔴 `GET /jobs/{job_id}/pages/{n}/pdf` é público — **não corrigido**
+### 11.4 ✅ `GET /jobs/{job_id}/pages/{n}/pdf` era público — **corrigido**
 
-`routes.py:1883` está deliberadamente sem autenticação (documentado como "NO AUTH REQUIRED") e
-redireciona para uma URL pública do MinIO. Quem obtiver ou adivinhar um UUID de job lê o PDF de
-qualquer usuário — e os objetos no MinIO são legíveis publicamente de qualquer forma.
+`routes.py` estava deliberadamente sem autenticação (documentado como "NO AUTH REQUIRED") e
+redirecionava para uma URL pública do MinIO. Quem obtivesse ou adivinhasse um UUID de job lia o
+PDF de qualquer usuário.
 
-Ficou de fora porque autenticar o endpoint quebra o viewer de PDF do frontend, que o consome
-como `<img>`/`<embed>` sem headers. **É uma decisão pendente**, não um esquecimento.
+O buraco maior estava uma camada abaixo: `MinIOClient._set_public_read_policies()` aplicava uma
+policy anônima de `s3:GetObject` em `uploads`, `pages` e `results` a **cada** inicialização do
+cliente. Os documentos originais e os markdowns convertidos eram legíveis por qualquer um em
+`http://<minio>:9000/<bucket>/<path>`, com caminho previsível
+(`pages/{job_id}/page_{n:04d}.pdf`). Autenticar só o endpoint teria sido cosmético.
 
-**Correção recomendada:** URLs pré-assinadas com TTL curto, geradas por um endpoint autenticado.
-Resolve sem exigir headers no elemento que renderiza o PDF, e permite fechar o bucket.
+**Corrigido:**
+- o endpoint usa `get_owned_job` (via `get_owned_page_or_none`) — MySQL como fonte da verdade,
+  404 para job de terceiro;
+- responde JSON com uma URL pré-assinada (TTL de 15 min) e seu `expires_at`, em vez de um 307
+  (um redirect não carrega o `Authorization` do chamador até o MinIO, e o cliente precisa saber
+  quando a URL morre);
+- os quatro buckets passam a ter a policy **apagada** no startup — remover o código não revoga a
+  policy já gravada num MinIO em execução;
+- a URL é assinada para o endpoint que o **navegador** usa (`MINIO_PUBLIC_ENDPOINT`, ou o host da
+  requisição + porta 9000). A assinatura SigV4 cobre o header `Host`: assinar para `minio:9000` e
+  buscar em outro host devolveria 403 em todo PDF.
+
+O frontend passou a buscar a URL de forma autenticada e a renová-la ao trocar de página, ao voltar
+para a aba PDF depois do TTL, e quando o viewer falha com uma URL expirada.
+
+**Limitação conhecida:** o esquema (http/https) da URL assinada vem de `MINIO_SECURE`, que também
+governa a conexão interna. Um deploy que termine TLS na frente do MinIO e fale HTTP por dentro
+precisaria de um flag separado.
 
 ### 11.5 🟠 `calculate_job_progress` não é o que a documentação diz
 
