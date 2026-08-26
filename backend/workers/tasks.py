@@ -36,7 +36,7 @@ settings = get_settings()
 # MAIN JOB - Ponto de entrada
 # ============================================
 
-@celery_app.task(bind=True, max_retries=3)
+@celery_app.task(bind=True, max_retries=3, name="workers.tasks.process_conversion")
 def process_conversion(
     self,
     job_id: str,
@@ -426,7 +426,7 @@ def process_conversion(
 # SPLIT JOB - Divide PDF em páginas
 # ============================================
 
-@celery_app.task(bind=True, max_retries=2)
+@celery_app.task(bind=True, max_retries=2, name="workers.tasks.split_pdf_task")
 def split_pdf_task(
     self,
     split_job_id: str,
@@ -553,33 +553,108 @@ def split_pdf_task(
 # PAGE JOB - Converte página individual
 # ============================================
 
-@celery_app.task(bind=True, max_retries=3)
-def convert_page_task(
-    self,
+def _recount_parent_pages(db, parent_job_id: str):
+    """Recompute pages_completed / pages_failed on the parent job.
+
+    Both counters are recomputed on every outcome: a retry that succeeds moves a
+    page out of FAILED, so pages_failed is only correct if it is recounted too.
+    """
+    from shared.models import Page as PageModel
+
+    parent_job = db.query(Job).filter(Job.id == parent_job_id).first()
+    if not parent_job:
+        return
+
+    parent_job.pages_completed = db.query(PageModel).filter(
+        PageModel.job_id == parent_job_id,
+        PageModel.status == JobStatus.COMPLETED
+    ).count()
+    parent_job.pages_failed = db.query(PageModel).filter(
+        PageModel.job_id == parent_job_id,
+        PageModel.status == JobStatus.FAILED
+    ).count()
+    db.commit()
+
+
+def _mark_page_failed(
+    log_prefix: str,
     page_job_id: str,
     parent_job_id: str,
     page_number: int,
-    page_file_path: str,
+    error_msg: str,
+):
+    """Record a page failure in Redis and MySQL."""
+    redis_client = get_redis_client()
+
+    redis_client.set_job_status(
+        job_id=page_job_id,
+        job_type="page",
+        status="failed",
+        parent_job_id=parent_job_id,
+        page_number=page_number,
+        error=error_msg,
+        completed_at=datetime.utcnow(),
+    )
+
+    db = SessionLocal()
+    try:
+        from shared.models import Page as PageModel
+        page = db.query(PageModel).filter(
+            PageModel.job_id == parent_job_id,
+            PageModel.page_number == page_number
+        ).first()
+        if page:
+            page.status = JobStatus.FAILED
+            page.error_message = error_msg
+            db.commit()
+
+        _recount_parent_pages(db, parent_job_id)
+    except Exception as e:
+        logger.error(f"{log_prefix} MySQL failure update error: {e}")
+    finally:
+        db.close()
+
+
+def _run_page_conversion(
+    task,
+    page_job_id: str,
+    parent_job_id: str,
+    page_number: int,
+    page_file_path: str = None,
+    source_pdf_path: str = None,
     options: dict = None,
 ):
-    """
-    Page job - converte página individual de PDF
+    """Convert a single PDF page and record the outcome.
+
+    Shared body of `convert_page_task` (fed a page file that `split_pdf_task`
+    already produced) and of the deprecated `process_page` shim (fed the whole
+    source PDF, extracting the page itself). Both paths must produce identical
+    effects; see tests/test_tasks_page_conversion.py.
 
     Args:
-        page_job_id: ID deste page job
-        parent_job_id: ID do main job
-        page_number: Número da página
-        page_file_path: Caminho do arquivo da página
-        options: Opções de conversão
+        task: The bound Celery task, used for `task.retry(...)`.
+        page_job_id: ID of this page job.
+        parent_job_id: ID of the main job.
+        page_number: 1-indexed page number.
+        page_file_path: Path to an already-split single-page PDF.
+        source_pdf_path: Path to the full PDF; the page is extracted here.
+        options: Conversion options.
     """
+    if bool(page_file_path) == bool(source_pdf_path):
+        raise ValueError(
+            "Exactly one of page_file_path / source_pdf_path must be supplied "
+            f"(page_job_id={page_job_id}, page_number={page_number})"
+        )
+
     if options is None:
         options = {}
 
     redis_client = get_redis_client()
     es_client = get_es_client()
-    converter = get_converter()
+    converter = get_converter(preset=options.get("docling_preset"))
 
-    logger.info(f"[PAGE JOB {page_job_id}] Processing page {page_number}")
+    log_prefix = f"[PAGE JOB {page_job_id}]"
+    logger.info(f"{log_prefix} Processing page {page_number} of job {parent_job_id}")
 
     # Update MySQL: Set page to processing
     db = SessionLocal()
@@ -591,11 +666,16 @@ def convert_page_task(
         ).first()
         if page:
             page.status = JobStatus.PROCESSING
+            page.page_job_id = page_job_id  # a retry runs under a new page job id
             db.commit()
     except Exception as e:
-        logger.error(f"[PAGE JOB {page_job_id}] MySQL update error: {e}")
+        logger.error(f"{log_prefix} MySQL update error: {e}")
     finally:
         db.close()
+
+    # Only a page we extracted ourselves is ours to delete; the files produced
+    # by split_pdf_task are cleaned up by merge_pages_task.
+    extracted_page_file = None
 
     try:
         # Mark page job as processing in Redis
@@ -608,8 +688,22 @@ def convert_page_task(
             started_at=datetime.utcnow(),
         )
 
+        if page_file_path:
+            page_path = Path(page_file_path)
+        else:
+            temp_dir = Path(settings.temp_storage_path) / parent_job_id / "retry_pages"
+            temp_dir.mkdir(parents=True, exist_ok=True)
+
+            splitter = PDFSplitter(temp_dir)
+            # extract_single_page returns (local_page_path, minio_path)
+            page_path, _page_minio_path = splitter.extract_single_page(
+                Path(source_pdf_path), page_number
+            )
+            extracted_page_file = page_path
+
+            logger.info(f"{log_prefix} Extracted page {page_number} to {page_path}")
+
         # Convert page
-        page_path = Path(page_file_path)
         result = converter.convert_to_markdown(page_path, options)
 
         # Store page result in Redis
@@ -627,7 +721,6 @@ def convert_page_task(
         )
 
         # Store page markdown in MinIO
-        minio_result_path = None
         try:
             minio_client = get_minio_client()
             minio_object_name = f"results/{parent_job_id}/page_{page_number:04d}.md"
@@ -637,10 +730,9 @@ def convert_page_task(
                 file_data=markdown_content.encode('utf-8'),
                 content_type="text/markdown",
             )
-            minio_result_path = minio_object_name
-            logger.info(f"Page {page_number} markdown uploaded to MinIO: {minio_object_name}")
+            logger.info(f"{log_prefix} Page {page_number} markdown uploaded to MinIO: {minio_object_name}")
         except Exception as e:
-            logger.error(f"Failed to upload page {page_number} markdown to MinIO: {e}")
+            logger.error(f"{log_prefix} Failed to upload page {page_number} markdown to MinIO: {e}")
 
         # Update MySQL: Mark page as completed with markdown content
         db = SessionLocal()
@@ -652,23 +744,16 @@ def convert_page_task(
             ).first()
             if page:
                 page.status = JobStatus.COMPLETED
-                page.markdown_content = markdown_content  # NEW: Store markdown in MySQL
+                page.markdown_content = markdown_content
                 page.char_count = len(markdown_content)
                 page.has_elasticsearch_result = es_success
+                page.error_message = None
                 page.completed_at = datetime.utcnow()
                 db.commit()
 
-            # Update parent job pages_completed count
-            parent_job = db.query(Job).filter(Job.id == parent_job_id).first()
-            if parent_job:
-                completed_count = db.query(PageModel).filter(
-                    PageModel.job_id == parent_job_id,
-                    PageModel.status == JobStatus.COMPLETED
-                ).count()
-                parent_job.pages_completed = completed_count
-                db.commit()
+            _recount_parent_pages(db, parent_job_id)
         except Exception as e:
-            logger.error(f"[PAGE JOB {page_job_id}] MySQL completion error: {e}")
+            logger.error(f"{log_prefix} MySQL completion error: {e}")
         finally:
             db.close()
 
@@ -682,7 +767,7 @@ def convert_page_task(
             completed_at=datetime.utcnow(),
         )
 
-        logger.info(f"[PAGE JOB {page_job_id}] Page {page_number} completed")
+        logger.info(f"{log_prefix} Page {page_number} completed")
 
         # Update main job progress
         total_pages = redis_client.get_job_pages_total(parent_job_id)
@@ -694,11 +779,11 @@ def convert_page_task(
             main_progress = 20 + pages_progress
             redis_client.update_job_progress(parent_job_id, main_progress)
 
-            logger.info(f"[PAGE JOB {page_job_id}] Main job progress: {main_progress}% ({completed_pages}/{total_pages} pages)")
+            logger.info(f"{log_prefix} Main job progress: {main_progress}% ({completed_pages}/{total_pages} pages)")
 
         # Check if all pages completed - trigger merge
         if redis_client.all_page_jobs_completed(parent_job_id):
-            logger.info(f"[PAGE JOB {page_job_id}] All pages completed - creating merge job")
+            logger.info(f"{log_prefix} All pages completed - creating merge job")
 
             merge_job_id = str(uuid4())
             merge_pages_task.delay(
@@ -711,101 +796,67 @@ def convert_page_task(
         return {"page_job_id": page_job_id, "page_number": page_number, "status": "completed"}
 
     except SoftTimeLimitExceeded:
-        # Gracefully handle soft timeout - mark as failed and retry
-        logger.warning(f"[PAGE JOB {page_job_id}] Page {page_number} soft timeout exceeded - marking as failed for retry")
-
         error_msg = f"Page conversion exceeded soft time limit ({settings.conversion_timeout_seconds - 30}s)"
+        logger.warning(f"{log_prefix} Page {page_number} soft timeout exceeded - marking as failed for retry")
 
-        # Update Redis
-        redis_client.set_job_status(
-            job_id=page_job_id,
-            job_type="page",
-            status="failed",
-            parent_job_id=parent_job_id,
-            page_number=page_number,
-            error=error_msg,
-            completed_at=datetime.utcnow(),
-        )
+        _mark_page_failed(log_prefix, page_job_id, parent_job_id, page_number, error_msg)
 
-        # Update MySQL
-        db = SessionLocal()
-        try:
-            from shared.models import Page as PageModel
-            page = db.query(PageModel).filter(
-                PageModel.job_id == parent_job_id,
-                PageModel.page_number == page_number
-            ).first()
-            if page:
-                page.status = JobStatus.FAILED
-                page.error_message = error_msg
-                db.commit()
-
-            # Update parent job pages_failed count
-            parent_job = db.query(Job).filter(Job.id == parent_job_id).first()
-            if parent_job:
-                failed_count = db.query(PageModel).filter(
-                    PageModel.job_id == parent_job_id,
-                    PageModel.status == JobStatus.FAILED
-                ).count()
-                parent_job.pages_failed = failed_count
-                db.commit()
-        except Exception as e:
-            logger.error(f"[PAGE JOB {page_job_id}] MySQL update error on timeout: {e}")
-        finally:
-            db.close()
-
-        # Retry with backoff
-        raise self.retry(exc=SoftTimeLimitExceeded(), countdown=30 * (2 ** self.request.retries))
+        raise task.retry(exc=SoftTimeLimitExceeded(), countdown=30 * (2 ** task.request.retries))
 
     except Exception as exc:
-        logger.error(f"[PAGE JOB {page_job_id}] Page {page_number} failed: {exc}", exc_info=True)
+        logger.error(f"{log_prefix} Page {page_number} failed: {exc}", exc_info=True)
 
-        # Update Redis
-        redis_client.set_job_status(
-            job_id=page_job_id,
-            job_type="page",
-            status="failed",
-            parent_job_id=parent_job_id,
-            page_number=page_number,
-            error=str(exc),
-            completed_at=datetime.utcnow(),
-        )
+        _mark_page_failed(log_prefix, page_job_id, parent_job_id, page_number, str(exc))
 
-        # Update MySQL: Mark page as failed
-        db = SessionLocal()
-        try:
-            from shared.models import Page as PageModel
-            page = db.query(PageModel).filter(
-                PageModel.job_id == parent_job_id,
-                PageModel.page_number == page_number
-            ).first()
-            if page:
-                page.status = JobStatus.FAILED
-                page.error_message = str(exc)
-                db.commit()
+        raise task.retry(exc=exc, countdown=30 * (2 ** task.request.retries))
 
-            # Update parent job pages_failed count
-            parent_job = db.query(Job).filter(Job.id == parent_job_id).first()
-            if parent_job:
-                failed_count = db.query(PageModel).filter(
-                    PageModel.job_id == parent_job_id,
-                    PageModel.status == JobStatus.FAILED
-                ).count()
-                parent_job.pages_failed = failed_count
-                db.commit()
-        except Exception as e:
-            logger.error(f"[PAGE JOB {page_job_id}] MySQL failure error: {e}")
-        finally:
-            db.close()
+    finally:
+        if extracted_page_file is not None:
+            try:
+                Path(extracted_page_file).unlink(missing_ok=True)
+            except Exception as e:
+                logger.warning(f"{log_prefix} Could not remove extracted page file: {e}")
 
-        raise self.retry(exc=exc, countdown=30 * (2 ** self.request.retries))
+
+@celery_app.task(bind=True, max_retries=3, name="workers.tasks.convert_page_task")
+def convert_page_task(
+    self,
+    page_job_id: str,
+    parent_job_id: str,
+    page_number: int,
+    page_file_path: str = None,
+    source_pdf_path: str = None,
+    options: dict = None,
+):
+    """
+    Page job - converte página individual de PDF
+
+    Exactly one of `page_file_path` / `source_pdf_path` must be supplied.
+
+    Args:
+        page_job_id: ID deste page job
+        parent_job_id: ID do main job
+        page_number: Número da página
+        page_file_path: Caminho de uma página já dividida (fluxo split_pdf_task)
+        source_pdf_path: Caminho do PDF completo; a página é extraída aqui
+        options: Opções de conversão
+    """
+    return _run_page_conversion(
+        self,
+        page_job_id=page_job_id,
+        parent_job_id=parent_job_id,
+        page_number=page_number,
+        page_file_path=page_file_path,
+        source_pdf_path=source_pdf_path,
+        options=options,
+    )
 
 
 # ============================================
-# PAGE RETRY - Reprocessa página que falhou
+# PAGE RETRY - Shim depreciado
 # ============================================
 
-@celery_app.task(bind=True, max_retries=3)
+@celery_app.task(bind=True, max_retries=3, name="workers.tasks.process_page")
 def process_page(
     self,
     job_id: str,
@@ -815,223 +866,44 @@ def process_page(
     options: dict = None,
 ):
     """
-    Retry task - reprocessa página individual de PDF que falhou
+    DEPRECATED - use `convert_page_task(source_pdf_path=...)` instead.
+
+    This task duplicated convert_page_task and mishandled the tuple returned by
+    PDFSplitter.extract_single_page. It survives only as a thin forwarder so
+    that messages already sitting on the queue under the name
+    "workers.tasks.process_page" still execute: with task_acks_late and
+    task_reject_on_worker_lost, an unregistered name would requeue forever.
+
+    Remove this task (and switch POST /jobs/{id}/pages/{n}/retry over to
+    convert_page_task) once the queue has drained.
 
     Args:
-        job_id: ID do novo page job (para retry)
+        job_id: ID do novo page job (mapeia para page_job_id)
         parent_job_id: ID do main job
-        pdf_path: Caminho do PDF completo
+        pdf_path: Caminho do PDF completo (mapeia para source_pdf_path)
         page_number: Número da página a processar
         options: Opções de conversão
     """
-    if options is None:
-        options = {}
-
-    redis_client = get_redis_client()
-    es_client = get_es_client()
-    converter = get_converter()
-
-    logger.info(f"[RETRY PAGE {job_id}] Retrying page {page_number} of job {parent_job_id}")
-
-    # Update MySQL: Set page to processing
-    db = SessionLocal()
-    try:
-        from shared.models import Page as PageModel
-        page = db.query(PageModel).filter(
-            PageModel.job_id == parent_job_id,
-            PageModel.page_number == page_number
-        ).first()
-        if page:
-            page.status = JobStatus.PROCESSING
-            page.page_job_id = job_id  # Update with new job ID
-            db.commit()
-    except Exception as e:
-        logger.error(f"[RETRY PAGE {job_id}] MySQL update error: {e}")
-    finally:
-        db.close()
-
-    try:
-        # Mark page job as processing in Redis
-        redis_client.set_job_status(
-            job_id=job_id,
-            job_type="page",
-            status="processing",
-            parent_job_id=parent_job_id,
-            page_number=page_number,
-            started_at=datetime.utcnow(),
-        )
-
-        # Extract single page from PDF
-        temp_dir = Path(settings.temp_storage_path) / parent_job_id / "retry_pages"
-        temp_dir.mkdir(parents=True, exist_ok=True)
-
-        splitter = PDFSplitter(temp_dir)
-        page_file = splitter.extract_single_page(Path(pdf_path), page_number)
-
-        logger.info(f"[RETRY PAGE {job_id}] Extracted page {page_number} to {page_file}")
-
-        # Convert page
-        result = converter.convert_to_markdown(page_file, options)
-
-        # Store page result in Redis
-        redis_client.set_job_result(job_id, result)
-
-        # Store page result in Elasticsearch
-        markdown_content = result.get("markdown", "")
-        metadata = result.get("metadata", {})
-
-        es_success = es_client.store_page_result(
-            job_id=parent_job_id,
-            page_number=page_number,
-            markdown_content=markdown_content,
-            metadata=metadata
-        )
-
-        # Store page markdown in MinIO
-        minio_result_path = None
-        try:
-            minio_client = get_minio_client()
-            minio_object_name = f"results/{parent_job_id}/page_{page_number:04d}.md"
-            minio_client.upload_file(
-                bucket_name=minio_client.bucket_results,
-                object_name=minio_object_name,
-                file_data=markdown_content.encode('utf-8'),
-                content_type="text/markdown",
-            )
-            minio_result_path = minio_object_name
-            logger.info(f"[RETRY] Page {page_number} markdown uploaded to MinIO: {minio_object_name}")
-        except Exception as e:
-            logger.error(f"[RETRY] Failed to upload page {page_number} markdown to MinIO: {e}")
-
-        # Update MySQL: Mark page as completed with markdown content
-        db = SessionLocal()
-        try:
-            from shared.models import Page as PageModel
-            page = db.query(PageModel).filter(
-                PageModel.job_id == parent_job_id,
-                PageModel.page_number == page_number
-            ).first()
-            if page:
-                page.status = JobStatus.COMPLETED
-                page.markdown_content = markdown_content  # NEW: Store markdown in MySQL
-                page.char_count = len(markdown_content)
-                page.has_elasticsearch_result = es_success
-                page.completed_at = datetime.utcnow()
-                db.commit()
-
-            # Update parent job pages_completed and pages_failed counts
-            parent_job = db.query(Job).filter(Job.id == parent_job_id).first()
-            if parent_job:
-                completed_count = db.query(PageModel).filter(
-                    PageModel.job_id == parent_job_id,
-                    PageModel.status == JobStatus.COMPLETED
-                ).count()
-                failed_count = db.query(PageModel).filter(
-                    PageModel.job_id == parent_job_id,
-                    PageModel.status == JobStatus.FAILED
-                ).count()
-                parent_job.pages_completed = completed_count
-                parent_job.pages_failed = failed_count
-                db.commit()
-        except Exception as e:
-            logger.error(f"[RETRY PAGE {job_id}] MySQL completion error: {e}")
-        finally:
-            db.close()
-
-        # Mark page job as completed in Redis
-        redis_client.set_job_status(
-            job_id=job_id,
-            job_type="page",
-            status="completed",
-            parent_job_id=parent_job_id,
-            page_number=page_number,
-            completed_at=datetime.utcnow(),
-        )
-
-        logger.info(f"[RETRY PAGE {job_id}] Page {page_number} retry completed successfully")
-
-        # Update main job progress
-        total_pages = redis_client.get_job_pages_total(parent_job_id)
-        completed_pages = redis_client.count_completed_page_jobs(parent_job_id)
-
-        if total_pages and completed_pages:
-            # Progress: 20% (download) + 70% (pages) + 10% (merge)
-            pages_progress = int((completed_pages / total_pages) * 70)
-            main_progress = 20 + pages_progress
-            redis_client.update_job_progress(parent_job_id, main_progress)
-
-            logger.info(f"[RETRY PAGE {job_id}] Main job progress: {main_progress}% ({completed_pages}/{total_pages} pages)")
-
-        # Check if all pages completed now - trigger merge if needed
-        if redis_client.all_page_jobs_completed(parent_job_id):
-            logger.info(f"[RETRY PAGE {job_id}] All pages completed - creating merge job")
-
-            merge_job_id = str(uuid4())
-            merge_pages_task.delay(
-                merge_job_id=merge_job_id,
-                parent_job_id=parent_job_id
-            )
-
-            redis_client.add_child_job(parent_job_id, "merge", merge_job_id)
-
-        # Cleanup page file
-        try:
-            if page_file.exists():
-                page_file.unlink()
-        except Exception:
-            pass
-
-        return {"job_id": job_id, "page_number": page_number, "status": "completed"}
-
-    except Exception as exc:
-        logger.error(f"[RETRY PAGE {job_id}] Page {page_number} retry failed: {exc}", exc_info=True)
-
-        # Update Redis
-        redis_client.set_job_status(
-            job_id=job_id,
-            job_type="page",
-            status="failed",
-            parent_job_id=parent_job_id,
-            page_number=page_number,
-            error=str(exc),
-            completed_at=datetime.utcnow(),
-        )
-
-        # Update MySQL: Mark page as failed again
-        db = SessionLocal()
-        try:
-            from shared.models import Page as PageModel
-            page = db.query(PageModel).filter(
-                PageModel.job_id == parent_job_id,
-                PageModel.page_number == page_number
-            ).first()
-            if page:
-                page.status = JobStatus.FAILED
-                page.error_message = str(exc)
-                db.commit()
-
-            # Update parent job pages_failed count
-            parent_job = db.query(Job).filter(Job.id == parent_job_id).first()
-            if parent_job:
-                failed_count = db.query(PageModel).filter(
-                    PageModel.job_id == parent_job_id,
-                    PageModel.status == JobStatus.FAILED
-                ).count()
-                parent_job.pages_failed = failed_count
-                db.commit()
-        except Exception as e:
-            logger.error(f"[RETRY PAGE {job_id}] MySQL failure error: {e}")
-        finally:
-            db.close()
-
-        raise self.retry(exc=exc, countdown=30 * (2 ** self.request.retries))
+    logger.warning(
+        "[DEPRECATED] workers.tasks.process_page called for page %s of job %s - "
+        "forwarding to convert_page_task",
+        page_number, parent_job_id,
+    )
+    return _run_page_conversion(
+        self,
+        page_job_id=job_id,
+        parent_job_id=parent_job_id,
+        page_number=page_number,
+        source_pdf_path=pdf_path,
+        options=options,
+    )
 
 
 # ============================================
 # MERGE JOB - Combina resultados das páginas
 # ============================================
 
-@celery_app.task(bind=True, max_retries=2)
+@celery_app.task(bind=True, max_retries=2, name="workers.tasks.merge_pages_task")
 def merge_pages_task(
     self,
     merge_job_id: str,

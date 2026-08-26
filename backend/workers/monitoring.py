@@ -9,7 +9,6 @@ import logging
 from uuid import uuid4
 
 from workers.celery_app import celery_app
-from workers.tasks import convert_page_task
 from shared.config import get_settings
 from shared.queries import (
     get_stuck_jobs,
