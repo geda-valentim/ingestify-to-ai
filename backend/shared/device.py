@@ -242,6 +242,94 @@ def resolve_dtype_name(device: str, requested: Optional[str] = None) -> str:
     return value
 
 
+def _cudnn9_load_error() -> Optional[str]:
+    """
+    None iff ``libcudnn_ops.so.9`` can actually be dlopen'd. Never raises.
+
+    This is the literal library named in ``Unable to load libcudnn_ops.so.9``,
+    so probing it is the closest thing to asking the question the guard claims
+    to answer. Two search paths are tried, in the same order CTranslate2 itself
+    finds the library:
+
+    1. ``<site-packages>/nvidia/cudnn/lib`` -- where the ``nvidia-cudnn-cu12``
+       wheel puts it, and what the ctranslate2 wheel's RPATH points at. Trying
+       the absolute path first matters: the wheel-provided copy is normally NOT
+       on the system loader path, so a bare soname lookup would report a false
+       failure on a perfectly good GPU install.
+    2. the bare soname, for a system-packaged cuDNN.
+
+    A ``nvidia.cudnn`` that is present but cu13-flavoured (what a plain PyPI
+    torch drags in) does not satisfy this: its tree does not provide the cu12
+    cuDNN 9 layout CTranslate2 links, which is exactly the breakage
+    backend/requirements-cuda.txt exists to avoid.
+    """
+    import ctypes
+    import os
+
+    candidates = []
+    try:
+        import nvidia.cudnn  # type: ignore[import-not-found]
+
+        pkg_dir = os.path.dirname(os.path.abspath(nvidia.cudnn.__file__))
+        candidates.append(os.path.join(pkg_dir, "lib", "libcudnn_ops.so.9"))
+    except Exception:
+        pass
+    candidates.append("libcudnn_ops.so.9")
+
+    errors = []
+    for candidate in candidates:
+        try:
+            ctypes.CDLL(candidate)
+            return None
+        except Exception as exc:  # OSError, but a broken tree can raise anything
+            errors.append(str(exc))
+
+    return "; ".join(errors) or "libcudnn_ops.so.9 not found"
+
+
+def _ctranslate2_cuda_blocker() -> Optional[str]:
+    """
+    None iff CTranslate2 can really run on CUDA here; otherwise WHY it cannot.
+
+    Deliberately NOT ``get_cuda_device_count() > 0``. That call binds to
+    ``ctranslate2::get_gpu_count`` -> ``cuda::get_gpu_count()`` ->
+    ``cudaGetDeviceCount()``: it counts VISIBLE GPUs and says nothing whatsoever
+    about cuDNN. On any host with an NVIDIA driver it returns >= 1, so as a
+    guard against ``Unable to load libcudnn_ops.so.9`` it never fires -- and the
+    single case where it does fire (a ctranslate2 built without CUDA) is one
+    where resolve_device() has already returned cpu. It was dead code.
+
+    The three checks below are ordered cheapest-first and each one can only be
+    reached when the previous passed:
+
+    1. ``ctranslate2`` imports at all.
+    2. ``get_supported_compute_types("cuda")`` -- unlike the device count this
+       initialises the CUDA backend and enumerates what the device can actually
+       compute. It raises (rather than returning 0) when the CUDA runtime is
+       unusable, and an empty set means no compute type is offered.
+    3. ``libcudnn_ops.so.9`` is loadable -- the specific failure this guard
+       exists for, checked by name.
+    """
+    try:
+        import ctranslate2
+    except Exception as exc:
+        return f"ctranslate2 is not importable ({exc})"
+
+    try:
+        supported = set(ctranslate2.get_supported_compute_types(CUDA))
+    except Exception as exc:
+        return f"ctranslate2.get_supported_compute_types('cuda') raised ({exc})"
+
+    if not supported:
+        return "ctranslate2 offers no CUDA compute type"
+
+    cudnn_error = _cudnn9_load_error()
+    if cudnn_error is not None:
+        return f"libcudnn_ops.so.9 cannot be loaded ({cudnn_error})"
+
+    return None
+
+
 def resolve_whisper_device() -> str:
     """
     Device for audio transcription: WHISPER_DEVICE if set, otherwise DEVICE.
@@ -250,38 +338,58 @@ def resolve_whisper_device() -> str:
     DEVICE (config.py logs a WARNING saying so on every boot), so an existing
     .env keeps its exact current behaviour.
 
-    Then a capability gate: faster-whisper runs on CTranslate2, which links its
-    own cuDNN. In the current image a CUDA run dies with the opaque
-    ``Unable to load libcudnn_ops.so.9``. A logged CPU fallback beats a 500 on
-    every transcription.
+    Then a capability gate -- see _ctranslate2_cuda_blocker(). faster-whisper
+    runs on CTranslate2, which links its own cuDNN and dies with the opaque
+    ``Unable to load libcudnn_ops.so.9`` against the wrong CUDA tree. A logged
+    CPU fallback beats a 500 on every transcription, and it applies to an
+    explicit ``WHISPER_DEVICE=cuda`` too: the request cannot be honoured, and
+    failing every transcription instead is not a better answer.
+
+    Finally the migration signal. ``WHISPER_DEVICE`` did not exist before this
+    change, so NOBODY has it set and everybody inherits the new behaviour --
+    which is precisely the population config.py's boot WARNING cannot reach,
+    because that only fires for a non-empty value. Whoever is about to have
+    audio move from CPU (the old hardcoded default) to CUDA gets one WARNING
+    saying so, and how to opt out.
     """
     from shared.config import get_settings
 
     settings = get_settings()
+    explicit = bool((settings.whisper_device or "").strip())
     requested = settings.whisper_device or settings.device
     device = resolve_device(requested)
 
     if not device.startswith(CUDA):
         return device
 
-    try:
-        import ctranslate2
-
-        usable = ctranslate2.get_cuda_device_count() > 0
-    except Exception:
-        usable = False
-
-    if not usable:
+    blocker = _ctranslate2_cuda_blocker()
+    if blocker is not None:
         _log_once(
             "whisper:ct2-fallback",
             logging.WARNING,
-            "audio: falling back to cpu - ctranslate2 reports no CUDA device "
-            "(the CUDA build ships nvidia-cudnn-cu12; see "
-            "backend/requirements-cuda.txt) [requested=%s, resolved=%s]",
+            "audio: falling back to cpu - %s. Transcription would otherwise "
+            "fail on every request. Install the CUDA build "
+            "(pip install -r backend/requirements-cuda.txt), which pins the "
+            "cu12 cuDNN 9 layout ctranslate2 needs; see docs/GPU.md. "
+            "[requested=%s, resolved=%s]",
+            blocker,
             requested,
             device,
         )
         return CPU
+
+    if not explicit:
+        _log_once(
+            "whisper:inherited-cuda",
+            logging.WARNING,
+            "audio: transcription now runs on %s because WHISPER_DEVICE is "
+            "unset and DEVICE=%s. This CHANGED: WHISPER_DEVICE used not to "
+            "exist and audio was hardcoded to cpu. Set WHISPER_DEVICE=cpu to "
+            "keep the old behaviour. See docs/specs/"
+            "0002-dispositivo-unico-e-migracao-do-whisper.md.",
+            device,
+            settings.device,
+        )
 
     return device
 

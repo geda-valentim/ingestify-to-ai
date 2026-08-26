@@ -40,7 +40,6 @@ nenhum caso especial.
 
 import asyncio
 import base64
-import binascii
 import logging
 import time
 from datetime import datetime
@@ -69,6 +68,17 @@ from shared.schemas import (
     VisionModelInfo,
 )
 from shared.utils import calculate_file_checksum
+# As regras de entrada de imagem (decode, limite de tamanho, magic bytes) moram
+# em `workers/vision/image_input.py` e em lugar nenhum mais. Importar daqui é de
+# graça: aquele módulo puxa apenas base64/re e os erros tipados de visão — nada
+# de torch, transformers ou PIL (garantido por `test_vision_import_safety.py`).
+from workers.vision.errors import VisionError
+from workers.vision.image_input import (
+    decode_base64_image,
+    ensure_within_size_limit,
+    extension_for_mime,
+    sniff_image_mime,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/images", tags=["Vision"])
@@ -90,27 +100,6 @@ CAPABILITIES_WAIT_SECONDS = 10
 # barato o suficiente para não aparecer no perfil e curto o suficiente para não
 # somar latência perceptível ao final da inferência.
 POLL_INTERVAL_SECONDS = 0.25
-
-# Assinaturas de arquivo (magic bytes). O `content_type` do multipart e
-# qualquer mime declarado pelo chamador são ignorados: só os bytes decidem.
-_IMAGE_SIGNATURES = (
-    (b"\x89PNG\r\n\x1a\n", "image/png"),
-    (b"\xff\xd8\xff", "image/jpeg"),
-    (b"GIF87a", "image/gif"),
-    (b"GIF89a", "image/gif"),
-    (b"BM", "image/bmp"),
-    (b"II*\x00", "image/tiff"),
-    (b"MM\x00*", "image/tiff"),
-)
-
-_MIME_EXTENSIONS = {
-    "image/png": ".png",
-    "image/jpeg": ".jpg",
-    "image/gif": ".gif",
-    "image/bmp": ".bmp",
-    "image/tiff": ".tiff",
-    "image/webp": ".webp",
-}
 
 SUPPORTED_IMAGE_FORMATS = "PNG, JPEG, WEBP, BMP, GIF, TIFF"
 
@@ -151,46 +140,30 @@ def _require_vision_enabled() -> None:
 # Validação da imagem
 # ============================================
 
+def _as_http_error(exc: VisionError) -> HTTPException:
+    """
+    Fronteira entre o erro tipado de visão e o envelope HTTP desta rota.
+
+    Cada `VisionError` já carrega o seu `error_code` e o seu `http_status`; aqui
+    eles só viram `HTTPException`. Nenhuma regra é reimplementada — é o que
+    permite que `workers/vision/image_input.py` seja a única implementação de
+    decode/tamanho/formato, usada igualmente pela rota JSON, pela multipart e
+    por quem mais precisar validar bytes de imagem.
+    """
+    return _error(exc.http_status, exc.error_code, str(exc))
+
+
 def _decode_base64_image(payload: str) -> bytes:
-    """
-    Decodifica o base64 do corpo JSON, tolerando o prefixo `data:...;base64,`
-    que todo `canvas.toDataURL()` e todo `FileReader.readAsDataURL()` produz.
-    """
-    data = payload.strip()
-    if data.startswith("data:"):
-        _, _, after = data.partition(",")
-        if not after:
-            raise _error(
-                422,
-                "INVALID_BASE64",
-                "image_base64 parece um data URI mas não tem conteúdo depois da vírgula.",
-            )
-        data = after.strip()
+    """Decode do corpo JSON. A regra é de `image_input`; aqui só o status HTTP.
 
+    Tolera o prefixo `data:...;base64,` que todo `canvas.toDataURL()` produz e
+    as quebras de linha que `base64 arquivo.png`, `base64.encodebytes()`,
+    `openssl base64` e `Base64.getMimeEncoder()` inserem a cada 64/76 colunas.
+    """
     try:
-        # `validate=True`: sem isso o base64 do Python descarta silenciosamente
-        # qualquer caractere inválido e "decodifica" lixo com sucesso.
-        return base64.b64decode(data, validate=True)
-    except (binascii.Error, ValueError) as e:
-        raise _error(
-            422,
-            "INVALID_BASE64",
-            f"image_base64 não é base64 válido: {e}. "
-            f"Envie os bytes da imagem em base64 (o prefixo data: URI é opcional).",
-        )
-
-
-def _sniff_image_mime(data: bytes) -> Optional[str]:
-    """Mime a partir dos magic bytes, ou None se não for uma imagem suportada."""
-    for signature, mime in _IMAGE_SIGNATURES:
-        if data.startswith(signature):
-            return mime
-
-    # WEBP é RIFF: "RIFF" + 4 bytes de tamanho + "WEBP".
-    if len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP":
-        return "image/webp"
-
-    return None
+        return decode_base64_image(payload)
+    except VisionError as exc:
+        raise _as_http_error(exc)
 
 
 def _validate_image_bytes(image_bytes: bytes) -> str:
@@ -200,32 +173,11 @@ def _validate_image_bytes(image_bytes: bytes) -> str:
     O limite é o de imagem (`vision_max_image_size_mb`, 10MB), nunca o de
     upload de documento (50MB): o custo aqui é de inferência, não de disco.
     """
-    max_bytes = settings.vision_max_image_size_mb * 1024 * 1024
-    if len(image_bytes) > max_bytes:
-        size_mb = len(image_bytes) / (1024 * 1024)
-        raise _error(
-            413,
-            "IMAGE_TOO_LARGE",
-            f"Imagem muito grande: {size_mb:.2f}MB. "
-            f"Máximo: {settings.vision_max_image_size_mb}MB.",
-        )
-
-    if not image_bytes:
-        raise _error(
-            422,
-            "UNSUPPORTED_IMAGE_FORMAT",
-            f"Payload vazio. Formatos aceitos: {SUPPORTED_IMAGE_FORMATS}.",
-        )
-
-    mime = _sniff_image_mime(image_bytes)
-    if mime is None:
-        raise _error(
-            422,
-            "UNSUPPORTED_IMAGE_FORMAT",
-            f"O conteúdo enviado não é uma imagem reconhecida. "
-            f"Formatos aceitos: {SUPPORTED_IMAGE_FORMATS}.",
-        )
-    return mime
+    try:
+        ensure_within_size_limit(image_bytes, settings.vision_max_image_size_mb)
+        return sniff_image_mime(image_bytes)
+    except VisionError as exc:
+        raise _as_http_error(exc)
 
 
 def _safe_filename(filename: Optional[str], mime: str) -> str:
@@ -238,7 +190,7 @@ def _safe_filename(filename: Optional[str], mime: str) -> str:
     """
     candidate = Path(filename or "").name.strip() if filename else ""
     if not candidate or candidate in {".", ".."}:
-        candidate = f"image{_MIME_EXTENSIONS.get(mime, '.bin')}"
+        candidate = f"image{extension_for_mime(mime)}"
     return candidate[:200]
 
 

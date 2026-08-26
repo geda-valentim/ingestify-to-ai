@@ -1,84 +1,26 @@
 # ---------------------------------------------------------------------------
-# BASE dependency set - do NOT install this file directly.
+# Ingestify - the default dependency set.
 #
-# torch is never named here, but it arrives transitively via
-# docling -> docling-slim[standard] -> torch. Installed from plain PyPI that
-# resolves to the CUDA build and pulls ~1.66GB of nvidia-* wheels onto a
-# machine that may have no GPU.
+#     pip install -r backend/requirements.txt
 #
-# Install one of these instead - they pin torch to the right index FIRST, so
-# docling's transitive requirement is already satisfied:
+# This file is deliberately a single `-r` line. The name `requirements.txt` is
+# the one every reader, every tutorial and every piece of tooling reaches for,
+# so it has to be the CORRECT thing to install rather than a trap you avoid by
+# having read the docs first. It points at the CPU set, which is the right
+# answer for every machine without an NVIDIA GPU - i.e. almost all of them.
 #
-#   backend/requirements-cpu.txt           CPU only (the default)
+# The shared package list itself lives in `requirements-base.txt`; that file
+# names no index and no torch build, so it can be reused unchanged by both the
+# CPU and the CUDA sets.
+#
+#   backend/requirements.txt               -> CPU (this file, the default)
+#   backend/requirements-cpu.txt           CPU only, explicit
 #   backend/requirements-vision.txt        CPU + Florence-2 vision extra
 #   backend/requirements-cuda.txt          NVIDIA GPU
 #   backend/requirements-vision-cuda.txt   NVIDIA GPU + Florence-2 vision extra
+#   backend/requirements-base.txt          shared package list, no torch index
 #
-# See docs/GPU.md.
+# GPU users: read docs/GPU.md before installing anything.
 # ---------------------------------------------------------------------------
 
-# Python 3.13+ compatibility - setuptools provides distutils
-setuptools>=75.0.0
-
-fastapi==0.104.1
-uvicorn[standard]==0.24.0
-celery==5.3.4
-redis==5.0.1
-# Pydantic - versões compatíveis com Docling 2.x
-pydantic>=2.9.0,<3.0.0
-pydantic-core>=2.23.0,<3.0.0
-pydantic-settings>=2.3.0,<3.0.0
-httpx==0.25.2
-python-multipart==0.0.6
-python-dotenv==1.0.0
-
-# Docling and dependencies (use latest compatible version)
-docling>=2.0.0,<3.0.0
-beautifulsoup4>=4.12.3,<5.0.0
-requests>=2.32.2,<3.0.0
-
-# PDF processing
-# PyPDF2==3.0.1  # REMOVIDO: Substituído por qpdf (ferramenta de sistema) para evitar explosão de tamanho ao dividir PDFs
-# qpdf instalado via apt-get nos Dockerfiles
-
-# Google Drive integration
-google-api-python-client==2.108.0
-google-auth==2.25.2
-google-auth-oauthlib==1.1.0
-google-auth-httplib2==0.2.0
-
-# Dropbox integration
-dropbox==11.36.2
-
-# Logging
-structlog==23.2.0
-
-# Testing
-pytest==7.4.3
-pytest-asyncio==0.21.1
-pytest-cov==4.1.0
-fakeredis==2.26.2  # in-memory Redis for unit tests
-
-# Database (MySQL)
-sqlalchemy>=2.0.0,<3.0.0
-pymysql>=1.1.0
-alembic>=1.13.0
-
-# Authentication & Security
-bcrypt>=4.0.0
-python-jose[cryptography]>=3.3.0
-passlib[bcrypt]>=1.7.4
-
-# Elasticsearch
-elasticsearch>=8.11.0,<9.0.0
-
-# MinIO Object Storage
-minio>=7.2.0,<8.0.0
-
-# Audio transcription - multiple providers supported
-# Default: faster-whisper (recommended, 4-5x faster)
-faster-whisper>=1.0.0  # Recommended: Optimized Whisper using CTranslate2
-# openai-whisper>=20240930  # Fallback: Original OpenAI Whisper implementation (slow to compile)
-openai>=1.0.0  # Optional: For openai-api provider (cloud-based)
-pydub>=0.25.1  # Audio file handling and metadata extraction
-ffmpeg-python>=0.2.0  # Audio format conversion support
+-r requirements-cpu.txt

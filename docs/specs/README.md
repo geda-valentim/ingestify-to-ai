@@ -73,5 +73,6 @@ Rascunho ──▶ Em revisão ──▶ Aprovada ──▶ Implementada
 | # | Spec | Status | Data |
 |---|---|---|---|
 | 0001 | [Remover as camadas de Clean Architecture não utilizadas](0001-remover-clean-architecture-morta.md) | Implementada | 2026-08-26 |
+| 0002 | [Dispositivo único (`DEVICE`) e a migração do Whisper para CPU→CUDA](0002-dispositivo-unico-e-migracao-do-whisper.md) | Implementada | 2026-08-26 |
 
 <!-- Adicione uma linha aqui ao criar cada spec. -->

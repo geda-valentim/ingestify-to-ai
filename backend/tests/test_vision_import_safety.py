@@ -59,6 +59,43 @@ def test_module_imports_without_torch(module_name, monkeypatch):
     assert module is not None
 
 
+def test_the_image_routes_module_imports_without_torch(monkeypatch):
+    """The API shares the worker's image-input rules, and that must stay free.
+
+    `api/image_routes.py` imports `workers.vision.image_input` so that decode,
+    size limit and magic-byte sniffing have exactly one implementation instead
+    of one per process. That import crosses from the API into the worker
+    package, which is the sort of edge along which a torch dependency travels:
+    the API image runs no model, and nobody would notice it had grown one until
+    the container was 2.5GB heavier.
+    """
+    real_import = builtins.__import__
+
+    def blocking_import(name, *args, **kwargs):
+        root = name.split(".")[0]
+        if root in HEAVY_MODULES:
+            raise ImportError(f"{root} is blocked by this test")
+        return real_import(name, *args, **kwargs)
+
+    for name in list(sys.modules):
+        if name.split(".")[0] in HEAVY_MODULES:
+            monkeypatch.delitem(sys.modules, name, raising=False)
+    monkeypatch.delitem(sys.modules, "api.image_routes", raising=False)
+    monkeypatch.setattr(builtins, "__import__", blocking_import)
+
+    module = importlib.import_module("api.image_routes")
+
+    # And the shared rule really is the one in use, not a private copy that
+    # drifted back in: tolerating the newlines every command-line base64
+    # encoder emits is behaviour only `image_input` has.
+    wrapped = (
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8\n"
+        "z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==\n"
+    )
+    assert module._decode_base64_image(wrapped).startswith(b"\x89PNG")
+    assert module._validate_image_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 8) == "image/png"
+
+
 def test_importing_the_package_pulls_in_no_heavy_dependency():
     """Importing is not merely possible - it must also be free."""
     for name in list(sys.modules):
