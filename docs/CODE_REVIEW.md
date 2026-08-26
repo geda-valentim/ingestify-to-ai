@@ -3,6 +3,9 @@
 > Revisão técnica do estado do repositório em **2026-08-24** (branch `main`, commit `b7bf521`).
 > Escopo: arquitetura, god files, dívida técnica, segurança, testes e documentação.
 > Método: inspeção estática do código-fonte (20.214 LOC em Python/TS, excluindo `node_modules`).
+>
+> **Status (2026-08-26):** todo o P0 e parte do P1 já foram corrigidos — ver § 9 e § 11.
+> Os achados abaixo estão preservados como escritos; o que mudou está marcado ✅ no plano.
 
 ---
 
@@ -347,15 +350,15 @@ a única parte da documentação que o código não consegue contar sozinho.
 
 ## 9. Plano de ação priorizado
 
-### P0 — Segurança (dias)
-- [ ] Corrigir o IDOR do `DELETE /jobs/{id}`; criar `api/deps.py::get_owned_job` e aplicar nos 14 endpoints (§ 5.1)
-- [ ] Implementar `User.is_admin` + migration, ou desabilitar `admin_router` (§ 5.2)
-- [ ] Remover defaults de `jwt_secret_key` e credenciais MinIO; falhar no boot se ausentes (§ 5.4)
-- [ ] `CORS_ALLOWED_ORIGINS` configurável, sem wildcard com credenciais (§ 5.3)
+### P0 — Segurança ✅ concluído
+- [x] IDOR do `DELETE /jobs/{id}`: `api/deps.py::get_owned_job`, MySQL como fonte da verdade, aplicado aos 7 endpoints que recebem job/page id (§ 5.1)
+- [x] `User.is_admin` + migration `e399267560a7` + `require_admin` com 403; bootstrap via `scripts/make_admin.py` (§ 5.2)
+- [x] `jwt_secret_key` e credenciais MinIO obrigatórios; boot falha com mensagem acionável (§ 5.4)
+- [x] `CORS_ALLOWED_ORIGINS` com allowlist explícita; métodos/headers restritos ao uso real (§ 5.3)
 
-### P1 — Rede de segurança (1–2 semanas)
-- [ ] Criar `backend/tests/` com pytest; começar por `pdf_splitter`, `calculate_job_progress`, `get_owned_job` (§ 4)
-- [ ] Consertar o target `make test`
+### P1 — Rede de segurança (parcial)
+- [x] `backend/tests/` criado — 48 testes cobrindo `pdf_splitter`, `redis_client` e a autorização de `deps.py` (§ 4)
+- [x] `make test` consertado; a imagem da API agora inclui `tests/`
 - [ ] Adicionar CI (`.github/workflows/ci.yml`): pytest + `tsc --noEmit` + `next lint`
 - [ ] `@contextmanager db_session()` e migrar as 37 chamadas manuais (§ 6.1)
 
@@ -388,3 +391,96 @@ Para calibrar: o que já está bem feito e deve ser preservado numa refatoraçã
 - **Nenhum segredo versionado**; `.gitignore` correto.
 - **Separação infra compartilhada** (`docker-compose.infra.yml`) é uma boa ideia para múltiplos
   projetos na mesma máquina.
+
+---
+
+## 11. Achados da rodada de correções (2026-08-26)
+
+Itens que só apareceram ao corrigir o P0. Os três primeiros eram bugs reais em produção,
+invisíveis porque estavam mascarados por `except Exception` (§ 6.2).
+
+### 11.1 ✅ `RedisClient` não tem atributo `.redis` — cleanup nunca deletou nada
+
+`RedisClient` guarda a conexão em `self.client` (23 usos, zero `self.redis`). Quatro call sites
+usavam `redis_client.redis`:
+
+| Local | Efeito |
+|---|---|
+| `api/admin_routes.py:62` | `AttributeError` engolido → `/admin/stats` sempre devolvia `redis: {error}` |
+| `workers/monitoring.py:275,283,284` | **`cleanup_old_jobs` nunca apagou uma única chave** |
+
+No `cleanup_old_jobs` o efeito era pior que um erro: cada `delete` lançava `AttributeError`, era
+capturado, logado — e `cleaned_count += 1` acontecia mesmo assim. A task registrava
+`"Cleanup complete: N jobs cleaned"` enquanto o Redis crescia sem limite.
+
+Dois nomes de chave também estavam errados: o status de página vive em `job:{id}:page:{n}`
+(não `:status`) e `job:{id}:child_jobs` nunca existiu — child jobs ficam dentro do JSON de status.
+
+**Corrigido.** Também passou a limpar `job:{id}:owner` e a remover o job de `user:{id}:jobs`,
+e um job cujo delete falha não é mais contado como limpo.
+
+### 11.2 ✅ Alembic nunca foi ligado
+
+`alembic/env.py` era o scaffolding intocado (`target_metadata = None`) e `alembic.ini` ainda tinha
+`driver://user:pass@localhost/dbname`. `alembic upgrade head` não rodava de forma alguma — o
+schema era criado só por `Base.metadata.create_all()`, que **não** altera tabelas existentes.
+
+Consequência: um banco já implantado nunca ganharia a coluna `is_admin` e quebraria em runtime
+assim que `require_admin` passasse a lê-la.
+
+**Corrigido** — `env.py` importa `shared.models` e usa `settings.database_url`.
+
+> ⚠️ **Pendência:** bancos criados via `create_all()` já têm `users.is_admin`, então
+> `alembic upgrade head` falhará com coluna duplicada. Rode `alembic stamp head` neles primeiro.
+> Ainda falta uma migration baseline para `users`/`api_keys`/`jobs`/`pages`.
+
+### 11.3 ✅ `start.sh` apagava o `.env` e produção nunca era produção
+
+- `start.sh` regenerava o `.env` inteiro com `cat > .env` a cada execução. Com o `JWT_SECRET_KEY`
+  agora obrigatório, isso apagaria a chave e deixaria um clone novo sem conseguir subir.
+  **Corrigido:** preserva segredos existentes, gera a chave quando ausente, e para de embutir
+  `minioadmin` na chamada `mc alias`.
+- `docker-compose.prod.yml` nunca sobrescrevia `ENVIRONMENT=development` do arquivo base. Em
+  produção o handler global de exceções devolvia `str(exc)` cru ao cliente. **Corrigido** para
+  api, worker e beat.
+
+### 11.4 🔴 `GET /jobs/{job_id}/pages/{n}/pdf` é público — **não corrigido**
+
+`routes.py:1883` está deliberadamente sem autenticação (documentado como "NO AUTH REQUIRED") e
+redireciona para uma URL pública do MinIO. Quem obtiver ou adivinhar um UUID de job lê o PDF de
+qualquer usuário — e os objetos no MinIO são legíveis publicamente de qualquer forma.
+
+Ficou de fora porque autenticar o endpoint quebra o viewer de PDF do frontend, que o consome
+como `<img>`/`<embed>` sem headers. **É uma decisão pendente**, não um esquecimento.
+
+**Correção recomendada:** URLs pré-assinadas com TTL curto, geradas por um endpoint autenticado.
+Resolve sem exigir headers no elemento que renderiza o PDF, e permite fechar o bucket.
+
+### 11.5 🟠 `calculate_job_progress` não é o que a documentação diz
+
+`CLAUDE.md` e § 2 do `SPECS.md` descrevem uma ponderação 10% split / 80% páginas / 10% merge.
+A implementação (`redis_client.py:255`) é uma razão simples `completed / total * 100`. Os testes
+fixam o comportamento **real**; ou a documentação ou o código precisa mudar — decisão de produto.
+
+### 11.6 🟠 Dívidas menores identificadas e não corrigidas
+
+- **`Page.page_job_id` sem índice** (`shared/models.py`) — a resolução de dono de child job faz
+  lookup nessa coluna a cada request de página. Precisa de índice + migration.
+- **`Job.user_id` com `ondelete="SET NULL"`** contradiz o `cascade="all, delete-orphan"` já
+  declarado em `User.jobs`. É a origem dos jobs órfãos que habilitaram o IDOR do § 5.1. Alinhar
+  para `CASCADE` eliminaria a classe inteira de problema.
+- **`GET /jobs` lista a partir do set Redis `user:{id}:jobs`** (TTL de 30 dias), não do MySQL.
+  Usuários perdem visibilidade de jobs antigos silenciosamente. Não é segurança, é correção.
+- **`redis_client.verify_job_ownership`** ficou sem uso. Deve ser removida — é uma primitiva de
+  autorização baseada em cache e não deve voltar a ser usada.
+- **`scripts/init_db.py` e `scripts/check_db_sync.py`** só inserem a raiz do repo no `sys.path`,
+  mas os módulos importam como `shared.*`; dependem de um `PYTHONPATH=backend` externo.
+
+### 11.7 Verificação
+
+- 48 testes passam no host e dentro de `ingestify-to-ai-api:latest` (Python 3.13, dependências reais).
+- `import api.main` funciona na imagem, com a allowlist de CORS aplicada no startup.
+- Sem `JWT_SECRET_KEY` o processo aborta com instrução de como gerar a chave.
+- `docker compose config -q` passa para base, infra e prod.
+- **Teste de mutação:** revertendo a guarda de autorização para a forma permissiva original,
+  falham exatamente os 4 casos de job órfão/ciclo — a suíte de fato pega a regressão.
