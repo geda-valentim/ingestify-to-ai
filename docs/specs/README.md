@@ -72,6 +72,6 @@ Rascunho ──▶ Em revisão ──▶ Aprovada ──▶ Implementada
 
 | # | Spec | Status | Data |
 |---|---|---|---|
-| — | _nenhuma spec ainda_ | — | — |
+| 0001 | [Remover as camadas de Clean Architecture não utilizadas](0001-remover-clean-architecture-morta.md) | Implementada | 2026-08-26 |
 
 <!-- Adicione uma linha aqui ao criar cada spec. -->
