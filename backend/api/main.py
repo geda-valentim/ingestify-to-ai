@@ -11,6 +11,7 @@ from api.routes import router
 from api.auth_routes import router as auth_router
 from api.apikey_routes import router as apikey_router
 from api.admin_routes import router as admin_router
+from api.image_routes import router as image_router
 
 # Configure logging
 logging.basicConfig(
@@ -234,6 +235,7 @@ async def shutdown_event():
 app.include_router(auth_router, prefix="/auth", tags=["Authentication"])
 app.include_router(apikey_router, prefix="/api-keys", tags=["API Keys"])
 app.include_router(admin_router)  # Admin routes (already has /admin prefix)
+app.include_router(image_router)  # Vision routes (already has /images prefix)
 app.include_router(router)
 
 

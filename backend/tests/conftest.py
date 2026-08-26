@@ -21,6 +21,12 @@ os.environ.setdefault("JWT_SECRET_KEY", "test-only-secret-not-for-any-real-envir
 os.environ.setdefault("MINIO_ACCESS_KEY", "test-access-key")
 os.environ.setdefault("MINIO_SECRET_KEY", "test-secret-key")
 
+# Keep the suite free of torch, transformers and any model download: the stub
+# provider is a real ImageDescriber with deterministic output and no heavy
+# imports. Tests that need the Florence-2 code path build it directly and inject
+# a fake backend.
+os.environ.setdefault("VISION_PROVIDER", "stub")
+
 import pytest  # noqa: E402
 
 

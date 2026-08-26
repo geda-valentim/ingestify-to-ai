@@ -27,6 +27,8 @@ services:
     # Production: use full worker concurrency
     volumes:
       - ./tmp:/tmp/ingestify
+      # Keep the shared HF cache so a re-routed vision task never re-downloads
+      - hf_cache:/models/huggingface
     command: celery -A workers.celery_app worker --loglevel=info --concurrency=4
     environment:
       - ENVIRONMENT=production
@@ -35,6 +37,24 @@ services:
     # Scale workers in production
     deploy:
       replicas: 5
+
+  worker-vision:
+    # Same reason as `beat` below: without this it inherits
+    # ENVIRONMENT=development from the base file and bypasses the
+    # production-only credential checks in shared/config.py.
+    # The ./tmp mount is re-declared because the API hands the decoded image to
+    # this worker through it.
+    volumes:
+      - ./tmp:/tmp/ingestify
+      - hf_cache:/models/huggingface
+    environment:
+      - ENVIRONMENT=production
+      - PYTHONUNBUFFERED=1
+    restart: unless-stopped
+    # Concurrency stays at 1 in production too: one resident model per box.
+    # Scale out with replicas, never with concurrency.
+    deploy:
+      replicas: 1
 
   beat:
     # Celery Beat inherits ENVIRONMENT=development from the base file otherwise,

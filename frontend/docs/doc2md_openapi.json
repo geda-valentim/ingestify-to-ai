@@ -533,6 +533,236 @@
         ]
       }
     },
+    "/images/describe": {
+      "post": {
+        "tags": [
+          "Vision"
+        ],
+        "summary": "Descrever imagem (JSON base64)",
+        "description": "Descreve uma imagem enviada em base64 e devolve a mesma imagem de volta.\n\n## Corpo\n- `image_base64`: bytes da imagem em base64 (o prefixo `data:image/...;base64,`\n  é aceito e removido)\n- `filename`: nome opcional, usado no job e no storage\n- `task`: `<MORE_DETAILED_CAPTION>` (padrão), `<DETAILED_CAPTION>` ou `<CAPTION>`\n\n## Retorno\nA descrição, os metadados da imagem e o eco de `image_base64` — os bytes\nexatos que você enviou, re-codificados, nunca uma re-compressão.\n\n## Timeout\nSe a inferência passar de `VISION_REQUEST_TIMEOUT_SECONDS`, a resposta é\n504 com `job_id`/`poll_url`: a task continua e o resultado sai em\n`/jobs/{job_id}/result`.",
+        "operationId": "describe_image_images_describe_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ImageDescribeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImageDescribeResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
+          }
+        ]
+      }
+    },
+    "/images/describe/upload": {
+      "post": {
+        "tags": [
+          "Vision"
+        ],
+        "summary": "Descrever imagem (multipart)",
+        "description": "Igual a `POST /images/describe`, com a imagem em `multipart/form-data`.\n\nExiste como caminho irmão porque o FastAPI não hospeda um corpo JSON e\nparâmetros `File`/`Form` na mesma operação — e sniffar o content-type\nproduziria uma única operação ilegível no OpenAPI.",
+        "operationId": "describe_image_upload_images_describe_upload_post",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_describe_image_upload_images_describe_upload_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImageDescribeResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
+          }
+        ]
+      }
+    },
+    "/images/ocr": {
+      "post": {
+        "tags": [
+          "Vision"
+        ],
+        "summary": "OCR de imagem (JSON base64)",
+        "description": "Extrai o texto de uma imagem com `<OCR_WITH_REGION>` do Florence-2.\n\nDevolve o texto completo e, por linha, o quadrilátero detectado\n(`quad_box`, 8 valores) e o retângulo derivado (`bbox`, 4 valores), em\npixels absolutos da imagem original.\n\nUma imagem sem texto detectável é 200 com `text: \"\"` e `lines: []` — nunca\num 4xx.",
+        "operationId": "ocr_image_images_ocr_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ImageOcrRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImageOcrResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
+          }
+        ]
+      }
+    },
+    "/images/ocr/upload": {
+      "post": {
+        "tags": [
+          "Vision"
+        ],
+        "summary": "OCR de imagem (multipart)",
+        "description": "Igual a `POST /images/ocr`, com a imagem em `multipart/form-data`.",
+        "operationId": "ocr_image_upload_images_ocr_upload_post",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_ocr_image_upload_images_ocr_upload_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImageOcrResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
+          }
+        ]
+      }
+    },
+    "/images/capabilities": {
+      "get": {
+        "tags": [
+          "Vision"
+        ],
+        "summary": "Estado do subsistema de visão",
+        "description": "O que o worker de visão consegue fazer *neste* deploy.\n\nA resposta vem do worker, não da API: a única resposta que vale alguma\ncoisa descreve o processo que de fato carrega o modelo, e calcular isso\naqui obrigaria a API a importar torch.\n\nSe nenhum worker responder em 10s, isto ainda é 200 — com\n`dependencies_installed=false` e `reason` preenchido. Uma sonda de ops não\npode dar 5xx quando aquilo que ela sonda está fora do ar.",
+        "operationId": "vision_capabilities_images_capabilities_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisionCapabilitiesResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
+          }
+        ]
+      }
+    },
     "/upload": {
       "post": {
         "tags": [
@@ -1528,6 +1758,27 @@
         ],
         "title": "Body_convert_document_convert_post"
       },
+      "Body_describe_image_upload_images_describe_upload_post": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "contentMediaType": "application/octet-stream",
+            "title": "File",
+            "description": "Imagem (PNG, JPEG, WEBP, BMP, GIF, TIFF)"
+          },
+          "task": {
+            "type": "string",
+            "title": "Task",
+            "description": "<MORE_DETAILED_CAPTION>, <DETAILED_CAPTION> ou <CAPTION>",
+            "default": "<MORE_DETAILED_CAPTION>"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file"
+        ],
+        "title": "Body_describe_image_upload_images_describe_upload_post"
+      },
       "Body_login_auth_login_post": {
         "properties": {
           "username": {
@@ -1545,6 +1796,21 @@
           "password"
         ],
         "title": "Body_login_auth_login_post"
+      },
+      "Body_ocr_image_upload_images_ocr_upload_post": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "contentMediaType": "application/octet-stream",
+            "title": "File",
+            "description": "Imagem (PNG, JPEG, WEBP, BMP, GIF, TIFF)"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file"
+        ],
+        "title": "Body_ocr_image_upload_images_ocr_upload_post"
       },
       "Body_transcribe_audio_transcribe_post": {
         "properties": {
@@ -1814,6 +2080,212 @@
           "timestamp"
         ],
         "title": "HealthCheckResponse"
+      },
+      "ImageDescribeRequest": {
+        "properties": {
+          "image_base64": {
+            "type": "string",
+            "title": "Image Base64",
+            "description": "Imagem em base64. Um prefixo `data:image/png;base64,` é aceito e removido. Formatos: PNG, JPEG, WEBP, BMP, GIF, TIFF."
+          },
+          "filename": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Filename",
+            "description": "Nome de identificação opcional (usado no job e no storage)."
+          },
+          "task": {
+            "type": "string",
+            "enum": [
+              "<MORE_DETAILED_CAPTION>",
+              "<DETAILED_CAPTION>",
+              "<CAPTION>"
+            ],
+            "title": "Task",
+            "description": "Prompt de caption do Florence-2.",
+            "default": "<MORE_DETAILED_CAPTION>"
+          }
+        },
+        "type": "object",
+        "required": [
+          "image_base64"
+        ],
+        "title": "ImageDescribeRequest",
+        "description": "Corpo JSON de `POST /images/describe`."
+      },
+      "ImageDescribeResponse": {
+        "properties": {
+          "job_id": {
+            "type": "string",
+            "title": "Job Id"
+          },
+          "status": {
+            "type": "string",
+            "const": "completed",
+            "title": "Status"
+          },
+          "image_base64": {
+            "type": "string",
+            "title": "Image Base64"
+          },
+          "image_mime_type": {
+            "type": "string",
+            "title": "Image Mime Type"
+          },
+          "image_bytes": {
+            "type": "integer",
+            "title": "Image Bytes"
+          },
+          "image_sha256": {
+            "type": "string",
+            "title": "Image Sha256"
+          },
+          "width": {
+            "type": "integer",
+            "title": "Width"
+          },
+          "height": {
+            "type": "integer",
+            "title": "Height"
+          },
+          "model": {
+            "$ref": "#/components/schemas/VisionModelInfo"
+          },
+          "duration_ms": {
+            "type": "integer",
+            "title": "Duration Ms"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          },
+          "task": {
+            "type": "string",
+            "title": "Task"
+          }
+        },
+        "type": "object",
+        "required": [
+          "job_id",
+          "status",
+          "image_base64",
+          "image_mime_type",
+          "image_bytes",
+          "image_sha256",
+          "width",
+          "height",
+          "model",
+          "duration_ms",
+          "description",
+          "task"
+        ],
+        "title": "ImageDescribeResponse",
+        "description": "Resposta de `POST /images/describe` e `/images/describe/upload`."
+      },
+      "ImageOcrRequest": {
+        "properties": {
+          "image_base64": {
+            "type": "string",
+            "title": "Image Base64",
+            "description": "Imagem em base64. Um prefixo `data:image/png;base64,` é aceito e removido. Formatos: PNG, JPEG, WEBP, BMP, GIF, TIFF."
+          },
+          "filename": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Filename",
+            "description": "Nome de identificação opcional."
+          }
+        },
+        "type": "object",
+        "required": [
+          "image_base64"
+        ],
+        "title": "ImageOcrRequest",
+        "description": "Corpo JSON de `POST /images/ocr`.\n\nSem campo `task`: OCR é sempre `<OCR_WITH_REGION>`, não é escolha do\nchamador."
+      },
+      "ImageOcrResponse": {
+        "properties": {
+          "job_id": {
+            "type": "string",
+            "title": "Job Id"
+          },
+          "status": {
+            "type": "string",
+            "const": "completed",
+            "title": "Status"
+          },
+          "image_base64": {
+            "type": "string",
+            "title": "Image Base64"
+          },
+          "image_mime_type": {
+            "type": "string",
+            "title": "Image Mime Type"
+          },
+          "image_bytes": {
+            "type": "integer",
+            "title": "Image Bytes"
+          },
+          "image_sha256": {
+            "type": "string",
+            "title": "Image Sha256"
+          },
+          "width": {
+            "type": "integer",
+            "title": "Width"
+          },
+          "height": {
+            "type": "integer",
+            "title": "Height"
+          },
+          "model": {
+            "$ref": "#/components/schemas/VisionModelInfo"
+          },
+          "duration_ms": {
+            "type": "integer",
+            "title": "Duration Ms"
+          },
+          "text": {
+            "type": "string",
+            "title": "Text"
+          },
+          "lines": {
+            "items": {
+              "$ref": "#/components/schemas/OcrLine"
+            },
+            "type": "array",
+            "title": "Lines"
+          }
+        },
+        "type": "object",
+        "required": [
+          "job_id",
+          "status",
+          "image_base64",
+          "image_mime_type",
+          "image_bytes",
+          "image_sha256",
+          "width",
+          "height",
+          "model",
+          "duration_ms",
+          "text",
+          "lines"
+        ],
+        "title": "ImageOcrResponse",
+        "description": "Resposta de `POST /images/ocr` e `/images/ocr/upload`."
       },
       "JobCreatedResponse": {
         "properties": {
@@ -2125,6 +2597,38 @@
         "title": "JobType",
         "description": "Tipos de jobs no sistema"
       },
+      "OcrLine": {
+        "properties": {
+          "text": {
+            "type": "string",
+            "title": "Text"
+          },
+          "quad_box": {
+            "items": {
+              "type": "number"
+            },
+            "type": "array",
+            "title": "Quad Box",
+            "description": "8 valores: x1,y1,x2,y2,x3,y3,x4,y4 (pixels da imagem original)."
+          },
+          "bbox": {
+            "items": {
+              "type": "number"
+            },
+            "type": "array",
+            "title": "Bbox",
+            "description": "4 valores derivados do quad_box: x_min,y_min,x_max,y_max."
+          }
+        },
+        "type": "object",
+        "required": [
+          "text",
+          "quad_box",
+          "bbox"
+        ],
+        "title": "OcrLine",
+        "description": "Uma linha detectada pelo `<OCR_WITH_REGION>` do Florence-2."
+      },
       "PageJobInfo": {
         "properties": {
           "page_number": {
@@ -2300,6 +2804,126 @@
           "type"
         ],
         "title": "ValidationError"
+      },
+      "VisionCapabilitiesResponse": {
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          },
+          "provider": {
+            "type": "string",
+            "title": "Provider"
+          },
+          "model_id": {
+            "type": "string",
+            "title": "Model Id"
+          },
+          "revision": {
+            "type": "string",
+            "title": "Revision"
+          },
+          "device_requested": {
+            "type": "string",
+            "title": "Device Requested"
+          },
+          "device_resolved": {
+            "type": "string",
+            "title": "Device Resolved"
+          },
+          "torch_available": {
+            "type": "boolean",
+            "title": "Torch Available"
+          },
+          "cuda_available": {
+            "type": "boolean",
+            "title": "Cuda Available"
+          },
+          "cuda_device_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cuda Device Name"
+          },
+          "dependencies_installed": {
+            "type": "boolean",
+            "title": "Dependencies Installed"
+          },
+          "model_downloaded": {
+            "type": "boolean",
+            "title": "Model Downloaded"
+          },
+          "model_loaded": {
+            "type": "boolean",
+            "title": "Model Loaded"
+          },
+          "trust_remote_code": {
+            "type": "boolean",
+            "title": "Trust Remote Code"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "type": "object",
+        "required": [
+          "enabled",
+          "provider",
+          "model_id",
+          "revision",
+          "device_requested",
+          "device_resolved",
+          "torch_available",
+          "cuda_available",
+          "dependencies_installed",
+          "model_downloaded",
+          "model_loaded",
+          "trust_remote_code"
+        ],
+        "title": "VisionCapabilitiesResponse",
+        "description": "Resposta de `GET /images/capabilities`.\n\nRespondida pelo worker de visão, não pela API: a única resposta que vale\nalguma coisa descreve o processo que realmente carrega o modelo."
+      },
+      "VisionModelInfo": {
+        "properties": {
+          "model_id": {
+            "type": "string",
+            "title": "Model Id"
+          },
+          "revision": {
+            "type": "string",
+            "title": "Revision"
+          },
+          "device": {
+            "type": "string",
+            "title": "Device"
+          },
+          "dtype": {
+            "type": "string",
+            "title": "Dtype"
+          }
+        },
+        "type": "object",
+        "required": [
+          "model_id",
+          "revision",
+          "device",
+          "dtype"
+        ],
+        "title": "VisionModelInfo",
+        "description": "Qual modelo, em qual revisão e em qual device produziu esta resposta."
       }
     },
     "securitySchemes": {
