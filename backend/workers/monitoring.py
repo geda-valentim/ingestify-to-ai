@@ -291,11 +291,55 @@ def cleanup_old_jobs():
         except Exception as e:
             logger.error(f"[MONITORING] Error cleaning up job {job.id}: {e}")
 
+    images_swept = sweep_orphaned_vision_images()
+
     logger.info(f"[MONITORING] Cleanup complete: {cleaned_count} jobs cleaned from Redis")
 
     return {
-        "jobs_cleaned": cleaned_count
+        "jobs_cleaned": cleaned_count,
+        "vision_images_swept": images_swept,
     }
+
+
+# The floor for how long an orphan must sit before it is swept. Deleting a file
+# a running inference still needs would be a far worse bug than leaving it a few
+# extra minutes, so this is deliberately far above any legitimate hold time
+# (`vision_task_timeout_seconds`, 120s by default).
+VISION_IMAGE_ORPHAN_MIN_AGE_SECONDS = 3600
+
+
+def sweep_orphaned_vision_images() -> int:
+    """
+    Delete image handoff directories that nobody is coming back for.
+
+    A BACKSTOP, not the mechanism. `/images/*` writes the image to
+    `<temp_storage_path>/images/<job_id>/` and the vision task deletes it in a
+    `finally`, so in every ordinary outcome - success, typed failure, crash,
+    soft time limit - it is already gone before this ever runs. What is left for
+    here is the case where that `finally` never executed at all: a HARD time
+    limit or an OOM killing the worker process mid-inference, or a message that
+    was dispatched and never delivered.
+
+    This is explicitly NOT a fix for an upload loop: it runs daily, and a caller
+    in a tight loop fills the disk in minutes. The bound on that is the task's
+    own cleanup.
+
+    Returns:
+        The number of directories removed.
+    """
+    from workers.vision.image_input import sweep_image_handoffs
+
+    max_age = max(
+        settings.vision_task_timeout_seconds * 4,
+        VISION_IMAGE_ORPHAN_MIN_AGE_SECONDS,
+    )
+    swept = sweep_image_handoffs(settings.temp_storage_path, max_age)
+    if swept:
+        logger.warning(
+            f"[MONITORING] Swept {swept} orphaned vision image handoff(s) older than "
+            f"{max_age}s. Each one is a vision task that died before its cleanup ran."
+        )
+    return swept
 
 
 @celery_app.task(name="workers.monitoring.health_check")

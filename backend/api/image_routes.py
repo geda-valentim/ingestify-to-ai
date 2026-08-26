@@ -53,9 +53,8 @@ from sqlalchemy.orm import Session
 from shared.auth import get_current_active_user
 from shared.config import get_settings
 from shared.database import get_db
-from shared.minio_client import get_minio_client
 from shared.models import Job, JobStatus as DBJobStatus, User
-from shared.redis_client import get_redis_client
+from shared.redis_client import VISION_HEARTBEAT_TTL_SECONDS, get_redis_client
 from shared.schemas import (
     DEFAULT_VISION_CAPTION_TASK,
     VISION_CAPTION_TASKS,
@@ -75,8 +74,10 @@ from shared.utils import calculate_file_checksum
 from workers.vision.errors import VisionError
 from workers.vision.image_input import (
     decode_base64_image,
+    discard_image_handoff,
     ensure_within_size_limit,
     extension_for_mime,
+    image_handoff_dir,
     sniff_image_mime,
 )
 
@@ -92,9 +93,15 @@ VISION_DISABLED_MESSAGE = (
     "(set ENABLE_IMAGE_DESCRIPTION=true to enable)"
 )
 
-# Quanto a rota de capacidades espera pelo worker. Curto de propósito: é uma
-# sonda de ops, não uma inferência.
-CAPABILITIES_WAIT_SECONDS = 10
+# Idade máxima aceitável do heartbeat do worker de visão. Vem do mesmo lugar em
+# que a chave e o TTL são definidos (`shared/redis_client.py`), para que leitor e
+# escritor não possam discordar sobre o que ainda é "recente".
+HEARTBEAT_MAX_AGE_SECONDS = VISION_HEARTBEAT_TTL_SECONDS
+
+NO_VISION_WORKER_REASON = (
+    f"no vision worker heartbeat in the last {HEARTBEAT_MAX_AGE_SECONDS}s "
+    f"(no worker is consuming the vision queue)"
+)
 
 # Intervalo entre dois `ready()`. Cada iteração é um GET no Redis; 250ms é
 # barato o suficiente para não aparecer no perfil e curto o suficiente para não
@@ -214,11 +221,37 @@ def _dispatch_vision_task(kind: str, **kwargs: Any):
     return task.delay(**kwargs)
 
 
-def _dispatch_capabilities_task():
-    """Enfileira a sonda de capacidades e devolve o `AsyncResult`."""
-    from workers.vision_tasks import vision_capabilities_task
+def _read_capabilities_heartbeat() -> Optional[Dict[str, Any]]:
+    """
+    Lê o último heartbeat do worker de visão. Nunca enfileira nada.
 
-    return vision_capabilities_task.delay()
+    Ver `workers/vision_tasks.publish_vision_heartbeat` para o porquê de ser um
+    heartbeat e não uma sonda enfileirada. Aqui fica só a metade que fecha o
+    modo de falha do heartbeat: **um registro velho não vale**. O TTL do Redis
+    já apagaria a chave, mas a idade é reconferida com `published_at` para que a
+    resposta não dependa de uma política de expiração escrita em outro processo.
+
+    Devolve `None` para "nenhum worker de visão" — sem distinguir "nunca
+    existiu" de "morreu": nenhum dos dois é evidência de que a visão funciona.
+    """
+    payload = get_redis_client().get_vision_heartbeat()
+    if not isinstance(payload, dict):
+        return None
+
+    published_at = payload.get("published_at")
+    if not isinstance(published_at, (int, float)):
+        logger.warning("Vision heartbeat has no usable published_at; treating it as stale")
+        return None
+
+    age = time.time() - float(published_at)
+    if age > HEARTBEAT_MAX_AGE_SECONDS:
+        logger.warning(
+            f"Vision heartbeat is {age:.0f}s old (limit {HEARTBEAT_MAX_AGE_SECONDS}s); "
+            f"treating the vision worker as absent."
+        )
+        return None
+
+    return payload
 
 
 async def _wait_for_result(async_result, timeout_seconds: float) -> Optional[Any]:
@@ -326,30 +359,50 @@ def _mark_job_failed(job_id: str, db: Session, db_job: Optional[Job], error: str
 
 def _persist_image(job_id: str, filename: str, image_bytes: bytes, mime: str) -> Path:
     """
-    Grava a imagem no MinIO (tolerando falha) e no disco compartilhado.
+    Grava a imagem no disco compartilhado — e **em nenhum outro lugar**.
 
     Os bytes **não** viajam pelo broker: base64 nos kwargs da task colocaria
     ~13MB por requisição dentro de uma mensagem do Redis. O worker lê o
     caminho; o bind mount `./tmp:/tmp/ingestify` (presente no compose base e no
     de produção) é o que faz a passagem funcionar.
-    """
-    try:
-        minio_client = get_minio_client()
-        minio_client.upload_file(
-            bucket_name=minio_client.bucket_uploads,
-            object_name=f"images/{job_id}/{filename}",
-            file_data=image_bytes,
-            content_type=mime,
-        )
-    except Exception as e:
-        # O MinIO aqui é retenção, não o caminho de dados: o worker lê do disco.
-        logger.warning(f"Failed to upload image to MinIO for job {job_id}: {e}")
 
-    temp_dir = Path(settings.temp_storage_path) / "images" / job_id
+    ## Por que não há mais uma cópia no MinIO
+
+    Esta rota gravava também `images/{job_id}/{filename}` no bucket de uploads,
+    sob o rótulo de "retenção". Não era retenção — era vazamento:
+
+      - **ninguém lê esse objeto.** O worker lê o disco; a resposta devolve os
+        bytes inline em `image_base64`; `/jobs/{job_id}/result` devolve o JSON
+        da inferência. Nenhuma rota, nenhuma task e nenhum admin baixam esse
+        prefixo;
+      - **nada aponta para ele.** Diferente de `/upload` e `/transcribe`, o
+        caminho nunca era gravado em `Job.minio_upload_path`, então o objeto era
+        irreferenciável: nem servível, nem varrível depois;
+      - **ele não tinha fim.** Sem TTL e sem política de lifecycle no bucket, um
+        laço autenticado enchia o object storage exatamente como enchia o disco
+        — só que sem conserto possível, por falta de referência;
+      - **ele custava latência.** Um PUT de até 10MB dentro do orçamento de 60s
+        de uma requisição *síncrona*, no caminho quente, por resultado nenhum.
+
+    O ciclo de vida certo para uma cópia sem leitor é não existir.
+    """
+    temp_dir = image_handoff_dir(settings.temp_storage_path, job_id)
     temp_dir.mkdir(parents=True, exist_ok=True)
     temp_path = temp_dir / filename
     temp_path.write_bytes(image_bytes)
     return temp_path
+
+
+def _discard_image(job_id: str) -> None:
+    """
+    Apaga o handoff em disco **quando a task não vai rodar**.
+
+    Só isso. Quando a task *foi* despachada, quem apaga é ela, no `finally` de
+    `workers/vision_tasks._run`: a requisição pode ir embora com 504 enquanto a
+    inferência continua (é o contrato desta rota), e apagar aqui puxaria o
+    arquivo debaixo de uma task viva.
+    """
+    discard_image_handoff(settings.temp_storage_path, job_id)
 
 
 # ============================================
@@ -459,6 +512,9 @@ async def _run_vision(
         image_path = _persist_image(job_id, safe_name, image_bytes, mime)
     except OSError as e:
         logger.error(f"Failed to persist image for job {job_id}: {e}", exc_info=True)
+        # mkdir pode ter passado e o write falhado: o diretório meio-criado é
+        # exatamente o lixo que ninguém mais viria recolher.
+        _discard_image(job_id)
         _mark_job_failed(job_id, db, db_job, str(e))
         raise _error(
             500,
@@ -475,6 +531,8 @@ async def _run_vision(
         async_result = _dispatch_vision_task(kind, **kwargs)
     except ImportError as e:
         logger.error(f"Vision tasks not available: {e}")
+        # Nenhuma task foi enfileirada, então ninguém mais vai apagar isto.
+        _discard_image(job_id)
         _mark_job_failed(job_id, db, db_job, "Celery workers não disponíveis")
         raise _error(
             503,
@@ -486,6 +544,7 @@ async def _run_vision(
     except Exception as e:
         # kombu.exceptions.OperationalError (broker fora do ar) e afins.
         logger.error(f"Error enqueueing vision job {job_id}: {e}", exc_info=True)
+        _discard_image(job_id)
         _mark_job_failed(job_id, db, db_job, str(e))
         raise _error(
             503,
@@ -704,9 +763,31 @@ async def vision_capabilities(
     coisa descreve o processo que de fato carrega o modelo, e calcular isso
     aqui obrigaria a API a importar torch.
 
-    Se nenhum worker responder em 10s, isto ainda é 200 — com
-    `dependencies_installed=false` e `reason` preenchido. Uma sonda de ops não
-    pode dar 5xx quando aquilo que ela sonda está fora do ar.
+    ## Lê, não enfileira
+
+    A sonda **não** é uma task. Uma task de sonda ia para `settings.vision_queue`
+    — uma vaga só, `worker_prefetch_multiplier=1` — e portanto ficava atrás de
+    uma inferência de até `vision_task_timeout_seconds`. Consequência: este
+    endpoint respondia "nenhum worker de visão" exatamente quando havia um
+    worker *ocupado*, ou seja, no único momento em que alguém consulta. E, pior,
+    nada limitava a fila: quem batesse aqui em laço enfileirava sondas mais
+    rápido do que a vaga única drenava, matando a inferência de verdade com a
+    própria ferramenta de diagnóstico.
+
+    Agora o worker publica um heartbeat com TTL no Redis
+    (`workers/vision_tasks.publish_vision_heartbeat`, em uma thread daemon que
+    continua rodando durante a inferência) e esta rota faz um GET. Os quatro
+    estados ficam distinguíveis:
+
+    | estado                                  | resposta                                             |
+    |-----------------------------------------|------------------------------------------------------|
+    | nenhum worker rodando                   | `dependencies_installed=false` + `reason` de ausência |
+    | worker rodando e ocioso                 | o relatório do worker                                 |
+    | worker rodando e **ocupado**            | o relatório do worker — ocupado não é ausente         |
+    | worker rodando **sem as dependências**  | `dependencies_installed=false` + o `reason` do worker |
+
+    Sempre 200: uma sonda de ops não pode dar 5xx quando aquilo que ela sonda
+    está fora do ar.
     """
     _require_vision_enabled()
 
@@ -725,25 +806,26 @@ async def vision_capabilities(
         model_downloaded=False,
         model_loaded=False,
         trust_remote_code=settings.vision_trust_remote_code,
-        reason="no vision worker responded within 10s",
+        reason=NO_VISION_WORKER_REASON,
     )
 
     try:
-        async_result = _dispatch_capabilities_task()
+        heartbeat = _read_capabilities_heartbeat()
     except Exception as e:
-        logger.warning(f"Could not dispatch vision capabilities probe: {e}")
-        return degraded.model_copy(update={"reason": f"could not reach the broker: {e}"})
+        # Redis fora do ar: não sabemos nada sobre o worker, e é isso que a
+        # resposta tem que dizer — nunca o padrão otimista.
+        logger.warning(f"Could not read the vision capabilities heartbeat: {e}")
+        return degraded.model_copy(
+            update={"reason": f"could not read the vision worker heartbeat: {e}"}
+        )
 
-    result = await _wait_for_result(async_result, CAPABILITIES_WAIT_SECONDS)
-    if not isinstance(result, dict):
-        if result is not None:
-            logger.warning(f"Vision capabilities probe failed: {result!r}")
+    if heartbeat is None:
         return degraded
 
     merged = degraded.model_dump()
-    merged.update({k: v for k, v in result.items() if k in merged})
+    merged.update({k: v for k, v in heartbeat.items() if k in merged})
     merged["enabled"] = True
     # O worker respondeu: o `reason` de degradação não vale mais, e um worker
     # saudável simplesmente não manda `reason`.
-    merged["reason"] = result.get("reason")
+    merged["reason"] = heartbeat.get("reason")
     return VisionCapabilitiesResponse(**merged)

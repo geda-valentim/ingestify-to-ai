@@ -71,6 +71,16 @@ def get_image_describer(force_provider: Optional[str] = None) -> ImageDescriber:
     return instance
 
 
+def peek_image_describer() -> Optional[ImageDescriber]:
+    """The cached instance, or None. Never builds one, never writes the global.
+
+    For observers - the capabilities heartbeat asks this from a background
+    thread, and a probe must not be able to construct (or race the construction
+    of) the instance that holds the loaded weights.
+    """
+    return _describer_instance
+
+
 def _build_describer(provider: str, settings) -> ImageDescriber:
     """Construct a describer. Cheap: no weights, no torch import."""
     if provider == "stub":

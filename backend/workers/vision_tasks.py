@@ -19,18 +19,39 @@ while the task runs. Three consequences shape everything here.
 Task names are given explicitly. With ``task_acks_late`` and
 ``task_reject_on_worker_lost`` both on, an unregistered name is not a one-off
 error - the message is redelivered forever.
+
+The task also owns the END of the image's life. The API writes the bytes to
+``<temp_storage_path>/images/<job_id>/`` and hands over a path; the task deletes
+that directory in a ``finally``, whatever happened. It cannot be the route's
+job: a request may walk away with a 504 while the inference is still running
+(that is the endpoint's contract), so a route-side cleanup would either delete
+the file out from under a live task or skip the case that leaks most.
+
+Capabilities are published as a HEARTBEAT rather than answered by a queued
+probe - see ``publish_vision_heartbeat`` for why.
 """
 
 import logging
+import threading
+import time
 from datetime import datetime
 from typing import Any, Dict, Optional
 
 from celery.signals import worker_process_init
 
 from shared.config import get_settings
+# Only the two module-level constants; `get_redis_client` stays a function-local
+# import in the call sites below, so a Redis that is not there cannot take the
+# module down at import time.
+from shared.redis_client import VISION_HEARTBEAT_TTL_SECONDS
 from workers.celery_app import celery_app
 from workers.vision.errors import VisionError
-from workers.vision.factory import get_available_providers, get_image_describer
+from workers.vision.factory import (
+    get_available_providers,
+    get_image_describer,
+    peek_image_describer,
+)
+from workers.vision.image_input import discard_image_handoff
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +61,15 @@ settings = get_settings()
 # hard limit kills the worker process out from under it.
 _TASK_TIME_LIMIT = settings.vision_task_timeout_seconds
 _TASK_SOFT_TIME_LIMIT = max(settings.vision_task_timeout_seconds - 15, 1)
+
+# How often a vision worker republishes what it can do. The lifetime itself is
+# `VISION_HEARTBEAT_TTL_SECONDS`, defined next to the key in
+# `shared/redis_client.py` so writer and reader cannot drift apart; refreshing
+# at a third of it means two missed refreshes (a GC pause, a slow Redis) do not
+# make a live worker look dead, while a worker that actually died stops being
+# reported within the TTL.
+HEARTBEAT_TTL_SECONDS = VISION_HEARTBEAT_TTL_SECONDS
+HEARTBEAT_INTERVAL_SECONDS = max(HEARTBEAT_TTL_SECONDS // 3, 1)
 
 
 @celery_app.task(
@@ -66,12 +96,37 @@ def ocr_image_task(self, job_id: str, image_path: str) -> dict:
     return _run("ocr", job_id, image_path, None)
 
 
-@celery_app.task(name="workers.vision_tasks.vision_capabilities_task")
+@celery_app.task(
+    name="workers.vision_tasks.vision_capabilities_task",
+    expires=HEARTBEAT_TTL_SECONDS,
+    time_limit=30,
+    soft_time_limit=20,
+)
 def vision_capabilities_task() -> dict:
     """Report what this worker can actually do.
 
-    Answered here rather than in the API because the only answer worth having
-    describes the process that loads the model - and computing it in the API
+    NO LONGER ON THE HOT PATH. ``GET /images/capabilities`` reads the heartbeat
+    key instead of queueing this - see ``publish_vision_heartbeat``. It stays
+    registered for two reasons, both about not breaking:
+
+      - a straggler message from an API instance that predates the heartbeat
+        would hit ``NotRegistered``, and with ``task_acks_late`` +
+        ``task_reject_on_worker_lost`` that message is redelivered forever;
+      - it is the manual probe (``celery call``) when someone wants an answer
+        from one specific worker.
+
+    ``expires`` is the guard for that first case: a probe that has been sitting
+    behind a 120s inference is already answering about a moment that has passed,
+    so the broker discards it instead of spending the one vision slot on it.
+    """
+    return capabilities_report()
+
+
+def capabilities_report() -> Dict[str, Any]:
+    """What this process can do, as the ``/images/capabilities`` body.
+
+    Computed in the worker, never in the API: the only answer worth having
+    describes the process that loads the model, and computing it in the API
     would force a torch import there.
     """
     from shared.device import device_report
@@ -85,8 +140,17 @@ def vision_capabilities_task() -> dict:
     model_loaded = False
     reason: Optional[str] = probe.get("reason") or report.get("reason")
     try:
-        # Cheap: builds the describer object but loads no weights.
-        model_loaded = bool(get_image_describer().is_loaded)
+        instance = peek_image_describer()
+        if instance is None:
+            # Nothing built yet, so nothing is loaded. Build a THROWAWAY anyway:
+            # it costs no weights and it is what surfaces a DEVICE the box
+            # cannot satisfy as a `reason` instead of as a failed request later.
+            # `force_provider` is what keeps this off the process-wide cache -
+            # this runs on a background thread, and a probe must never repoint
+            # (or race with) the instance holding the loaded model.
+            get_image_describer(force_provider=provider)
+        else:
+            model_loaded = bool(instance.is_loaded)
     except Exception as exc:
         reason = f"{type(exc).__name__}: {exc}"
 
@@ -118,9 +182,24 @@ def _run(
     image_path: str,
     options: Optional[Dict[str, Any]],
 ) -> dict:
-    """Shared body for both vision tasks: run it, record it, report it."""
+    """Shared body for both vision tasks: run it, record it, report it, bin it."""
     _set_status(job_id, "processing", progress=10, started_at=datetime.utcnow())
+    try:
+        return _run_inner(operation, job_id, image_path, options)
+    finally:
+        # EVERY exit: success, typed failure, crash, SoftTimeLimitExceeded.
+        # This is the only cleanup that runs in the normal case - the sweeper in
+        # `workers/monitoring.cleanup_old_jobs` is a periodic backstop for the
+        # hard-kill case, and periodic cannot bound a tight upload loop.
+        discard_image_handoff(settings.temp_storage_path, job_id)
 
+
+def _run_inner(
+    operation: str,
+    job_id: str,
+    image_path: str,
+    options: Optional[Dict[str, Any]],
+) -> dict:
     try:
         describer = get_image_describer()
         if operation == "describe":
@@ -194,6 +273,123 @@ def _store_result(job_id: str, payload: dict) -> None:
         get_redis_client().set_job_result(job_id, payload)
     except Exception as exc:
         logger.warning("vision: could not store result for job %s: %s", job_id, exc)
+
+
+# ---------------------------------------------------------------------------
+# Heartbeat: how /images/capabilities learns the truth without queueing
+# ---------------------------------------------------------------------------
+
+def consumes_vision_queue() -> bool:
+    """Does THIS process actually serve ``settings.vision_queue``?
+
+    ``workers/celery_app.py`` imports this module in every process - the API,
+    beat, and the five general workers - so "I imported the vision tasks" says
+    nothing about whether anyone is consuming the vision queue. A general worker
+    publishing a heartbeat would be the exact lie this fix exists to remove:
+    ``/images/capabilities`` would report a healthy subsystem while
+    ``/images/describe`` timed out against a queue with no consumer.
+
+    The honest source is Celery's own selection: ``celery worker -Q <queue>``
+    calls ``app.amqp.queues.select()``, and ``consume_from`` is the result. With
+    no ``-Q`` it is just the default queue, which is not the vision one.
+    """
+    try:
+        consume_from = celery_app.amqp.queues.consume_from or {}
+        return settings.vision_queue in set(consume_from)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("vision: could not read the consumed queues: %s", exc)
+        return False
+
+
+def publish_vision_heartbeat() -> bool:
+    """Write this worker's capabilities to Redis under a TTL.
+
+    ## Why a heartbeat and not a probe task
+
+    The probe used to be a Celery task on ``settings.vision_queue``: one slot,
+    ``worker_prefetch_multiplier=1``. It therefore queued behind an inference of
+    up to ``vision_task_timeout_seconds``, so the endpoint answered "no vision
+    worker" precisely when a worker was there and busy - the one moment somebody
+    is looking. Worse, nothing bounded the backlog: polling the endpoint
+    enqueued probes faster than the single slot could drain them, starving real
+    inference with the ops tooling. Reading a key costs the vision worker
+    nothing and cannot be starved by it.
+
+    ## The failure mode a heartbeat brings, and how it is closed
+
+    A heartbeat can outlive the worker that wrote it. Two things stop it:
+    the Redis TTL (``HEARTBEAT_TTL_SECONDS``), and ``published_at`` inside the
+    payload, which lets the reader reject a stale record even if some future
+    caller writes the key without an expiry. Absence is then unambiguous, and
+    the API renders it as "no worker" - never as a healthy default.
+
+    Returns:
+        True if the report was written.
+    """
+    try:
+        from shared.redis_client import get_redis_client
+
+        payload = capabilities_report()
+        payload["published_at"] = time.time()
+        return get_redis_client().set_vision_heartbeat(payload, HEARTBEAT_TTL_SECONDS)
+    except Exception as exc:
+        logger.warning("vision: could not publish the capabilities heartbeat: %s", exc)
+        return False
+
+
+def _heartbeat_loop(stop_event: threading.Event, interval: float) -> None:
+    """Republish until asked to stop. Runs on a daemon thread, never in a task.
+
+    A periodic *task* would land on the one-slot vision queue and stop being
+    published for exactly as long as the worker was busy - which is the state
+    the heartbeat most needs to describe.
+    """
+    while not stop_event.wait(interval):
+        publish_vision_heartbeat()
+
+
+def start_vision_heartbeat(interval: float = HEARTBEAT_INTERVAL_SECONDS):
+    """Publish once, then keep publishing on a daemon thread.
+
+    The first publish is synchronous so that a request arriving right after the
+    worker boots does not read an empty key and conclude nobody is home.
+
+    Returns:
+        ``(thread, stop_event)``, or ``None`` when this process does not serve
+        the vision queue.
+    """
+    if not consumes_vision_queue():
+        return None
+
+    publish_vision_heartbeat()
+
+    stop_event = threading.Event()
+    thread = threading.Thread(
+        target=_heartbeat_loop,
+        args=(stop_event, interval),
+        name="vision-heartbeat",
+        daemon=True,  # never hold up worker shutdown for a status write
+    )
+    thread.start()
+    logger.info(
+        "vision: publishing a capabilities heartbeat every %ss (ttl %ss)",
+        interval,
+        HEARTBEAT_TTL_SECONDS,
+    )
+    return thread, stop_event
+
+
+@worker_process_init.connect
+def _start_vision_heartbeat(**kwargs):
+    """Start the heartbeat when a vision worker process comes up.
+
+    Must never abort startup: a worker whose Redis is briefly unreachable still
+    has to boot, and it will simply be reported as absent until it can publish.
+    """
+    try:
+        start_vision_heartbeat()
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("vision: could not start the capabilities heartbeat: %s", exc)
 
 
 @worker_process_init.connect

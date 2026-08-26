@@ -1,5 +1,5 @@
 """
-Validation for caller-supplied image bytes.
+Validation for caller-supplied image bytes, and the on-disk handoff to the worker.
 
 The rungs of the ladder - decode, size, format - are here rather than inline in
 the HTTP handlers so that the JSON route, the multipart route and the tasks all
@@ -9,18 +9,34 @@ package, so a failure carries its HTTP status and error code with it.
 
 Format is decided by sniffing magic bytes. A caller-supplied mime type is never
 trusted: it is trivially forged and would let unexpected bytes reach PIL.
+
+The handoff helpers at the bottom own the *layout* of that directory
+(``<temp_storage_path>/images/<job_id>/<filename>``) so that the writer (the
+API route), the deleter (the vision task) and the sweeper (the monitoring
+backstop) cannot disagree about where the bytes live. They are here, and not in
+``api/image_routes.py``, precisely because the process that creates the file is
+not the process that removes it.
+
+Nothing in this module imports torch, transformers or PIL - the API imports it,
+and ``test_vision_import_safety.py`` keeps that true.
 """
 
 import base64
 import binascii
+import logging
 import re
-from typing import Optional, Tuple
+import shutil
+import time
+from pathlib import Path
+from typing import Optional, Tuple, Union
 
 from workers.vision.errors import (
     ImagePayloadTooLargeError,
     InvalidImageBase64Error,
     VisionInvalidImageError,
 )
+
+logger = logging.getLogger(__name__)
 
 # `data:image/png;base64,....` - stripped when present so a browser's
 # canvas.toDataURL() output works without the caller having to trim it.
@@ -132,3 +148,104 @@ def extension_for_mime(mime: str) -> str:
         "image/gif": ".gif",
         "image/tiff": ".tiff",
     }.get(mime, ".bin")
+
+
+# ---------------------------------------------------------------------------
+# The on-disk handoff: one directory per job, deleted by whoever last read it
+# ---------------------------------------------------------------------------
+
+# Directory under `temp_storage_path` that holds the per-job handoff dirs.
+IMAGE_HANDOFF_ROOT = "images"
+
+# A job id is a uuid4 minted by the route. Rebuilding the path from it means a
+# forged broker message cannot turn "delete the handoff" into "delete anything
+# else": `../..` never matches.
+_SAFE_JOB_ID = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
+
+def image_handoff_root(temp_storage_path: Union[str, Path]) -> Path:
+    """``<temp_storage_path>/images`` - the parent of every per-job directory."""
+    return Path(temp_storage_path) / IMAGE_HANDOFF_ROOT
+
+
+def image_handoff_dir(temp_storage_path: Union[str, Path], job_id: str) -> Path:
+    """The directory holding one job's image.
+
+    One directory per job, and a job id is a fresh uuid4 per request, so
+    deleting a whole directory can never take a file another in-flight request
+    is still using.
+
+    Raises:
+        ValueError: The job id is not a plain identifier (path traversal).
+    """
+    if not _SAFE_JOB_ID.match(str(job_id or "")):
+        raise ValueError(f"refusing to build an image handoff path for job id {job_id!r}")
+    return image_handoff_root(temp_storage_path) / str(job_id)
+
+
+def discard_image_handoff(temp_storage_path: Union[str, Path], job_id: str) -> bool:
+    """Delete one job's handoff directory. Never raises.
+
+    Returns:
+        True if a directory was removed, False if there was nothing to remove
+        or the removal failed (which is logged, not raised - failing to clean
+        up must never turn a successful inference into an error).
+    """
+    try:
+        directory = image_handoff_dir(temp_storage_path, job_id)
+    except ValueError as exc:
+        logger.error("vision: %s", exc)
+        return False
+
+    try:
+        if not directory.is_dir():
+            return False
+        shutil.rmtree(directory)
+        logger.debug("vision: removed image handoff directory %s", directory)
+        return True
+    except OSError as exc:
+        logger.warning("vision: could not remove image handoff %s: %s", directory, exc)
+        return False
+
+
+def sweep_image_handoffs(
+    temp_storage_path: Union[str, Path], max_age_seconds: float
+) -> int:
+    """Remove handoff directories older than ``max_age_seconds``. Never raises.
+
+    A BACKSTOP, not the mechanism. The primary deletion happens in the vision
+    task's ``finally``; this only catches the case where that never ran at all -
+    a hard time limit killing the worker process, a SIGKILL, or a message that
+    was dispatched and never delivered. It is periodic, so it cannot bound a
+    tight upload loop on its own.
+
+    ``max_age_seconds`` must be comfortably longer than a task can legitimately
+    hold its image, or this would delete a file out from under a running
+    inference.
+
+    Returns:
+        The number of directories removed.
+    """
+    root = image_handoff_root(temp_storage_path)
+    removed = 0
+
+    try:
+        if not root.is_dir():
+            return 0
+        entries = list(root.iterdir())
+    except OSError as exc:
+        logger.warning("vision: could not list image handoffs in %s: %s", root, exc)
+        return 0
+
+    cutoff = time.time() - max_age_seconds
+    for entry in entries:
+        try:
+            if not entry.is_dir() or entry.stat().st_mtime > cutoff:
+                continue
+            shutil.rmtree(entry)
+            removed += 1
+            logger.info("vision: swept orphaned image handoff %s", entry)
+        except OSError as exc:
+            logger.warning("vision: could not sweep image handoff %s: %s", entry, exc)
+
+    return removed

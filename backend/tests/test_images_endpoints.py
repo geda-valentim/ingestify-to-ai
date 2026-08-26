@@ -51,6 +51,7 @@ extended here to carry a request body, since every existing helper hardcodes
 import asyncio
 import base64
 import json
+import time
 
 import pytest
 from fastapi import FastAPI
@@ -60,6 +61,7 @@ from sqlalchemy.orm import sessionmaker
 from shared.database import Base, get_db
 from shared.models import Job, User
 from shared.auth import get_current_active_user
+from shared.schemas import VisionCapabilitiesResponse
 
 import api.image_routes as image_routes
 
@@ -150,7 +152,14 @@ class FakeDispatch:
 
 
 class FakeMinIO:
-    """Stands in for MinIOClient: records uploads, never touches the network."""
+    """Stands in for MinIOClient: records uploads, never touches the network.
+
+    Kept even though `/images/*` no longer writes to object storage - it is the
+    trap. It is installed with `raising=False`, so re-adding a
+    `get_minio_client` import to the route rebinds it to this recorder instead
+    of to a client that would open a socket, and
+    `test_the_image_is_not_copied_to_object_storage` sees the write.
+    """
 
     def __init__(self, fail=False):
         self.bucket_uploads = "ingestify-uploads"
@@ -195,8 +204,21 @@ def no_redis(monkeypatch, fake_redis):
 
 @pytest.fixture(autouse=True)
 def minio(monkeypatch):
+    """A recorder bound wherever a bucket write could come from.
+
+    Both bindings matter, and only having the first is how the first draft of
+    this fixture let a reintroduced upload through: the route no longer has a
+    `get_minio_client` name (hence `raising=False`), so a re-added upload
+    written as a function-local `from shared.minio_client import ...` would
+    have resolved past the module attribute and reached a real client. Patching
+    the source module as well closes that, and keeps the suite off the network
+    either way.
+    """
+    import shared.minio_client as minio_module
+
     fake = FakeMinIO()
-    monkeypatch.setattr(image_routes, "get_minio_client", lambda: fake)
+    monkeypatch.setattr(image_routes, "get_minio_client", lambda: fake, raising=False)
+    monkeypatch.setattr(minio_module, "get_minio_client", lambda: fake)
     return fake
 
 
@@ -397,8 +419,8 @@ class TestAuthorization:
         probed = []
         monkeypatch.setattr(
             image_routes,
-            "_dispatch_capabilities_task",
-            lambda: probed.append(1) or FakeAsyncResult({}),
+            "_read_capabilities_heartbeat",
+            lambda: probed.append(1) or None,
         )
 
         response = _request(app, "GET", "/images/capabilities")
@@ -561,15 +583,28 @@ class TestDescribeHappyPath:
         written = temp_storage / "images" / call["job_id"]
         assert (written / "image.png").read_bytes() == PNG_BYTES
         assert call["image_path"] == str(written / "image.png")
-        assert minio.uploads[0]["object_name"] == f"images/{call['job_id']}/image.png"
 
-    def test_a_minio_failure_does_not_fail_the_request(self, app, db, users, dispatch, monkeypatch):
-        """MinIO here is retention; the worker reads from the shared volume."""
-        monkeypatch.setattr(image_routes, "get_minio_client", lambda: FakeMinIO(fail=True))
+    def test_the_image_is_not_copied_to_object_storage(self, app, db, users, dispatch, minio):
+        """
+        There is ONE copy of the image, on the shared volume, and it is the one
+        the worker reads.
 
-        response = _post_json(app, "/images/describe", {"image_base64": PNG_B64}, user=users)
+        The route used to also PUT `images/{job_id}/{filename}` into the uploads
+        bucket under the name "retention". Nothing ever read it: the worker
+        reads the disk, the response echoes the bytes back inline, and
+        `/jobs/{id}/result` returns the inference JSON. Nothing even *pointed*
+        at it - unlike `/upload` and `/transcribe`, the object name was never
+        written to `Job.minio_upload_path` - so it could be neither served nor
+        swept, and it had no TTL. That is not retention, it is an unbounded,
+        unreferenceable leak with a 10MB PUT on the hot path of a synchronous
+        request. A second copy that no one reads has no correct lifetime except
+        "never created".
+        """
+        _post_json(app, "/images/describe", {"image_base64": PNG_B64}, user=users)
 
-        assert response.status_code == 200
+        assert minio.uploads == []
+        job = db.query(Job).one()
+        assert job.minio_upload_path is None
 
     def test_a_caller_supplied_filename_cannot_escape_its_directory(
         self, app, db, users, dispatch, temp_storage
@@ -769,6 +804,229 @@ class TestRouteAndTaskAgree:
         assert response.detail["error_code"] == "VISION_MODEL_LOAD_FAILED"
         assert "the stub refused to load" in response.detail["message"]
         assert response.detail["job_id"] == db.query(Job).one().id
+
+
+# ---------------------------------------------------------------------------
+# The image does not outlive the work it was uploaded for
+# ---------------------------------------------------------------------------
+
+def _handoff_dirs(temp_storage):
+    """The per-job directories currently sitting under `<temp>/images`."""
+    root = temp_storage / "images"
+    return sorted(p.name for p in root.iterdir()) if root.is_dir() else []
+
+
+class TestTheImageIsDeleted:
+    """
+    `/images/*` is a synchronous endpoint an authenticated caller can hit in a
+    loop, at up to 10MB a time, writing onto a bind-mounted host volume shared
+    by the API and every worker. Nothing deleted those bytes: the disk filled
+    at the caller's chosen rate.
+
+    The deletion belongs to the TASK, not to the route, and the two halves of
+    that sentence both need a test:
+
+      - the task deletes on every exit, not just the happy one, which is why
+        the failing and crashing paths are exercised here through the real task
+        rather than through a stubbed dispatch;
+      - the route must NOT delete when it gives up, because a 504 is a handover
+        and the task is still reading the file. `test_a_timed_out_request_leaves
+        _the_image_for_the_still_running_task` is what fails if someone
+        "improves" this into a `finally` around the request.
+
+    The route cleans up in exactly one situation: the task was never dispatched,
+    so nobody else is ever going to.
+    """
+
+    def test_the_image_is_deleted_when_the_task_finishes(
+        self, app, db, users, eager_vision, temp_storage
+    ):
+        response = _post_json(app, "/images/describe", {"image_base64": PNG_B64}, user=users)
+
+        assert response.status_code == 200, response.body
+        assert _handoff_dirs(temp_storage) == []
+
+    def test_the_image_is_deleted_when_the_inference_fails(
+        self, app, db, users, eager_vision, temp_storage, monkeypatch
+    ):
+        """A typed failure returns rather than raises - the `finally` must still fire."""
+        from workers.vision.errors import VisionModelLoadError
+        from workers.vision.stub_describer import StubDescriber
+
+        def boom(self, image_path, options=None):
+            raise VisionModelLoadError("the stub refused to load")
+
+        monkeypatch.setattr(StubDescriber, "describe", boom)
+
+        response = _post_json(app, "/images/describe", {"image_base64": PNG_B64}, user=users)
+
+        assert response.status_code == 503
+        assert _handoff_dirs(temp_storage) == []
+
+    def test_the_image_is_deleted_when_the_task_crashes(
+        self, app, db, users, eager_vision, temp_storage, monkeypatch
+    ):
+        """An unexpected exception propagates out of the task; cleanup precedes it."""
+        from workers.vision.stub_describer import StubDescriber
+
+        def boom(self, image_path, options=None):
+            raise RuntimeError("something exploded inside the model")
+
+        monkeypatch.setattr(StubDescriber, "ocr", boom)
+
+        response = _post_json(app, "/images/ocr", {"image_base64": PNG_B64}, user=users)
+
+        assert response.status_code == 500
+        assert _handoff_dirs(temp_storage) == []
+
+    def test_the_image_is_deleted_when_the_dispatch_never_happens(
+        self, app, db, users, install_dispatch, temp_storage
+    ):
+        """No task was enqueued, so the route is the last one holding the file."""
+        install_dispatch(raises=ImportError("no module named workers.vision_tasks"))
+
+        response = _post_json(app, "/images/describe", {"image_base64": PNG_B64}, user=users)
+
+        assert response.status_code == 503
+        assert _handoff_dirs(temp_storage) == []
+
+    def test_the_image_is_deleted_when_the_broker_is_down(
+        self, app, db, users, install_dispatch, temp_storage
+    ):
+        install_dispatch(raises=RuntimeError("Cannot connect to redis://redis:6379//"))
+
+        response = _post_json(app, "/images/describe", {"image_base64": PNG_B64}, user=users)
+
+        assert response.status_code == 503
+        assert _handoff_dirs(temp_storage) == []
+
+    def test_a_timed_out_request_leaves_the_image_for_the_still_running_task(
+        self, app, db, users, install_dispatch, temp_storage, monkeypatch
+    ):
+        """
+        The 504 is a handover, not an abort: the task keeps running and is
+        still reading this file. Deleting it here would break the one path the
+        whole synchronous design depends on.
+        """
+        monkeypatch.setattr(image_routes.settings, "vision_request_timeout_seconds", 0)
+        install_dispatch(result=None, ready=False)
+
+        response = _post_json(app, "/images/describe", {"image_base64": PNG_B64}, user=users)
+
+        assert response.status_code == 504
+        job_id = response.detail["job_id"]
+        assert _handoff_dirs(temp_storage) == [job_id]
+        assert (temp_storage / "images" / job_id / "image.png").read_bytes() == PNG_BYTES
+
+    def test_one_requests_cleanup_cannot_touch_another(
+        self, app, db, users, eager_vision, temp_storage
+    ):
+        """
+        A directory per job id - a fresh uuid4 per request - is what makes
+        deleting a whole directory safe under concurrency. Plant a neighbour and
+        watch it survive a completed request.
+        """
+        neighbour = temp_storage / "images" / "another-in-flight-job"
+        neighbour.mkdir(parents=True)
+        (neighbour / "image.png").write_bytes(PNG_BYTES)
+
+        response = _post_json(app, "/images/describe", {"image_base64": PNG_B64}, user=users)
+
+        assert response.status_code == 200, response.body
+        assert _handoff_dirs(temp_storage) == ["another-in-flight-job"]
+        assert (neighbour / "image.png").read_bytes() == PNG_BYTES
+
+
+class TestTheOrphanSweep:
+    """
+    The backstop for the one case the task's `finally` cannot cover: the worker
+    process being killed outright (hard time limit, OOM), or a message that was
+    dispatched and never delivered.
+
+    It is a backstop and nothing more - it runs daily, and a caller in a loop
+    fills the disk in minutes. What it must get right is not being eager: an
+    inference legitimately holds its image for up to
+    `vision_task_timeout_seconds`, so a sweep with a short horizon would delete
+    files out from under running work.
+    """
+
+    def test_it_removes_a_directory_nobody_came_back_for(self, tmp_path):
+        import os
+
+        from workers.vision.image_input import sweep_image_handoffs
+
+        orphan = tmp_path / "images" / "job-that-died"
+        orphan.mkdir(parents=True)
+        (orphan / "image.png").write_bytes(PNG_BYTES)
+        old = time.time() - 7200
+        os.utime(orphan, (old, old))
+
+        assert sweep_image_handoffs(tmp_path, max_age_seconds=3600) == 1
+        assert not orphan.exists()
+
+    def test_it_leaves_a_directory_a_running_task_may_still_need(self, tmp_path):
+        from workers.vision.image_input import sweep_image_handoffs
+
+        fresh = tmp_path / "images" / "job-in-progress"
+        fresh.mkdir(parents=True)
+        (fresh / "image.png").write_bytes(PNG_BYTES)
+
+        assert sweep_image_handoffs(tmp_path, max_age_seconds=3600) == 0
+        assert (fresh / "image.png").exists()
+
+    def test_its_horizon_is_far_longer_than_a_task_can_hold_an_image(self):
+        """The monitoring wiring must never sweep inside a legitimate hold."""
+        from shared.config import get_settings
+        from workers.monitoring import VISION_IMAGE_ORPHAN_MIN_AGE_SECONDS
+
+        assert VISION_IMAGE_ORPHAN_MIN_AGE_SECONDS > (
+            get_settings().vision_task_timeout_seconds * 4
+        )
+
+    def test_the_daily_cleanup_actually_runs_it(self, tmp_path, monkeypatch):
+        """
+        A backstop nobody calls is not a backstop. This drives the real
+        `cleanup_old_jobs` body, with only its database query stubbed out.
+        """
+        import os
+
+        import workers.monitoring as monitoring
+
+        monkeypatch.setattr(monitoring.settings, "temp_storage_path", str(tmp_path))
+        monkeypatch.setattr(monitoring.settings, "monitoring_enabled", True)
+        monkeypatch.setattr(monitoring, "get_old_completed_jobs", lambda **kw: [])
+        monkeypatch.setattr(monitoring, "get_redis_client", lambda: None)
+
+        orphan = tmp_path / "images" / "job-whose-worker-was-killed"
+        orphan.mkdir(parents=True)
+        (orphan / "image.png").write_bytes(PNG_BYTES)
+        old = time.time() - 86400
+        os.utime(orphan, (old, old))
+
+        assert monitoring.cleanup_old_jobs()["vision_images_swept"] == 1
+        assert not orphan.exists()
+
+    def test_a_missing_directory_is_not_an_error(self, tmp_path):
+        from workers.vision.image_input import sweep_image_handoffs
+
+        assert sweep_image_handoffs(tmp_path / "nothing-here", max_age_seconds=1) == 0
+
+    def test_a_forged_job_id_cannot_aim_the_deletion(self, tmp_path):
+        """
+        The path is rebuilt from the job id rather than taken from the message,
+        so a hand-crafted broker message cannot turn cleanup into `rm -rf`.
+        """
+        from workers.vision.image_input import discard_image_handoff, image_handoff_dir
+
+        victim = tmp_path / "important"
+        victim.mkdir()
+        (victim / "keep.txt").write_text("do not delete me")
+
+        assert discard_image_handoff(tmp_path, "../important") is False
+        assert (victim / "keep.txt").exists()
+
+        with pytest.raises(ValueError):
+            image_handoff_dir(tmp_path, "../important")
 
 
 # ---------------------------------------------------------------------------
@@ -1031,21 +1289,76 @@ class TestRequestTimeout:
 # Capabilities
 # ---------------------------------------------------------------------------
 
-class TestCapabilities:
-    def test_it_reports_what_the_worker_says(self, app, users, monkeypatch):
-        worker_answer = {
-            "provider": "florence2",
-            "device_resolved": "cuda:0",
-            "torch_available": True,
-            "cuda_available": True,
-            "cuda_device_name": "NVIDIA GeForce RTX 5060 Ti",
-            "dependencies_installed": True,
-            "model_downloaded": True,
-            "model_loaded": True,
-        }
-        monkeypatch.setattr(
-            image_routes, "_dispatch_capabilities_task", lambda: FakeAsyncResult(worker_answer)
+HEALTHY_WORKER_REPORT = {
+    "enabled": True,
+    "provider": "florence2",
+    "model_id": "florence-community/Florence-2-base-ft",
+    "revision": "0b03b6f15a4a211370fb204aee4e7dd48887ea37",
+    "device_requested": "auto",
+    "device_resolved": "cuda:0",
+    "torch_available": True,
+    "cuda_available": True,
+    "cuda_device_name": "NVIDIA GeForce RTX 5060 Ti",
+    "dependencies_installed": True,
+    "model_downloaded": True,
+    "model_loaded": True,
+    "trust_remote_code": False,
+    "reason": None,
+}
+
+
+class NoQueueingAllowed:
+    """A `vision_capabilities_task.delay` that fails the test if it is called.
+
+    The old implementation put the ops probe on `settings.vision_queue`: one
+    slot, no prefetch, behind an inference of up to 120s. That produced both
+    halves of the defect - a probe that reported "no worker" whenever a worker
+    was busy, and an unbounded backlog an authenticated caller could grow by
+    polling, starving real inference with the diagnostic. Reverting to a
+    dispatch trips this.
+    """
+
+    def __init__(self):
+        self.calls = 0
+
+    def __call__(self, *args, **kwargs):
+        self.calls += 1
+        raise AssertionError(
+            "/images/capabilities must not enqueue anything: the vision queue "
+            "has one slot and the probe would sit behind an inference."
         )
+
+
+@pytest.fixture
+def no_queueing(monkeypatch):
+    from workers.vision_tasks import vision_capabilities_task
+
+    spy = NoQueueingAllowed()
+    monkeypatch.setattr(vision_capabilities_task, "delay", spy)
+    monkeypatch.setattr(vision_capabilities_task, "apply_async", spy)
+    return spy
+
+
+class TestCapabilities:
+    """
+    Four states, four distinguishable answers - and being BUSY is not being
+    ABSENT.
+
+    The route reads a heartbeat key instead of queueing a probe, so the state
+    of the vision queue is irrelevant to the answer. Every test here installs
+    `no_queueing`, which turns any dispatch back into a failure.
+    """
+
+    def _publish(self, redis_client, **overrides):
+        payload = dict(HEALTHY_WORKER_REPORT, published_at=time.time())
+        payload.update(overrides)
+        redis_client.set_vision_heartbeat(payload, 45)
+        return payload
+
+    def test_a_running_worker_is_reported_from_its_heartbeat(
+        self, app, users, no_redis, no_queueing
+    ):
+        self._publish(no_redis)
 
         response = _request(app, "GET", "/images/capabilities", user=users)
 
@@ -1056,15 +1369,51 @@ class TestCapabilities:
         assert body["cuda_device_name"] == "NVIDIA GeForce RTX 5060 Ti"
         assert body["model_loaded"] is True
         assert body["reason"] is None, "a healthy worker leaves nothing to explain"
+        assert no_queueing.calls == 0
 
-    def test_a_silent_worker_still_answers_200(self, app, users, monkeypatch):
+    def test_a_busy_worker_is_not_reported_as_an_absent_one(
+        self, app, users, no_redis, no_queueing, install_dispatch, monkeypatch
+    ):
+        """
+        THE defect. The vision queue is saturated - an inference is running and
+        the single slot is taken - and the answer must still be the truth about
+        the worker, because the endpoint never touches that queue.
+        """
+        monkeypatch.setattr(image_routes.settings, "vision_request_timeout_seconds", 0)
+        install_dispatch(result=None, ready=False)  # the slot is occupied
+        self._publish(no_redis)
+
+        response = _request(app, "GET", "/images/capabilities", user=users)
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["dependencies_installed"] is True
+        assert body["model_loaded"] is True
+        assert body["reason"] is None
+        assert no_queueing.calls == 0
+
+    def test_no_worker_at_all_answers_200_and_says_so(
+        self, app, users, no_redis, no_queueing
+    ):
         """An ops probe must not 5xx when the thing it probes is down."""
-        monkeypatch.setattr(image_routes, "CAPABILITIES_WAIT_SECONDS", 0)
-        monkeypatch.setattr(
-            image_routes,
-            "_dispatch_capabilities_task",
-            lambda: FakeAsyncResult(None, ready=False),
-        )
+        response = _request(app, "GET", "/images/capabilities", user=users)
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["dependencies_installed"] is False
+        assert body["model_loaded"] is False
+        assert "no vision worker heartbeat" in body["reason"]
+
+    def test_a_stale_heartbeat_is_not_a_live_worker(
+        self, app, users, no_redis, no_queueing
+    ):
+        """
+        The failure mode a heartbeat brings with it: a record outliving the
+        process that wrote it. The Redis TTL handles the ordinary case, and the
+        age carried inside the payload closes the rest - a key written without
+        an expiry, or a clock that let one linger, must not read as healthy.
+        """
+        self._publish(no_redis, published_at=time.time() - 600)
 
         response = _request(app, "GET", "/images/capabilities", user=users)
 
@@ -1072,15 +1421,206 @@ class TestCapabilities:
         body = response.json()
         assert body["dependencies_installed"] is False
         assert body["model_loaded"] is False
-        assert body["reason"] == "no vision worker responded within 10s"
+        assert "no vision worker heartbeat" in body["reason"]
 
-    def test_a_dead_broker_still_answers_200(self, app, users, monkeypatch):
-        def boom():
-            raise RuntimeError("Cannot connect to redis://redis:6379//")
+    def test_a_heartbeat_without_an_age_is_not_trusted(
+        self, app, users, no_redis, no_queueing
+    ):
+        payload = dict(HEALTHY_WORKER_REPORT)
+        payload.pop("published_at", None)
+        no_redis.set_vision_heartbeat(payload, 45)
 
-        monkeypatch.setattr(image_routes, "_dispatch_capabilities_task", boom)
+        response = _request(app, "GET", "/images/capabilities", user=users)
+
+        assert response.json()["dependencies_installed"] is False
+
+    def test_the_heartbeat_carries_a_ttl(self, no_redis):
+        """Without an expiry the key would describe a worker forever."""
+        self._publish(no_redis)
+
+        from shared.redis_client import VISION_HEARTBEAT_KEY
+
+        assert 0 < no_redis.client.ttl(VISION_HEARTBEAT_KEY) <= 45
+
+    def test_a_worker_without_the_vision_extra_reports_the_reason(
+        self, app, users, no_redis, no_queueing
+    ):
+        """
+        Running-but-uninstalled is its own state: the worker is there, so the
+        `reason` is the worker's, not the API's "nobody answered".
+        """
+        self._publish(
+            no_redis,
+            dependencies_installed=False,
+            model_downloaded=False,
+            model_loaded=False,
+            torch_available=False,
+            cuda_available=False,
+            device_resolved="cpu",
+            reason="missing dependencies: torch, transformers, Pillow.",
+        )
 
         response = _request(app, "GET", "/images/capabilities", user=users)
 
         assert response.status_code == 200
-        assert "broker" in response.json()["reason"]
+        body = response.json()
+        assert body["dependencies_installed"] is False
+        assert body["reason"] == "missing dependencies: torch, transformers, Pillow."
+        assert "no vision worker heartbeat" not in body["reason"]
+
+    def test_a_dead_redis_still_answers_200(self, app, users, monkeypatch, no_queueing):
+        class DeadRedis:
+            def get_vision_heartbeat(self):
+                raise RuntimeError("Cannot connect to redis://redis:6379//")
+
+        monkeypatch.setattr(image_routes, "get_redis_client", lambda: DeadRedis())
+
+        response = _request(app, "GET", "/images/capabilities", user=users)
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["dependencies_installed"] is False
+        assert "heartbeat" in body["reason"]
+
+    def test_the_capabilities_task_cannot_pile_up_on_the_queue(self):
+        """
+        The task stays registered (an unknown name under `task_acks_late` is
+        redelivered forever, so deleting it would be worse than keeping it), but
+        a straggler from an older API build must not spend the single vision
+        slot answering about a moment that has passed.
+        """
+        from workers.vision_tasks import HEARTBEAT_TTL_SECONDS, vision_capabilities_task
+
+        assert vision_capabilities_task.expires == HEARTBEAT_TTL_SECONDS
+        assert vision_capabilities_task.time_limit is not None
+        assert vision_capabilities_task.name == "workers.vision_tasks.vision_capabilities_task"
+
+
+class TestTheHeartbeatAndTheRouteAgree:
+    """
+    The publisher and the reader are in different processes, and nothing else in
+    this file makes them agree: every test above writes the payload by hand.
+    Here the REAL publisher writes it, through the real `RedisClient`, and the
+    real route reads it - so renaming a key in `capabilities_report()` breaks a
+    test instead of silently degrading production to "no worker".
+    """
+
+    def test_the_real_publisher_produces_a_report_the_route_can_read(
+        self, app, users, no_redis, monkeypatch
+    ):
+        import shared.redis_client as redis_module
+        import workers.vision_tasks as vision_tasks
+
+        monkeypatch.setattr(redis_module, "get_redis_client", lambda: no_redis)
+
+        assert vision_tasks.publish_vision_heartbeat() is True
+
+        response = _request(app, "GET", "/images/capabilities", user=users)
+
+        assert response.status_code == 200
+        body = response.json()
+        # VISION_PROVIDER=stub in conftest: a real describer, no torch.
+        assert body["provider"] == "stub"
+        assert body["dependencies_installed"] is True
+        assert "no vision worker heartbeat" not in (body["reason"] or "")
+        # Every field the response model needs actually arrived.
+        for field in VisionCapabilitiesResponse.model_fields:
+            assert field in body
+
+    def test_the_publisher_does_not_disturb_the_loaded_model(self, no_redis, monkeypatch):
+        """
+        It runs on a background thread while inference runs on the main one.
+        Building (or rebuilding) the process-wide describer from there would
+        race the instance that holds the weights, so the probe only ever peeks.
+        """
+        import shared.redis_client as redis_module
+        import workers.vision_tasks as vision_tasks
+        from workers.vision.factory import (
+            get_image_describer,
+            peek_image_describer,
+            reset_image_describer,
+        )
+
+        monkeypatch.setattr(redis_module, "get_redis_client", lambda: no_redis)
+        reset_image_describer()
+        try:
+            assert peek_image_describer() is None
+            vision_tasks.publish_vision_heartbeat()
+            assert peek_image_describer() is None, "a probe must not populate the cache"
+
+            loaded = get_image_describer()
+            vision_tasks.publish_vision_heartbeat()
+            assert peek_image_describer() is loaded, "nor replace it"
+        finally:
+            reset_image_describer()
+
+    def test_only_a_worker_serving_the_vision_queue_publishes(self, monkeypatch):
+        """
+        `workers/celery_app.py` imports the vision tasks in EVERY process - the
+        API, beat, and the five general workers. If any of those published, the
+        endpoint would report a healthy subsystem while `/images/describe` timed
+        out against a queue with no consumer: the same lie, from the other side.
+
+        The answer comes from Celery's own `-Q` selection, exercised here on the
+        real `Queues` object rather than described by a mock.
+        """
+        import workers.vision_tasks as vision_tasks
+        from shared.config import get_settings
+        from workers.celery_app import celery_app
+
+        queues = celery_app.amqp.queues
+        previous = queues._consume_from
+        try:
+            queues.select([get_settings().celery_task_default_queue])
+            assert vision_tasks.consumes_vision_queue() is False
+            assert vision_tasks.start_vision_heartbeat() is None
+
+            queues.select([get_settings().vision_queue])
+            assert vision_tasks.consumes_vision_queue() is True
+        finally:
+            queues._consume_from = previous
+
+    def test_the_heartbeat_thread_keeps_publishing_while_the_worker_is_busy(
+        self, no_redis, monkeypatch
+    ):
+        """
+        The refresh must not be a Celery task: on a one-slot queue it would stop
+        being published for exactly as long as the worker was busy - the state
+        the heartbeat most needs to describe. A daemon thread does not queue.
+        """
+        import shared.redis_client as redis_module
+        import workers.vision_tasks as vision_tasks
+        from shared.config import get_settings
+        from workers.celery_app import celery_app
+
+        monkeypatch.setattr(redis_module, "get_redis_client", lambda: no_redis)
+
+        published = []
+        monkeypatch.setattr(
+            vision_tasks,
+            "publish_vision_heartbeat",
+            lambda: published.append(time.time()) or True,
+        )
+
+        queues = celery_app.amqp.queues
+        previous = queues._consume_from
+        started = None
+        try:
+            queues.select([get_settings().vision_queue])
+            started = vision_tasks.start_vision_heartbeat(interval=0.01)
+            assert started is not None
+            thread, stop_event = started
+            assert thread.daemon, "shutdown must not wait on a status write"
+
+            deadline = time.time() + 2
+            while len(published) < 3 and time.time() < deadline:
+                time.sleep(0.01)
+        finally:
+            if started is not None:
+                started[1].set()
+                started[0].join(timeout=2)
+            queues._consume_from = previous
+
+        # One synchronous publish at start (so a request arriving immediately
+        # after boot does not read an empty key), then the loop.
+        assert len(published) >= 3
