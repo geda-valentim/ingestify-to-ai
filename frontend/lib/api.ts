@@ -14,7 +14,9 @@ import type {
   ConvertRequest,
   UploadRequest,
   JobsListParams,
+  JobsListResponse,
   SearchParams,
+  SearchResponse,
 } from "@/types/api";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080";
@@ -182,7 +184,16 @@ export const jobsApi = {
     return response.json();
   },
 
-  async list(params?: JobsListParams): Promise<JobStatusResponse[]> {
+  /**
+   * List the caller's jobs.
+   *
+   * Returns the server's envelope verbatim. This used to declare
+   * `Promise<JobStatusResponse[]>` while handing back `{total, limit, offset,
+   * jobs}`; `response.json()` is `any`, so the declaration was simply false and
+   * `tsc` had nothing to object to. Every consumer then treated the object as
+   * an array and rendered nothing.
+   */
+  async list(params?: JobsListParams): Promise<JobsListResponse> {
     const searchParams = new URLSearchParams();
     if (params?.limit) searchParams.set("limit", params.limit.toString());
     if (params?.offset) searchParams.set("offset", params.offset.toString());
@@ -201,12 +212,19 @@ export const jobsApi = {
     return response.json();
   },
 
-  async search(params: SearchParams): Promise<JobStatusResponse[]> {
+  /**
+   * Full-text search over converted document content.
+   *
+   * The route is `/search`, not `/jobs/search`. `/jobs/search` is not a route at
+   * all - it matches `GET /jobs/{job_id}` with `job_id="search"`, so every
+   * keystroke used to come back as a confident, wrong 404 "Job não encontrado".
+   */
+  async search(params: SearchParams): Promise<SearchResponse> {
     const searchParams = new URLSearchParams();
     searchParams.set("query", params.query);
     if (params.limit) searchParams.set("limit", params.limit.toString());
 
-    const response = await fetch(`${API_URL}/jobs/search?${searchParams}`, {
+    const response = await fetch(`${API_URL}/search?${searchParams}`, {
       headers: getHeaders(true),
     });
 
@@ -217,18 +235,11 @@ export const jobsApi = {
     return response.json();
   },
 
-  async cancel(jobId: string): Promise<{ message: string }> {
-    const response = await fetch(`${API_URL}/jobs/${jobId}/cancel`, {
-      method: "POST",
-      headers: getHeaders(true),
-    });
-
-    if (!response.ok) {
-      throw new Error(`Failed to cancel job: ${response.statusText}`);
-    }
-
-    return response.json();
-  },
+  // `cancel()` used to live here, calling POST /jobs/{job_id}/cancel. That
+  // route does not exist and never has - the API has no cancel operation - so
+  // the method could only ever have thrown. It had no call sites; removed
+  // rather than left as a trap for whoever wires up a Cancel button next.
+  // Reinstating it means adding the endpoint first.
 
   async getPageResultByNumber(jobId: string, pageNumber: number): Promise<JobResultResponse> {
     // First get all pages to find the job_id for this page number
@@ -237,6 +248,11 @@ export const jobsApi = {
 
     if (!page) {
       throw new Error(`Page ${pageNumber} not found`);
+    }
+
+    // A listed page can have no job yet (see PageJobInfo.job_id).
+    if (!page.job_id) {
+      throw new Error(`Page ${pageNumber} has not been queued for conversion yet`);
     }
 
     // Then get the result for that specific page job
@@ -256,18 +272,31 @@ export const jobsApi = {
     return response.json();
   },
 
-  async retryPage(pageJobId: string): Promise<string> {
-    const response = await fetch(`${API_URL}/jobs/${pageJobId}/retry`, {
-      method: "POST",
-      headers: getHeaders(true),
-    });
+  /**
+   * Re-queue a page that failed, and return the id of the new page job.
+   *
+   * Addressed by (main job id, page number) - not by the failed page's own job
+   * id. `POST /jobs/{pageJobId}/retry` is not a route, so every retry 404'd;
+   * the live route is `POST /jobs/{job_id}/pages/{page_number}/retry`, and it
+   * has to be, because a retry mints a *new* page job and the server needs to
+   * know which page of which document it belongs to. The server answers with
+   * `new_page_job_id`; the old client read `new_job_id`, which never exists.
+   */
+  async retryPage(jobId: string, pageNumber: number): Promise<string> {
+    const response = await fetch(
+      `${API_URL}/jobs/${jobId}/pages/${pageNumber}/retry`,
+      {
+        method: "POST",
+        headers: getHeaders(true),
+      }
+    );
 
     if (!response.ok) {
       throw new Error(`Failed to retry page: ${response.statusText}`);
     }
 
     const data = await response.json();
-    return data.new_job_id || data.job_id;
+    return data.new_page_job_id;
   },
 
   /**
@@ -305,8 +334,9 @@ export const apiKeysApi = {
       throw new Error(`Failed to list API keys: ${response.statusText}`);
     }
 
-    const data = await response.json();
-    return data.api_keys || [];
+    // A bare array (`response_model=List[APIKeyInfo]`). There is no `api_keys`
+    // envelope; unwrapping one produced an empty list for every user, forever.
+    return response.json();
   },
 
   async create(request: APIKeyCreate): Promise<APIKeyResponse> {
@@ -326,7 +356,14 @@ export const apiKeysApi = {
     return response.json();
   },
 
-  async revoke(keyId: string): Promise<{ message: string }> {
+  /**
+   * Revoke an API key.
+   *
+   * The server answers 204 No Content, so there is no body to parse. Calling
+   * `response.json()` on it threw *after* the key had already been destroyed:
+   * the revoke succeeded and the UI reported failure.
+   */
+  async revoke(keyId: string): Promise<void> {
     const response = await fetch(`${API_URL}/api-keys/${keyId}`, {
       method: "DELETE",
       headers: getHeaders(true),
@@ -335,7 +372,5 @@ export const apiKeysApi = {
     if (!response.ok) {
       throw new Error(`Failed to revoke API key: ${response.statusText}`);
     }
-
-    return response.json();
   },
 };

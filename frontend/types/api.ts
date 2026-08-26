@@ -108,7 +108,15 @@ export interface JobResultResponse {
 
 export interface PageJobInfo {
   page_number: number;
-  job_id: string;
+  /**
+   * `null` until the split task has created this page's job.
+   *
+   * The API publishes `total_pages` before the page rows exist, so a page can
+   * be listed with no job behind it yet. It used to fabricate an id
+   * ("pending-3") for that case; nothing addressable lives at it. Anything that
+   * fetches by page job id must handle the null.
+   */
+  job_id: string | null;
   status: JobStatus;
   url: string;
   error_message?: string | null;
@@ -171,7 +179,64 @@ export interface SearchParams {
   limit?: number;
 }
 
+/**
+ * One row of `GET /jobs`.
+ *
+ * Deliberately not `JobStatusResponse`: the list handler builds these by hand
+ * from Redis + MySQL and returns strictly less than the detail endpoint - no
+ * `started_at`, no `pages`, no `child_jobs` - and `created_at`/`completed_at`
+ * are null whenever the MySQL row is missing. Reusing `JobStatusResponse` here
+ * would be the same kind of false claim that hid this bug in the first place.
+ */
+export interface JobListItem {
+  job_id: string;
+  type: JobType;
+  status: JobStatus;
+  progress: number;
+  name?: string | null;
+  created_at?: string | null;
+  completed_at?: string | null;
+  total_pages?: number;
+  pages_completed?: number;
+  page_number?: number | null;
+  parent_job_id?: string | null;
+}
+
+/**
+ * `GET /jobs` answers an envelope, never a bare array.
+ *
+ * `total` is the count *after* filtering and *before* pagination, so it - not
+ * `jobs.length` - drives the pager. Treating the envelope as an array is what
+ * made "My Jobs" render empty for every user regardless of job count.
+ */
 export interface JobsListResponse {
-  jobs: JobStatusResponse[];
   total: number;
+  limit: number;
+  offset: number;
+  jobs: JobListItem[];
+}
+
+/**
+ * One hit from `GET /search`.
+ *
+ * A search hit is not a job: it is a match inside an indexed document. It
+ * carries the evidence for the match (`preview`) and no live job state - the
+ * Elasticsearch index only holds finished conversions, and re-deriving
+ * status/progress per hit would mean a Redis round trip each and would lose
+ * every document whose Redis key has since expired.
+ */
+export interface SearchResult {
+  job_id: string;
+  filename?: string | null;
+  total_pages?: number | null;
+  char_count?: number | null;
+  created_at?: string | null;
+  preview: string;
+}
+
+export interface SearchResponse {
+  query: string;
+  total: number;
+  limit: number;
+  results: SearchResult[];
 }

@@ -939,11 +939,20 @@ async def get_job_status(
                     }
                     page_status = status_map.get(db_page.status, "pending")
 
+                    # No fabricated ids: a page row without `page_job_id` has no
+                    # page job to address, and inventing one ("page-3") both
+                    # failed schema validation (500) and pointed callers at a
+                    # URL that 404s. `None` says what is true; the URL falls back
+                    # to the by-page-number route, which is real either way.
                     pages_status_dict[db_page.page_number] = {
                         "page_number": db_page.page_number,
-                        "job_id": db_page.page_job_id or f"page-{db_page.page_number}",
+                        "job_id": db_page.page_job_id,
                         "status": page_status,
-                        "url": f"/jobs/{db_page.page_job_id or job_id}/result",
+                        "url": (
+                            f"/jobs/{db_page.page_job_id}/result"
+                            if db_page.page_job_id
+                            else f"/jobs/{job_id}/pages/{db_page.page_number}/result"
+                        ),
                         "error_message": db_page.error_message,
                         "retry_count": db_page.retry_count or 0,
                     }
@@ -977,10 +986,11 @@ async def get_job_status(
                 if page_num in pages_status_dict:
                     pages_status_list.append(pages_status_dict[page_num])
                 else:
-                    # Add placeholder for pages not yet created
+                    # Placeholder for pages the split task has not created yet.
+                    # `job_id` stays None - there is no page job to point at.
                     pages_status_list.append({
                         "page_number": page_num,
-                        "job_id": f"pending-{page_num}",
+                        "job_id": None,
                         "status": "queued",
                         "url": f"/jobs/{job_id}/pages/{page_num}/result",
                         "error_message": None,
@@ -1255,11 +1265,16 @@ async def get_job_pages(
             }
             page_status = status_map.get(db_page.status, "pending")
 
+            # Same rule as GET /jobs/{job_id}: never invent a page job id.
             pages_list.append(PageJobInfo(
                 page_number=db_page.page_number,
-                job_id=db_page.page_job_id or f"page-{db_page.page_number}",
+                job_id=db_page.page_job_id,
                 status=page_status,
-                url=f"/jobs/{db_page.page_job_id or job_id}/result",
+                url=(
+                    f"/jobs/{db_page.page_job_id}/result"
+                    if db_page.page_job_id
+                    else f"/jobs/{job_id}/pages/{db_page.page_number}/result"
+                ),
                 error_message=db_page.error_message,
                 retry_count=db_page.retry_count or 0,
             ))

@@ -13,6 +13,8 @@ import {
 } from "lucide-react";
 import { apiKeysApi } from "@/lib/api";
 import { useAuthStore } from "@/lib/store/auth";
+import { formatApiError } from "@/lib/utils";
+import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -28,6 +30,7 @@ import { formatDistanceToNow } from "date-fns";
 export default function ApiKeysPage() {
   const router = useRouter();
   const queryClient = useQueryClient();
+  const { toast } = useToast();
   const token = useAuthStore((state) => state.token);
   const isAuthenticated = useAuthStore((state) => state.token !== null && state.user !== null);
   const hasHydrated = useAuthStore((state) => state._hasHydrated);
@@ -64,6 +67,18 @@ export default function ApiKeysPage() {
     mutationFn: (id: string) => apiKeysApi.revoke(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["api-keys", token] });
+      toast({
+        title: "API key revoked",
+        description: "The key can no longer be used to access the API.",
+      });
+    },
+    // Without this, a failure was swallowed entirely: the UI just sat there.
+    onError: (error: unknown) => {
+      toast({
+        title: "Error revoking API key",
+        description: formatApiError(error),
+        variant: "destructive",
+      });
     },
   });
 
