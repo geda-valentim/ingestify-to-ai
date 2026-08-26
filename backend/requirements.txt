@@ -38,6 +38,7 @@ structlog==23.2.0
 pytest==7.4.3
 pytest-asyncio==0.21.1
 pytest-cov==4.1.0
+fakeredis==2.26.2  # in-memory Redis for unit tests
 
 # Database (MySQL)
 sqlalchemy>=2.0.0,<3.0.0
