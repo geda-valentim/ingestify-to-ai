@@ -25,6 +25,7 @@ from shared.database import SessionLocal, get_db
 from shared.models import Job, Page, JobStatus as DBJobStatus, User
 from shared.config import get_settings
 from shared.auth import get_current_active_user
+from api.deps import get_owned_job, get_owned_page_or_none
 from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
@@ -811,6 +812,7 @@ async def convert_document(
 async def get_job_status(
     job_id: str,
     current_user: User = Depends(get_current_active_user),
+    owned_job: Optional[Job] = Depends(get_owned_job),
     db: Session = Depends(get_db),
     page_limit: Optional[int] = None,
     page_offset: int = 0,
@@ -823,8 +825,14 @@ async def get_job_status(
     - `page_offset`: Number of pages to skip (default: 0)
 
     Example: GET /jobs/{job_id}?page_limit=50&page_offset=0
+
+    ## Permissões:
+    - Apenas o dono do job (verificado no MySQL) pode consultá-lo.
+      Jobs de outros usuários retornam 404.
     """
     redis_client = get_redis_client()
+
+    # Ownership já validada em get_owned_job (MySQL como fonte da verdade)
 
     # Get job status from Redis (real-time data)
     status_data = redis_client.get_job_status(job_id)
@@ -832,12 +840,8 @@ async def get_job_status(
     if not status_data:
         raise HTTPException(status_code=404, detail="Job não encontrado ou expirado")
 
-    # Verify job ownership
-    if not redis_client.verify_job_ownership(job_id, current_user.id):
-        raise HTTPException(status_code=403, detail="Acesso negado: este job pertence a outro usuário")
-
-    # Get job metadata from MySQL
-    db_job = db.query(Job).filter(Job.id == job_id).first()
+    # Get job metadata from MySQL (child jobs não possuem linha própria)
+    db_job = owned_job if (owned_job is not None and owned_job.id == job_id) else None
 
     # Parse timestamps
     started_at = None
@@ -998,6 +1002,7 @@ async def get_job_status(
 async def delete_job(
     job_id: str,
     current_user: User = Depends(get_current_active_user),
+    owned_job: Optional[Job] = Depends(get_owned_job),
     db: Session = Depends(get_db),
 ):
     """
@@ -1017,12 +1022,12 @@ async def delete_job(
     - Remove todo o conteúdo markdown
 
     ## Permissões:
-    - Apenas o dono do job pode deletá-lo
+    - Apenas o dono do job (verificado no MySQL) pode deletá-lo
 
     ## Retorno:
     - 200: Job deletado com sucesso
-    - 403: Acesso negado (job de outro usuário)
-    - 404: Job não encontrado
+    - 404: Job não encontrado (também retornado quando o job pertence a outro
+      usuário, para não expor a existência do recurso)
     """
     redis_client = get_redis_client()
 
@@ -1033,21 +1038,14 @@ async def delete_job(
     except Exception as e:
         logger.info(f"Elasticsearch not available: {e}")
 
-    # Verify job exists and ownership
+    # Ownership já validada em get_owned_job (MySQL como fonte da verdade)
     status_data = redis_client.get_job_status(job_id)
 
-    # Also check MySQL
-    db_job = db.query(Job).filter(Job.id == job_id).first()
+    # Linha própria no MySQL (jobs filhos não são persistidos)
+    db_job = owned_job if (owned_job is not None and owned_job.id == job_id) else None
 
     if not status_data and not db_job:
         raise HTTPException(status_code=404, detail="Job não encontrado")
-
-    # Verify ownership
-    if status_data and not redis_client.verify_job_ownership(job_id, current_user.id):
-        raise HTTPException(status_code=403, detail="Acesso negado: este job pertence a outro usuário")
-
-    if db_job and db_job.user_id and db_job.user_id != current_user.id:
-        raise HTTPException(status_code=403, detail="Acesso negado: este job pertence a outro usuário")
 
     logger.info(f"Deleting job {job_id} for user {current_user.username}")
 
@@ -1131,21 +1129,26 @@ async def delete_job(
 async def get_job_result(
     job_id: str,
     current_user: User = Depends(get_current_active_user),
+    owned_job: Optional[Job] = Depends(get_owned_job),
     db: Session = Depends(get_db),
 ):
-    """Recuperar resultado de qualquer tipo de job (main ou page individual)"""
+    """
+    Recuperar resultado de qualquer tipo de job (main ou page individual)
+
+    ## Permissões:
+    - Apenas o dono do job (verificado no MySQL) pode acessar o resultado.
+      Jobs de outros usuários retornam 404.
+    """
     redis_client = get_redis_client()
     es_client = get_es_client()
+
+    # Ownership já validada em get_owned_job (MySQL como fonte da verdade)
 
     # Check job status first
     status_data = redis_client.get_job_status(job_id)
 
     if not status_data:
         raise HTTPException(status_code=404, detail="Job não encontrado ou expirado")
-
-    # Verify job ownership
-    if not redis_client.verify_job_ownership(job_id, current_user.id):
-        raise HTTPException(status_code=403, detail="Acesso negado: este job pertence a outro usuário")
 
     if status_data["status"] == "processing" or status_data["status"] == "queued":
         raise HTTPException(status_code=400, detail="Job ainda está em processamento")
@@ -1180,7 +1183,7 @@ async def get_job_result(
 
     # Get completed_at timestamp
     completed_at = None
-    db_job = db.query(Job).filter(Job.id == job_id).first()
+    db_job = owned_job if (owned_job is not None and owned_job.id == job_id) else None
 
     if db_job and db_job.completed_at:
         completed_at = db_job.completed_at
@@ -1210,14 +1213,19 @@ async def get_job_result(
 async def get_job_pages(
     job_id: str,
     current_user: User = Depends(get_current_active_user),
+    owned_job: Optional[Job] = Depends(get_owned_job),
     db: Session = Depends(get_db),
 ):
-    """Obter progresso detalhado por página com job_id de cada página (para PDFs)"""
+    """
+    Obter progresso detalhado por página com job_id de cada página (para PDFs)
+
+    ## Permissões:
+    - Apenas o dono do job (verificado no MySQL) pode consultar as páginas.
+      Jobs de outros usuários retornam 404.
+    """
     redis_client = get_redis_client()
 
-    # Verify job ownership
-    if not redis_client.verify_job_ownership(job_id, current_user.id):
-        raise HTTPException(status_code=403, detail="Acesso negado: este job pertence a outro usuário")
+    # Ownership já validada em get_owned_job (MySQL como fonte da verdade)
 
     # Try to get pages from MySQL first
     db_pages = db.query(Page).filter(Page.job_id == job_id).order_by(Page.page_number).all()
@@ -1319,6 +1327,7 @@ async def get_page_status_by_number(
     job_id: str,
     page_number: int,
     current_user: User = Depends(get_current_active_user),
+    db_page: Optional[Page] = Depends(get_owned_page_or_none),
     db: Session = Depends(get_db),
 ):
     """
@@ -1337,18 +1346,15 @@ async def get_page_status_by_number(
     ```
 
     Retorna o status da página 5 do job especificado.
+
+    ## Permissões:
+    - Apenas o dono do job (verificado no MySQL) pode consultar a página.
+      Jobs de outros usuários retornam 404.
     """
     redis_client = get_redis_client()
 
-    # Verify job ownership
-    if not redis_client.verify_job_ownership(job_id, current_user.id):
-        raise HTTPException(status_code=403, detail="Acesso negado: este job pertence a outro usuário")
-
-    # Try MySQL first
-    db_page = db.query(Page).filter(
-        Page.job_id == job_id,
-        Page.page_number == page_number
-    ).first()
+    # Ownership já validada em get_owned_page_or_none -> get_owned_job
+    # (MySQL como fonte da verdade). db_page vem da mesma dependência.
 
     if db_page:
         # Map database status to schema status
@@ -1414,6 +1420,7 @@ async def get_page_result_by_number(
     job_id: str,
     page_number: int,
     current_user: User = Depends(get_current_active_user),
+    db_page: Optional[Page] = Depends(get_owned_page_or_none),
     db: Session = Depends(get_db),
 ):
     """
@@ -1435,25 +1442,22 @@ async def get_page_result_by_number(
 
     ## Vantagem:
     Não precisa conhecer o `page_job_id` - basta usar o job principal + número da página!
+
+    ## Permissões:
+    - Apenas o dono do job (verificado no MySQL) pode acessar o resultado.
+      Jobs de outros usuários retornam 404.
     """
     redis_client = get_redis_client()
     es_client = get_es_client()
 
-    # Verify job ownership
-    if not redis_client.verify_job_ownership(job_id, current_user.id):
-        raise HTTPException(status_code=403, detail="Acesso negado: este job pertence a outro usuário")
+    # Ownership já validada em get_owned_page_or_none -> get_owned_job
+    # (MySQL como fonte da verdade). db_page vem da mesma dependência.
 
     # Try to get page from Elasticsearch first
     es_page_result = es_client.get_page_result(job_id, page_number)
 
     if es_page_result:
         logger.info(f"Retrieved page {page_number} from Elasticsearch for job {job_id}")
-
-        # Get page metadata from MySQL
-        db_page = db.query(Page).filter(
-            Page.job_id == job_id,
-            Page.page_number == page_number
-        ).first()
 
         # Check status
         if db_page:
@@ -1714,6 +1718,8 @@ async def retry_failed_page(
     job_id: str,
     page_number: int,
     current_user: User = Depends(get_current_active_user),
+    owned_job: Optional[Job] = Depends(get_owned_job),
+    db_page: Optional[Page] = Depends(get_owned_page_or_none),
     db: Session = Depends(get_db),
 ):
     """
@@ -1732,18 +1738,15 @@ async def retry_failed_page(
     ```
 
     Reprocessa a página 5 do job especificado.
+
+    ## Permissões:
+    - Apenas o dono do job (verificado no MySQL) pode reprocessar a página.
+      Jobs de outros usuários retornam 404.
     """
     redis_client = get_redis_client()
 
-    # Verify job ownership
-    if not redis_client.verify_job_ownership(job_id, current_user.id):
-        raise HTTPException(status_code=403, detail="Acesso negado: este job pertence a outro usuário")
-
-    # Get page from MySQL
-    db_page = db.query(Page).filter(
-        Page.job_id == job_id,
-        Page.page_number == page_number
-    ).first()
+    # Ownership já validada em get_owned_page_or_none -> get_owned_job
+    # (MySQL como fonte da verdade). db_page vem da mesma dependência.
 
     # If page doesn't exist in MySQL, try to get it from Redis (backwards compatibility)
     if not db_page:
@@ -1796,7 +1799,7 @@ async def retry_failed_page(
             )
 
     # Get main job info to access original file
-    db_job = db.query(Job).filter(Job.id == job_id).first()
+    db_job = owned_job if (owned_job is not None and owned_job.id == job_id) else None
     if not db_job:
         raise HTTPException(status_code=404, detail="Job principal não encontrado")
 
