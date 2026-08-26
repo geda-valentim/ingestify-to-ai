@@ -277,21 +277,45 @@ else:
 ```
 
 ### 2. Progress Tracking
-Progress is calculated dynamically based on completed pages:
-- Split: 10%
-- Pages: 80% (distributed across all pages)
-- Merge: 10%
+Progress is calculated dynamically based on completed page **jobs**:
+- Download + split: 20%
+- Pages: 70% (distributed evenly across all pages)
+- Merge: the remaining 10%
 
-See `redis_client.calculate_job_progress()` for implementation.
+The live formula is inline in [backend/workers/tasks.py](backend/workers/tasks.py)
+(two occurrences), and reads:
+
+```python
+progress = 20 + int((completed_pages / total_pages) * 70)
+```
+
+where `completed_pages` comes from `redis_client.count_completed_page_jobs()` and
+`total_pages` from `redis_client.get_job_pages_total()`.
+
+Note: there is no `calculate_job_progress()` on `RedisClient` — it was removed as
+dead code, and the 10/80/10 weighting this section used to document was never
+implemented anywhere.
 
 ### 3. Redis Key Structure
+
+Redis is a **TTL cache only**. Every key expires; a miss means "unknown", never
+"does not exist". No authorization decision may be derived from it — ownership is
+enforced by [backend/api/deps.py](backend/api/deps.py) against the database.
+
 ```
-job:{job_id}:status          # Job metadata and status
-job:{job_id}:result          # Final merged result
-job:{job_id}:pages           # Total page count
-job:{job_id}:page:{n}:status # Individual page status
-job:{job_id}:page:{n}:result # Individual page markdown
+job:{job_id}:status          # Job metadata + status (24h TTL)
+job:{job_id}:result          # Job result payload (RESULT_TTL_SECONDS)
+job:{job_id}:pages:total     # Total page count for a split PDF (24h TTL)
+job:{job_id}:owner           # Cached owner user_id; deps.py fallback only (24h TTL)
+user:{user_id}:jobs          # SET of that user's job IDs (30d TTL)
 ```
+
+**There is no per-page key namespace.** Each page is modelled as a *job* in its own
+right: workers call `set_job_status(job_id=<page_job_id>, job_type="page",
+parent_job_id=<main_job_id>, page_number=N)`, so a page's status and result live at
+`job:{page_job_id}:status` / `job:{page_job_id}:result` like any other job. The
+parent's `job:{job_id}:status` blob carries a `child_job_ids` field
+(`split_job_id`, `page_job_ids[]`, `merge_job_id`) linking them together.
 
 ### 4. Source Handlers
 Each source type (file, url, gdrive, dropbox) has a dedicated handler implementing the `SourceHandler` interface. Add new sources by creating a new handler in [workers/sources.py](workers/sources.py).

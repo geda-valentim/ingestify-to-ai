@@ -1,9 +1,34 @@
+"""
+Redis job cache.
+
+CONTRACT — this module is a TTL cache, nothing more.
+
+Every key written here carries an expiry (24h for status/ownership metadata,
+``result_ttl_seconds`` for payloads, 30 days for the per-user job index). A miss
+is therefore indistinguishable from "never existed", and callers must treat a
+``None`` return as "unknown", never as a fact about the domain.
+
+NO AUTHORIZATION DECISION MAY BE DERIVED FROM THIS MODULE.
+
+Ownership lives in the database and is enforced by ``api/deps.py``. Because
+cache entries expire, an ownership check answered from here would silently start
+returning "no owner" once the TTL lapsed — turning an access-control question
+into a cache-liveness question. ``get_job_owner`` survives solely as the
+best-effort fallback ``api/deps.py`` consults when the database has no row yet
+(freshly enqueued jobs); it is that module's job to decide what an absent owner
+means, and its answer is deny.
+
+Do not reintroduce a ``verify_job_ownership``-style helper here.
+"""
+
 import redis
 import json
+import logging
 from typing import Optional, Dict, Any, List
 from datetime import datetime
-from uuid import UUID
 from shared.config import get_settings
+
+logger = logging.getLogger(__name__)
 
 
 class RedisClient:
@@ -77,7 +102,7 @@ class RedisClient:
             self.client.set(key, json.dumps(data), ex=86400)  # 24h TTL
             return True
         except Exception as e:
-            print(f"Error setting job status: {e}")
+            logger.error("Failed to cache status for job %s: %s", job_id, e)
             return False
 
     def get_job_status(self, job_id: str) -> Optional[Dict[str, Any]]:
@@ -89,7 +114,7 @@ class RedisClient:
                 return json.loads(data)
             return None
         except Exception as e:
-            print(f"Error getting job status: {e}")
+            logger.error("Failed to read cached status for job %s: %s", job_id, e)
             return None
 
     def update_job_progress(self, job_id: str, progress: int) -> bool:
@@ -102,7 +127,7 @@ class RedisClient:
                 self.client.set(key, json.dumps(status_data), ex=86400)
                 return True
             except Exception as e:
-                print(f"Error updating progress: {e}")
+                logger.error("Failed to update cached progress for job %s: %s", job_id, e)
                 return False
         return False
 
@@ -113,7 +138,7 @@ class RedisClient:
             self.client.set(key, json.dumps(result), ex=self.result_ttl)
             return True
         except Exception as e:
-            print(f"Error setting job result: {e}")
+            logger.error("Failed to cache result for job %s: %s", job_id, e)
             return False
 
     def get_job_result(self, job_id: str) -> Optional[Dict[str, Any]]:
@@ -125,7 +150,7 @@ class RedisClient:
                 return json.loads(data)
             return None
         except Exception as e:
-            print(f"Error getting job result: {e}")
+            logger.error("Failed to read cached result for job %s: %s", job_id, e)
             return None
 
     def delete_job(self, job_id: str) -> bool:
@@ -134,7 +159,7 @@ class RedisClient:
             self.client.delete(f"job:{job_id}:status", f"job:{job_id}:result")
             return True
         except Exception as e:
-            print(f"Error deleting job: {e}")
+            logger.error("Failed to evict cache entries for job %s: %s", job_id, e)
             return False
 
     def close(self):
@@ -152,7 +177,7 @@ class RedisClient:
             self.client.set(key, total_pages, ex=86400)
             return True
         except Exception as e:
-            print(f"Error setting total pages: {e}")
+            logger.error("Failed to cache page total for job %s: %s", job_id, e)
             return False
 
     def get_job_pages_total(self, job_id: str) -> Optional[int]:
@@ -162,106 +187,8 @@ class RedisClient:
             total = self.client.get(key)
             return int(total) if total else None
         except Exception as e:
-            print(f"Error getting total pages: {e}")
+            logger.error("Failed to read cached page total for job %s: %s", job_id, e)
             return None
-
-    def set_page_status(
-        self,
-        job_id: str,
-        page_number: int,
-        status: str,
-        started_at: Optional[datetime] = None,
-        completed_at: Optional[datetime] = None,
-        error: Optional[str] = None,
-    ) -> bool:
-        """Define status de uma página específica"""
-        key = f"job:{job_id}:page:{page_number}"
-        data = {
-            "page_number": page_number,
-            "status": status,
-            "error": error,
-        }
-        if started_at:
-            data["started_at"] = started_at.isoformat()
-        if completed_at:
-            data["completed_at"] = completed_at.isoformat()
-
-        try:
-            self.client.set(key, json.dumps(data), ex=86400)
-            return True
-        except Exception as e:
-            print(f"Error setting page status: {e}")
-            return False
-
-    def get_page_status(self, job_id: str, page_number: int) -> Optional[Dict[str, Any]]:
-        """Retorna status de uma página específica"""
-        key = f"job:{job_id}:page:{page_number}"
-        try:
-            data = self.client.get(key)
-            if data:
-                return json.loads(data)
-            return None
-        except Exception as e:
-            print(f"Error getting page status: {e}")
-            return None
-
-    def get_all_pages_status(self, job_id: str) -> Dict[int, Dict[str, Any]]:
-        """Retorna status de todas as páginas do job"""
-        total_pages = self.get_job_pages_total(job_id)
-        if not total_pages:
-            return {}
-
-        pages_status = {}
-        for page_num in range(1, total_pages + 1):
-            status = self.get_page_status(job_id, page_num)
-            if status:
-                pages_status[page_num] = status
-
-        return pages_status
-
-    def set_page_result(self, job_id: str, page_number: int, markdown: str) -> bool:
-        """Armazena resultado de uma página"""
-        key = f"job:{job_id}:page:{page_number}:result"
-        try:
-            self.client.set(key, markdown, ex=self.result_ttl)
-            return True
-        except Exception as e:
-            print(f"Error setting page result: {e}")
-            return False
-
-    def get_page_result(self, job_id: str, page_number: int) -> Optional[str]:
-        """Retorna markdown de uma página"""
-        key = f"job:{job_id}:page:{page_number}:result"
-        try:
-            return self.client.get(key)
-        except Exception as e:
-            print(f"Error getting page result: {e}")
-            return None
-
-    def get_all_pages_results(self, job_id: str) -> Dict[int, str]:
-        """Retorna markdown de todas as páginas ordenadas"""
-        total_pages = self.get_job_pages_total(job_id)
-        if not total_pages:
-            return {}
-
-        results = {}
-        for page_num in range(1, total_pages + 1):
-            markdown = self.get_page_result(job_id, page_num)
-            if markdown:
-                results[page_num] = markdown
-
-        return results
-
-    def calculate_job_progress(self, job_id: str) -> int:
-        """Calcula progresso baseado em páginas completadas"""
-        total_pages = self.get_job_pages_total(job_id)
-        if not total_pages:
-            return 0
-
-        pages_status = self.get_all_pages_status(job_id)
-        completed = sum(1 for p in pages_status.values() if p.get("status") == "completed")
-
-        return int((completed / total_pages) * 100)
 
     # ============================================
     # Hierarquia de Jobs (parent/child)
@@ -292,11 +219,17 @@ class RedisClient:
             self.client.set(key, json.dumps(parent_status), ex=86400)
             return True
         except Exception as e:
-            print(f"Error adding child job: {e}")
+            logger.error(
+                "Failed to attach %s child job %s to parent job %s: %s",
+                child_type, child_job_id, parent_job_id, e,
+            )
             return False
 
     def get_child_jobs(self, parent_job_id: str) -> Optional[Dict[str, Any]]:
-        """Retorna child jobs do parent"""
+        """Retorna child jobs do parent.
+
+        Internal helper: the only caller is get_page_jobs() below.
+        """
         parent_status = self.get_job_status(parent_job_id)
         if parent_status:
             return parent_status.get("child_job_ids")
@@ -386,50 +319,35 @@ class RedisClient:
             self.client.set(key, user_id, ex=86400)  # 24h TTL
             return True
         except Exception as e:
-            print(f"Error setting job owner: {e}")
+            logger.error("Failed to cache owner for job %s: %s", job_id, e)
             return False
 
     def get_job_owner(self, job_id: str) -> Optional[str]:
         """
-        Get owner of a job
+        Get the cached owner of a job.
+
+        NOT an authorization check. This is a best-effort cache lookup whose
+        sole consumer is the fallback path in ``api/deps.py``, used when the
+        database has no row for the job yet. The entry expires after 24h, so
+        None means "unknown", not "unowned" — only ``api/deps.py`` may turn
+        this into an allow/deny decision, and absent means deny.
 
         Args:
             job_id: Job ID
 
         Returns:
-            User ID (owner) or None
+            User ID (owner) or None if unknown/expired
         """
         key = f"job:{job_id}:owner"
         try:
             return self.client.get(key)
         except Exception as e:
-            print(f"Error getting job owner: {e}")
+            logger.error(
+                "Failed to read cached owner for job %s; caller must treat this as "
+                "unknown and deny: %s",
+                job_id, e,
+            )
             return None
-
-    def verify_job_ownership(self, job_id: str, user_id: str) -> bool:
-        """
-        Verify if user owns a job (checks parent job ownership for child jobs)
-
-        Args:
-            job_id: Job ID
-            user_id: User ID to verify
-
-        Returns:
-            True if user owns the job, False otherwise
-        """
-        owner = self.get_job_owner(job_id)
-        if owner == user_id:
-            return True
-
-        # If job doesn't have owner set, check if it's a child job
-        # by checking its parent job's ownership
-        status_data = self.get_job_status(job_id)
-        if status_data and status_data.get("parent_job_id"):
-            parent_job_id = status_data["parent_job_id"]
-            parent_owner = self.get_job_owner(parent_job_id)
-            return parent_owner == user_id
-
-        return False
 
     def add_job_to_user(self, user_id: str, job_id: str) -> bool:
         """
@@ -448,7 +366,7 @@ class RedisClient:
             self.client.expire(key, 86400 * 30)  # 30 days TTL
             return True
         except Exception as e:
-            print(f"Error adding job to user: {e}")
+            logger.error("Failed to index job %s under user %s: %s", job_id, user_id, e)
             return False
 
     def get_user_jobs(self, user_id: str, limit: int = 100) -> List[str]:
@@ -469,7 +387,7 @@ class RedisClient:
             # Convert to list and limit
             return list(job_ids)[:limit]
         except Exception as e:
-            print(f"Error getting user jobs: {e}")
+            logger.error("Failed to read job index for user %s: %s", user_id, e)
             return []
 
     def remove_job_from_user(self, user_id: str, job_id: str) -> bool:
@@ -488,7 +406,7 @@ class RedisClient:
             self.client.srem(key, job_id)
             return True
         except Exception as e:
-            print(f"Error removing job from user: {e}")
+            logger.error("Failed to unindex job %s from user %s: %s", job_id, user_id, e)
             return False
 
 
