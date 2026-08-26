@@ -246,9 +246,19 @@ scale: ## Scale workers (usage: make scale n=10)
 # ======================================
 # TESTING COMMANDS
 # ======================================
-test: ## Run backend tests
+test: ## Run backend unit tests (in the api container if running, else locally)
 	@echo "$(CYAN)🧪 Running tests...$(NC)"
-	@docker compose exec api pytest tests/ -v
+	@if docker compose ps --status running --services 2>/dev/null | grep -qx api; then \
+		echo "$(CYAN)   (inside the api container)$(NC)"; \
+		docker compose exec -T api pytest tests/ -v; \
+	else \
+		echo "$(CYAN)   (locally - api container is not running)$(NC)"; \
+		cd backend && python -m pytest tests/ -v; \
+	fi
+
+test-local: ## Run backend unit tests on the host (no Docker)
+	@echo "$(CYAN)🧪 Running tests locally...$(NC)"
+	@cd backend && python -m pytest tests/ -v
 
 test-api: ## Test API health
 	@echo "$(CYAN)🔍 Testing API...$(NC)"

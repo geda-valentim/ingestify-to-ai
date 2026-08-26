@@ -261,29 +261,30 @@ def cleanup_old_jobs():
 
     for job in old_jobs:
         try:
-            # Delete Redis keys for this job
-            # Pattern: job:{job_id}:*
+            # Key names must match those written by RedisClient (shared/redis_client.py).
+            # Note: page status lives at job:{id}:page:{n}, NOT job:{id}:page:{n}:status.
             keys_to_delete = [
                 f"job:{job.id}:status",
                 f"job:{job.id}:result",
-                f"job:{job.id}:pages",
-                f"job:{job.id}:child_jobs",
+                f"job:{job.id}:pages:total",
+                f"job:{job.id}:owner",
             ]
 
-            for key in keys_to_delete:
-                try:
-                    redis_client.redis.delete(key)
-                except Exception as e:
-                    logger.error(f"[MONITORING] Error deleting Redis key {key}: {e}")
-
-            # Also delete page keys if this was a multi-page job
             if job.total_pages and job.total_pages > 1:
                 for page_num in range(1, job.total_pages + 1):
-                    try:
-                        redis_client.redis.delete(f"job:{job.id}:page:{page_num}:status")
-                        redis_client.redis.delete(f"job:{job.id}:page:{page_num}:result")
-                    except Exception as e:
-                        logger.error(f"[MONITORING] Error deleting page {page_num} keys: {e}")
+                    keys_to_delete.append(f"job:{job.id}:page:{page_num}")
+                    keys_to_delete.append(f"job:{job.id}:page:{page_num}:result")
+
+            try:
+                redis_client.client.delete(*keys_to_delete)
+            except Exception as e:
+                # Do not count this job as cleaned - it must be retried on the next run.
+                logger.error(f"[MONITORING] Error deleting Redis keys for job {job.id}: {e}")
+                continue
+
+            # Drop the job from the owner's index set so it does not leak entries.
+            if job.user_id:
+                redis_client.remove_job_from_user(job.user_id, job.id)
 
             logger.debug(f"[MONITORING] Cleaned up Redis keys for job {job.id} (completed {job.completed_at})")
             cleaned_count += 1
