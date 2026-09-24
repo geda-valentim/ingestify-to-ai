@@ -25,6 +25,13 @@ NC='\033[0m' # No Color
 export DOCKER_BUILDKIT=1
 export COMPOSE_DOCKER_CLI_BUILD=1
 
+# JWT secret: reuse the one already in .env (so existing sessions stay valid) or generate one
+JWT_SECRET_KEY="${JWT_SECRET_KEY:-$(grep -s '^JWT_SECRET_KEY=' .env | cut -d= -f2- || true)}"
+if [ -z "$JWT_SECRET_KEY" ]; then
+    JWT_SECRET_KEY="$(openssl rand -hex 32)"
+    echo -e "${YELLOW}🔑 Generated a new JWT_SECRET_KEY (saved to .env)${NC}"
+fi
+
 echo ""
 echo -e "${BLUE}======================================${NC}"
 echo -e "${BLUE}  Ingestify - Smart Startup${NC}"
@@ -89,6 +96,7 @@ if is_container_running "$SHARED_REDIS" && \
 
     # Create .env file with shared infra settings
     cat > .env << EOF
+JWT_SECRET_KEY=$JWT_SECRET_KEY
 REDIS_HOST=$REDIS_HOST
 MINIO_HOST=$MINIO_HOST
 ELASTICSEARCH_HOST=$ELASTICSEARCH_HOST
@@ -110,8 +118,8 @@ else
     echo -e "${CYAN}📦 Starting with local infrastructure...${NC}"
     echo ""
 
-    # Remove .env file to use defaults
-    rm -f .env
+    # Reset .env to defaults, keeping only the JWT secret
+    echo "JWT_SECRET_KEY=$JWT_SECRET_KEY" > .env
 
     # Start everything including local infrastructure
     docker compose --profile infra up -d --build
