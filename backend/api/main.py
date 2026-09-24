@@ -158,6 +158,10 @@ async def startup_event():
     logger.info(f"Elasticsearch: {settings.elasticsearch_url}")
     logger.info(f"MinIO endpoint: {settings.minio_endpoint}")
 
+    # Refuse to start with a missing or insecure JWT secret: anyone could forge tokens
+    from shared.auth import validate_jwt_secret
+    validate_jwt_secret(settings.jwt_secret_key)
+
     # Initialize MySQL database (create tables if they don't exist)
     try:
         from shared.database import init_db

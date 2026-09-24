@@ -39,6 +39,37 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
 # JWT Token Functions
 # ============================================
 
+JWT_SECRET_MIN_LENGTH = 32
+
+# Placeholders that shipped as defaults in earlier versions; tokens signed
+# with them can be forged by anyone who has read the source code.
+_KNOWN_INSECURE_JWT_SECRETS = {
+    "your-secret-key-change-in-production-min-32-chars",
+}
+
+
+def validate_jwt_secret(secret: str) -> None:
+    """Raise RuntimeError if the JWT secret is missing, a known placeholder or too short."""
+    if not secret:
+        raise RuntimeError(
+            "JWT_SECRET_KEY is not set. Generate one with `openssl rand -hex 32`."
+        )
+    if secret in _KNOWN_INSECURE_JWT_SECRETS:
+        raise RuntimeError(
+            "JWT_SECRET_KEY is set to a publicly known placeholder. "
+            "Generate a new one with `openssl rand -hex 32`."
+        )
+    if len(secret) < JWT_SECRET_MIN_LENGTH:
+        raise RuntimeError(
+            f"JWT_SECRET_KEY must be at least {JWT_SECRET_MIN_LENGTH} characters long."
+        )
+
+
+def _get_jwt_secret() -> str:
+    validate_jwt_secret(settings.jwt_secret_key)
+    return settings.jwt_secret_key
+
+
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
     """
     Create JWT access token
@@ -58,7 +89,7 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
         expire = datetime.utcnow() + timedelta(minutes=settings.jwt_expiration_minutes)
 
     to_encode.update({"exp": expire})
-    encoded_jwt = jwt.encode(to_encode, settings.jwt_secret_key, algorithm=settings.jwt_algorithm)
+    encoded_jwt = jwt.encode(to_encode, _get_jwt_secret(), algorithm=settings.jwt_algorithm)
 
     return encoded_jwt
 
@@ -74,7 +105,7 @@ def verify_token(token: str) -> Optional[str]:
         user_id if valid, None otherwise
     """
     try:
-        payload = jwt.decode(token, settings.jwt_secret_key, algorithms=[settings.jwt_algorithm])
+        payload = jwt.decode(token, _get_jwt_secret(), algorithms=[settings.jwt_algorithm])
         user_id: str = payload.get("sub")
         if user_id is None:
             return None
