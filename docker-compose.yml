@@ -105,6 +105,7 @@ services:
       - CELERY_TASK_DEFAULT_QUEUE=ingestify
       - CELERY_WORKER_NAME=ingestify-worker
       - ENVIRONMENT=development
+      - ADMIN_USER_IDS=${ADMIN_USER_IDS:-}
       - LOG_LEVEL=INFO
       - MAX_FILE_SIZE_MB=50
       - CONVERSION_TIMEOUT_SECONDS=600
