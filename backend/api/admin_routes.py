@@ -35,13 +35,16 @@ settings = get_settings()
 router = APIRouter(prefix="/admin", tags=["Admin & Monitoring"])
 
 
-# Simple admin check (you can enhance this with proper role-based auth)
 def require_admin(current_user=Depends(get_current_active_user)):
     """
     Dependency to check if user is admin
-    For now, all authenticated users are considered admins
-    TODO: Add is_admin field to User model and check it here
+
+    Admins are the users whose IDs are listed in ADMIN_USER_IDS (comma-separated).
     """
+    admin_ids = {uid.strip() for uid in settings.admin_user_ids.split(",") if uid.strip()}
+    if str(current_user.id) not in admin_ids:
+        logger.warning(f"[ADMIN] Access denied for user {current_user.id}")
+        raise HTTPException(status_code=403, detail="Admin privileges required")
     return current_user
 
 
