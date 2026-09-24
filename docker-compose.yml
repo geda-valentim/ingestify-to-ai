@@ -105,7 +105,6 @@ services:
       - CELERY_TASK_DEFAULT_QUEUE=ingestify
       - CELERY_WORKER_NAME=ingestify-worker
       - ENVIRONMENT=development
-      - ADMIN_USER_IDS=${ADMIN_USER_IDS:-}
       - LOG_LEVEL=INFO
       - MAX_FILE_SIZE_MB=50
       - CONVERSION_TIMEOUT_SECONDS=600
@@ -123,6 +122,7 @@ services:
       - MINIO_BUCKET_PAGES=ingestify-pages
       - MINIO_BUCKET_AUDIO=ingestify-audio
       - MINIO_BUCKET_RESULTS=ingestify-results
+      - ADMIN_USER_IDS=${ADMIN_USER_IDS:-}
     networks:
       - ingestify-network
     volumes:
