@@ -32,6 +32,20 @@ router = APIRouter(tags=["Conversion"])
 settings = get_settings()
 
 
+def sanitize_upload_filename(filename: Optional[str]) -> str:
+    """
+    Reduce a client-supplied filename to a safe basename.
+
+    The multipart filename is fully attacker-controlled; joining it to a path
+    as-is allows "../" traversal or absolute paths (Path(a) / "/etc/x" == "/etc/x").
+    """
+    name = (filename or "").replace("\\", "/").split("/")[-1]
+    name = "".join(ch for ch in name if ch.isprintable()).strip()
+    if name in ("", ".", ".."):
+        return "upload"
+    return name[:255]
+
+
 @router.post("/upload", response_model=JobCreatedResponse, summary="Upload e converter arquivo")
 async def upload_and_convert(
     file: UploadFile = File(..., description="Arquivo para conversão (PDF, DOCX, HTML, etc.)"),
@@ -86,7 +100,7 @@ async def upload_and_convert(
 
     # Read file contents
     file_contents = await file.read()
-    filename = file.filename
+    filename = sanitize_upload_filename(file.filename)
     file_size_mb = len(file_contents) / (1024 * 1024)
     file_size_bytes = len(file_contents)
 
@@ -316,7 +330,7 @@ async def transcribe_audio(
 
     # Read file contents
     file_contents = await file.read()
-    filename = file.filename
+    filename = sanitize_upload_filename(file.filename)
     file_size_mb = len(file_contents) / (1024 * 1024)
     file_size_bytes = len(file_contents)
 
@@ -614,7 +628,7 @@ async def convert_document(
 
     if file:
         file_contents = await file.read()
-        filename = file.filename
+        filename = sanitize_upload_filename(file.filename)
         file_size_mb = len(file_contents) / (1024 * 1024)
         file_size_bytes = len(file_contents)
         mime_type = file.content_type or "application/octet-stream"
