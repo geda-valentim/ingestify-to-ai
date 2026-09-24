@@ -597,6 +597,11 @@ async def convert_document(
     if source_type == "file" and not file:
         raise HTTPException(status_code=400, detail="Arquivo é obrigatório para source_type=file")
 
+    # For uploads the worker reads the file saved by the API. Never forward a
+    # client-supplied `source`, otherwise it is used as a path on the worker.
+    if source_type == "file":
+        source = None
+
     # Validate source for non-file types
     if source_type != "file" and not source:
         raise HTTPException(status_code=400, detail=f"source é obrigatório para source_type={source_type}")
@@ -618,6 +623,9 @@ async def convert_document(
         file_size_mb = len(file_contents) / (1024 * 1024)
         file_size_bytes = len(file_contents)
         mime_type = file.content_type or "application/octet-stream"
+
+        if not file_contents:
+            raise HTTPException(status_code=400, detail="Arquivo enviado está vazio")
 
         # Validate file size
         if file_size_mb > settings.max_file_size_mb:

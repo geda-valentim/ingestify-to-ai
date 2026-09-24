@@ -32,6 +32,28 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 
 
+def _resolve_uploaded_file(source: str, job_id: str) -> Path:
+    """
+    Resolve the path of a file uploaded through the API for this job.
+
+    Only files the API saved under {temp}/uploads/{job_id}/ or {temp}/audio/{job_id}/
+    are accepted, so a crafted `source` cannot make the worker read arbitrary
+    local files (other users' uploads, container files) and return their content.
+    """
+    if not source:
+        raise ValueError("Missing uploaded file path")
+
+    file_path = Path(source).resolve()
+    base = Path(settings.temp_storage_path).resolve()
+    allowed_dirs = [base / "uploads" / job_id, base / "audio" / job_id]
+
+    if not any(file_path.is_relative_to(d) for d in allowed_dirs):
+        logger.warning(f"[MAIN JOB {job_id}] Rejected file source outside upload dir: {source}")
+        raise ValueError("Invalid uploaded file path")
+
+    return file_path
+
+
 # ============================================
 # MAIN JOB - Ponto de entrada
 # ============================================
@@ -100,7 +122,7 @@ def process_conversion(
         temp_dir.mkdir(parents=True, exist_ok=True)
 
         if source_type == 'file':
-            file_path = Path(source)
+            file_path = _resolve_uploaded_file(source, job_id)
         else:
             file_path = asyncio.run(
                 handler.download(
