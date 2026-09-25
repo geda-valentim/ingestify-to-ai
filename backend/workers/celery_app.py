@@ -1,14 +1,14 @@
 from celery import Celery
 from celery.schedules import crontab
-from shared.config import get_settings
+from shared.config import get_settings, redis_url_with_password
 
 settings = get_settings()
 
 # Create Celery app
 celery_app = Celery(
     "doc2md",
-    broker=settings.celery_broker_url,
-    backend=settings.celery_result_backend,
+    broker=redis_url_with_password(settings.celery_broker_url, settings.redis_password),
+    backend=redis_url_with_password(settings.celery_result_backend, settings.redis_password),
 )
 
 # Configure Celery
