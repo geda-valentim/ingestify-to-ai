@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Form
+from fastapi import APIRouter, Depends, HTTPException, status, Form, Request
 from sqlalchemy.orm import Session
 from datetime import timedelta
 
@@ -12,13 +12,14 @@ from shared.auth import (
     get_current_active_user,
 )
 from shared.config import get_settings
+from shared import rate_limit
 
 settings = get_settings()
 router = APIRouter()
 
 
 @router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
-async def register(user_data: UserCreate, db: Session = Depends(get_db)):
+async def register(user_data: UserCreate, request: Request, db: Session = Depends(get_db)):
     """
     Register a new user
 
@@ -36,7 +37,10 @@ async def register(user_data: UserCreate, db: Session = Depends(get_db)):
 
     ## Errors:
     - 400: Email or username already exists
+    - 429: Too many registrations from this IP
     """
+    rate_limit.hit("register:ip", rate_limit.client_ip(request), settings.register_limit_per_hour, 3600)
+
     # Check if email already exists
     existing_email = db.query(User).filter(User.email == user_data.email).first()
     if existing_email:
@@ -71,6 +75,7 @@ async def register(user_data: UserCreate, db: Session = Depends(get_db)):
 
 @router.post("/login", response_model=Token)
 async def login(
+    request: Request,
     username: str = Form(...),
     password: str = Form(...),
     db: Session = Depends(get_db)
@@ -98,10 +103,16 @@ async def login(
 
     ## Errors:
     - 401: Invalid credentials
+    - 429: Too many attempts (per IP, or too many failures for this account)
     """
+    account = rate_limit.normalize_identity(username)
+    rate_limit.hit("login:ip", rate_limit.client_ip(request), settings.rate_limit_per_minute, 60)
+    rate_limit.check_failures("login:failed", account, settings.login_max_failed_attempts)
+
     user = authenticate_user(db, username, password)
 
     if not user:
+        rate_limit.record_failure("login:failed", account, settings.login_lockout_seconds)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect username/email or password",
@@ -113,6 +124,8 @@ async def login(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Inactive user account"
         )
+
+    rate_limit.reset("login:failed", account)
 
     # Create access token
     access_token_expires = timedelta(minutes=settings.jwt_expiration_minutes)
