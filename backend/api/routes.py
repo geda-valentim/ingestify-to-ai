@@ -22,11 +22,11 @@ from shared.schemas import (
 from shared.redis_client import get_redis_client
 from shared.elasticsearch_client import get_es_client
 from shared.minio_client import get_minio_client
+from shared.transcripts import TRANSCRIPT_CONTENT_TYPES, TRANSCRIPT_FORMATS, transcript_object_name
 from shared.database import SessionLocal, get_db
 from shared.models import Job, Page, JobStatus as DBJobStatus, User
 from shared.config import get_settings
 from shared.auth import get_current_active_user
-from shared.transcripts import TRANSCRIPT_CONTENT_TYPES, TRANSCRIPT_FORMATS, transcript_object_name
 from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
