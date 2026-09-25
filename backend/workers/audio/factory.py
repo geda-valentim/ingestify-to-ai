@@ -6,9 +6,16 @@ This allows switching between different Whisper implementations via environment 
 """
 
 import logging
-from typing import Optional
+from pathlib import Path
+from typing import Any, Callable, Dict, Optional, Tuple
 
 from workers.audio.base_transcriber import AudioTranscriber
+from workers.audio.device import (
+    WhisperDevice,
+    get_whisper_device,
+    is_gpu_error,
+    mark_gpu_unavailable,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -94,10 +101,12 @@ def _create_faster_whisper_transcriber(settings) -> AudioTranscriber:
             "Run: pip install faster-whisper"
         ) from e
 
-    return FasterWhisperTranscriber(
-        model_size=settings.whisper_model,
-        device=settings.whisper_device,
-        compute_type=settings.whisper_compute_type
+    return _create_on_best_device(
+        lambda d: FasterWhisperTranscriber(
+            model_size=settings.whisper_model,
+            device=d.device,
+            compute_type=d.compute_type
+        )
     )
 
 
@@ -115,9 +124,11 @@ def _create_openai_whisper_transcriber(settings) -> AudioTranscriber:
             "Run: pip install openai-whisper"
         ) from e
 
-    return OpenAIWhisperTranscriber(
-        model_size=settings.whisper_model,
-        device=settings.whisper_device
+    return _create_on_best_device(
+        lambda d: OpenAIWhisperTranscriber(
+            model_size=settings.whisper_model,
+            device=d.device
+        )
     )
 
 
@@ -142,6 +153,52 @@ def _create_openai_api_transcriber(settings) -> AudioTranscriber:
         )
 
     return OpenAIAPITranscriber(api_key=settings.openai_api_key)
+
+
+def _create_on_best_device(create: Callable[[WhisperDevice], AudioTranscriber]) -> AudioTranscriber:
+    """
+    Build a local Whisper transcriber on the cached device (GPU when available).
+
+    If the model cannot be loaded on the GPU because of a GPU/CUDA error, the GPU is
+    marked unavailable for this worker process and the model is loaded on CPU instead.
+    """
+    device = get_whisper_device()
+    try:
+        return create(device)
+    except Exception as e:
+        # Only GPU problems disable the GPU; e.g. a model download error must not
+        if device.device != "cuda" or not is_gpu_error(e):
+            raise
+        logger.error(f"Failed to load Whisper on GPU, falling back to CPU: {e}")
+        return create(mark_gpu_unavailable(str(e)))
+
+
+def transcribe_with_gpu_fallback(
+    audio_path: Path,
+    options: Optional[Dict[str, Any]] = None,
+    force_provider: Optional[str] = None,
+) -> Tuple[Dict[str, Any], AudioTranscriber]:
+    """
+    Transcribe with the configured transcriber, retrying once on CPU if the GPU fails.
+
+    Some CUDA problems (e.g. cuDNN libraries missing) only surface when the model
+    runs, not when it loads. In that case the GPU is marked unavailable for this
+    worker process, the transcriber is rebuilt on CPU and the job is retried.
+    """
+    transcriber = get_audio_transcriber(force_provider=force_provider)
+    try:
+        result = transcriber.transcribe(audio_path, options)
+    except Exception as e:
+        if getattr(transcriber, "device", None) != "cuda" or not is_gpu_error(e):
+            raise
+        logger.error(f"Transcription failed on GPU, retrying on CPU: {e}")
+        mark_gpu_unavailable(str(e))
+        reset_audio_transcriber()
+        transcriber = get_audio_transcriber(force_provider=force_provider)
+        result = transcriber.transcribe(audio_path, options)
+
+    result.setdefault("device", getattr(transcriber, "device", None) or "remote")
+    return result, transcriber
 
 
 def reset_audio_transcriber() -> None:

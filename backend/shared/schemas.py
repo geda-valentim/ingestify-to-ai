@@ -146,6 +146,11 @@ class DocumentMetadata(BaseModel):
     size_bytes: int
     title: Optional[str] = None
     author: Optional[str] = None
+    # Audio / video transcription
+    language: Optional[str] = None
+    duration: Optional[float] = None
+    device: Optional[str] = None  # "cuda", "cpu" or "remote"
+    available_formats: Optional[List[str]] = None  # use GET /jobs/{id}/result?format=...
 
 
 class ConversionResult(BaseModel):
