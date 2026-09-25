@@ -1,15 +1,8 @@
 """The worker must only read files the API saved for the same job."""
-import sys
-from unittest.mock import MagicMock
-
 import pytest
 
-# workers.tasks imports Docling and the source handlers; stub the heavy modules
-for module in ("workers.converter", "workers.sources"):
-    sys.modules.setdefault(module, MagicMock())
-
-import workers.celery_app  # noqa: E402,F401  (import order used by the worker; avoids a circular import)
-from workers import tasks  # noqa: E402
+import workers.celery_app  # noqa: F401  (import order used by the worker; avoids a circular import)
+from workers import tasks
 
 JOB_ID = "job-1"
 
