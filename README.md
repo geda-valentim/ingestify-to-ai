@@ -237,6 +237,9 @@ Health check da API.
 
 **Modo Desenvolvimento (Padrão - com hot reload):**
 ```bash
+# Gerar JWT_SECRET_KEY no .env (obrigatório; só gera se ainda não existir)
+./scripts/ensure_jwt_secret.sh
+
 # Iniciar todos os serviços em modo desenvolvimento
 # docker-compose.override.yml é aplicado automaticamente!
 docker compose up -d --build
@@ -423,10 +426,11 @@ ELASTICSEARCH_URL=http://localhost:9200
 CELERY_BROKER_URL=redis://redis:6379/0
 CELERY_RESULT_BACKEND=redis://redis:6379/1
 
-# JWT Authentication
-SECRET_KEY=your-secret-key-here
-ALGORITHM=HS256
-ACCESS_TOKEN_EXPIRE_MINUTES=30
+# JWT Authentication (JWT_SECRET_KEY é obrigatório: a API não sobe sem ele)
+# Gere com: openssl rand -hex 32  (ou ./scripts/ensure_jwt_secret.sh)
+JWT_SECRET_KEY=
+JWT_ALGORITHM=HS256
+JWT_EXPIRATION_MINUTES=60
 
 # Conversão
 MAX_FILE_SIZE_MB=50
