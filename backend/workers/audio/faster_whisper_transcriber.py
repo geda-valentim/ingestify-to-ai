@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Dict, Any, List
 import logging
 
-from workers.audio.base_transcriber import AudioTranscriber
+from workers.audio.base_transcriber import AudioTranscriber, VIDEO_FORMATS
 
 logger = logging.getLogger(__name__)
 
@@ -247,4 +247,4 @@ class FasterWhisperTranscriber(AudioTranscriber):
             'aac',
             'oga',
             'spx'
-        ]
+        ] + VIDEO_FORMATS
