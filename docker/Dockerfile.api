@@ -24,6 +24,13 @@ COPY backend/workers/ ./workers/
 # Create temp directory
 RUN mkdir -p /tmp/doc2md/uploads
 
+# Run as an unprivileged user (the entrypoint fixes temp storage ownership, then drops root)
+RUN useradd --create-home --uid 10001 --user-group app \
+    && mkdir -p /tmp/ingestify \
+    && chown -R app:app /tmp/ingestify
+COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+
 # Expose port
 EXPOSE 8000
 
