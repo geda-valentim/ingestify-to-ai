@@ -36,9 +36,16 @@ def _too_many(retry_after: int, detail: str) -> HTTPException:
 
 
 def _increment(redis, key: str, window_seconds: int) -> int:
-    count = redis.incr(key)
-    if count == 1:
-        redis.expire(key, window_seconds)
+    """
+    Atomically create the counter with its TTL (if missing) and increment it.
+
+    SET NX EX + INCR run in one MULTI/EXEC transaction, so a counter can never be
+    left without an expiry (which would lock an IP/account out permanently).
+    """
+    pipe = redis.pipeline(transaction=True)
+    pipe.set(key, 0, ex=window_seconds, nx=True)
+    pipe.incr(key)
+    _, count = pipe.execute()
     return count
 
 
