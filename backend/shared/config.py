@@ -1,5 +1,6 @@
 from pydantic_settings import BaseSettings
 from functools import lru_cache
+from urllib.parse import quote
 
 
 class Settings(BaseSettings):
@@ -142,6 +143,16 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
         case_sensitive = False
+
+
+def redis_url_with_password(url: str, password: str) -> str:
+    """Add REDIS_PASSWORD to a redis:// URL that has no credentials (for Celery broker/backend)"""
+    if not password or not url.startswith(("redis://", "rediss://")):
+        return url
+    scheme, rest = url.split("://", 1)
+    if "@" in rest.split("/", 1)[0]:
+        return url  # credentials already in the URL
+    return f"{scheme}://:{quote(password, safe='')}@{rest}"
 
 
 @lru_cache()
