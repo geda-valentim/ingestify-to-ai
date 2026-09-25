@@ -1,6 +1,6 @@
 "use client";
 
-import { use, useEffect, useState } from "react";
+import { use, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
@@ -92,6 +92,20 @@ export default function JobStatusPage({ params }: PageProps) {
 
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [selectedPage, setSelectedPage] = useState<PageInfo | null>(null);
+
+  // The page PDF endpoint requires authentication, so the viewer sends the token.
+  // Memoized so the viewer only reloads when the page (or token) changes.
+  const selectedPageNumber = selectedPage?.page_number;
+  const pdfUrl = useMemo(
+    () =>
+      selectedPageNumber && token
+        ? {
+            url: `${jobsApi.getPagePdf(resolvedParams.id, selectedPageNumber)}?t=${Date.now()}`,
+            httpHeaders: { Authorization: `Bearer ${token}` },
+          }
+        : null,
+    [resolvedParams.id, selectedPageNumber, token]
+  );
   const [activeTab, setActiveTab] = useState<"pdf" | "markdown">("pdf");
   const [numPdfPages, setNumPdfPages] = useState<number>(0);
   const [pdfError, setPdfError] = useState<string | null>(null);
@@ -328,9 +342,6 @@ export default function JobStatusPage({ params }: PageProps) {
     );
   }
 
-  const pdfUrl = selectedPage
-    ? `${jobsApi.getPagePdf(resolvedParams.id, selectedPage.page_number)}?t=${Date.now()}`
-    : null;
 
   return (
     <TooltipProvider>
