@@ -1,0 +1,32 @@
+# Optional GPU override for Whisper transcription (NVIDIA only)
+#
+# Requirements on the host: NVIDIA driver + NVIDIA Container Toolkit
+#   https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build worker
+#
+# The worker detects the GPU once per process (WHISPER_DEVICE=auto) and falls back
+# to CPU automatically if CUDA is not usable, so this file is safe to try.
+
+services:
+  worker:
+    build:
+      args:
+        INSTALL_CUDA_LIBS: "true"
+    environment:
+      - WHISPER_DEVICE=${WHISPER_DEVICE:-auto}
+      - WHISPER_COMPUTE_TYPE=${WHISPER_COMPUTE_TYPE:-auto}
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+    # Each worker process loads its own Whisper model into GPU memory:
+    # keep replicas x concurrency low to avoid running out of VRAM.
+    command: celery -A workers.celery_app worker --loglevel=info --concurrency=1 -Q ingestify -n ingestify-worker@%h
+    deploy:
+      replicas: 1
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
