@@ -158,6 +158,12 @@ async def startup_event():
     logger.info(f"Elasticsearch: {settings.elasticsearch_url}")
     logger.info(f"MinIO endpoint: {settings.minio_endpoint}")
 
+    if settings.environment == "production":
+        if settings.minio_secret_key == "minioadmin":
+            logger.warning("SECURITY: MinIO is using the default credentials (minioadmin). Set MINIO_ROOT_PASSWORD.")
+        if not settings.redis_password:
+            logger.warning("SECURITY: Redis has no password. Set REDIS_PASSWORD (Redis must only be reachable internally).")
+
     # Refuse to start with a missing or insecure JWT secret: anyone could forge tokens
     from shared.auth import validate_jwt_secret
     validate_jwt_secret(settings.jwt_secret_key)

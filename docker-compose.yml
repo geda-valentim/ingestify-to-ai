@@ -29,7 +29,7 @@ services:
         hard: -1
     mem_limit: 1g
     ports:
-      - "9200:9200"
+      - "127.0.0.1:9200:9200"  # host-only: reachable by local tools, not from other machines
     volumes:
       - elasticsearch_data:/usr/share/elasticsearch/data
     networks:
@@ -47,14 +47,17 @@ services:
     image: redis:7-alpine
     container_name: ingestify-redis
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"  # host-only: reachable by local tools, not from other machines
     volumes:
       - redis_data:/data
-    command: redis-server --appendonly yes
+    # Password is optional: set REDIS_PASSWORD (in .env) to require it
+    command: sh -c 'exec redis-server --appendonly yes $${REDIS_PASSWORD:+--requirepass "$$REDIS_PASSWORD"}'
+    environment:
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
     networks:
       - ingestify-network
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD-SHELL", "REDISCLI_AUTH=\"$$REDIS_PASSWORD\" redis-cli ping | grep -q PONG"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -66,8 +69,8 @@ services:
     image: minio/minio:latest
     container_name: ingestify-minio
     ports:
-      - "9000:9000"  # API
-      - "9001:9001"  # Web Console
+      - "127.0.0.1:9000:9000"  # API (host-only)
+      - "127.0.0.1:9001:9001"  # Web Console (host-only)
     volumes:
       - minio_data:/data
     environment:
@@ -98,6 +101,7 @@ services:
       - "8000:8000"
     environment:
       # Smart host detection: uses service name if in same network, or localhost if external
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
       - REDIS_HOST=${REDIS_HOST:-redis}
       - REDIS_PORT=${REDIS_PORT:-6379}
       - CELERY_BROKER_URL=${CELERY_BROKER_URL:-redis://${REDIS_HOST:-redis}:6379/0}
@@ -139,6 +143,7 @@ services:
       context: .
       dockerfile: docker/Dockerfile.worker
     environment:
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
       - REDIS_HOST=${REDIS_HOST:-redis}
       - REDIS_PORT=${REDIS_PORT:-6379}
       - CELERY_BROKER_URL=${CELERY_BROKER_URL:-redis://${REDIS_HOST:-redis}:6379/0}
@@ -182,6 +187,7 @@ services:
     container_name: ingestify-beat
     command: celery -A workers.celery_app beat --loglevel=info
     environment:
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
       - REDIS_HOST=${REDIS_HOST:-redis}
       - REDIS_PORT=${REDIS_PORT:-6379}
       - CELERY_BROKER_URL=${CELERY_BROKER_URL:-redis://${REDIS_HOST:-redis}:6379/0}
