@@ -1,14 +1,14 @@
 from celery import Celery
 from celery.schedules import crontab
-from shared.config import get_settings
+from shared.config import get_settings, redis_url_with_password
 
 settings = get_settings()
 
 # Create Celery app
 celery_app = Celery(
     "doc2md",
-    broker=settings.celery_broker_url,
-    backend=settings.celery_result_backend,
+    broker=redis_url_with_password(settings.celery_broker_url, settings.redis_password),
+    backend=redis_url_with_password(settings.celery_result_backend, settings.redis_password),
 )
 
 # Configure Celery
@@ -47,6 +47,11 @@ if settings.monitoring_enabled:
             'task': 'workers.monitoring.cleanup_old_jobs',
             'schedule': crontab(hour='2', minute='0'),  # Daily at 2 AM UTC
             'options': {'expires': 3600}  # Expire after 1 hour if not picked up
+        },
+        'cleanup-stale-files': {
+            'task': 'workers.monitoring.cleanup_stale_files',
+            'schedule': crontab(hour='3', minute='0'),  # Daily at 3 AM UTC
+            'options': {'expires': 3600}
         },
         'health-check': {
             'task': 'workers.monitoring.health_check',

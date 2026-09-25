@@ -14,6 +14,11 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+
+# Video containers whose audio track local Whisper can decode (via PyAV/ffmpeg)
+VIDEO_FORMATS = ['mp4', 'm4v', 'mkv', 'mov', 'avi', 'webm', 'wmv', 'flv', 'mpeg', 'mpg', 'ts', '3gp']
+
+
 class AudioTranscriber(ABC):
     """
     Abstract base class for audio transcription
@@ -156,6 +161,34 @@ class AudioTranscriber(ABC):
 
         return '\n'.join(lines)
 
+    def format_as_text(self, transcription: Dict[str, Any]) -> str:
+        """Plain text transcript, one segment per line"""
+        segments = transcription.get('segments') or []
+        if not segments:
+            return transcription.get('text', '').strip()
+        lines = (' '.join(segment.get('text', '').split()) for segment in segments)
+        return '\n'.join(line for line in lines if line)
+
+    def format_as_vtt(self, transcription: Dict[str, Any]) -> str:
+        """WebVTT subtitles (https://www.w3.org/TR/webvtt1/) built from the segments"""
+        cues = ['WEBVTT', '']
+        for index, (start, end, text) in enumerate(_subtitle_cues(transcription), start=1):
+            cues.append(str(index))
+            cues.append(f"{_format_timestamp(start, '.')} --> {_format_timestamp(end, '.')}")
+            cues.append(text)
+            cues.append('')
+        return '\n'.join(cues)
+
+    def format_as_srt(self, transcription: Dict[str, Any]) -> str:
+        """SubRip (.srt) subtitles built from the segments"""
+        cues = []
+        for index, (start, end, text) in enumerate(_subtitle_cues(transcription), start=1):
+            cues.append(str(index))
+            cues.append(f"{_format_timestamp(start, ',')} --> {_format_timestamp(end, ',')}")
+            cues.append(text)
+            cues.append('')
+        return '\n'.join(cues)
+
     def _validate_audio_file(self, audio_path: Path) -> None:
         """
         Validate that audio file exists and has supported format
@@ -176,3 +209,24 @@ class AudioTranscriber(ABC):
                 f"Unsupported audio format: {extension}. "
                 f"Supported formats: {', '.join(self.supported_formats())}"
             )
+
+
+def _format_timestamp(seconds: float, decimal_marker: str) -> str:
+    """HH:MM:SS.mmm (VTT) or HH:MM:SS,mmm (SRT)"""
+    total_ms = max(0, int(round((seconds or 0) * 1000)))
+    hours, rest = divmod(total_ms, 3_600_000)
+    minutes, rest = divmod(rest, 60_000)
+    secs, ms = divmod(rest, 1000)
+    return f"{hours:02d}:{minutes:02d}:{secs:02d}{decimal_marker}{ms:03d}"
+
+
+def _subtitle_cues(transcription: Dict[str, Any]):
+    """Yield (start, end, text) for each non-empty segment, safe for VTT/SRT"""
+    for segment in transcription.get('segments') or []:
+        # Blank lines end a cue and "-->" is reserved for timings
+        text = ' '.join(segment.get('text', '').split()).replace('-->', '->')
+        if not text:
+            continue
+        start = float(segment.get('start') or 0)
+        end = max(float(segment.get('end') or start), start)
+        yield start, end, text

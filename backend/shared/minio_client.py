@@ -44,6 +44,7 @@ class MinIOClient:
         self.bucket_pages = settings.minio_bucket_pages
         self.bucket_audio = settings.minio_bucket_audio
         self.bucket_results = settings.minio_bucket_results
+        self.bucket_crawled = settings.minio_bucket_crawled
 
         # Clientes usados apenas para assinar URLs para o navegador, indexados
         # por (endpoint, região). Ver `get_presigned_url`.
@@ -51,7 +52,7 @@ class MinIOClient:
 
         # Initialize buckets on startup
         self._ensure_buckets_exist()
-        self._enforce_private_bucket_policies()
+        self._remove_public_read_policies()
 
     def _ensure_buckets_exist(self):
         """Create buckets if they don't exist"""
@@ -60,6 +61,7 @@ class MinIOClient:
             self.bucket_pages,
             self.bucket_audio,
             self.bucket_results,
+            self.bucket_crawled,
         ]
 
         for bucket_name in buckets:
@@ -73,50 +75,39 @@ class MinIOClient:
                 logger.error(f"Error ensuring bucket {bucket_name} exists: {e}")
                 raise
 
-    def _enforce_private_bucket_policies(self):
+    def _remove_public_read_policies(self):
         """
-        Garante que nenhum bucket seja legível anonimamente.
+        Make sure no bucket allows anonymous reads.
 
-        Até esta versão, uploads/pages/results recebiam uma policy de
-        `s3:GetObject` para `Principal: *` a cada inicialização do cliente: os
-        documentos originais, as páginas em PDF e os markdowns convertidos eram
-        lidos por qualquer pessoa que soubesse (ou adivinhasse) o caminho —
-        `pages/{job_id}/page_{n:04d}.pdf` é previsível. O acesso agora é sempre
-        por URL pré-assinada com TTL curto (ver `get_presigned_url`).
-
-        Apenas remover o código não revoga a policy já gravada num MinIO em
-        execução, por isso a policy é **ativamente apagada** no startup. A
-        operação é idempotente: `NoSuchBucketPolicy` significa que o bucket já
-        está privado. Falhas nunca sobem — o comportamento é o mesmo do método
-        que este substituiu (logar e continuar), para não derrubar a aplicação
-        quando o MinIO está indisponível.
+        Earlier versions set a public "s3:GetObject for *" policy on the uploads,
+        pages and results buckets, exposing every user's documents to anyone who
+        could guess an object key. Files are now served through the API after an
+        ownership check, so the policy is removed from existing buckets too.
         """
-        private_buckets = [
+        for bucket_name in [
             self.bucket_uploads,
             self.bucket_pages,
-            self.bucket_results,
             self.bucket_audio,
-        ]
+            self.bucket_results,
+            self.bucket_crawled,
+        ]:
+            # Fail closed: if the policy can't be checked or removed, the client is not
+            # created (get_minio_client retries on the next call) instead of silently
+            # running with buckets that may still be publicly readable.
+            try:
+                policy = self.client.get_bucket_policy(bucket_name)
+            except S3Error as e:
+                if e.code == "NoSuchBucketPolicy":
+                    continue
+                raise RuntimeError(f"Could not verify that bucket {bucket_name} is private: {e}") from e
 
-        for bucket_name in private_buckets:
+            if not policy:
+                continue
             try:
                 self.client.delete_bucket_policy(bucket_name)
-                logger.info(
-                    f"Removed anonymous read policy from MinIO bucket: {bucket_name} "
-                    f"(access is now via presigned URLs only)"
-                )
+                logger.info(f"Removed public read policy from bucket: {bucket_name}")
             except S3Error as e:
-                if e.code in ("NoSuchBucketPolicy", "NoSuchBucket"):
-                    logger.debug(f"MinIO bucket {bucket_name} has no public policy to remove")
-                else:
-                    logger.warning(
-                        f"Failed to remove public policy from {bucket_name}: {e}. "
-                        f"The bucket may still be anonymously readable - check it manually."
-                    )
-            except Exception as e:  # MinIO fora do ar, DNS, timeout...
-                logger.warning(
-                    f"Could not verify/remove public policy for {bucket_name}: {e}"
-                )
+                raise RuntimeError(f"Could not remove the public policy from bucket {bucket_name}: {e}") from e
 
     def health_check(self) -> bool:
         """Check MinIO connection by listing buckets"""
@@ -162,7 +153,7 @@ class MinIOClient:
                     content_type=content_type,
                 )
                 logger.info(f"Uploaded file to MinIO: {bucket_name}/{object_name}")
-            elif file_data:
+            elif file_data is not None:
                 # Upload from bytes
                 file_stream = io.BytesIO(file_data)
                 self.client.put_object(
@@ -222,6 +213,15 @@ class MinIOClient:
         except S3Error as e:
             logger.error(f"Failed to download from MinIO: {e}")
             raise
+
+    def open_object(self, bucket_name: str, object_name: str):
+        """
+        Open an object for streaming.
+
+        Returns the urllib3 response: iterate with .stream(chunk_size), then call
+        .close() and .release_conn(). Raises S3Error if the object does not exist.
+        """
+        return self.client.get_object(bucket_name, object_name)
 
     def delete_file(self, bucket_name: str, object_name: str) -> bool:
         """

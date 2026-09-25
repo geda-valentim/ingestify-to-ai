@@ -11,8 +11,11 @@ if (typeof window !== 'undefined') {
   pdfjs.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjs.version}/pdf.worker.min.js`;
 }
 
+// A URL, or { url, httpHeaders } to send the Authorization header with the request
+export type PdfSource = string | { url: string; httpHeaders?: Record<string, string> };
+
 interface PdfViewerProps {
-  file: string;
+  file: PdfSource;
   onLoadSuccess?: ({ numPages }: { numPages: number }) => void;
   onLoadError?: (error: Error) => void;
   pageNumber?: number;

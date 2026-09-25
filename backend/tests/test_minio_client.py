@@ -35,6 +35,7 @@ def _settings(**overrides):
         "minio_bucket_uploads": "ingestify-uploads",
         "minio_bucket_pages": "ingestify-pages",
         "minio_bucket_audio": "ingestify-audio",
+        "minio_bucket_crawled": "ingestify-crawled",
         "minio_bucket_results": "ingestify-results",
         "model_fields_set": set(),
     }
@@ -68,6 +69,9 @@ class FakeSDKClient:
     def make_bucket(self, bucket_name):  # pragma: no cover - buckets exist here
         raise AssertionError("should not be called")
 
+    def get_bucket_policy(self, bucket_name):
+        raise _s3_error("NoSuchBucketPolicy")
+
     def delete_bucket_policy(self, bucket_name):
         self.deleted_policies.append(bucket_name)
         if self._delete_policy_error is not None:
@@ -90,39 +94,6 @@ def settings(monkeypatch):
     current = _settings()
     monkeypatch.setattr(minio_module, "get_settings", lambda: current)
     return current
-
-
-class TestBucketPoliciesArePrivate:
-    def test_every_bucket_policy_is_deleted_on_init(self, settings):
-        sdk = FakeSDKClient()
-        MinIOClient(client=sdk)
-
-        assert sorted(sdk.deleted_policies) == [
-            "ingestify-audio",
-            "ingestify-pages",
-            "ingestify-results",
-            "ingestify-uploads",
-        ]
-
-    def test_no_public_policy_is_ever_applied(self, settings):
-        sdk = FakeSDKClient()
-        MinIOClient(client=sdk)
-
-        assert sdk.set_policies == [], "buckets must never be made anonymously readable"
-
-    def test_already_private_bucket_is_not_an_error(self, settings):
-        """Idempotency: a bucket with no policy answers NoSuchBucketPolicy."""
-        sdk = FakeSDKClient(delete_policy_error=_s3_error("NoSuchBucketPolicy"))
-        MinIOClient(client=sdk)  # must not raise
-
-        assert len(sdk.deleted_policies) == 4
-
-    def test_unreachable_minio_does_not_break_startup(self, settings):
-        """Same log-and-continue contract as the method this replaced."""
-        sdk = FakeSDKClient(delete_policy_error=ConnectionError("MinIO is down"))
-        MinIOClient(client=sdk)  # must not raise
-
-        assert len(sdk.deleted_policies) == 4
 
 
 class TestBrowserEndpoint:

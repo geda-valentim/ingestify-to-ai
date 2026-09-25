@@ -13,6 +13,7 @@ from celery.exceptions import SoftTimeLimitExceeded
 from pathlib import Path
 from datetime import datetime
 from uuid import uuid4
+import json
 import logging
 import asyncio
 import shutil
@@ -27,9 +28,50 @@ from shared.database import SessionLocal
 from shared.models import Job, Page, JobStatus
 from shared.config import get_settings
 from shared.pdf_splitter import PDFSplitter, should_split_pdf
+from shared.transcripts import TRANSCRIPT_CONTENT_TYPES, transcript_object_name
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
+
+
+def _resolve_uploaded_file(source: str, job_id: str) -> Path:
+    """
+    Resolve the path of a file uploaded through the API for this job.
+
+    Only files the API saved under {temp}/uploads/{job_id}/ or {temp}/audio/{job_id}/
+    are accepted, so a crafted `source` cannot make the worker read arbitrary
+    local files (other users' uploads, container files) and return their content.
+    """
+    if not source:
+        raise ValueError("Missing uploaded file path")
+
+    file_path = Path(source).resolve()
+    base = Path(settings.temp_storage_path).resolve()
+    allowed_dirs = [base / "uploads" / job_id, base / "audio" / job_id]
+
+    if not any(file_path.is_relative_to(d) for d in allowed_dirs):
+        logger.warning(f"[MAIN JOB {job_id}] Rejected file source outside upload dir: {source}")
+        raise ValueError("Invalid uploaded file path")
+
+    return file_path
+
+
+def _remove_job_files(job_id: str) -> None:
+    """
+    Delete a finished job's local files: work dir, uploaded file and audio.
+
+    The original upload is kept in MinIO (page retries restore it from there),
+    so nothing is needed on disk once the job completed. Failed jobs keep their
+    files for Celery retries; the periodic cleanup_stale_files task removes them.
+    """
+    base = Path(settings.temp_storage_path)
+    for directory in (base / job_id, base / "uploads" / job_id, base / "audio" / job_id):
+        try:
+            if directory.exists():
+                shutil.rmtree(directory)
+        except Exception as e:
+            # Not fatal for the job, but the (possibly sensitive) files stay on disk
+            logger.error(f"[JOB {job_id}] Could not remove {directory}: {e}")
 
 
 # ============================================
@@ -100,7 +142,7 @@ def process_conversion(
         temp_dir.mkdir(parents=True, exist_ok=True)
 
         if source_type == 'file':
-            file_path = Path(source)
+            file_path = _resolve_uploaded_file(source, job_id)
         else:
             file_path = asyncio.run(
                 handler.download(
@@ -122,13 +164,9 @@ def process_conversion(
             logger.info(f"[MAIN JOB {job_id}] Audio file detected - transcribing with Whisper")
 
             try:
-                from workers.audio import get_audio_transcriber
+                from workers.audio import transcribe_with_gpu_fallback
 
-                # Get transcriber (respects provider configuration)
                 provider_override = options.get('transcriber_provider')
-                transcriber = get_audio_transcriber(force_provider=provider_override)
-
-                logger.info(f"[MAIN JOB {job_id}] Using transcriber provider: {transcriber.__class__.__name__}")
 
                 # Update progress
                 redis_client.update_job_progress(job_id, 30)
@@ -141,12 +179,15 @@ def process_conversion(
                     'beam_size': options.get('beam_size', 5)
                 }
 
-                result = transcriber.transcribe(file_path, transcription_options)
+                # Uses the GPU when available (detected once per worker) and falls back to CPU
+                result, transcriber = transcribe_with_gpu_fallback(
+                    file_path, transcription_options, force_provider=provider_override
+                )
 
                 logger.info(
-                    f"[MAIN JOB {job_id}] Transcription complete: "
-                    f"{result['word_count']} words, {result['duration']:.2f}s, "
-                    f"language={result['language']}"
+                    f"[MAIN JOB {job_id}] Transcription complete with {transcriber.__class__.__name__} "
+                    f"on {result.get('device')}: {result['word_count']} words, "
+                    f"{result['duration']:.2f}s, language={result['language']}"
                 )
                 redis_client.update_job_progress(job_id, 70)
 
@@ -154,17 +195,36 @@ def process_conversion(
                 include_timestamps = options.get('include_timestamps', True)
                 markdown_content = transcriber.format_as_markdown(result, include_timestamps)
 
+                # Subtitle / text outputs, retrievable via GET /jobs/{id}/result?format=...
+                transcript_outputs = {
+                    'vtt': transcriber.format_as_vtt(result),
+                    'srt': transcriber.format_as_srt(result),
+                    'txt': transcriber.format_as_text(result),
+                    'json': json.dumps(
+                        {k: result.get(k) for k in ('language', 'duration', 'text', 'segments')},
+                        ensure_ascii=False,
+                    ),
+                }
+                _store_transcript_outputs(job_id, transcript_outputs)
+
                 # Store result in Redis
                 result_with_markdown = {
                     'markdown': markdown_content,
                     'metadata': {
+                        'format': file_path.suffix.lower().lstrip('.') or options.get('media_kind', 'audio'),
+                        'size_bytes': file_path.stat().st_size,
+                        'words': result['word_count'],
                         'language': result['language'],
                         'duration': result['duration'],
                         'word_count': result['word_count'],
                         'char_count': result['char_count'],
                         'provider': result.get('provider', 'unknown'),
-                        'model': result.get('model', 'unknown')
-                    }
+                        'model': result.get('model', 'unknown'),
+                        'device': result.get('device'),
+                        'output_format': options.get('output_format', 'markdown'),
+                        'available_formats': ['markdown'] + list(transcript_outputs),
+                    },
+                    'transcript': transcript_outputs,
                 }
                 redis_client.set_job_result(job_id, result_with_markdown)
                 redis_client.update_job_progress(job_id, 80)
@@ -219,6 +279,7 @@ def process_conversion(
                     completed_at=datetime.utcnow()
                 )
 
+                _remove_job_files(job_id)
                 logger.info(f"[MAIN JOB {job_id}] ✓ Audio transcription completed successfully")
                 return
 
@@ -322,9 +383,8 @@ def process_conversion(
             finally:
                 db.close()
 
-            # Cleanup
-            if temp_dir.exists() and source_type != 'file':
-                shutil.rmtree(temp_dir, ignore_errors=True)
+            # Cleanup (work dir and the uploaded file; the original stays in MinIO)
+            _remove_job_files(job_id)
 
             # Mark as completed in Redis
             redis_client.set_job_status(
@@ -1028,14 +1088,9 @@ def merge_pages_task(
 
         logger.info(f"[MERGE JOB {merge_job_id}] Completed - main job {parent_job_id} finished")
 
-        # Cleanup temp files
-        try:
-            temp_dir = Path(settings.temp_storage_path) / parent_job_id
-            if temp_dir.exists():
-                shutil.rmtree(temp_dir, ignore_errors=True)
-                logger.info(f"[MERGE JOB {merge_job_id}] Cleanup completed")
-        except Exception as e:
-            logger.warning(f"[MERGE JOB {merge_job_id}] Cleanup warning: {e}")
+        # Cleanup temp files (pages, merged output and the uploaded file; the original stays in MinIO)
+        _remove_job_files(parent_job_id)
+        logger.info(f"[MERGE JOB {merge_job_id}] Cleanup completed")
 
         return {"merge_job_id": merge_job_id, "pages_merged": total_pages}
 
@@ -1095,3 +1150,24 @@ def send_callback(callback_url: str, job_id: str, status: str, result: dict = No
     except Exception as e:
         logger.error(f"Failed to send callback: {e}")
         raise
+
+
+def _store_transcript_outputs(job_id: str, outputs: dict) -> None:
+    """Persist transcript formats in the private audio bucket so they outlive the Redis result TTL"""
+    try:
+        minio_client = get_minio_client()
+    except Exception as e:
+        logger.warning(f"[MAIN JOB {job_id}] MinIO unavailable, transcript files kept only in Redis: {e}")
+        return
+
+    for fmt, content in outputs.items():
+        # Empty outputs are valid (e.g. SRT of a recording without speech) and stored too
+        try:
+            minio_client.upload_file(
+                bucket_name=minio_client.bucket_audio,
+                object_name=transcript_object_name(job_id, fmt),
+                file_data=content.encode('utf-8'),
+                content_type=TRANSCRIPT_CONTENT_TYPES[fmt],
+            )
+        except Exception as e:
+            logger.warning(f"[MAIN JOB {job_id}] Failed to store transcript.{fmt} in MinIO: {e}")

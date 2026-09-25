@@ -12,7 +12,7 @@
           "Authentication"
         ],
         "summary": "Register",
-        "description": "Register a new user\n\n## Request Body:\n```json\n{\n  \"email\": \"user@example.com\",\n  \"username\": \"testuser\",\n  \"password\": \"Test123\"\n}\n```\n\n## Returns:\nUser object with id, email, username, is_active, created_at\n\n## Errors:\n- 400: Email or username already exists",
+        "description": "Register a new user\n\n## Request Body:\n```json\n{\n  \"email\": \"user@example.com\",\n  \"username\": \"testuser\",\n  \"password\": \"Test123\"\n}\n```\n\n## Returns:\nUser object with id, email, username, is_active, created_at\n\n## Errors:\n- 400: Email or username already exists\n- 429: Too many registrations from this IP",
         "operationId": "register_auth_register_post",
         "requestBody": {
           "content": {
@@ -54,7 +54,7 @@
           "Authentication"
         ],
         "summary": "Login",
-        "description": "Login with username/email and password (OAuth2 compatible)\n\n## Request Body (form-urlencoded):\n- username: testuser (or email)\n- password: Test123\n\n## Returns:\n```json\n{\n  \"access_token\": \"eyJ...\",\n  \"token_type\": \"bearer\"\n}\n```\n\n## Usage:\nUse the access_token in subsequent requests:\n```\nAuthorization: Bearer eyJ...\n```\n\n## Errors:\n- 401: Invalid credentials",
+        "description": "Login with username/email and password (OAuth2 compatible)\n\n## Request Body (form-urlencoded):\n- username: testuser (or email)\n- password: Test123\n\n## Returns:\n```json\n{\n  \"access_token\": \"eyJ...\",\n  \"token_type\": \"bearer\"\n}\n```\n\n## Usage:\nUse the access_token in subsequent requests:\n```\nAuthorization: Bearer eyJ...\n```\n\n## Errors:\n- 401: Invalid credentials\n- 429: Too many attempts (per IP, or too many failures for this account)",
         "operationId": "login_auth_login_post",
         "requestBody": {
           "content": {
@@ -818,8 +818,8 @@
         "tags": [
           "Conversion"
         ],
-        "summary": "Transcrever áudio para texto",
-        "description": "Transcrever áudio para texto usando Whisper\n\nEste endpoint é dedicado exclusivamente para transcrição de áudio.\nSuporta múltiplos formatos de áudio e retorna transcrição em formato Markdown.\n\n## Parâmetros:\n- `file`: Arquivo de áudio para transcrição\n- `name`: Nome de identificação opcional\n- `language`: Código de idioma ISO 639-1 (ex: 'en', 'pt', 'es'). Auto-detecta se não fornecido\n- `include_timestamps`: Adicionar marcadores de tempo [MM:SS] na transcrição\n- `include_word_timestamps`: Adicionar timestamps em cada palavra (mais detalhado)\n\n## Formatos suportados\nMP3, WAV, M4A, FLAC, OGG, OPUS, WEBM, WMA, AAC\n\n## Limite de tamanho\nAté 50MB (configurável via MAX_AUDIO_FILE_SIZE_MB)\n\n## Retorno\nRetorna imediatamente um `job_id` para consultar o progresso via `/jobs/{job_id}`\n\n## Exemplo:\n```bash\ncurl -X POST http://localhost:8080/transcribe \\\n  -F \"file=@meeting.mp3\" \\\n  -F \"language=pt\" \\\n  -F \"include_timestamps=true\"\n```\n\n## Resultado\nO resultado estará disponível em `/jobs/{job_id}/result` e incluirá:\n- Transcrição completa em markdown\n- Timestamps (se solicitado)\n- Idioma detectado\n- Duração do áudio\n- Contagem de palavras",
+        "summary": "Transcrever áudio ou vídeo (STT, legendas VTT/SRT)",
+        "description": "Transcrever áudio ou vídeo para texto usando Whisper (STT)\n\nAceita áudio ou vídeo (só a faixa de áudio do vídeo é transcrita).\nO job entra na fila; o worker usa GPU quando disponível (detectada uma vez por\nworker, com fallback automático para CPU).\n\nTodos os formatos são gerados: Markdown, legendas WebVTT e SRT, texto puro e\nJSON com segmentos. Escolha o formato em `GET /jobs/{job_id}/result?format=vtt`\n(ou defina o padrão com `output_format`).\n\n## Parâmetros:\n- `file`: Arquivo de áudio para transcrição\n- `name`: Nome de identificação opcional\n- `language`: Código de idioma ISO 639-1 (ex: 'en', 'pt', 'es'). Auto-detecta se não fornecido\n- `include_timestamps`: Adicionar marcadores de tempo [MM:SS] na transcrição\n- `include_word_timestamps`: Adicionar timestamps em cada palavra (mais detalhado)\n- `output_format`: Formato padrão do resultado (`markdown`, `vtt`, `srt`, `txt`, `json`)\n\n## Formatos suportados\n- Áudio: MP3, WAV, M4A, FLAC, OGG, OPUS, WEBM, WMA, AAC\n- Vídeo: MP4, M4V, MKV, MOV, AVI, WEBM, WMV, FLV, MPEG, TS, 3GP\n\n## Limite de tamanho\n- Áudio: até 50MB (MAX_AUDIO_FILE_SIZE_MB)\n- Vídeo: até 500MB (MAX_VIDEO_FILE_SIZE_MB)\n\n## Retorno\nRetorna imediatamente um `job_id` para consultar o progresso via `/jobs/{job_id}`\n\n## Exemplo:\n```bash\ncurl -X POST http://localhost:8080/transcribe \\\n  -F \"file=@meeting.mp3\" \\\n  -F \"language=pt\" \\\n  -F \"include_timestamps=true\"\n```\n\n## Resultado\nConsulte o status em `/jobs/{job_id}` até `completed` e busque o resultado:\n- `GET /jobs/{job_id}/result`: JSON com markdown e metadados (idioma, duração, device)\n- `GET /jobs/{job_id}/result?format=vtt`: legenda WebVTT (`text/vtt`)\n- `?format=srt`, `?format=txt`, `?format=json`: SRT, texto puro, segmentos",
         "operationId": "transcribe_audio_transcribe_post",
         "requestBody": {
           "content": {
@@ -1063,7 +1063,7 @@
           "Conversion"
         ],
         "summary": "Get Job Result",
-        "description": "Recuperar resultado de qualquer tipo de job (main ou page individual)\n\n## Permissões:\n- Apenas o dono do job (verificado no MySQL) pode acessar o resultado.\n  Jobs de outros usuários retornam 404.",
+        "description": "Recuperar resultado de qualquer tipo de job (main ou page individual)\n\n## Permissões:\n- Apenas o dono do job (verificado no MySQL) pode acessar o resultado.\n  Jobs de outros usuários retornam 404.\n\nPara jobs de transcrição (/transcribe), `?format=vtt|srt|txt|json` retorna o\narquivo no formato pedido (ex.: legenda WebVTT com `Content-Type: text/vtt`).",
         "operationId": "get_job_result_jobs__job_id__result_get",
         "security": [
           {
@@ -1082,6 +1082,24 @@
               "type": "string",
               "title": "Job Id"
             }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Para transcrições: markdown (JSON padrão), vtt, srt, txt ou json. Sem este parâmetro vale o output_format escolhido no /transcribe.",
+              "title": "Format"
+            },
+            "description": "Para transcrições: markdown (JSON padrão), vtt, srt, txt ou json. Sem este parâmetro vale o output_format escolhido no /transcribe."
           }
         ],
         "responses": {
@@ -1730,7 +1748,7 @@
             "anyOf": [
               {
                 "type": "string",
-                "contentMediaType": "application/octet-stream"
+                "format": "binary"
               },
               {
                 "type": "null"
@@ -1762,7 +1780,7 @@
         "properties": {
           "file": {
             "type": "string",
-            "contentMediaType": "application/octet-stream",
+            "format": "binary",
             "title": "File",
             "description": "Imagem (PNG, JPEG, WEBP, BMP, GIF, TIFF)"
           },
@@ -1801,7 +1819,7 @@
         "properties": {
           "file": {
             "type": "string",
-            "contentMediaType": "application/octet-stream",
+            "format": "binary",
             "title": "File",
             "description": "Imagem (PNG, JPEG, WEBP, BMP, GIF, TIFF)"
           }
@@ -1816,9 +1834,9 @@
         "properties": {
           "file": {
             "type": "string",
-            "contentMediaType": "application/octet-stream",
+            "format": "binary",
             "title": "File",
-            "description": "Arquivo de áudio (MP3, WAV, M4A, FLAC, OGG, etc.)"
+            "description": "Arquivo de áudio (MP3, WAV, M4A, FLAC, OGG...) ou vídeo (MP4, MKV, MOV, WEBM, AVI...)"
           },
           "name": {
             "anyOf": [
@@ -1855,6 +1873,12 @@
             "title": "Include Word Timestamps",
             "description": "Incluir timestamps em nível de palavra (mais detalhado)",
             "default": false
+          },
+          "output_format": {
+            "type": "string",
+            "title": "Output Format",
+            "description": "Formato padrão do resultado em /jobs/{job_id}/result: markdown, vtt, srt, txt ou json",
+            "default": "markdown"
           }
         },
         "type": "object",
@@ -1867,7 +1891,7 @@
         "properties": {
           "file": {
             "type": "string",
-            "contentMediaType": "application/octet-stream",
+            "format": "binary",
             "title": "File",
             "description": "Arquivo para conversão (PDF, DOCX, HTML, etc.)"
           },
@@ -2019,6 +2043,53 @@
               }
             ],
             "title": "Author"
+          },
+          "language": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Language"
+          },
+          "duration": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration"
+          },
+          "device": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device"
+          },
+          "available_formats": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Available Formats"
           }
         },
         "type": "object",
@@ -2592,7 +2663,8 @@
           "split",
           "page",
           "merge",
-          "download"
+          "download",
+          "crawler"
         ],
         "title": "JobType",
         "description": "Tipos de jobs no sistema"
@@ -2788,13 +2860,6 @@
           "type": {
             "type": "string",
             "title": "Error Type"
-          },
-          "input": {
-            "title": "Input"
-          },
-          "ctx": {
-            "type": "object",
-            "title": "Context"
           }
         },
         "type": "object",
