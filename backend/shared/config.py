@@ -34,10 +34,11 @@ class Settings(BaseSettings):
     # Audio Transcription Settings
     audio_transcriber_provider: str = "faster-whisper"  # faster-whisper, openai-whisper, openai-api
     whisper_model: str = "turbo"  # tiny, base, small, medium, large, turbo
-    whisper_device: str = "cpu"  # cpu or cuda
-    whisper_compute_type: str = "int8"  # int8, float16, float32 (for faster-whisper)
+    whisper_device: str = "auto"  # auto (GPU if available, detected once per worker), cuda or cpu
+    whisper_compute_type: str = "auto"  # auto (float16 on GPU, int8 on CPU), int8, float16, float32
     enable_audio_transcription: bool = True  # Feature flag to enable/disable audio transcription
     max_audio_file_size_mb: int = 50  # Maximum audio file size
+    max_video_file_size_mb: int = 500  # Maximum video file size (only the audio track is transcribed)
     max_audio_duration_seconds: int = 3600  # Maximum audio duration (1 hour)
     openai_api_key: str = ""  # Required for openai-api provider
 

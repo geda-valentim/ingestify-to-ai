@@ -1,4 +1,5 @@
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Header, Body, Depends, Request
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Header, Body, Depends, Request, Query
+from fastapi.responses import Response
 from typing import Optional, List
 from uuid import uuid4
 from datetime import datetime
@@ -25,6 +26,7 @@ from shared.database import SessionLocal, get_db
 from shared.models import Job, Page, JobStatus as DBJobStatus, User
 from shared.config import get_settings
 from shared.auth import get_current_active_user
+from shared.transcripts import TRANSCRIPT_CONTENT_TYPES, TRANSCRIPT_FORMATS, transcript_object_name
 from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
@@ -257,21 +259,46 @@ async def upload_and_convert(
     )
 
 
-@router.post("/transcribe", response_model=JobCreatedResponse, summary="Transcrever áudio para texto")
+TRANSCRIPT_OUTPUT_FORMATS = ["markdown", "vtt", "srt", "txt", "json"]
+
+AUDIO_MIME_TYPES = [
+    "audio/mpeg", "audio/mp3", "audio/wav", "audio/wave", "audio/x-wav",
+    "audio/m4a", "audio/x-m4a", "audio/mp4", "audio/flac", "audio/ogg",
+    "audio/opus", "audio/webm", "audio/wma", "audio/x-ms-wma", "audio/aac", "audio/x-aac",
+]
+AUDIO_EXTENSIONS = ['.mp3', '.wav', '.m4a', '.flac', '.ogg', '.opus', '.webm', '.wma', '.aac', '.oga', '.spx']
+
+VIDEO_MIME_TYPES = [
+    "video/mp4", "video/x-m4v", "video/x-matroska", "video/quicktime", "video/x-msvideo",
+    "video/webm", "video/x-ms-wmv", "video/x-flv", "video/mpeg", "video/mp2t", "video/3gpp",
+]
+VIDEO_EXTENSIONS = ['.mp4', '.m4v', '.mkv', '.mov', '.avi', '.webm', '.wmv', '.flv', '.mpeg', '.mpg', '.ts', '.3gp']
+
+
+@router.post("/transcribe", response_model=JobCreatedResponse, summary="Transcrever áudio ou vídeo (STT, legendas VTT/SRT)")
 async def transcribe_audio(
-    file: UploadFile = File(..., description="Arquivo de áudio (MP3, WAV, M4A, FLAC, OGG, etc.)"),
+    file: UploadFile = File(..., description="Arquivo de áudio (MP3, WAV, M4A, FLAC, OGG...) ou vídeo (MP4, MKV, MOV, WEBM, AVI...)"),
     name: Optional[str] = Form(None, description="Nome de identificação (opcional, padrão: nome do arquivo)"),
     language: Optional[str] = Form(None, description="Código do idioma (ex: 'en', 'pt'). Auto-detectar se não fornecido"),
     include_timestamps: bool = Form(True, description="Incluir marcadores de tempo na transcrição"),
     include_word_timestamps: bool = Form(False, description="Incluir timestamps em nível de palavra (mais detalhado)"),
+    output_format: str = Form(
+        "markdown",
+        description="Formato padrão do resultado em /jobs/{job_id}/result: markdown, vtt, srt, txt ou json",
+    ),
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
 ):
     """
-    Transcrever áudio para texto usando Whisper
+    Transcrever áudio ou vídeo para texto usando Whisper (STT)
 
-    Este endpoint é dedicado exclusivamente para transcrição de áudio.
-    Suporta múltiplos formatos de áudio e retorna transcrição em formato Markdown.
+    Aceita áudio ou vídeo (só a faixa de áudio do vídeo é transcrita).
+    O job entra na fila; o worker usa GPU quando disponível (detectada uma vez por
+    worker, com fallback automático para CPU).
+
+    Todos os formatos são gerados: Markdown, legendas WebVTT e SRT, texto puro e
+    JSON com segmentos. Escolha o formato em `GET /jobs/{job_id}/result?format=vtt`
+    (ou defina o padrão com `output_format`).
 
     ## Parâmetros:
     - `file`: Arquivo de áudio para transcrição
@@ -279,12 +306,15 @@ async def transcribe_audio(
     - `language`: Código de idioma ISO 639-1 (ex: 'en', 'pt', 'es'). Auto-detecta se não fornecido
     - `include_timestamps`: Adicionar marcadores de tempo [MM:SS] na transcrição
     - `include_word_timestamps`: Adicionar timestamps em cada palavra (mais detalhado)
+    - `output_format`: Formato padrão do resultado (`markdown`, `vtt`, `srt`, `txt`, `json`)
 
     ## Formatos suportados
-    MP3, WAV, M4A, FLAC, OGG, OPUS, WEBM, WMA, AAC
+    - Áudio: MP3, WAV, M4A, FLAC, OGG, OPUS, WEBM, WMA, AAC
+    - Vídeo: MP4, M4V, MKV, MOV, AVI, WEBM, WMV, FLV, MPEG, TS, 3GP
 
     ## Limite de tamanho
-    Até 50MB (configurável via MAX_AUDIO_FILE_SIZE_MB)
+    - Áudio: até 50MB (MAX_AUDIO_FILE_SIZE_MB)
+    - Vídeo: até 500MB (MAX_VIDEO_FILE_SIZE_MB)
 
     ## Retorno
     Retorna imediatamente um `job_id` para consultar o progresso via `/jobs/{job_id}`
@@ -298,12 +328,10 @@ async def transcribe_audio(
     ```
 
     ## Resultado
-    O resultado estará disponível em `/jobs/{job_id}/result` e incluirá:
-    - Transcrição completa em markdown
-    - Timestamps (se solicitado)
-    - Idioma detectado
-    - Duração do áudio
-    - Contagem de palavras
+    Consulte o status em `/jobs/{job_id}` até `completed` e busque o resultado:
+    - `GET /jobs/{job_id}/result`: JSON com markdown e metadados (idioma, duração, device)
+    - `GET /jobs/{job_id}/result?format=vtt`: legenda WebVTT (`text/vtt`)
+    - `?format=srt`, `?format=txt`, `?format=json`: SRT, texto puro, segmentos
     """
     # Check if audio transcription is enabled
     if not settings.enable_audio_transcription:
@@ -320,47 +348,40 @@ async def transcribe_audio(
     file_size_mb = len(file_contents) / (1024 * 1024)
     file_size_bytes = len(file_contents)
 
-    # Validate audio file size
-    max_size_mb = settings.max_audio_file_size_mb
+    output_format = (output_format or "markdown").lower()
+    if output_format not in TRANSCRIPT_OUTPUT_FORMATS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"output_format inválido: {output_format}. Use: {', '.join(TRANSCRIPT_OUTPUT_FORMATS)}"
+        )
+
+    # Validate media type (audio or video), by MIME type or extension
+    mime_type = file.content_type or "application/octet-stream"
+    file_ext = filename.lower()[filename.rfind('.'):] if '.' in filename else ''
+
+    is_video = mime_type in VIDEO_MIME_TYPES or (
+        file_ext in VIDEO_EXTENSIONS and mime_type not in AUDIO_MIME_TYPES
+    )
+    is_audio = mime_type in AUDIO_MIME_TYPES or file_ext in AUDIO_EXTENSIONS
+
+    if not is_video and not is_audio:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Formato não suportado. MIME type: {mime_type}, Extensão: {file_ext}. "
+                   f"Áudio: MP3, WAV, M4A, FLAC, OGG, OPUS, WEBM, WMA, AAC. "
+                   f"Vídeo: MP4, M4V, MKV, MOV, AVI, WEBM, WMV, FLV, MPEG, TS, 3GP"
+        )
+
+    # Validate file size
+    max_size_mb = settings.max_video_file_size_mb if is_video else settings.max_audio_file_size_mb
     if file_size_mb > max_size_mb:
         raise HTTPException(
             status_code=413,
-            detail=f"Arquivo de áudio muito grande: {file_size_mb:.2f}MB. Máximo: {max_size_mb}MB"
+            detail=f"Arquivo muito grande: {file_size_mb:.2f}MB. Máximo: {max_size_mb}MB"
         )
 
-    # Validate audio MIME type
-    mime_type = file.content_type or "application/octet-stream"
-    audio_mime_types = [
-        "audio/mpeg",  # MP3
-        "audio/mp3",
-        "audio/wav",
-        "audio/wave",
-        "audio/x-wav",
-        "audio/m4a",
-        "audio/x-m4a",
-        "audio/mp4",  # M4A alternative
-        "audio/flac",
-        "audio/ogg",
-        "audio/opus",
-        "audio/webm",
-        "audio/wma",
-        "audio/x-ms-wma",
-        "audio/aac",
-        "audio/x-aac"
-    ]
-
-    # Also check file extension as backup
-    audio_extensions = ['.mp3', '.wav', '.m4a', '.flac', '.ogg', '.opus', '.webm', '.wma', '.aac', '.oga', '.spx']
-    file_ext = filename.lower()[filename.rfind('.'):] if '.' in filename else ''
-
-    if mime_type not in audio_mime_types and file_ext not in audio_extensions:
-        raise HTTPException(
-            status_code=422,
-            detail=f"Formato de áudio não suportado. MIME type: {mime_type}, Extensão: {file_ext}. "
-                   f"Formatos aceitos: MP3, WAV, M4A, FLAC, OGG, OPUS, WEBM, WMA, AAC"
-        )
-
-    logger.info(f"Audio file uploaded: {filename} ({file_size_mb:.2f}MB, {mime_type})")
+    media_kind = "video" if is_video else "audio"
+    logger.info(f"{media_kind.capitalize()} file uploaded: {filename} ({file_size_mb:.2f}MB, {mime_type})")
 
     # Calculate file checksum for deduplication
     file_checksum = calculate_file_checksum(file_contents)
@@ -469,6 +490,8 @@ async def transcribe_audio(
             "language": language,
             "include_timestamps": include_timestamps,
             "include_word_timestamps": include_word_timestamps,
+            "output_format": output_format,
+            "media_kind": media_kind,
             "is_audio": True  # Flag to indicate this is audio transcription
         }
 
@@ -1130,10 +1153,29 @@ async def delete_job(
 @router.get("/jobs/{job_id}/result", response_model=JobResultResponse)
 async def get_job_result(
     job_id: str,
+    format_: Optional[str] = Query(
+        None,
+        alias="format",
+        description="Para transcrições: markdown (JSON padrão), vtt, srt, txt ou json. "
+                    "Sem este parâmetro vale o output_format escolhido no /transcribe.",
+    ),
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
 ):
-    """Recuperar resultado de qualquer tipo de job (main ou page individual)"""
+    """
+    Recuperar resultado de qualquer tipo de job (main ou page individual)
+
+    Para jobs de transcrição (/transcribe), `?format=vtt|srt|txt|json` retorna o
+    arquivo no formato pedido (ex.: legenda WebVTT com `Content-Type: text/vtt`).
+    """
+    if format_ is not None:
+        format_ = format_.lower()
+        if format_ not in ["markdown"] + TRANSCRIPT_FORMATS:
+            raise HTTPException(
+                status_code=422,
+                detail=f"format inválido: {format_}. Use: markdown, {', '.join(TRANSCRIPT_FORMATS)}"
+            )
+
     redis_client = get_redis_client()
     es_client = get_es_client()
 
@@ -1178,6 +1220,11 @@ async def get_job_result(
         else:
             raise HTTPException(status_code=404, detail="Resultado não encontrado ou expirado")
 
+    # Transcription jobs: serve subtitles / text / segments in the requested format
+    requested_format = format_ or (result_data.get("metadata") or {}).get("output_format") or "markdown"
+    if requested_format != "markdown":
+        return _transcript_response(job_id, requested_format, redis_client)
+
     # Get completed_at timestamp
     completed_at = None
     db_job = db.query(Job).filter(Job.id == job_id).first()
@@ -1204,6 +1251,34 @@ async def get_job_result(
         response_data["parent_job_id"] = status_data.get("parent_job_id")
 
     return JobResultResponse(**response_data)
+
+
+def _transcript_response(job_id: str, fmt: str, redis_client) -> Response:
+    """Return one transcript format (from Redis, or MinIO once the Redis result expired)"""
+    content = ((redis_client.get_job_result(job_id) or {}).get("transcript") or {}).get(fmt)
+
+    if content is None:
+        try:
+            minio_client = get_minio_client()
+            data = minio_client.download_file(
+                bucket_name=minio_client.bucket_audio,
+                object_name=transcript_object_name(job_id, fmt),
+            )
+            content = data.decode("utf-8") if data is not None else None
+        except Exception as e:
+            logger.warning(f"Transcript {fmt} for job {job_id} not available in MinIO: {e}")
+
+    if content is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Formato '{fmt}' não disponível para este job (apenas jobs de /transcribe geram {', '.join(TRANSCRIPT_FORMATS)})"
+        )
+
+    return Response(
+        content=content,
+        media_type=TRANSCRIPT_CONTENT_TYPES[fmt],
+        headers={"Content-Disposition": f'inline; filename="{job_id}.{fmt}"'},
+    )
 
 
 @router.get("/jobs/{job_id}/pages", response_model=JobPagesResponse)

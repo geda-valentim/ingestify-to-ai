@@ -13,6 +13,7 @@ from celery.exceptions import SoftTimeLimitExceeded
 from pathlib import Path
 from datetime import datetime
 from uuid import uuid4
+import json
 import logging
 import asyncio
 import shutil
@@ -27,9 +28,32 @@ from shared.database import SessionLocal
 from shared.models import Job, Page, JobStatus
 from shared.config import get_settings
 from shared.pdf_splitter import PDFSplitter, should_split_pdf
+from shared.transcripts import TRANSCRIPT_CONTENT_TYPES, transcript_object_name
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
+
+
+def _store_transcript_outputs(job_id: str, outputs: dict) -> None:
+    """Persist transcript formats in the private audio bucket so they outlive the Redis result TTL"""
+    try:
+        minio_client = get_minio_client()
+    except Exception as e:
+        logger.warning(f"[MAIN JOB {job_id}] MinIO unavailable, transcript files kept only in Redis: {e}")
+        return
+
+    for fmt, content in outputs.items():
+        if not content:
+            continue  # e.g. SRT of a recording without speech
+        try:
+            minio_client.upload_file(
+                bucket_name=minio_client.bucket_audio,
+                object_name=transcript_object_name(job_id, fmt),
+                file_data=content.encode('utf-8'),
+                content_type=TRANSCRIPT_CONTENT_TYPES[fmt],
+            )
+        except Exception as e:
+            logger.warning(f"[MAIN JOB {job_id}] Failed to store transcript.{fmt} in MinIO: {e}")
 
 
 # ============================================
@@ -122,13 +146,9 @@ def process_conversion(
             logger.info(f"[MAIN JOB {job_id}] Audio file detected - transcribing with Whisper")
 
             try:
-                from workers.audio import get_audio_transcriber
+                from workers.audio import transcribe_with_gpu_fallback
 
-                # Get transcriber (respects provider configuration)
                 provider_override = options.get('transcriber_provider')
-                transcriber = get_audio_transcriber(force_provider=provider_override)
-
-                logger.info(f"[MAIN JOB {job_id}] Using transcriber provider: {transcriber.__class__.__name__}")
 
                 # Update progress
                 redis_client.update_job_progress(job_id, 30)
@@ -141,12 +161,15 @@ def process_conversion(
                     'beam_size': options.get('beam_size', 5)
                 }
 
-                result = transcriber.transcribe(file_path, transcription_options)
+                # Uses the GPU when available (detected once per worker) and falls back to CPU
+                result, transcriber = transcribe_with_gpu_fallback(
+                    file_path, transcription_options, force_provider=provider_override
+                )
 
                 logger.info(
-                    f"[MAIN JOB {job_id}] Transcription complete: "
-                    f"{result['word_count']} words, {result['duration']:.2f}s, "
-                    f"language={result['language']}"
+                    f"[MAIN JOB {job_id}] Transcription complete with {transcriber.__class__.__name__} "
+                    f"on {result.get('device')}: {result['word_count']} words, "
+                    f"{result['duration']:.2f}s, language={result['language']}"
                 )
                 redis_client.update_job_progress(job_id, 70)
 
@@ -154,17 +177,36 @@ def process_conversion(
                 include_timestamps = options.get('include_timestamps', True)
                 markdown_content = transcriber.format_as_markdown(result, include_timestamps)
 
+                # Subtitle / text outputs, retrievable via GET /jobs/{id}/result?format=...
+                transcript_outputs = {
+                    'vtt': transcriber.format_as_vtt(result),
+                    'srt': transcriber.format_as_srt(result),
+                    'txt': transcriber.format_as_text(result),
+                    'json': json.dumps(
+                        {k: result.get(k) for k in ('language', 'duration', 'text', 'segments')},
+                        ensure_ascii=False,
+                    ),
+                }
+                _store_transcript_outputs(job_id, transcript_outputs)
+
                 # Store result in Redis
                 result_with_markdown = {
                     'markdown': markdown_content,
                     'metadata': {
+                        'format': file_path.suffix.lower().lstrip('.') or options.get('media_kind', 'audio'),
+                        'size_bytes': file_path.stat().st_size,
+                        'words': result['word_count'],
                         'language': result['language'],
                         'duration': result['duration'],
                         'word_count': result['word_count'],
                         'char_count': result['char_count'],
                         'provider': result.get('provider', 'unknown'),
-                        'model': result.get('model', 'unknown')
-                    }
+                        'model': result.get('model', 'unknown'),
+                        'device': result.get('device'),
+                        'output_format': options.get('output_format', 'markdown'),
+                        'available_formats': ['markdown'] + list(transcript_outputs),
+                    },
+                    'transcript': transcript_outputs,
                 }
                 redis_client.set_job_result(job_id, result_with_markdown)
                 redis_client.update_job_progress(job_id, 80)
