@@ -25,25 +25,12 @@ from shared.database import SessionLocal, get_db
 from shared.models import Job, Page, JobStatus as DBJobStatus, User
 from shared.config import get_settings
 from shared.auth import get_current_active_user
+from shared.utils import sanitize_upload_filename
 from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["Conversion"])
 settings = get_settings()
-
-
-def sanitize_upload_filename(filename: Optional[str]) -> str:
-    """
-    Reduce a client-supplied filename to a safe basename.
-
-    The multipart filename is fully attacker-controlled; joining it to a path
-    as-is allows "../" traversal or absolute paths (Path(a) / "/etc/x" == "/etc/x").
-    """
-    name = (filename or "").replace("\\", "/").split("/")[-1]
-    name = "".join(ch for ch in name if ch.isprintable()).strip()
-    if name in ("", ".", ".."):
-        return "upload"
-    return name[:255]
 
 
 @router.post("/upload", response_model=JobCreatedResponse, summary="Upload e converter arquivo")
