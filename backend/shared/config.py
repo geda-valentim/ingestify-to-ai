@@ -83,12 +83,17 @@ class Settings(BaseSettings):
     minio_bucket_results: str = "ingestify-results"
 
     # JWT Authentication
-    jwt_secret_key: str = "your-secret-key-change-in-production-min-32-chars"
+    # REQUIRED: no default. Generate with `openssl rand -hex 32` and set JWT_SECRET_KEY.
+    # The API refuses to start without a valid secret (see shared.auth.validate_jwt_secret).
+    jwt_secret_key: str = ""
     jwt_algorithm: str = "HS256"
     jwt_expiration_minutes: int = 60  # 1 hour
 
     # Authentication
     auth_enabled: bool = True  # Feature flag to enable/disable auth
+    # Comma-separated user IDs (UUIDs) allowed to use /admin endpoints. Empty = no admins.
+    # IDs are used instead of emails because registration does not verify email ownership.
+    admin_user_ids: str = ""
 
     # Rate Limiting
     rate_limit_per_minute: int = 10
