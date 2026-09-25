@@ -1,5 +1,6 @@
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Header, Body, Depends, Request, Query
-from fastapi.responses import Response
+from fastapi.responses import Response, StreamingResponse
+from starlette.concurrency import run_in_threadpool
 from typing import Optional, List, Tuple
 from pathlib import Path
 import hashlib
@@ -86,181 +87,167 @@ async def upload_and_convert(
       -F "docling_preset=quality"
     ```
     """
-    from shared.utils import calculate_file_checksum
-
     redis_client = get_redis_client()
 
-    # Read file contents
-    file_contents = await file.read()
     filename = sanitize_upload_filename(file.filename)
-    file_size_mb = len(file_contents) / (1024 * 1024)
-    file_size_bytes = len(file_contents)
 
-    # Validate file size
-    if file_size_mb > settings.max_file_size_mb:
-        raise HTTPException(
-            status_code=413,
-            detail=f"Arquivo muito grande: {file_size_mb:.2f}MB. Máximo: {settings.max_file_size_mb}MB"
-        )
-
-    logger.info(f"File uploaded: {filename} ({file_size_mb:.2f}MB)")
-
-    # Calculate file checksum for deduplication
-    file_checksum = calculate_file_checksum(file_contents)
-    logger.info(f"File checksum: {file_checksum}")
-
-    # Check if file already processed by this user
-    existing_job = db.query(Job).filter(
-        Job.user_id == current_user.id,
-        Job.file_checksum == file_checksum,
-        Job.job_type == "MAIN"
-    ).first()
-
-    if existing_job:
-        logger.info(f"Duplicate file detected! Returning existing job: {existing_job.id}")
-        return JobCreatedResponse(
-            job_id=existing_job.id,
-            status="queued",  # Use current status from DB
-            created_at=existing_job.created_at,
-            message=f"Arquivo já foi processado anteriormente (job existente: {existing_job.id})"
-        )
-
-    # Generate job ID for new file
-    job_id = uuid4()
-    created_at = datetime.utcnow()
-
-    # Determine job name (use provided name or filename)
-    job_name = name if name else filename
-
-    # Detect MIME type
-    mime_type = file.content_type or "application/octet-stream"
-
-    # Store initial job status in Redis
-    redis_client.set_job_status(
-        job_id=str(job_id),
-        job_type="main",
-        status="queued",
-        progress=0,
-        name=job_name,
-    )
-
-    # Set job ownership
-    redis_client.set_job_owner(str(job_id), current_user.id)
-    redis_client.add_job_to_user(current_user.id, str(job_id))
-
-    # Create Job record in MySQL
+    # Stream the upload to disk in chunks (size limit + checksum) instead of reading it into memory
+    staging_path = _upload_staging_path(filename)
     try:
-        db_job = Job(
-            id=str(job_id),
-            user_id=current_user.id,
-            filename=filename,
-            name=job_name,  # Save user-friendly name
-            source_type="file",
-            file_size_bytes=file_size_bytes,
-            mime_type=mime_type,
-            file_checksum=file_checksum,  # Save checksum for deduplication
-            status=DBJobStatus.PENDING,
-            job_type="MAIN",
-            created_at=created_at,
-        )
-        db.add(db_job)
-        db.commit()
-        logger.info(f"Job {job_id} created in MySQL with name: {job_name} and checksum: {file_checksum}")
-    except Exception as e:
-        logger.error(f"Error creating job in MySQL: {e}", exc_info=True)
-        db.rollback()
-        # Continue - MySQL is for persistence, Redis is primary
+        file_size_bytes, file_checksum = await _stream_upload_to_file(file, staging_path, settings.max_file_size_mb)
+        file_size_mb = file_size_bytes / (1024 * 1024)
 
-    logger.info(f"MAIN JOB created: {job_id} | user: {current_user.username} | source_type: file")
+        logger.info(f"File uploaded: {filename} ({file_size_mb:.2f}MB)")
+        logger.info(f"File checksum: {file_checksum}")
 
-    # Save file to MinIO and temporarily to filesystem
-    try:
-        from workers.tasks import process_conversion
-        from pathlib import Path
+        # Check if file already processed by this user
+        existing_job = db.query(Job).filter(
+            Job.user_id == current_user.id,
+            Job.file_checksum == file_checksum,
+            Job.job_type == "MAIN"
+        ).first()
 
-        # Save to MinIO
-        minio_client = get_minio_client()
-        minio_object_name = f"uploads/{job_id}/{filename}"
-        try:
-            minio_client.upload_file(
-                bucket_name=minio_client.bucket_uploads,
-                object_name=minio_object_name,
-                file_data=file_contents,
-                content_type=file.content_type or "application/octet-stream",
+        if existing_job:
+            logger.info(f"Duplicate file detected! Returning existing job: {existing_job.id}")
+            return JobCreatedResponse(
+                job_id=existing_job.id,
+                status="queued",  # Use current status from DB
+                created_at=existing_job.created_at,
+                message=f"Arquivo já foi processado anteriormente (job existente: {existing_job.id})"
             )
-            logger.info(f"File uploaded to MinIO: {minio_object_name}")
 
-            # Update MySQL job with MinIO path
-            try:
-                db_job.minio_upload_path = minio_object_name
-                db.commit()
-            except Exception as e:
-                logger.warning(f"Failed to update job MinIO path in MySQL: {e}")
-                db.rollback()
+        # Generate job ID for new file
+        job_id = uuid4()
+        created_at = datetime.utcnow()
+
+        # Determine job name (use provided name or filename)
+        job_name = name if name else filename
+
+        # Detect MIME type
+        mime_type = file.content_type or "application/octet-stream"
+
+        # Store initial job status in Redis
+        redis_client.set_job_status(
+            job_id=str(job_id),
+            job_type="main",
+            status="queued",
+            progress=0,
+            name=job_name,
+        )
+
+        # Set job ownership
+        redis_client.set_job_owner(str(job_id), current_user.id)
+        redis_client.add_job_to_user(current_user.id, str(job_id))
+
+        # Create Job record in MySQL
+        try:
+            db_job = Job(
+                id=str(job_id),
+                user_id=current_user.id,
+                filename=filename,
+                name=job_name,  # Save user-friendly name
+                source_type="file",
+                file_size_bytes=file_size_bytes,
+                mime_type=mime_type,
+                file_checksum=file_checksum,  # Save checksum for deduplication
+                status=DBJobStatus.PENDING,
+                job_type="MAIN",
+                created_at=created_at,
+            )
+            db.add(db_job)
+            db.commit()
+            logger.info(f"Job {job_id} created in MySQL with name: {job_name} and checksum: {file_checksum}")
         except Exception as e:
-            logger.error(f"Failed to upload file to MinIO: {e}")
-            # Continue with filesystem fallback
-
-        # Also save to filesystem temporarily for processing
-        temp_dir = Path(settings.temp_storage_path) / "uploads" / str(job_id)
-        temp_dir.mkdir(parents=True, exist_ok=True)
-        temp_file_path = temp_dir / filename
-
-        with open(temp_file_path, "wb") as f:
-            f.write(file_contents)
-
-        logger.info(f"File saved to filesystem: {temp_file_path}")
-
-        # Enqueue task
-        process_conversion.delay(
-            job_id=str(job_id),
-            source_type="file",
-            source=str(temp_file_path),
-            options={"docling_preset": docling_preset},
-        )
-        logger.info(f"MAIN JOB {job_id} enqueued to Celery successfully")
-
-    except ImportError as e:
-        logger.error(f"Celery tasks not available: {e}")
-        redis_client.set_job_status(
-            job_id=str(job_id),
-            job_type="main",
-            status="failed",
-            progress=0,
-            error="Celery workers não disponíveis"
-        )
-        # Update MySQL
-        try:
-            db_job.status = DBJobStatus.FAILED
-            db_job.error_message = "Celery workers não disponíveis"
-            db.commit()
-        except Exception:
+            logger.error(f"Error creating job in MySQL: {e}", exc_info=True)
             db.rollback()
-        raise HTTPException(status_code=503, detail="Sistema de processamento indisponível")
-    except Exception as e:
-        logger.error(f"Error enqueueing job {job_id}: {e}", exc_info=True)
-        redis_client.set_job_status(
-            job_id=str(job_id),
-            job_type="main",
-            status="failed",
-            progress=0,
-            error=str(e)
-        )
-        # Update MySQL
-        try:
-            db_job.status = DBJobStatus.FAILED
-            db_job.error_message = str(e)
-            db.commit()
-        except Exception:
-            db.rollback()
-        raise HTTPException(status_code=500, detail="Erro ao criar job")
+            # Continue - MySQL is for persistence, Redis is primary
 
-    return JobCreatedResponse(
-        job_id=job_id,
-        status="queued",
-        created_at=created_at,
-        message="Job enfileirado para processamento"
-    )
+        logger.info(f"MAIN JOB created: {job_id} | user: {current_user.username} | source_type: file")
+
+        # Save file to MinIO and temporarily to filesystem
+        try:
+            from workers.tasks import process_conversion
+
+            # Move the streamed upload to the job's directory (read by the worker)
+            temp_file_path = _move_upload_to_job_dir(staging_path, job_id, filename)
+            logger.info(f"File saved to filesystem: {temp_file_path}")
+
+            # Save to MinIO (streamed from disk)
+            minio_client = get_minio_client()
+            minio_object_name = f"uploads/{job_id}/{filename}"
+            try:
+                minio_client.upload_file(
+                    bucket_name=minio_client.bucket_uploads,
+                    object_name=minio_object_name,
+                    file_path=str(temp_file_path),
+                    content_type=file.content_type or "application/octet-stream",
+                )
+                logger.info(f"File uploaded to MinIO: {minio_object_name}")
+
+                # Update MySQL job with MinIO path
+                try:
+                    db_job.minio_upload_path = minio_object_name
+                    db.commit()
+                except Exception as e:
+                    logger.warning(f"Failed to update job MinIO path in MySQL: {e}")
+                    db.rollback()
+            except Exception as e:
+                logger.error(f"Failed to upload file to MinIO: {e}")
+                # Continue with filesystem fallback
+
+            # Enqueue task
+            process_conversion.delay(
+                job_id=str(job_id),
+                source_type="file",
+                source=str(temp_file_path),
+                options={"docling_preset": docling_preset},
+            )
+            logger.info(f"MAIN JOB {job_id} enqueued to Celery successfully")
+
+        except ImportError as e:
+            logger.error(f"Celery tasks not available: {e}")
+            redis_client.set_job_status(
+                job_id=str(job_id),
+                job_type="main",
+                status="failed",
+                progress=0,
+                error="Celery workers não disponíveis"
+            )
+            # Update MySQL
+            try:
+                db_job.status = DBJobStatus.FAILED
+                db_job.error_message = "Celery workers não disponíveis"
+                db.commit()
+            except Exception:
+                db.rollback()
+            raise HTTPException(status_code=503, detail="Sistema de processamento indisponível")
+        except Exception as e:
+            logger.error(f"Error enqueueing job {job_id}: {e}", exc_info=True)
+            redis_client.set_job_status(
+                job_id=str(job_id),
+                job_type="main",
+                status="failed",
+                progress=0,
+                error=str(e)
+            )
+            # Update MySQL
+            try:
+                db_job.status = DBJobStatus.FAILED
+                db_job.error_message = str(e)
+                db.commit()
+            except Exception:
+                db.rollback()
+            raise HTTPException(status_code=500, detail="Erro ao criar job")
+
+        return JobCreatedResponse(
+            job_id=job_id,
+            status="queued",
+            created_at=created_at,
+            message="Job enfileirado para processamento"
+        )
+    finally:
+        # Remove the staged upload unless it was moved to the job directory
+        staging_path.unlink(missing_ok=True)
 
 
 TRANSCRIPT_OUTPUT_FORMATS = ["markdown", "vtt", "srt", "txt", "json"]
@@ -280,6 +267,31 @@ VIDEO_EXTENSIONS = ['.mp4', '.m4v', '.mkv', '.mov', '.avi', '.webm', '.wmv', '.f
 
 
 UPLOAD_CHUNK_SIZE = 1024 * 1024  # 1MB
+
+
+STAGING_MAX_SUFFIX_BYTES = 16
+
+
+def _upload_staging_path(filename: str, area: str = "uploads") -> Path:
+    """
+    Temporary location for an upload before its job exists (unique per request).
+
+    Only a short extension is kept (the name is a UUID), so the staging name stays
+    far below the 255-byte filename limit even for long sanitized names.
+    """
+    suffix = Path(filename).suffix
+    if len(suffix.encode("utf-8")) > STAGING_MAX_SUFFIX_BYTES:
+        suffix = ""
+    return Path(settings.temp_storage_path) / area / ".staging" / f"{uuid4()}{suffix}"
+
+
+def _move_upload_to_job_dir(staging_path: Path, job_id, filename: str) -> Path:
+    """Move a streamed upload to {temp}/uploads/{job_id}/, where the worker reads it"""
+    temp_dir = Path(settings.temp_storage_path) / "uploads" / str(job_id)
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    temp_file_path = temp_dir / filename
+    os.replace(staging_path, temp_file_path)
+    return temp_file_path
 
 
 async def _stream_upload_to_file(file: UploadFile, destination: Path, max_size_mb: int) -> Tuple[int, str]:
@@ -410,173 +422,174 @@ async def transcribe_audio(
 
     # Stream the upload to disk in chunks (size limit + checksum) instead of
     # holding up to max_size_mb in memory
-    staging_path = Path(settings.temp_storage_path) / "audio" / ".staging" / f"{uuid4()}{file_ext}"
-    file_size_bytes, file_checksum = await _stream_upload_to_file(file, staging_path, max_size_mb)
-    file_size_mb = file_size_bytes / (1024 * 1024)
-
-    logger.info(f"{media_kind.capitalize()} file uploaded: {filename} ({file_size_mb:.2f}MB, {mime_type})")
-    logger.info(f"Audio file checksum: {file_checksum}")
-
-    # Check if file already processed by this user
-    existing_job = db.query(Job).filter(
-        Job.user_id == current_user.id,
-        Job.file_checksum == file_checksum,
-        Job.job_type == "MAIN"
-    ).first()
-
-    if existing_job:
-        logger.info(f"Duplicate audio file detected! Returning existing job: {existing_job.id}")
-        staging_path.unlink(missing_ok=True)
-        # The latest request decides the default result format of the reused job
-        redis_client.set_job_output_format(str(existing_job.id), output_format)
-        return JobCreatedResponse(
-            job_id=existing_job.id,
-            status="queued",
-            created_at=existing_job.created_at,
-            message=f"Arquivo de áudio já foi processado anteriormente (job existente: {existing_job.id})"
-        )
-
-    # Generate job ID for new file
-    job_id = uuid4()
-    created_at = datetime.utcnow()
-
-    # Determine job name
-    job_name = name if name else filename
-
-    # Store initial job status in Redis
-    redis_client.set_job_status(
-        job_id=str(job_id),
-        job_type="main",
-        status="queued",
-        progress=0,
-        name=job_name,
-    )
-
-    # Set job ownership
-    redis_client.set_job_owner(str(job_id), current_user.id)
-    redis_client.add_job_to_user(current_user.id, str(job_id))
-    redis_client.set_job_output_format(str(job_id), output_format)
-
-    # Create Job record in MySQL
+    staging_path = _upload_staging_path(filename, "audio")
     try:
-        db_job = Job(
-            id=str(job_id),
-            user_id=current_user.id,
-            filename=filename,
-            name=job_name,  # Save user-friendly name
-            source_type="audio",
-            file_size_bytes=file_size_bytes,
-            mime_type=mime_type,
-            file_checksum=file_checksum,  # Save checksum for deduplication
-            status=DBJobStatus.PENDING,
-            job_type="MAIN",
-            created_at=created_at,
-        )
-        db.add(db_job)
-        db.commit()
-        logger.info(f"Audio transcription job {job_id} created in MySQL with name: {job_name} and checksum: {file_checksum}")
-    except Exception as e:
-        logger.error(f"Error creating audio job in MySQL: {e}", exc_info=True)
-        db.rollback()
+        file_size_bytes, file_checksum = await _stream_upload_to_file(file, staging_path, max_size_mb)
+        file_size_mb = file_size_bytes / (1024 * 1024)
 
-    logger.info(f"AUDIO TRANSCRIPTION JOB created: {job_id} | user: {current_user.username}")
+        logger.info(f"{media_kind.capitalize()} file uploaded: {filename} ({file_size_mb:.2f}MB, {mime_type})")
+        logger.info(f"Audio file checksum: {file_checksum}")
 
-    # Save audio file to MinIO and temporarily to filesystem
-    try:
-        from workers.tasks import process_conversion
+        # Check if file already processed by this user
+        existing_job = db.query(Job).filter(
+            Job.user_id == current_user.id,
+            Job.file_checksum == file_checksum,
+            Job.job_type == "MAIN"
+        ).first()
 
-        # Move the streamed upload to the job's directory (read by the worker)
-        temp_dir = Path(settings.temp_storage_path) / "audio" / str(job_id)
-        temp_dir.mkdir(parents=True, exist_ok=True)
-        temp_file_path = temp_dir / filename
-        os.replace(staging_path, temp_file_path)
-        logger.info(f"Audio file saved to filesystem: {temp_file_path}")
-
-        # Save to MinIO (streamed from disk)
-        minio_client = get_minio_client()
-        minio_object_name = f"audio/{job_id}/{filename}"
-        try:
-            minio_client.upload_file(
-                bucket_name=minio_client.bucket_audio,
-                object_name=minio_object_name,
-                file_path=str(temp_file_path),
-                content_type=file.content_type or "audio/mpeg",
+        if existing_job:
+            logger.info(f"Duplicate audio file detected! Returning existing job: {existing_job.id}")
+            # The latest request decides the default result format of the reused job
+            redis_client.set_job_output_format(str(existing_job.id), output_format)
+            return JobCreatedResponse(
+                job_id=existing_job.id,
+                status="queued",
+                created_at=existing_job.created_at,
+                message=f"Arquivo de áudio já foi processado anteriormente (job existente: {existing_job.id})"
             )
-            logger.info(f"Audio file uploaded to MinIO: {minio_object_name}")
 
-            # Update MySQL job with MinIO path
-            try:
-                db_job.minio_upload_path = minio_object_name
-                db.commit()
-            except Exception as e:
-                logger.warning(f"Failed to update audio job MinIO path in MySQL: {e}")
-                db.rollback()
+        # Generate job ID for new file
+        job_id = uuid4()
+        created_at = datetime.utcnow()
+
+        # Determine job name
+        job_name = name if name else filename
+
+        # Store initial job status in Redis
+        redis_client.set_job_status(
+            job_id=str(job_id),
+            job_type="main",
+            status="queued",
+            progress=0,
+            name=job_name,
+        )
+
+        # Set job ownership
+        redis_client.set_job_owner(str(job_id), current_user.id)
+        redis_client.add_job_to_user(current_user.id, str(job_id))
+        redis_client.set_job_output_format(str(job_id), output_format)
+
+        # Create Job record in MySQL
+        try:
+            db_job = Job(
+                id=str(job_id),
+                user_id=current_user.id,
+                filename=filename,
+                name=job_name,  # Save user-friendly name
+                source_type="audio",
+                file_size_bytes=file_size_bytes,
+                mime_type=mime_type,
+                file_checksum=file_checksum,  # Save checksum for deduplication
+                status=DBJobStatus.PENDING,
+                job_type="MAIN",
+                created_at=created_at,
+            )
+            db.add(db_job)
+            db.commit()
+            logger.info(f"Audio transcription job {job_id} created in MySQL with name: {job_name} and checksum: {file_checksum}")
         except Exception as e:
-            logger.error(f"Failed to upload audio file to MinIO: {e}")
-            # Continue with filesystem fallback
-
-        # Build audio transcription options
-        options = {
-            "language": language,
-            "include_timestamps": include_timestamps,
-            "include_word_timestamps": include_word_timestamps,
-            "output_format": output_format,
-            "media_kind": media_kind,
-            "is_audio": True  # Flag to indicate this is audio transcription
-        }
-
-        # Enqueue task (use 'file' source type since audio is already saved locally)
-        process_conversion.delay(
-            job_id=str(job_id),
-            source_type="file",
-            source=str(temp_file_path),
-            options=options,
-        )
-        logger.info(f"AUDIO JOB {job_id} enqueued to Celery successfully")
-
-    except ImportError as e:
-        staging_path.unlink(missing_ok=True)
-        logger.error(f"Celery tasks not available: {e}")
-        redis_client.set_job_status(
-            job_id=str(job_id),
-            job_type="main",
-            status="failed",
-            progress=0,
-            error="Celery workers não disponíveis"
-        )
-        # Update MySQL
-        try:
-            db_job.status = DBJobStatus.FAILED
-            db_job.error_message = "Celery workers não disponíveis"
-            db.commit()
-        except Exception:
+            logger.error(f"Error creating audio job in MySQL: {e}", exc_info=True)
             db.rollback()
-        raise HTTPException(status_code=503, detail="Sistema de processamento indisponível")
-    except Exception as e:
-        staging_path.unlink(missing_ok=True)
-        logger.error(f"Error enqueueing audio job {job_id}: {e}", exc_info=True)
-        redis_client.set_job_status(
-            job_id=str(job_id),
-            job_type="main",
-            status="failed",
-            progress=0,
-            error=str(e)
-        )
-        # Update MySQL
-        try:
-            db_job.status = DBJobStatus.FAILED
-            db_job.error_message = str(e)
-            db.commit()
-        except Exception:
-            db.rollback()
-        raise HTTPException(status_code=500, detail="Erro ao criar job de transcrição")
 
-    return JobCreatedResponse(
-        job_id=job_id,
-        status="queued",
-        created_at=created_at,
-        message="Job de transcrição de áudio enfileirado para processamento"
-    )
+        logger.info(f"AUDIO TRANSCRIPTION JOB created: {job_id} | user: {current_user.username}")
+
+        # Save audio file to MinIO and temporarily to filesystem
+        try:
+            from workers.tasks import process_conversion
+
+            # Move the streamed upload to the job's directory (read by the worker)
+            temp_dir = Path(settings.temp_storage_path) / "audio" / str(job_id)
+            temp_dir.mkdir(parents=True, exist_ok=True)
+            temp_file_path = temp_dir / filename
+            os.replace(staging_path, temp_file_path)
+            logger.info(f"Audio file saved to filesystem: {temp_file_path}")
+
+            # Save to MinIO (streamed from disk)
+            minio_client = get_minio_client()
+            minio_object_name = f"audio/{job_id}/{filename}"
+            try:
+                minio_client.upload_file(
+                    bucket_name=minio_client.bucket_audio,
+                    object_name=minio_object_name,
+                    file_path=str(temp_file_path),
+                    content_type=file.content_type or "audio/mpeg",
+                )
+                logger.info(f"Audio file uploaded to MinIO: {minio_object_name}")
+
+                # Update MySQL job with MinIO path
+                try:
+                    db_job.minio_upload_path = minio_object_name
+                    db.commit()
+                except Exception as e:
+                    logger.warning(f"Failed to update audio job MinIO path in MySQL: {e}")
+                    db.rollback()
+            except Exception as e:
+                logger.error(f"Failed to upload audio file to MinIO: {e}")
+                # Continue with filesystem fallback
+
+            # Build audio transcription options
+            options = {
+                "language": language,
+                "include_timestamps": include_timestamps,
+                "include_word_timestamps": include_word_timestamps,
+                "output_format": output_format,
+                "media_kind": media_kind,
+                "is_audio": True  # Flag to indicate this is audio transcription
+            }
+
+            # Enqueue task (use 'file' source type since audio is already saved locally)
+            process_conversion.delay(
+                job_id=str(job_id),
+                source_type="file",
+                source=str(temp_file_path),
+                options=options,
+            )
+            logger.info(f"AUDIO JOB {job_id} enqueued to Celery successfully")
+
+        except ImportError as e:
+            logger.error(f"Celery tasks not available: {e}")
+            redis_client.set_job_status(
+                job_id=str(job_id),
+                job_type="main",
+                status="failed",
+                progress=0,
+                error="Celery workers não disponíveis"
+            )
+            # Update MySQL
+            try:
+                db_job.status = DBJobStatus.FAILED
+                db_job.error_message = "Celery workers não disponíveis"
+                db.commit()
+            except Exception:
+                db.rollback()
+            raise HTTPException(status_code=503, detail="Sistema de processamento indisponível")
+        except Exception as e:
+            logger.error(f"Error enqueueing audio job {job_id}: {e}", exc_info=True)
+            redis_client.set_job_status(
+                job_id=str(job_id),
+                job_type="main",
+                status="failed",
+                progress=0,
+                error=str(e)
+            )
+            # Update MySQL
+            try:
+                db_job.status = DBJobStatus.FAILED
+                db_job.error_message = str(e)
+                db.commit()
+            except Exception:
+                db.rollback()
+            raise HTTPException(status_code=500, detail="Erro ao criar job de transcrição")
+
+        return JobCreatedResponse(
+            job_id=job_id,
+            status="queued",
+            created_at=created_at,
+            message="Job de transcrição de áudio enfileirado para processamento"
+        )
+    finally:
+        # Remove the staged upload unless it was moved to the job directory
+        staging_path.unlink(missing_ok=True)
 
 
 @router.post("/convert", response_model=JobCreatedResponse)
@@ -665,209 +678,197 @@ async def convert_document(
     if source_type in ["gdrive", "dropbox"] and not authorization:
         raise HTTPException(status_code=401, detail="Authorization header é obrigatório para esta fonte")
 
-    # Read file contents if uploaded
-    file_contents = None
-    filename = None
-    file_size_bytes = 0
-    mime_type = None
-    file_checksum = None
-
-    if file:
-        file_contents = await file.read()
-        filename = sanitize_upload_filename(file.filename)
-        file_size_mb = len(file_contents) / (1024 * 1024)
-        file_size_bytes = len(file_contents)
-        mime_type = file.content_type or "application/octet-stream"
-
-        if not file_contents:
-            raise HTTPException(status_code=400, detail="Arquivo enviado está vazio")
-
-        # Validate file size
-        if file_size_mb > settings.max_file_size_mb:
-            raise HTTPException(
-                status_code=413,
-                detail=f"Arquivo muito grande: {file_size_mb:.2f}MB. Máximo: {settings.max_file_size_mb}MB"
-            )
-
-        logger.info(f"File uploaded: {filename} ({file_size_mb:.2f}MB)")
-
-        # Calculate file checksum for deduplication
-        file_checksum = calculate_file_checksum(file_contents)
-        logger.info(f"File checksum: {file_checksum}")
-
-        # Check if file already processed by this user
-        existing_job = db.query(Job).filter(
-            Job.user_id == current_user.id,
-            Job.file_checksum == file_checksum,
-            Job.job_type == "MAIN"
-        ).first()
-
-        if existing_job:
-            logger.info(f"Duplicate file detected! Returning existing job: {existing_job.id}")
-            return JobCreatedResponse(
-                job_id=existing_job.id,
-                status="queued",
-                created_at=existing_job.created_at,
-                message=f"Arquivo já foi processado anteriormente (job existente: {existing_job.id})"
-            )
-
-    # Generate job ID for new conversion
-    job_id = uuid4()
-    created_at = datetime.utcnow()
-
-    # Determine job name (use provided name or auto-detect)
-    if name:
-        job_name = name
-    elif filename:
-        job_name = filename
-    elif source:
-        # Extract name from URL or path
-        if source_type == "url":
-            job_name = source.split('/')[-1] or source
-        else:
-            job_name = source.split('/')[-1] or source
-    else:
-        job_name = f"Job {job_id}"
-
-    # Store initial job status in Redis
-    redis_client.set_job_status(
-        job_id=str(job_id),
-        job_type="main",
-        status="queued",
-        progress=0,
-        name=job_name,
-    )
-
-    # Set job ownership
-    redis_client.set_job_owner(str(job_id), current_user.id)
-    redis_client.add_job_to_user(current_user.id, str(job_id))
-
-    # Create Job record in MySQL
+    # Stream the uploaded file (if any) to disk in chunks (size limit + checksum)
+    staging_path = None
     try:
-        db_job = Job(
-            id=str(job_id),
-            user_id=current_user.id,
-            filename=filename or job_name,
-            name=job_name,  # Save user-friendly name
-            source_type=source_type,
-            source_url=source if source_type != "file" else None,
-            file_size_bytes=file_size_bytes if file_size_bytes > 0 else None,
-            mime_type=mime_type,
-            file_checksum=file_checksum,  # Save checksum for deduplication (only for file uploads)
-            status=DBJobStatus.PENDING,
-            job_type="MAIN",
-            created_at=created_at,
-        )
-        db.add(db_job)
-        db.commit()
-        checksum_info = f" and checksum: {file_checksum}" if file_checksum else ""
-        logger.info(f"Job {job_id} created in MySQL with name: {job_name} (source_type: {source_type}){checksum_info}")
-    except Exception as e:
-        logger.error(f"Error creating job in MySQL: {e}", exc_info=True)
-        db.rollback()
-        # Continue - MySQL is for persistence, Redis is primary
+        filename = None
+        file_size_bytes = 0
+        mime_type = None
+        file_checksum = None
 
-    logger.info(f"MAIN JOB created: {job_id} | user: {current_user.username} | source_type: {source_type}")
+        if file:
+            filename = sanitize_upload_filename(file.filename)
+            mime_type = file.content_type or "application/octet-stream"
 
-    # Enqueue Celery task
-    try:
-        from workers.tasks import process_conversion
-        import os
-        from pathlib import Path
+            # Rejects empty uploads (400) and files over the limit (413)
+            staging_path = _upload_staging_path(filename)
+            file_size_bytes, file_checksum = await _stream_upload_to_file(file, staging_path, settings.max_file_size_mb)
+            file_size_mb = file_size_bytes / (1024 * 1024)
 
-        # Prepare task arguments
-        task_kwargs = {
-            "job_id": str(job_id),
-            "source_type": source_type,
-            "source": source,
-            "options": {},  # Default options for now
-        }
+            logger.info(f"File uploaded: {filename} ({file_size_mb:.2f}MB)")
+            logger.info(f"File checksum: {file_checksum}")
 
-        # Add auth token if present
-        if authorization and authorization.startswith("Bearer "):
-            task_kwargs["auth_token"] = authorization.replace("Bearer ", "")
+            # Check if file already processed by this user
+            existing_job = db.query(Job).filter(
+                Job.user_id == current_user.id,
+                Job.file_checksum == file_checksum,
+                Job.job_type == "MAIN"
+            ).first()
 
-        # Save file to MinIO and temporarily to filesystem if uploaded
-        if file_contents:
-            # Save to MinIO
-            minio_client = get_minio_client()
-            minio_object_name = f"uploads/{job_id}/{filename}"
-            try:
-                minio_client.upload_file(
-                    bucket_name=minio_client.bucket_uploads,
-                    object_name=minio_object_name,
-                    file_data=file_contents,
-                    content_type=mime_type or "application/octet-stream",
+            if existing_job:
+                logger.info(f"Duplicate file detected! Returning existing job: {existing_job.id}")
+                return JobCreatedResponse(
+                    job_id=existing_job.id,
+                    status="queued",
+                    created_at=existing_job.created_at,
+                    message=f"Arquivo já foi processado anteriormente (job existente: {existing_job.id})"
                 )
-                logger.info(f"File uploaded to MinIO: {minio_object_name}")
 
-                # Update MySQL job with MinIO path
+        # Generate job ID for new conversion
+        job_id = uuid4()
+        created_at = datetime.utcnow()
+
+        # Determine job name (use provided name or auto-detect)
+        if name:
+            job_name = name
+        elif filename:
+            job_name = filename
+        elif source:
+            # Extract name from URL or path
+            if source_type == "url":
+                job_name = source.split('/')[-1] or source
+            else:
+                job_name = source.split('/')[-1] or source
+        else:
+            job_name = f"Job {job_id}"
+
+        # Store initial job status in Redis
+        redis_client.set_job_status(
+            job_id=str(job_id),
+            job_type="main",
+            status="queued",
+            progress=0,
+            name=job_name,
+        )
+
+        # Set job ownership
+        redis_client.set_job_owner(str(job_id), current_user.id)
+        redis_client.add_job_to_user(current_user.id, str(job_id))
+
+        # Create Job record in MySQL
+        try:
+            db_job = Job(
+                id=str(job_id),
+                user_id=current_user.id,
+                filename=filename or job_name,
+                name=job_name,  # Save user-friendly name
+                source_type=source_type,
+                source_url=source if source_type != "file" else None,
+                file_size_bytes=file_size_bytes if file_size_bytes > 0 else None,
+                mime_type=mime_type,
+                file_checksum=file_checksum,  # Save checksum for deduplication (only for file uploads)
+                status=DBJobStatus.PENDING,
+                job_type="MAIN",
+                created_at=created_at,
+            )
+            db.add(db_job)
+            db.commit()
+            checksum_info = f" and checksum: {file_checksum}" if file_checksum else ""
+            logger.info(f"Job {job_id} created in MySQL with name: {job_name} (source_type: {source_type}){checksum_info}")
+        except Exception as e:
+            logger.error(f"Error creating job in MySQL: {e}", exc_info=True)
+            db.rollback()
+            # Continue - MySQL is for persistence, Redis is primary
+
+        logger.info(f"MAIN JOB created: {job_id} | user: {current_user.username} | source_type: {source_type}")
+
+        # Enqueue Celery task
+        try:
+            from workers.tasks import process_conversion
+            import os
+            from pathlib import Path
+
+            # Prepare task arguments
+            task_kwargs = {
+                "job_id": str(job_id),
+                "source_type": source_type,
+                "source": source,
+                "options": {},  # Default options for now
+            }
+
+            # Add auth token if present
+            if authorization and authorization.startswith("Bearer "):
+                task_kwargs["auth_token"] = authorization.replace("Bearer ", "")
+
+            # Save file to MinIO and temporarily to filesystem if uploaded
+            if staging_path:
+                # Move the streamed upload to the job's directory (read by the worker)
+                temp_file_path = _move_upload_to_job_dir(staging_path, job_id, filename)
+                task_kwargs["source"] = str(temp_file_path)
+                logger.info(f"File saved to filesystem: {temp_file_path}")
+
+                # Save to MinIO (streamed from disk)
+                minio_client = get_minio_client()
+                minio_object_name = f"uploads/{job_id}/{filename}"
                 try:
-                    db_job.minio_upload_path = minio_object_name
-                    db.commit()
+                    minio_client.upload_file(
+                        bucket_name=minio_client.bucket_uploads,
+                        object_name=minio_object_name,
+                        file_path=str(temp_file_path),
+                        content_type=mime_type or "application/octet-stream",
+                    )
+                    logger.info(f"File uploaded to MinIO: {minio_object_name}")
+
+                    # Update MySQL job with MinIO path
+                    try:
+                        db_job.minio_upload_path = minio_object_name
+                        db.commit()
+                    except Exception as e:
+                        logger.warning(f"Failed to update job MinIO path in MySQL: {e}")
+                        db.rollback()
                 except Exception as e:
-                    logger.warning(f"Failed to update job MinIO path in MySQL: {e}")
-                    db.rollback()
-            except Exception as e:
-                logger.error(f"Failed to upload file to MinIO: {e}")
-                # Continue with filesystem fallback
+                    logger.error(f"Failed to upload file to MinIO: {e}")
+                    # Continue with filesystem fallback
 
-            # Also save to filesystem temporarily for processing
-            temp_dir = Path(settings.temp_storage_path) / "uploads" / str(job_id)
-            temp_dir.mkdir(parents=True, exist_ok=True)
-            temp_file_path = temp_dir / filename
+            # Enqueue task
+            process_conversion.delay(**task_kwargs)
+            logger.info(f"MAIN JOB {job_id} enqueued to Celery successfully")
 
-            with open(temp_file_path, "wb") as f:
-                f.write(file_contents)
+        except ImportError as e:
+            logger.error(f"Celery tasks not available: {e}")
+            redis_client.set_job_status(
+                job_id=str(job_id),
+                job_type="main",
+                status="failed",
+                progress=0,
+                error="Celery workers não disponíveis"
+            )
+            # Update MySQL
+            try:
+                db_job.status = DBJobStatus.FAILED
+                db_job.error_message = "Celery workers não disponíveis"
+                db.commit()
+            except Exception:
+                db.rollback()
+            raise HTTPException(status_code=503, detail="Sistema de processamento indisponível")
+        except Exception as e:
+            logger.error(f"Error enqueueing job {job_id}: {e}", exc_info=True)
+            redis_client.set_job_status(
+                job_id=str(job_id),
+                job_type="main",
+                status="failed",
+                progress=0,
+                error=str(e)
+            )
+            # Update MySQL
+            try:
+                db_job.status = DBJobStatus.FAILED
+                db_job.error_message = str(e)
+                db.commit()
+            except Exception:
+                db.rollback()
+            raise HTTPException(status_code=500, detail="Erro ao criar job")
 
-            task_kwargs["source"] = str(temp_file_path)
-            logger.info(f"File saved to filesystem: {temp_file_path}")
-
-        # Enqueue task
-        process_conversion.delay(**task_kwargs)
-        logger.info(f"MAIN JOB {job_id} enqueued to Celery successfully")
-
-    except ImportError as e:
-        logger.error(f"Celery tasks not available: {e}")
-        redis_client.set_job_status(
-            job_id=str(job_id),
-            job_type="main",
-            status="failed",
-            progress=0,
-            error="Celery workers não disponíveis"
+        return JobCreatedResponse(
+            job_id=job_id,
+            status="queued",
+            created_at=created_at,
+            message="Job enfileirado para processamento"
         )
-        # Update MySQL
-        try:
-            db_job.status = DBJobStatus.FAILED
-            db_job.error_message = "Celery workers não disponíveis"
-            db.commit()
-        except Exception:
-            db.rollback()
-        raise HTTPException(status_code=503, detail="Sistema de processamento indisponível")
-    except Exception as e:
-        logger.error(f"Error enqueueing job {job_id}: {e}", exc_info=True)
-        redis_client.set_job_status(
-            job_id=str(job_id),
-            job_type="main",
-            status="failed",
-            progress=0,
-            error=str(e)
-        )
-        # Update MySQL
-        try:
-            db_job.status = DBJobStatus.FAILED
-            db_job.error_message = str(e)
-            db.commit()
-        except Exception:
-            db.rollback()
-        raise HTTPException(status_code=500, detail="Erro ao criar job")
-
-    return JobCreatedResponse(
-        job_id=job_id,
-        status="queued",
-        created_at=created_at,
-        message="Job enfileirado para processamento"
-    )
+    finally:
+        # Remove the staged upload unless it was moved to the job directory
+        if staging_path:
+            staging_path.unlink(missing_ok=True)
 
 
 @router.get("/jobs/{job_id}", response_model=JobStatusResponse)
@@ -1961,6 +1962,20 @@ async def retry_failed_page(
 
         # Find PDF file in directory
         pdf_files = list(temp_dir.glob("*.pdf"))
+
+        # Local copies are deleted once a job completes: restore the original from MinIO
+        if not pdf_files and db_job.minio_upload_path:
+            try:
+                restored = temp_dir / Path(db_job.minio_upload_path).name
+                temp_dir.mkdir(parents=True, exist_ok=True)
+                minio_client = get_minio_client()
+                minio_client.download_file(
+                    minio_client.bucket_uploads, db_job.minio_upload_path, file_path=str(restored)
+                )
+                pdf_files = [restored] if restored.suffix.lower() == ".pdf" else []
+            except Exception as e:
+                logger.warning(f"Could not restore original PDF of job {job_id} from MinIO: {e}")
+
         if not pdf_files:
             raise HTTPException(
                 status_code=404,
@@ -2033,19 +2048,25 @@ async def get_page_pdf(
     minio_object_path = db_page.minio_page_path or f"pages/{job_id}/page_{page_number:04d}.pdf"
 
     try:
-        pdf_bytes = minio_client.download_file(minio_client.bucket_pages, minio_object_path)
+        # Blocking MinIO call: run it off the event loop
+        pdf_object = await run_in_threadpool(minio_client.open_object, minio_client.bucket_pages, minio_object_path)
     except Exception as e:
         logger.warning(f"Page {page_number} PDF for job {job_id} not available in MinIO: {e}")
-        pdf_bytes = None
-
-    if pdf_bytes is None:
         raise HTTPException(
             status_code=404,
             detail=f"Arquivo PDF da página {page_number} não encontrado. O job pode não ter sido dividido em páginas."
         )
 
-    return Response(
-        content=pdf_bytes,
+    def pdf_chunks():
+        # Sync generator: StreamingResponse iterates it in a thread pool
+        try:
+            yield from pdf_object.stream(64 * 1024)
+        finally:
+            pdf_object.close()
+            pdf_object.release_conn()
+
+    return StreamingResponse(
+        pdf_chunks(),
         media_type="application/pdf",
         headers={
             "Content-Disposition": f'inline; filename="page_{page_number:04d}.pdf"',

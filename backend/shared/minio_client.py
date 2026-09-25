@@ -79,13 +79,15 @@ class MinIOClient:
             self.bucket_results,
             self.bucket_crawled,
         ]:
+            # Fail closed: if the policy can't be checked or removed, the client is not
+            # created (get_minio_client retries on the next call) instead of silently
+            # running with buckets that may still be publicly readable.
             try:
                 policy = self.client.get_bucket_policy(bucket_name)
             except S3Error as e:
                 if e.code == "NoSuchBucketPolicy":
                     continue
-                logger.warning(f"Could not read policy of bucket {bucket_name}: {e}")
-                continue
+                raise RuntimeError(f"Could not verify that bucket {bucket_name} is private: {e}") from e
 
             if not policy:
                 continue
@@ -93,7 +95,7 @@ class MinIOClient:
                 self.client.delete_bucket_policy(bucket_name)
                 logger.info(f"Removed public read policy from bucket: {bucket_name}")
             except S3Error as e:
-                logger.error(f"Failed to remove public policy from bucket {bucket_name}: {e}")
+                raise RuntimeError(f"Could not remove the public policy from bucket {bucket_name}: {e}") from e
 
     def health_check(self) -> bool:
         """Check MinIO connection by listing buckets"""
@@ -199,6 +201,15 @@ class MinIOClient:
         except S3Error as e:
             logger.error(f"Failed to download from MinIO: {e}")
             raise
+
+    def open_object(self, bucket_name: str, object_name: str):
+        """
+        Open an object for streaming.
+
+        Returns the urllib3 response: iterate with .stream(chunk_size), then call
+        .close() and .release_conn(). Raises S3Error if the object does not exist.
+        """
+        return self.client.get_object(bucket_name, object_name)
 
     def delete_file(self, bucket_name: str, object_name: str) -> bool:
         """

@@ -6,6 +6,10 @@ These periodic tasks run via Celery Beat to automatically detect and recover fro
 
 from datetime import datetime, timedelta
 import logging
+import re
+from pathlib import Path
+import time
+import shutil
 from uuid import uuid4
 
 from workers.celery_app import celery_app
@@ -296,6 +300,89 @@ def cleanup_old_jobs():
     return {
         "jobs_cleaned": cleaned_count
     }
+
+
+@celery_app.task(name="workers.monitoring.cleanup_stale_files")
+def cleanup_stale_files():
+    """
+    Periodic task to delete leftover local files
+
+    Completed jobs delete their files right away; this removes what is left
+    behind by jobs that failed for good, crashed workers and aborted uploads
+    (staging files), once older than TEMP_FILES_RETENTION_HOURS. The originals
+    stay in MinIO.
+    """
+    return remove_stale_temp_files(
+        Path(settings.temp_storage_path),
+        max_age_seconds=settings.temp_files_retention_hours * 3600,
+        is_job_active=_is_job_active,
+    )
+
+
+_ACTIVE_JOB_STATUSES = (JobStatus.PENDING, JobStatus.PROCESSING)
+
+
+def _is_job_active(job_id: str) -> bool:
+    """True if the job is still queued or processing (its files are still needed)"""
+    db = SessionLocal()
+    try:
+        row = db.query(Job.status).filter(Job.id == job_id).first()
+        return row is not None and row[0] in _ACTIVE_JOB_STATUSES
+    finally:
+        db.close()
+
+
+_APP_ENTRY_NAME = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.IGNORECASE)
+
+
+def remove_stale_temp_files(base: Path, max_age_seconds: int, now: float = None, is_job_active=None) -> dict:
+    """
+    Delete entries under the temp storage that were not modified for max_age_seconds.
+
+    Job directories of jobs that are still queued/processing are kept (e.g. a long
+    worker backlog), since the worker reads the upload from disk. If the job state
+    can't be checked, the directory is kept too.
+    """
+    now = now if now is not None else time.time()
+    removed = 0
+    staging_dirs = {base / "uploads" / ".staging", base / "audio" / ".staging"}
+
+    # {temp}/{job_id}/ work dirs, {temp}/uploads/{job_id}/, {temp}/audio/{job_id}/
+    # and the per-request staging files in {temp}/uploads|audio/.staging/
+    containers = [base, base / "uploads", base / "audio", base / "uploads" / ".staging", base / "audio" / ".staging"]
+    keep = {base / "uploads", base / "audio", base / "uploads" / ".staging", base / "audio" / ".staging"}
+
+    for container in containers:
+        if not container.is_dir():
+            continue
+        for entry in container.iterdir():
+            # Only touch what this app creates (named after job IDs / request UUIDs), so a
+            # TEMP_STORAGE_PATH shared with other software (e.g. /tmp) is never swept
+            if entry in keep or not _APP_ENTRY_NAME.match(entry.name):
+                continue
+            try:
+                if now - entry.stat().st_mtime < max_age_seconds:
+                    continue
+                if container not in staging_dirs and is_job_active is not None:
+                    job_id = _APP_ENTRY_NAME.match(entry.name).group(0)
+                    try:
+                        if is_job_active(job_id):
+                            continue
+                    except Exception as e:
+                        logger.warning(f"[MONITORING] Could not check job {job_id}, keeping {entry}: {e}")
+                        continue
+                if entry.is_dir() and not entry.is_symlink():
+                    shutil.rmtree(entry)
+                else:
+                    entry.unlink()
+                removed += 1
+            except FileNotFoundError:
+                continue
+            except Exception as e:
+                logger.error(f"[MONITORING] Could not remove stale file {entry}: {e}")
+
+    logger.info(f"[MONITORING] Removed {removed} stale temp entries from {base}")
+    return {"removed": removed}
 
 
 @celery_app.task(name="workers.monitoring.health_check")
