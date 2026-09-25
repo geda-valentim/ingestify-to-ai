@@ -35,22 +35,46 @@ class FakeDB:
         return FakeQuery(self.results[model])
 
 
+class FakeObject:
+    def __init__(self, data):
+        self.data, self.closed, self.released = data, False, False
+
+    def stream(self, chunk_size):
+        for i in range(0, len(self.data), chunk_size):
+            yield self.data[i:i + chunk_size]
+
+    def close(self):
+        self.closed = True
+
+    def release_conn(self):
+        self.released = True
+
+
 class FakeMinio:
     bucket_pages = "ingestify-pages"
 
     def __init__(self, objects):
         self.objects = objects
+        self.opened = []
 
-    def download_file(self, bucket_name, object_name):
+    def open_object(self, bucket_name, object_name):
         if object_name not in self.objects:
             raise FileNotFoundError(object_name)
-        return self.objects[object_name]
+        obj = FakeObject(self.objects[object_name])
+        self.opened.append(obj)
+        return obj
+
+
+async def read_body(response):
+    return b"".join([chunk async for chunk in response.body_iterator])
 
 
 @pytest.fixture
 def storage(monkeypatch):
     def setup(objects):
-        monkeypatch.setattr(routes, "get_minio_client", lambda: FakeMinio(objects))
+        fake = FakeMinio(objects)
+        monkeypatch.setattr(routes, "get_minio_client", lambda: fake)
+        return fake
     return setup
 
 
@@ -63,10 +87,12 @@ JOB = SimpleNamespace(id=JOB_ID, user_id=OWNER.id)
 PAGE = SimpleNamespace(minio_page_path=f"pages/{JOB_ID}/page_0001.pdf")
 
 
-def test_owner_gets_the_pdf_from_the_api(storage):
-    storage({PAGE.minio_page_path: PDF})
+def test_owner_gets_the_pdf_streamed_from_the_api(storage):
+    big = PDF * 20000  # several chunks
+    fake = storage({PAGE.minio_page_path: big})
     response = get_pdf(OWNER, JOB, PAGE)
-    assert response.body == PDF
+    assert asyncio.run(read_body(response)) == big
+    assert fake.opened[0].closed and fake.opened[0].released  # connection returned to the pool
     assert response.media_type == "application/pdf"
     assert "no-store" in response.headers["cache-control"]
 
@@ -93,6 +119,11 @@ def test_missing_file_gets_404(storage):
     assert exc.value.status_code == 404
 
 
+def s3_error(code, bucket):
+    # Keyword arguments: the positional order differs between minio versions
+    return S3Error(code=code, message=code, resource=bucket, request_id="req", host_id="host", response=None)
+
+
 class FakeS3:
     """Minimal MinIO SDK stand-in: buckets exist, some have a public policy"""
 
@@ -105,7 +136,7 @@ class FakeS3:
 
     def get_bucket_policy(self, name):
         if name not in self.policies:
-            raise S3Error("NoSuchBucketPolicy", "no policy", name, "req", "host", None)
+            raise s3_error("NoSuchBucketPolicy", name)
         return self.policies[name]
 
     def delete_bucket_policy(self, name):
@@ -114,6 +145,19 @@ class FakeS3:
 
     def set_bucket_policy(self, name, policy):
         raise AssertionError("buckets must never be made public")
+
+
+@pytest.mark.parametrize("fail_on", ["get_bucket_policy", "delete_bucket_policy"])
+def test_client_fails_closed_when_buckets_cannot_be_made_private(fail_on):
+    public = '{"Statement":[{"Principal":{"AWS":["*"]}}]}'
+    fake = FakeS3({"ingestify-uploads": public})
+
+    def denied(name):
+        raise s3_error("AccessDenied", name)
+    setattr(fake, fail_on, denied)
+
+    with pytest.raises(RuntimeError):
+        MinIOClient(client=fake)
 
 
 def test_public_policies_are_removed_from_existing_buckets():

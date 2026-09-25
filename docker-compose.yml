@@ -109,6 +109,7 @@ services:
       - CELERY_TASK_DEFAULT_QUEUE=ingestify
       - CELERY_WORKER_NAME=ingestify-worker
       - ENVIRONMENT=development
+      - SQL_ECHO=${SQL_ECHO:-false}  # true = log every SQL statement (debug only)
       - JWT_SECRET_KEY=${JWT_SECRET_KEY:-}
       - LOG_LEVEL=INFO
       - MAX_FILE_SIZE_MB=50
@@ -132,9 +133,11 @@ services:
       - ingestify-network
     volumes:
       - ./tmp:/tmp/ingestify
-      - ./backend/api:/app/api
-      - ./backend/shared:/app/shared
+      - ./backend/api:/app/api:ro
+      - ./backend/shared:/app/shared:ro
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
@@ -151,6 +154,7 @@ services:
       - CELERY_TASK_DEFAULT_QUEUE=ingestify
       - CELERY_WORKER_NAME=ingestify-worker
       - ENVIRONMENT=development
+      - SQL_ECHO=${SQL_ECHO:-false}  # true = log every SQL statement (debug only)
       - LOG_LEVEL=INFO
       - MAX_FILE_SIZE_MB=50
       - CONVERSION_TIMEOUT_SECONDS=600
@@ -172,11 +176,13 @@ services:
       - ingestify-network
     volumes:
       - ./tmp:/tmp/ingestify
-      - ./backend/workers:/app/workers
-      - ./backend/shared:/app/shared
+      - ./backend/workers:/app/workers:ro
+      - ./backend/shared:/app/shared:ro
     deploy:
       replicas: 5
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
@@ -185,7 +191,7 @@ services:
       context: .
       dockerfile: docker/Dockerfile.worker
     container_name: ingestify-beat
-    command: celery -A workers.celery_app beat --loglevel=info
+    command: celery -A workers.celery_app beat --loglevel=info --schedule /tmp/ingestify/celerybeat-schedule
     environment:
       - REDIS_PASSWORD=${REDIS_PASSWORD:-}
       - REDIS_HOST=${REDIS_HOST:-redis}
@@ -195,6 +201,7 @@ services:
       - CELERY_TASK_DEFAULT_QUEUE=ingestify
       - CELERY_WORKER_NAME=ingestify-beat
       - ENVIRONMENT=development
+      - SQL_ECHO=${SQL_ECHO:-false}  # true = log every SQL statement (debug only)
       - LOG_LEVEL=INFO
       - DATABASE_URL=${DATABASE_URL:-mysql+pymysql://root:root@host.docker.internal:3306/ingestify}
       - ELASTICSEARCH_URL=${ELASTICSEARCH_URL:-http://${ELASTICSEARCH_HOST:-elasticsearch}:9200}
@@ -215,9 +222,11 @@ services:
     networks:
       - ingestify-network
     volumes:
-      - ./backend/workers:/app/workers
-      - ./backend/shared:/app/shared
+      - ./backend/workers:/app/workers:ro
+      - ./backend/shared:/app/shared:ro
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
