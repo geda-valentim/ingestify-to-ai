@@ -29,7 +29,7 @@ services:
     mem_limit: 2g
     cpus: 1.0
     ports:
-      - "9200:9200"
+      - "127.0.0.1:9200:9200"  # host-only: reachable by local tools, not from other machines
     volumes:
       - elasticsearch_shared:/usr/share/elasticsearch/data
     networks:
@@ -45,14 +45,17 @@ services:
     image: redis:7-alpine
     container_name: shared-redis
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"  # host-only: reachable by local tools, not from other machines
     volumes:
       - redis_shared:/data
-    command: redis-server --appendonly yes
+    # Password is optional: set REDIS_PASSWORD (in .env) to require it
+    command: sh -c 'exec redis-server --appendonly yes $${REDIS_PASSWORD:+--requirepass "$$REDIS_PASSWORD"}'
+    environment:
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
     networks:
       - shared-dev-network
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD-SHELL", "REDISCLI_AUTH=\"$$REDIS_PASSWORD\" redis-cli ping | grep -q PONG"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -62,8 +65,8 @@ services:
     image: minio/minio:latest
     container_name: shared-minio
     ports:
-      - "9000:9000"  # API
-      - "9001:9001"  # Web Console
+      - "127.0.0.1:9000:9000"  # API (host-only)
+      - "127.0.0.1:9001:9001"  # Web Console (host-only)
     volumes:
       - /data:/data
     environment:
