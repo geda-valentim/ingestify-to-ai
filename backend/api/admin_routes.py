@@ -85,7 +85,7 @@ async def get_stats(admin_user=Depends(require_admin)) -> Dict[str, Any]:
 
     except Exception as e:
         logger.error(f"Error fetching stats: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to fetch stats: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to fetch stats")
 
 
 @router.get("/jobs/stuck", summary="List stuck jobs")
@@ -142,7 +142,7 @@ async def list_stuck_jobs(
 
     except Exception as e:
         logger.error(f"Error listing stuck jobs: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to list stuck jobs: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to list stuck jobs")
 
 
 @router.post("/jobs/recover-stuck", summary="Manually trigger stuck job recovery")
@@ -187,7 +187,7 @@ async def recover_stuck_jobs(
 
     except Exception as e:
         logger.error(f"Error recovering stuck jobs: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to recover stuck jobs: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to recover stuck jobs")
 
 
 @router.post("/jobs/{job_id}/retry-all-failed", summary="Bulk retry all failed pages of a job")
@@ -292,7 +292,7 @@ async def retry_all_failed_pages(
         raise
     except Exception as e:
         logger.error(f"Error bulk retrying pages for job {job_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to retry pages: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to retry pages")
 
 
 @router.post("/cleanup", summary="Manually trigger cleanup of old jobs")
@@ -334,7 +334,7 @@ async def trigger_cleanup(
 
     except Exception as e:
         logger.error(f"Error during manual cleanup: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to cleanup: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to cleanup")
 
 
 @router.get("/health/monitoring", summary="Check monitoring system health")
@@ -373,4 +373,4 @@ async def monitoring_health(admin_user=Depends(require_admin)) -> Dict[str, Any]
 
     except Exception as e:
         logger.error(f"Error checking monitoring health: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to check health: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to check health")
