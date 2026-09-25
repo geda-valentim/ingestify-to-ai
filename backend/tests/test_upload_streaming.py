@@ -128,3 +128,33 @@ def test_convert_streams_the_uploaded_file(env):
 def test_checksum_matches_content(tmp_path):
     size, checksum = asyncio.run(routes._stream_upload_to_file(upload_file(), tmp_path / "x.pdf", 1))
     assert (size, checksum) == (len(DATA), hashlib.sha256(DATA).hexdigest())
+
+
+class BrokenDB(FakeDB):
+    def query(self, model):
+        raise RuntimeError("database unavailable")
+
+
+def test_staged_file_removed_when_setup_fails_before_enqueue(env):
+    with pytest.raises(RuntimeError):
+        upload(db=BrokenDB())
+    assert staging_files(env.tmp) == []
+    assert env.enqueued == []
+
+
+def test_convert_staged_file_removed_when_setup_fails(env):
+    with pytest.raises(RuntimeError):
+        asyncio.run(routes.convert_document(
+            source_type="file", source=None, file=upload_file(), name=None,
+            authorization=None, current_user=USER, db=BrokenDB(),
+        ))
+    assert staging_files(env.tmp) == []
+
+
+def test_staging_name_stays_short_for_long_extensions(tmp_path, monkeypatch):
+    monkeypatch.setattr(routes.settings, "temp_storage_path", str(tmp_path))
+    long_name = "a." + "b" * 220  # valid sanitized name (< 255 bytes), huge "extension"
+    staged = routes._upload_staging_path(long_name)
+    assert len(staged.name.encode()) <= 36 + routes.STAGING_MAX_SUFFIX_BYTES
+    assert routes._upload_staging_path("report.pdf").suffix == ".pdf"
+    assert routes._upload_staging_path("clip.mp4", "audio").parent == tmp_path / "audio" / ".staging"
