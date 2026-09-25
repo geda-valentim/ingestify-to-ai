@@ -44,3 +44,34 @@ def init_db():
     """
     from shared.models import User, APIKey, Job, Page  # Import models to register them
     Base.metadata.create_all(bind=engine)
+    _add_missing_columns()
+
+
+# Columns added to existing tables after they were first created. create_all() only
+# creates missing tables, so existing databases need these ALTERs (otherwise every
+# query on the model fails with "Unknown column"). Plain ADD COLUMN works on both
+# MySQL and MariaDB. Keep in sync with backend/migrations/*.sql.
+_ADDED_COLUMNS = {
+    "jobs": {
+        "crawler_config": "JSON NULL",  # migrations/002_add_crawler_fields.sql
+        "crawler_schedule": "JSON NULL",
+    },
+}
+
+
+def _add_missing_columns(bind=None) -> None:
+    """Add columns from _ADDED_COLUMNS that an existing table does not have yet"""
+    from sqlalchemy import inspect, text
+
+    bind = bind or engine
+    inspector = inspect(bind)
+    existing_tables = set(inspector.get_table_names())
+
+    with bind.begin() as conn:
+        for table, columns in _ADDED_COLUMNS.items():
+            if table not in existing_tables:
+                continue
+            present = {col["name"] for col in inspector.get_columns(table)}
+            for column, ddl in columns.items():
+                if column not in present:
+                    conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}"))
