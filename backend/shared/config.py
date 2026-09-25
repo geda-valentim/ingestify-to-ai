@@ -129,7 +129,10 @@ class Settings(BaseSettings):
     rate_limit_per_minute: int = 10
 
     # Environment
-    environment: str = "development"
+    # "production" unless explicitly set: development mode returns exception
+    # messages to clients and skips the startup fail-fast checks
+    environment: str = "production"
+    sql_echo: bool = False  # Log every SQL statement with its parameters (debug only)
     log_level: str = "INFO"
 
     class Config:
