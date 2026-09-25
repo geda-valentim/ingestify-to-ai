@@ -58,6 +58,7 @@ cd "$SCRIPT_DIR"
 export PYTHONPATH="$SCRIPT_DIR/backend:$PYTHONPATH"
 
 # Set environment variables for local development
+export ENVIRONMENT="${ENVIRONMENT:-development}"
 export REDIS_HOST="localhost"
 export CELERY_BROKER_URL="redis://localhost:6379/0"
 export CELERY_RESULT_BACKEND="redis://localhost:6379/1"
