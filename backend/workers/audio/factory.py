@@ -159,14 +159,15 @@ def _create_on_best_device(create: Callable[[WhisperDevice], AudioTranscriber]) 
     """
     Build a local Whisper transcriber on the cached device (GPU when available).
 
-    If the model cannot be loaded on the GPU, the GPU is marked unavailable for
-    this worker process and the model is loaded on CPU instead.
+    If the model cannot be loaded on the GPU because of a GPU/CUDA error, the GPU is
+    marked unavailable for this worker process and the model is loaded on CPU instead.
     """
     device = get_whisper_device()
     try:
         return create(device)
     except Exception as e:
-        if device.device != "cuda":
+        # Only GPU problems disable the GPU; e.g. a model download error must not
+        if device.device != "cuda" or not is_gpu_error(e):
             raise
         logger.error(f"Failed to load Whisper on GPU, falling back to CPU: {e}")
         return create(mark_gpu_unavailable(str(e)))

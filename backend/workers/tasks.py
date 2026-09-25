@@ -1254,8 +1254,7 @@ def _store_transcript_outputs(job_id: str, outputs: dict) -> None:
         return
 
     for fmt, content in outputs.items():
-        if not content:
-            continue  # e.g. SRT of a recording without speech
+        # Empty outputs are valid (e.g. SRT of a recording without speech) and stored too
         try:
             minio_client.upload_file(
                 bucket_name=minio_client.bucket_audio,

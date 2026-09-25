@@ -370,6 +370,25 @@ class RedisClient:
     # Job Ownership (User Isolation)
     # ============================================
 
+    def set_job_output_format(self, job_id: str, output_format: str) -> bool:
+        """Store the default result format requested for a transcription job"""
+        key = f"job:{job_id}:output_format"
+        try:
+            self.client.set(key, output_format)
+            return True
+        except Exception as e:
+            print(f"Error setting job output format: {e}")
+            return False
+
+    def get_job_output_format(self, job_id: str) -> Optional[str]:
+        """Get the default result format requested for a transcription job"""
+        try:
+            value = self.client.get(f"job:{job_id}:output_format")
+            return value.decode() if isinstance(value, bytes) else value
+        except Exception as e:
+            print(f"Error getting job output format: {e}")
+            return None
+
     def set_job_owner(self, job_id: str, user_id: str) -> bool:
         """
         Set owner of a job

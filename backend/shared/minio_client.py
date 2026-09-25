@@ -138,7 +138,7 @@ class MinIOClient:
                     content_type=content_type,
                 )
                 logger.info(f"Uploaded file to MinIO: {bucket_name}/{object_name}")
-            elif file_data:
+            elif file_data is not None:
                 # Upload from bytes
                 file_stream = io.BytesIO(file_data)
                 self.client.put_object(
