@@ -1,5 +1,6 @@
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Header, Body, Depends, Request, Query
-from fastapi.responses import Response
+from fastapi.responses import Response, StreamingResponse
+from starlette.concurrency import run_in_threadpool
 from typing import Optional, List, Tuple
 from pathlib import Path
 import hashlib
@@ -2003,36 +2004,24 @@ async def retry_failed_page(
 async def get_page_pdf(
     job_id: str,
     page_number: int,
-    request: Request,
+    current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
 ):
     """
-    Redirect to MinIO public URL for page PDF (NO AUTH REQUIRED)
+    Download the PDF of a single page (for the PDF preview)
 
-    Returns a redirect to the public MinIO URL for a specific page PDF.
-    Dynamically adapts to the request host, so it works from any IP/domain.
-    This endpoint is public to allow PDF viewers to load content without authentication headers.
+    Requires authentication and only serves pages of the caller's own jobs.
+    The file is streamed through the API; MinIO buckets are private.
 
     ## Parameters:
     - `job_id`: Main job ID
     - `page_number`: Page number (1-indexed)
-
-    ## Example:
-    ```
-    GET http://192.168.1.10:8000/jobs/550e8400-e29b-41d4-a716-446655440000/pages/5/pdf
-    -> Redirects to: http://192.168.1.10:9000/ingestify-pages/pages/{job_id}/page_0005.pdf
-    ```
     """
-    from fastapi.responses import RedirectResponse
-
-    # No authentication required for PDF preview
-
-    # Check if job exists
     db_job = db.query(Job).filter(Job.id == job_id).first()
-    if not db_job:
+    if not db_job or db_job.user_id != current_user.id:
+        # Same answer for "missing" and "not yours" so job IDs can't be probed
         raise HTTPException(status_code=404, detail="Job não encontrado")
 
-    # Check if page exists
     db_page = db.query(Page).filter(
         Page.job_id == job_id,
         Page.page_number == page_number
@@ -2041,38 +2030,35 @@ async def get_page_pdf(
     if not db_page:
         raise HTTPException(status_code=404, detail=f"Página {page_number} não encontrada")
 
-    # Get MinIO public URL
     minio_client = get_minio_client()
+    minio_object_path = db_page.minio_page_path or f"pages/{job_id}/page_{page_number:04d}.pdf"
 
-    # If page has MinIO path stored, use it
-    if db_page.minio_page_path:
-        minio_object_path = db_page.minio_page_path
-    else:
-        # Fallback to expected path pattern
-        minio_object_path = f"pages/{job_id}/page_{page_number:04d}.pdf"
-
-    # Check if file exists in MinIO
-    if not minio_client.file_exists(minio_client.bucket_pages, minio_object_path):
+    try:
+        # Blocking MinIO call: run it off the event loop
+        pdf_object = await run_in_threadpool(minio_client.open_object, minio_client.bucket_pages, minio_object_path)
+    except Exception as e:
+        logger.warning(f"Page {page_number} PDF for job {job_id} not available in MinIO: {e}")
         raise HTTPException(
             status_code=404,
-            detail=f"Arquivo PDF da página {page_number} não encontrado no MinIO. O job pode não ter sido dividido em páginas."
+            detail=f"Arquivo PDF da página {page_number} não encontrado. O job pode não ter sido dividido em páginas."
         )
 
-    # Get request host for dynamic URL generation
-    request_host = request.headers.get("host", "localhost:8000")
+    def pdf_chunks():
+        # Sync generator: StreamingResponse iterates it in a thread pool
+        try:
+            yield from pdf_object.stream(64 * 1024)
+        finally:
+            pdf_object.close()
+            pdf_object.release_conn()
 
-    # Generate public URL based on request host
-    public_url = minio_client.get_public_url(
-        minio_client.bucket_pages,
-        minio_object_path,
-        request_host=request_host
+    return StreamingResponse(
+        pdf_chunks(),
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'inline; filename="page_{page_number:04d}.pdf"',
+            "Cache-Control": "private, no-store",
+        },
     )
-
-    logger.info(f"Redirecting page {page_number} PDF for job {job_id} to MinIO: {public_url} (from host: {request_host})")
-
-    # Redirect to MinIO public URL
-    return RedirectResponse(url=public_url, status_code=307)
-
 
 @router.get("/health", response_model=HealthCheckResponse)
 async def health_check():
