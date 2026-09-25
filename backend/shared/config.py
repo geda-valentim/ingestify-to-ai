@@ -90,6 +90,9 @@ class Settings(BaseSettings):
 
     # Authentication
     auth_enabled: bool = True  # Feature flag to enable/disable auth
+    # Comma-separated user IDs (UUIDs) allowed to use /admin endpoints. Empty = no admins.
+    # IDs are used instead of emails because registration does not verify email ownership.
+    admin_user_ids: str = ""
 
     # Rate Limiting
     rate_limit_per_minute: int = 10

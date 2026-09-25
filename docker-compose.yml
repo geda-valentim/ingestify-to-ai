@@ -123,6 +123,7 @@ services:
       - MINIO_BUCKET_PAGES=ingestify-pages
       - MINIO_BUCKET_AUDIO=ingestify-audio
       - MINIO_BUCKET_RESULTS=ingestify-results
+      - ADMIN_USER_IDS=${ADMIN_USER_IDS:-}
     networks:
       - ingestify-network
     volumes:
