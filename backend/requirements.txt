@@ -9,7 +9,7 @@ redis==5.0.1
 pydantic>=2.9.0,<3.0.0
 pydantic-core>=2.23.0,<3.0.0
 pydantic-settings>=2.3.0,<3.0.0
-httpx[socks]>=0.27.0  # HTTP client with SOCKS proxy support for crawler
+httpx[socks]>=0.27.0,<0.28  # SOCKS proxy support for crawler; 0.28 breaks starlette 0.27 TestClient
 python-multipart==0.0.6
 python-dotenv==1.0.0
 
