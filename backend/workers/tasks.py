@@ -34,28 +34,6 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 
 
-def _store_transcript_outputs(job_id: str, outputs: dict) -> None:
-    """Persist transcript formats in the private audio bucket so they outlive the Redis result TTL"""
-    try:
-        minio_client = get_minio_client()
-    except Exception as e:
-        logger.warning(f"[MAIN JOB {job_id}] MinIO unavailable, transcript files kept only in Redis: {e}")
-        return
-
-    for fmt, content in outputs.items():
-        if not content:
-            continue  # e.g. SRT of a recording without speech
-        try:
-            minio_client.upload_file(
-                bucket_name=minio_client.bucket_audio,
-                object_name=transcript_object_name(job_id, fmt),
-                file_data=content.encode('utf-8'),
-                content_type=TRANSCRIPT_CONTENT_TYPES[fmt],
-            )
-        except Exception as e:
-            logger.warning(f"[MAIN JOB {job_id}] Failed to store transcript.{fmt} in MinIO: {e}")
-
-
 # ============================================
 # MAIN JOB - Ponto de entrada
 # ============================================
@@ -1265,3 +1243,25 @@ def send_callback(callback_url: str, job_id: str, status: str, result: dict = No
     except Exception as e:
         logger.error(f"Failed to send callback: {e}")
         raise
+
+
+def _store_transcript_outputs(job_id: str, outputs: dict) -> None:
+    """Persist transcript formats in the private audio bucket so they outlive the Redis result TTL"""
+    try:
+        minio_client = get_minio_client()
+    except Exception as e:
+        logger.warning(f"[MAIN JOB {job_id}] MinIO unavailable, transcript files kept only in Redis: {e}")
+        return
+
+    for fmt, content in outputs.items():
+        if not content:
+            continue  # e.g. SRT of a recording without speech
+        try:
+            minio_client.upload_file(
+                bucket_name=minio_client.bucket_audio,
+                object_name=transcript_object_name(job_id, fmt),
+                file_data=content.encode('utf-8'),
+                content_type=TRANSCRIPT_CONTENT_TYPES[fmt],
+            )
+        except Exception as e:
+            logger.warning(f"[MAIN JOB {job_id}] Failed to store transcript.{fmt} in MinIO: {e}")
