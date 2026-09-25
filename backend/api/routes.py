@@ -1,5 +1,6 @@
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Header, Body, Depends, Request, Query
-from fastapi.responses import Response
+from fastapi.responses import Response, StreamingResponse
+from starlette.concurrency import run_in_threadpool
 from typing import Optional, List, Tuple
 from pathlib import Path
 import hashlib
@@ -2033,19 +2034,25 @@ async def get_page_pdf(
     minio_object_path = db_page.minio_page_path or f"pages/{job_id}/page_{page_number:04d}.pdf"
 
     try:
-        pdf_bytes = minio_client.download_file(minio_client.bucket_pages, minio_object_path)
+        # Blocking MinIO call: run it off the event loop
+        pdf_object = await run_in_threadpool(minio_client.open_object, minio_client.bucket_pages, minio_object_path)
     except Exception as e:
         logger.warning(f"Page {page_number} PDF for job {job_id} not available in MinIO: {e}")
-        pdf_bytes = None
-
-    if pdf_bytes is None:
         raise HTTPException(
             status_code=404,
             detail=f"Arquivo PDF da página {page_number} não encontrado. O job pode não ter sido dividido em páginas."
         )
 
-    return Response(
-        content=pdf_bytes,
+    def pdf_chunks():
+        # Sync generator: StreamingResponse iterates it in a thread pool
+        try:
+            yield from pdf_object.stream(64 * 1024)
+        finally:
+            pdf_object.close()
+            pdf_object.release_conn()
+
+    return StreamingResponse(
+        pdf_chunks(),
         media_type="application/pdf",
         headers={
             "Content-Disposition": f'inline; filename="page_{page_number:04d}.pdf"',
