@@ -253,7 +253,7 @@ async def upload_and_convert(
             db.commit()
         except Exception:
             db.rollback()
-        raise HTTPException(status_code=500, detail=f"Erro ao criar job: {str(e)}")
+        raise HTTPException(status_code=500, detail="Erro ao criar job")
 
     return JobCreatedResponse(
         job_id=job_id,
@@ -569,7 +569,7 @@ async def transcribe_audio(
             db.commit()
         except Exception:
             db.rollback()
-        raise HTTPException(status_code=500, detail=f"Erro ao criar job de transcrição: {str(e)}")
+        raise HTTPException(status_code=500, detail="Erro ao criar job de transcrição")
 
     return JobCreatedResponse(
         job_id=job_id,
@@ -860,7 +860,7 @@ async def convert_document(
             db.commit()
         except Exception:
             db.rollback()
-        raise HTTPException(status_code=500, detail=f"Erro ao criar job: {str(e)}")
+        raise HTTPException(status_code=500, detail="Erro ao criar job")
 
     return JobCreatedResponse(
         job_id=job_id,
@@ -1151,7 +1151,7 @@ async def delete_job(
     except Exception as e:
         db.rollback()
         logger.error(f"Failed to delete job {job_id} from MySQL: {e}")
-        raise HTTPException(status_code=500, detail=f"Erro ao deletar do banco de dados: {str(e)}")
+        raise HTTPException(status_code=500, detail="Erro ao deletar do banco de dados")
 
     # 3. Delete from Redis
     try:
@@ -1770,7 +1770,7 @@ async def list_jobs(
 
     except Exception as e:
         logger.error(f"Error listing jobs: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Erro ao listar jobs: {str(e)}")
+        raise HTTPException(status_code=500, detail="Erro ao listar jobs")
 
 
 @router.get("/search", summary="Buscar jobs por conteúdo")
@@ -1828,7 +1828,7 @@ async def search_jobs(
 
     except Exception as e:
         logger.error(f"Error searching jobs: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Erro ao buscar jobs: {str(e)}")
+        raise HTTPException(status_code=500, detail="Erro ao buscar jobs")
 
 
 @router.post("/jobs/{job_id}/pages/{page_number}/retry", summary="Retry de página que falhou")
@@ -1996,7 +1996,7 @@ async def retry_failed_page(
     except Exception as e:
         logger.error(f"Error retrying page {page_number} of job {job_id}: {e}", exc_info=True)
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"Erro ao reprocessar página: {str(e)}")
+        raise HTTPException(status_code=500, detail="Erro ao reprocessar página")
 
 
 @router.get("/jobs/{job_id}/pages/{page_number}/pdf")
