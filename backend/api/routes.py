@@ -30,6 +30,7 @@ from shared.database import SessionLocal, get_db
 from shared.models import Job, Page, JobStatus as DBJobStatus, User
 from shared.config import get_settings
 from shared.auth import get_current_active_user
+from shared.utils import sanitize_upload_filename
 from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
@@ -91,7 +92,7 @@ async def upload_and_convert(
 
     # Read file contents
     file_contents = await file.read()
-    filename = file.filename
+    filename = sanitize_upload_filename(file.filename)
     file_size_mb = len(file_contents) / (1024 * 1024)
     file_size_bytes = len(file_contents)
 
@@ -378,7 +379,7 @@ async def transcribe_audio(
 
     redis_client = get_redis_client()
 
-    filename = file.filename
+    filename = sanitize_upload_filename(file.filename)
 
     output_format = (output_format or "markdown").lower()
     if output_format not in TRANSCRIPT_OUTPUT_FORMATS:
@@ -651,6 +652,11 @@ async def convert_document(
     if source_type == "file" and not file:
         raise HTTPException(status_code=400, detail="Arquivo é obrigatório para source_type=file")
 
+    # For uploads the worker reads the file saved by the API. Never forward a
+    # client-supplied `source`, otherwise it is used as a path on the worker.
+    if source_type == "file":
+        source = None
+
     # Validate source for non-file types
     if source_type != "file" and not source:
         raise HTTPException(status_code=400, detail=f"source é obrigatório para source_type={source_type}")
@@ -668,10 +674,13 @@ async def convert_document(
 
     if file:
         file_contents = await file.read()
-        filename = file.filename
+        filename = sanitize_upload_filename(file.filename)
         file_size_mb = len(file_contents) / (1024 * 1024)
         file_size_bytes = len(file_contents)
         mime_type = file.content_type or "application/octet-stream"
+
+        if not file_contents:
+            raise HTTPException(status_code=400, detail="Arquivo enviado está vazio")
 
         # Validate file size
         if file_size_mb > settings.max_file_size_mb:

@@ -41,6 +41,22 @@ network_exists() {
     docker network ls --format '{{.Name}}' | grep -q "^$1$"
 }
 
+# Set KEY=VALUE in .env, keeping every other line (user settings such as
+# JWT_SECRET_KEY or ADMIN_USER_IDS must survive restarts)
+set_env_var() {
+    touch .env
+    grep -v "^$1=" .env > .env.tmp || true
+    echo "$1=$2" >> .env.tmp
+    mv .env.tmp .env
+}
+
+# Remove KEY from .env, keeping every other line
+unset_env_var() {
+    [ -f .env ] || return 0
+    grep -v "^$1=" .env > .env.tmp || true
+    mv .env.tmp .env
+}
+
 # Function to create shared infrastructure network if needed
 ensure_shared_network() {
     if ! network_exists "$SHARED_NETWORK"; then
@@ -72,6 +88,9 @@ connect_to_shared_infra() {
     echo -e "   Elasticsearch: ${CYAN}$ES_HOST${NC}"
 }
 
+# The API refuses to start without JWT_SECRET_KEY: keep the existing one or generate it
+./scripts/ensure_jwt_secret.sh
+
 # Check if shared infrastructure is running
 echo -e "${CYAN}🔍 Detecting infrastructure...${NC}"
 echo ""
@@ -87,14 +106,12 @@ if is_container_running "$SHARED_REDIS" && \
     # Ensure shared network exists and connect to it
     ensure_shared_network
 
-    # Create .env file with shared infra settings
-    cat > .env << EOF
-REDIS_HOST=$REDIS_HOST
-MINIO_HOST=$MINIO_HOST
-ELASTICSEARCH_HOST=$ELASTICSEARCH_HOST
-MINIO_ROOT_USER=minioadmin
-MINIO_ROOT_PASSWORD=minioadmin
-EOF
+    # Write shared infra settings to .env (other settings are kept)
+    set_env_var REDIS_HOST "$REDIS_HOST"
+    set_env_var MINIO_HOST "$MINIO_HOST"
+    set_env_var ELASTICSEARCH_HOST "$ELASTICSEARCH_HOST"
+    set_env_var MINIO_ROOT_USER minioadmin
+    set_env_var MINIO_ROOT_PASSWORD minioadmin
 
     # Connect ingestify network to shared network if not already connected
     if network_exists "ingestify-network" && network_exists "$SHARED_NETWORK"; then
@@ -110,8 +127,10 @@ else
     echo -e "${CYAN}📦 Starting with local infrastructure...${NC}"
     echo ""
 
-    # Remove .env file to use defaults
-    rm -f .env
+    # Drop shared infra settings so compose defaults apply (other settings are kept)
+    for key in REDIS_HOST MINIO_HOST ELASTICSEARCH_HOST MINIO_ROOT_USER MINIO_ROOT_PASSWORD; do
+        unset_env_var "$key"
+    done
 
     # Start everything including local infrastructure
     docker compose --profile infra up -d --build
