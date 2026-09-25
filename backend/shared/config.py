@@ -126,7 +126,10 @@ class Settings(BaseSettings):
     admin_user_ids: str = ""
 
     # Rate Limiting
-    rate_limit_per_minute: int = 10
+    rate_limit_per_minute: int = 10  # Login attempts per client IP per minute
+    login_max_failed_attempts: int = 5  # Failed logins per account before a temporary lockout
+    login_lockout_seconds: int = 900  # Lockout window (counted from the first failure)
+    register_limit_per_hour: int = 5  # Registrations per client IP per hour
 
     # Environment
     # "production" unless explicitly set: development mode returns exception
