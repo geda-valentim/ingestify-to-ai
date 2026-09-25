@@ -54,6 +54,7 @@ class Settings(BaseSettings):
     monitoring_max_retry_count: int = 3  # Maximum retry attempts per page
     monitoring_check_interval_minutes: int = 5  # How often to run monitoring tasks
     monitoring_batch_size: int = 100  # Max jobs to process per monitoring cycle
+    temp_files_retention_hours: int = 72  # Delete leftover local files (failed jobs, aborted uploads) after X hours
 
     # Google Drive (optional)
     google_drive_credentials_path: str = "/secrets/gdrive.json"
