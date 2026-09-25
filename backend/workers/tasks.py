@@ -68,9 +68,10 @@ def _remove_job_files(job_id: str) -> None:
     for directory in (base / job_id, base / "uploads" / job_id, base / "audio" / job_id):
         try:
             if directory.exists():
-                shutil.rmtree(directory, ignore_errors=True)
+                shutil.rmtree(directory)
         except Exception as e:
-            logger.warning(f"[JOB {job_id}] Could not remove {directory}: {e}")
+            # Not fatal for the job, but the (possibly sensitive) files stay on disk
+            logger.error(f"[JOB {job_id}] Could not remove {directory}: {e}")
 
 
 # ============================================

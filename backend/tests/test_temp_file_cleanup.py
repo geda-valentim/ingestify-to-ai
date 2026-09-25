@@ -67,3 +67,54 @@ def test_sweeper_handles_missing_directories(tmp_path):
 def test_sweeper_is_scheduled():
     schedule = workers.celery_app.celery_app.conf.beat_schedule
     assert schedule["cleanup-stale-files"]["task"] == "workers.monitoring.cleanup_stale_files"
+
+
+def test_sweeper_keeps_files_of_active_jobs(tmp_path):
+    active, finished = str(uuid.uuid4()), str(uuid.uuid4())
+    active_upload = make(tmp_path / "uploads" / active, 10 * DAY, is_dir=True)
+    active_work = make(tmp_path / active, 10 * DAY, is_dir=True)
+    finished_upload = make(tmp_path / "uploads" / finished, 10 * DAY, is_dir=True)
+    old_staging = make(tmp_path / "uploads" / ".staging" / f"{uuid.uuid4()}.pdf", 10 * DAY)
+
+    result = monitoring.remove_stale_temp_files(
+        tmp_path, max_age_seconds=3 * DAY, is_job_active=lambda job_id: job_id == active,
+    )
+
+    assert active_upload.exists() and active_work.exists()  # backlog: still needed by the worker
+    assert not finished_upload.exists()
+    assert not old_staging.exists()  # staging files have no job, age alone decides
+    assert result["removed"] == 2
+
+
+def test_sweeper_keeps_files_when_job_state_is_unknown(tmp_path):
+    entry = make(tmp_path / "uploads" / str(uuid.uuid4()), 10 * DAY, is_dir=True)
+
+    def db_down(job_id):
+        raise ConnectionError("mysql down")
+
+    assert monitoring.remove_stale_temp_files(tmp_path, 3 * DAY, is_job_active=db_down) == {"removed": 0}
+    assert entry.exists()
+
+
+def test_failed_deletions_are_not_counted_and_are_logged(tmp_path, monkeypatch, caplog):
+    make(tmp_path / "uploads" / str(uuid.uuid4()), 10 * DAY, is_dir=True)
+
+    def denied(path, *args, **kwargs):
+        raise PermissionError("denied")
+    monkeypatch.setattr(monitoring.shutil, "rmtree", denied)
+
+    assert monitoring.remove_stale_temp_files(tmp_path, 3 * DAY) == {"removed": 0}
+    assert "Could not remove stale file" in caplog.text
+
+
+def test_remove_job_files_logs_failures(tmp_path, monkeypatch, caplog):
+    monkeypatch.setattr(tasks.settings, "temp_storage_path", str(tmp_path))
+    job = str(uuid.uuid4())
+    make(tmp_path / "uploads" / job, is_dir=True)
+
+    def denied(path, *args, **kwargs):
+        raise PermissionError("denied")
+    monkeypatch.setattr(tasks.shutil, "rmtree", denied)
+
+    tasks._remove_job_files(job)
+    assert "Could not remove" in caplog.text
