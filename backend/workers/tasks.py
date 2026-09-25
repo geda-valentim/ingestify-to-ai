@@ -56,6 +56,23 @@ def _resolve_uploaded_file(source: str, job_id: str) -> Path:
     return file_path
 
 
+def _remove_job_files(job_id: str) -> None:
+    """
+    Delete a finished job's local files: work dir, uploaded file and audio.
+
+    The original upload is kept in MinIO (page retries restore it from there),
+    so nothing is needed on disk once the job completed. Failed jobs keep their
+    files for Celery retries; the periodic cleanup_stale_files task removes them.
+    """
+    base = Path(settings.temp_storage_path)
+    for directory in (base / job_id, base / "uploads" / job_id, base / "audio" / job_id):
+        try:
+            if directory.exists():
+                shutil.rmtree(directory, ignore_errors=True)
+        except Exception as e:
+            logger.warning(f"[JOB {job_id}] Could not remove {directory}: {e}")
+
+
 # ============================================
 # MAIN JOB - Ponto de entrada
 # ============================================
@@ -261,6 +278,7 @@ def process_conversion(
                     completed_at=datetime.utcnow()
                 )
 
+                _remove_job_files(job_id)
                 logger.info(f"[MAIN JOB {job_id}] ✓ Audio transcription completed successfully")
                 return
 
@@ -364,9 +382,8 @@ def process_conversion(
             finally:
                 db.close()
 
-            # Cleanup
-            if temp_dir.exists() and source_type != 'file':
-                shutil.rmtree(temp_dir, ignore_errors=True)
+            # Cleanup (work dir and the uploaded file; the original stays in MinIO)
+            _remove_job_files(job_id)
 
             # Mark as completed in Redis
             redis_client.set_job_status(
@@ -1198,14 +1215,9 @@ def merge_pages_task(
 
         logger.info(f"[MERGE JOB {merge_job_id}] Completed - main job {parent_job_id} finished")
 
-        # Cleanup temp files
-        try:
-            temp_dir = Path(settings.temp_storage_path) / parent_job_id
-            if temp_dir.exists():
-                shutil.rmtree(temp_dir, ignore_errors=True)
-                logger.info(f"[MERGE JOB {merge_job_id}] Cleanup completed")
-        except Exception as e:
-            logger.warning(f"[MERGE JOB {merge_job_id}] Cleanup warning: {e}")
+        # Cleanup temp files (pages, merged output and the uploaded file; the original stays in MinIO)
+        _remove_job_files(parent_job_id)
+        logger.info(f"[MERGE JOB {merge_job_id}] Cleanup completed")
 
         return {"merge_job_id": merge_job_id, "pages_merged": total_pages}
 

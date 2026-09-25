@@ -1961,6 +1961,20 @@ async def retry_failed_page(
 
         # Find PDF file in directory
         pdf_files = list(temp_dir.glob("*.pdf"))
+
+        # Local copies are deleted once a job completes: restore the original from MinIO
+        if not pdf_files and db_job.minio_upload_path:
+            try:
+                restored = temp_dir / Path(db_job.minio_upload_path).name
+                temp_dir.mkdir(parents=True, exist_ok=True)
+                minio_client = get_minio_client()
+                minio_client.download_file(
+                    minio_client.bucket_uploads, db_job.minio_upload_path, file_path=str(restored)
+                )
+                pdf_files = [restored] if restored.suffix.lower() == ".pdf" else []
+            except Exception as e:
+                logger.warning(f"Could not restore original PDF of job {job_id} from MinIO: {e}")
+
         if not pdf_files:
             raise HTTPException(
                 status_code=404,
