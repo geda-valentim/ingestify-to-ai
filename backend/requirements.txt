@@ -9,18 +9,23 @@ redis==5.0.1
 pydantic>=2.9.0,<3.0.0
 pydantic-core>=2.23.0,<3.0.0
 pydantic-settings>=2.3.0,<3.0.0
-httpx==0.25.2
+httpx[socks]>=0.27.0  # HTTP client with SOCKS proxy support for crawler
 python-multipart==0.0.6
 python-dotenv==1.0.0
 
 # Docling and dependencies (use latest compatible version)
 docling>=2.0.0,<3.0.0
 beautifulsoup4>=4.12.3,<5.0.0
+lxml>=5.0.0  # Fast HTML/XML parser for BeautifulSoup
 requests>=2.32.2,<3.0.0
 
 # PDF processing
-# PyPDF2==3.0.1  # REMOVIDO: Substituído por qpdf (ferramenta de sistema) para evitar explosão de tamanho ao dividir PDFs
-# qpdf instalado via apt-get nos Dockerfiles
+# qpdf instalado via apt-get nos Dockerfiles (usado para split)
+PyPDF2>=3.0.0  # Re-added for PDF merge functionality in crawler
+
+# Web Scraping - Crawler
+playwright>=1.40.0  # Browser automation for JS-heavy sites
+python-socks>=2.4.0  # SOCKS proxy protocol support
 
 # Google Drive integration
 google-api-python-client==2.108.0
@@ -43,6 +48,10 @@ pytest-cov==4.1.0
 sqlalchemy>=2.0.0,<3.0.0
 pymysql>=1.1.0
 alembic>=1.13.0
+
+# Crawler scheduling
+croniter>=2.0.0  # Cron expression parsing for recurring crawlers
+pytz>=2024.1     # Timezone handling for scheduled crawlers
 
 # Authentication & Security
 bcrypt>=4.0.0

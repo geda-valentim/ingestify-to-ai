@@ -8,6 +8,9 @@ from typing import List, Optional
 from sqlalchemy.orm import Session
 
 from domain.entities.job import Job, JobStatus, JobType
+from domain.entities.crawler_job import CrawlerJob
+from domain.value_objects.crawler_config import CrawlerConfig
+from domain.value_objects.crawler_schedule import CrawlerSchedule
 from domain.repositories.job_repository import JobRepository
 from shared.models import Job as JobModel, JobStatus as DBJobStatus
 from shared.database import SessionLocal
@@ -227,12 +230,86 @@ class MySQLJobRepository(JobRepository):
         ).count() > 0
 
     # ============================================
+    # Métodos Específicos para Crawler (STI)
+    # ============================================
+
+    async def find_crawler_jobs(
+        self,
+        user_id: str,
+        filters: Optional[dict] = None
+    ) -> List[CrawlerJob]:
+        """
+        Busca crawler jobs com filtros opcionais.
+
+        Args:
+            user_id: User ID
+            filters: Filtros opcionais (status, search, etc.)
+
+        Returns:
+            Lista de CrawlerJob entities
+        """
+        query = self.session.query(JobModel).filter(
+            JobModel.user_id == user_id,
+            JobModel.job_type == "crawler"
+        )
+
+        # Apply filters if provided
+        if filters:
+            if "status" in filters:
+                query = query.filter(JobModel.status == self._status_to_db_status(filters["status"]))
+
+            if "search" in filters and filters["search"]:
+                search_term = f"%{filters['search']}%"
+                query = query.filter(JobModel.source_url.like(search_term))
+
+        # Order by creation (most recent first)
+        query = query.order_by(JobModel.created_at.desc())
+
+        db_jobs = query.all()
+
+        return [self._model_to_crawler_job(db_job) for db_job in db_jobs]
+
+    async def find_active_crawlers(self) -> List[CrawlerJob]:
+        """
+        Busca crawlers ativos (para scheduler Celery Beat).
+
+        Crawlers ativos são aqueles com status PENDING ou QUEUED.
+
+        Returns:
+            Lista de CrawlerJob entities ativos
+        """
+        db_jobs = self.session.query(JobModel).filter(
+            JobModel.job_type == "crawler",
+            JobModel.status.in_([DBJobStatus.PENDING, DBJobStatus.PROCESSING])
+        ).all()
+
+        return [self._model_to_crawler_job(db_job) for db_job in db_jobs]
+
+    async def find_crawler_executions(self, crawler_job_id: str) -> List[Job]:
+        """
+        Busca histórico de execuções de um crawler.
+
+        Execuções são jobs com parent_job_id apontando para o crawler.
+
+        Args:
+            crawler_job_id: Crawler job ID
+
+        Returns:
+            Lista de Job entities (execuções)
+        """
+        db_jobs = self.session.query(JobModel).filter(
+            JobModel.parent_job_id == crawler_job_id
+        ).order_by(JobModel.created_at.desc()).all()
+
+        return [self._model_to_entity(db_job) for db_job in db_jobs]
+
+    # ============================================
     # Conversões Entity <-> Model
     # ============================================
 
     def _entity_to_model(self, job: Job) -> JobModel:
         """Converte Job entity para ORM model"""
-        return JobModel(
+        model = JobModel(
             id=job.id,
             user_id=job.user_id,
             filename=job.filename,
@@ -256,6 +333,15 @@ class MySQLJobRepository(JobRepository):
             updated_at=job.updated_at,
         )
 
+        # Handle CrawlerJob-specific fields (STI pattern)
+        if isinstance(job, CrawlerJob):
+            if job.crawler_config:
+                model.crawler_config = job.crawler_config.to_dict()
+            if job.crawler_schedule:
+                model.crawler_schedule = job.crawler_schedule.to_dict()
+
+        return model
+
     def _update_model_from_entity(self, db_job: JobModel, job: Job) -> None:
         """Atualiza model existente com dados da entity"""
         db_job.status = self._status_to_db_status(job.status)
@@ -270,8 +356,24 @@ class MySQLJobRepository(JobRepository):
         db_job.completed_at = job.completed_at
         db_job.updated_at = job.updated_at
 
+        # Handle CrawlerJob-specific fields (STI pattern)
+        if isinstance(job, CrawlerJob):
+            if job.crawler_config:
+                db_job.crawler_config = job.crawler_config.to_dict()
+            if job.crawler_schedule:
+                db_job.crawler_schedule = job.crawler_schedule.to_dict()
+
     def _model_to_entity(self, db_job: JobModel) -> Job:
-        """Converte ORM model para Job entity"""
+        """
+        Converte ORM model para Job entity
+
+        Checks job_type and returns CrawlerJob if applicable (STI pattern)
+        """
+        # Check if this is a crawler job (STI discriminator)
+        if db_job.job_type == "crawler":
+            return self._model_to_crawler_job(db_job)
+
+        # Regular job
         return Job(
             id=db_job.id,
             user_id=db_job.user_id,
@@ -321,3 +423,65 @@ class MySQLJobRepository(JobRepository):
             DBJobStatus.CANCELLED: JobStatus.CANCELLED,
         }
         return mapping.get(db_status, JobStatus.PENDING)
+
+    def _model_to_crawler_job(self, db_job: JobModel) -> CrawlerJob:
+        """
+        Converte ORM model para CrawlerJob entity.
+
+        Deserializa JSON fields (crawler_config, crawler_schedule) para value objects.
+
+        Args:
+            db_job: JobModel ORM instance
+
+        Returns:
+            CrawlerJob entity
+
+        Raises:
+            ValueError: Se JSON inválido ou campos obrigatórios faltando
+        """
+        # Deserialize crawler_config
+        crawler_config = None
+        if db_job.crawler_config:
+            try:
+                crawler_config = CrawlerConfig.from_dict(db_job.crawler_config)
+            except Exception as e:
+                logger.error(f"Failed to deserialize crawler_config for job {db_job.id}: {e}")
+                raise ValueError(f"Invalid crawler_config: {e}")
+
+        # Deserialize crawler_schedule
+        crawler_schedule = None
+        if db_job.crawler_schedule:
+            try:
+                crawler_schedule = CrawlerSchedule.from_dict(db_job.crawler_schedule)
+            except Exception as e:
+                logger.error(f"Failed to deserialize crawler_schedule for job {db_job.id}: {e}")
+                raise ValueError(f"Invalid crawler_schedule: {e}")
+
+        return CrawlerJob(
+            id=db_job.id,
+            user_id=db_job.user_id,
+            job_type=JobType.CRAWLER,
+            status=self._db_status_to_status(db_job.status),
+            filename=db_job.filename,
+            source_type=db_job.source_type,
+            source_url=db_job.source_url,
+            file_size_bytes=db_job.file_size_bytes,
+            mime_type=db_job.mime_type,
+            progress=db_job.progress or 0,
+            error_message=db_job.error_message,
+            total_pages=db_job.total_pages,
+            pages_completed=db_job.pages_completed or 0,
+            pages_failed=db_job.pages_failed or 0,
+            parent_job_id=db_job.parent_job_id,
+            page_number=None,
+            child_job_ids=[],
+            char_count=db_job.char_count,
+            has_result_stored=db_job.has_elasticsearch_result or False,
+            created_at=db_job.created_at,
+            started_at=db_job.started_at,
+            completed_at=db_job.completed_at,
+            updated_at=db_job.updated_at,
+            name=db_job.name,
+            crawler_config=crawler_config,
+            crawler_schedule=crawler_schedule,
+        )
