@@ -19,8 +19,12 @@ METADATA = {
 
 
 class FakeRedis:
-    def __init__(self, result):
+    def __init__(self, result, output_format=None):
         self.result = result
+        self.output_format = output_format
+
+    def get_job_output_format(self, job_id):
+        return self.output_format
 
     def get_job_status(self, job_id):
         return {"status": "completed", "type": "main", "completed_at": "2026-09-25T12:00:00"}
@@ -57,8 +61,8 @@ class FakeDB:
 
 @pytest.fixture
 def backend(monkeypatch):
-    def setup(redis_result, minio_objects=None, es_result=None):
-        monkeypatch.setattr(routes, "get_redis_client", lambda: FakeRedis(redis_result))
+    def setup(redis_result, minio_objects=None, es_result=None, output_format=None):
+        monkeypatch.setattr(routes, "get_redis_client", lambda: FakeRedis(redis_result, output_format))
         monkeypatch.setattr(routes, "get_es_client", lambda: SimpleNamespace(get_job_result=lambda job_id: es_result))
         monkeypatch.setattr(routes, "get_minio_client", lambda: FakeMinio(minio_objects or {}))
     return setup
@@ -83,6 +87,30 @@ def test_vtt_from_minio_after_redis_expired(backend):
         es_result={"markdown_content": "# t", "metadata": METADATA},
     )
     assert get_result("vtt").body.decode() == VTT
+
+
+def test_vtt_from_minio_when_elasticsearch_has_no_result(backend):
+    backend(None, minio_objects={f"transcripts/{JOB_ID}/transcript.vtt": VTT.encode()}, es_result=None)
+    assert get_result("vtt").body.decode() == VTT
+
+
+def test_empty_srt_is_served_from_minio(backend):
+    backend(None, minio_objects={f"transcripts/{JOB_ID}/transcript.srt": b""})
+    response = get_result("srt")
+    assert response.body == b""
+    assert response.media_type.startswith("application/x-subrip")
+
+
+def test_latest_requested_default_format_wins(backend):
+    # e.g. the same file re-submitted (deduplicated) with output_format=vtt
+    backend({"markdown": "# t", "metadata": {**METADATA, "output_format": "markdown"}, "transcript": {"vtt": VTT}},
+            output_format="vtt")
+    assert get_result().body.decode() == VTT
+
+
+def test_markdown_query_overrides_default(backend):
+    backend({"markdown": "# t", "metadata": METADATA, "transcript": {"vtt": VTT}}, output_format="vtt")
+    assert get_result("markdown").result.markdown == "# t"
 
 
 def test_output_format_chosen_at_upload_is_the_default(backend):

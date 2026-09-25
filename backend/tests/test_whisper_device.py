@@ -129,6 +129,18 @@ def test_model_load_failure_on_gpu_falls_back_to_cpu(config, gpus):
     assert device_module.get_whisper_device().device == "cpu"
 
 
+def test_non_gpu_load_failure_keeps_gpu(config, gpus):
+    set_count, _ = gpus
+    set_count(1)
+
+    def create(selected):
+        raise OSError("Invalid model size 'huge', expected one of: tiny, base, small")
+
+    with pytest.raises(OSError):
+        factory._create_on_best_device(create)
+    assert device_module.get_whisper_device().device == "cuda"
+
+
 def test_transcription_failure_on_gpu_retries_on_cpu(config, gpus, monkeypatch):
     set_count, _ = gpus
     set_count(1)

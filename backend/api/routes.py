@@ -1,6 +1,9 @@
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Header, Body, Depends, Request, Query
 from fastapi.responses import Response
-from typing import Optional, List
+from typing import Optional, List, Tuple
+from pathlib import Path
+import hashlib
+import os
 from uuid import uuid4
 from datetime import datetime
 import logging
@@ -275,6 +278,39 @@ VIDEO_MIME_TYPES = [
 VIDEO_EXTENSIONS = ['.mp4', '.m4v', '.mkv', '.mov', '.avi', '.webm', '.wmv', '.flv', '.mpeg', '.mpg', '.ts', '.3gp']
 
 
+UPLOAD_CHUNK_SIZE = 1024 * 1024  # 1MB
+
+
+async def _stream_upload_to_file(file: UploadFile, destination: Path, max_size_mb: int) -> Tuple[int, str]:
+    """
+    Copy an upload to disk in chunks, enforcing the size limit and computing its SHA256.
+
+    Returns:
+        (size in bytes, sha256 hex digest)
+    """
+    max_bytes = max_size_mb * 1024 * 1024
+    hasher = hashlib.sha256()
+    size = 0
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with open(destination, "wb") as out:
+            while chunk := await file.read(UPLOAD_CHUNK_SIZE):
+                size += len(chunk)
+                if size > max_bytes:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"Arquivo muito grande. Máximo: {max_size_mb}MB"
+                    )
+                hasher.update(chunk)
+                out.write(chunk)
+        if size == 0:
+            raise HTTPException(status_code=400, detail="Arquivo enviado está vazio")
+    except BaseException:
+        destination.unlink(missing_ok=True)
+        raise
+    return size, hasher.hexdigest()
+
+
 @router.post("/transcribe", response_model=JobCreatedResponse, summary="Transcrever áudio ou vídeo (STT, legendas VTT/SRT)")
 async def transcribe_audio(
     file: UploadFile = File(..., description="Arquivo de áudio (MP3, WAV, M4A, FLAC, OGG...) ou vídeo (MP4, MKV, MOV, WEBM, AVI...)"),
@@ -342,11 +378,7 @@ async def transcribe_audio(
 
     redis_client = get_redis_client()
 
-    # Read file contents
-    file_contents = await file.read()
     filename = file.filename
-    file_size_mb = len(file_contents) / (1024 * 1024)
-    file_size_bytes = len(file_contents)
 
     output_format = (output_format or "markdown").lower()
     if output_format not in TRANSCRIPT_OUTPUT_FORMATS:
@@ -372,19 +404,16 @@ async def transcribe_audio(
                    f"Vídeo: MP4, M4V, MKV, MOV, AVI, WEBM, WMV, FLV, MPEG, TS, 3GP"
         )
 
-    # Validate file size
-    max_size_mb = settings.max_video_file_size_mb if is_video else settings.max_audio_file_size_mb
-    if file_size_mb > max_size_mb:
-        raise HTTPException(
-            status_code=413,
-            detail=f"Arquivo muito grande: {file_size_mb:.2f}MB. Máximo: {max_size_mb}MB"
-        )
-
     media_kind = "video" if is_video else "audio"
-    logger.info(f"{media_kind.capitalize()} file uploaded: {filename} ({file_size_mb:.2f}MB, {mime_type})")
+    max_size_mb = settings.max_video_file_size_mb if is_video else settings.max_audio_file_size_mb
 
-    # Calculate file checksum for deduplication
-    file_checksum = calculate_file_checksum(file_contents)
+    # Stream the upload to disk in chunks (size limit + checksum) instead of
+    # holding up to max_size_mb in memory
+    staging_path = Path(settings.temp_storage_path) / "audio" / ".staging" / f"{uuid4()}{file_ext}"
+    file_size_bytes, file_checksum = await _stream_upload_to_file(file, staging_path, max_size_mb)
+    file_size_mb = file_size_bytes / (1024 * 1024)
+
+    logger.info(f"{media_kind.capitalize()} file uploaded: {filename} ({file_size_mb:.2f}MB, {mime_type})")
     logger.info(f"Audio file checksum: {file_checksum}")
 
     # Check if file already processed by this user
@@ -396,6 +425,9 @@ async def transcribe_audio(
 
     if existing_job:
         logger.info(f"Duplicate audio file detected! Returning existing job: {existing_job.id}")
+        staging_path.unlink(missing_ok=True)
+        # The latest request decides the default result format of the reused job
+        redis_client.set_job_output_format(str(existing_job.id), output_format)
         return JobCreatedResponse(
             job_id=existing_job.id,
             status="queued",
@@ -422,6 +454,7 @@ async def transcribe_audio(
     # Set job ownership
     redis_client.set_job_owner(str(job_id), current_user.id)
     redis_client.add_job_to_user(current_user.id, str(job_id))
+    redis_client.set_job_output_format(str(job_id), output_format)
 
     # Create Job record in MySQL
     try:
@@ -450,16 +483,22 @@ async def transcribe_audio(
     # Save audio file to MinIO and temporarily to filesystem
     try:
         from workers.tasks import process_conversion
-        from pathlib import Path
 
-        # Save to MinIO
+        # Move the streamed upload to the job's directory (read by the worker)
+        temp_dir = Path(settings.temp_storage_path) / "audio" / str(job_id)
+        temp_dir.mkdir(parents=True, exist_ok=True)
+        temp_file_path = temp_dir / filename
+        os.replace(staging_path, temp_file_path)
+        logger.info(f"Audio file saved to filesystem: {temp_file_path}")
+
+        # Save to MinIO (streamed from disk)
         minio_client = get_minio_client()
         minio_object_name = f"audio/{job_id}/{filename}"
         try:
             minio_client.upload_file(
                 bucket_name=minio_client.bucket_audio,
                 object_name=minio_object_name,
-                file_data=file_contents,
+                file_path=str(temp_file_path),
                 content_type=file.content_type or "audio/mpeg",
             )
             logger.info(f"Audio file uploaded to MinIO: {minio_object_name}")
@@ -474,16 +513,6 @@ async def transcribe_audio(
         except Exception as e:
             logger.error(f"Failed to upload audio file to MinIO: {e}")
             # Continue with filesystem fallback
-
-        # Also save to filesystem temporarily for processing
-        temp_dir = Path(settings.temp_storage_path) / "audio" / str(job_id)
-        temp_dir.mkdir(parents=True, exist_ok=True)
-        temp_file_path = temp_dir / filename
-
-        with open(temp_file_path, "wb") as f:
-            f.write(file_contents)
-
-        logger.info(f"Audio file saved to filesystem: {temp_file_path}")
 
         # Build audio transcription options
         options = {
@@ -505,6 +534,7 @@ async def transcribe_audio(
         logger.info(f"AUDIO JOB {job_id} enqueued to Celery successfully")
 
     except ImportError as e:
+        staging_path.unlink(missing_ok=True)
         logger.error(f"Celery tasks not available: {e}")
         redis_client.set_job_status(
             job_id=str(job_id),
@@ -522,6 +552,7 @@ async def transcribe_audio(
             db.rollback()
         raise HTTPException(status_code=503, detail="Sistema de processamento indisponível")
     except Exception as e:
+        staging_path.unlink(missing_ok=True)
         logger.error(f"Error enqueueing audio job {job_id}: {e}", exc_info=True)
         redis_client.set_job_status(
             job_id=str(job_id),
@@ -1198,6 +1229,12 @@ async def get_job_result(
             detail=f"Job falhou: {status_data.get('error', 'Erro desconhecido')}"
         )
 
+    # Transcription formats (explicit ?format= or the default chosen at upload) are
+    # served straight from Redis/MinIO, even if Elasticsearch has no result
+    requested_format = format_ or redis_client.get_job_output_format(job_id)
+    if requested_format and requested_format != "markdown":
+        return _transcript_response(job_id, requested_format, redis_client)
+
     # Get job type
     job_type = status_data.get("type", "main")
 
@@ -1220,10 +1257,11 @@ async def get_job_result(
         else:
             raise HTTPException(status_code=404, detail="Resultado não encontrado ou expirado")
 
-    # Transcription jobs: serve subtitles / text / segments in the requested format
-    requested_format = format_ or (result_data.get("metadata") or {}).get("output_format") or "markdown"
-    if requested_format != "markdown":
-        return _transcript_response(job_id, requested_format, redis_client)
+    # Older transcription jobs only have their default format in the result metadata
+    if not requested_format:
+        default_format = (result_data.get("metadata") or {}).get("output_format") or "markdown"
+        if default_format != "markdown":
+            return _transcript_response(job_id, default_format, redis_client)
 
     # Get completed_at timestamp
     completed_at = None
