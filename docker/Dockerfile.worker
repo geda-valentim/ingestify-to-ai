@@ -40,5 +40,12 @@ COPY backend/shared/ ./shared/
 # Create temp directory
 RUN mkdir -p /tmp/doc2md
 
+# Run as an unprivileged user (the entrypoint fixes temp storage ownership, then drops root)
+RUN useradd --create-home --uid 10001 --user-group app \
+    && mkdir -p /tmp/ingestify \
+    && chown -R app:app /tmp/ingestify
+COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+
 # Run Celery worker with isolated queue and unique hostname
 CMD ["celery", "-A", "workers.celery_app", "worker", "--loglevel=info", "--concurrency=2", "-Q", "ingestify", "-n", "ingestify-worker@%h"]

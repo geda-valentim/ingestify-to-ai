@@ -129,9 +129,11 @@ services:
       - ingestify-network
     volumes:
       - ./tmp:/tmp/ingestify
-      - ./backend/api:/app/api
-      - ./backend/shared:/app/shared
+      - ./backend/api:/app/api:ro
+      - ./backend/shared:/app/shared:ro
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
@@ -169,11 +171,13 @@ services:
       - ingestify-network
     volumes:
       - ./tmp:/tmp/ingestify
-      - ./backend/workers:/app/workers
-      - ./backend/shared:/app/shared
+      - ./backend/workers:/app/workers:ro
+      - ./backend/shared:/app/shared:ro
     deploy:
       replicas: 5
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
@@ -182,7 +186,7 @@ services:
       context: .
       dockerfile: docker/Dockerfile.worker
     container_name: ingestify-beat
-    command: celery -A workers.celery_app beat --loglevel=info
+    command: celery -A workers.celery_app beat --loglevel=info --schedule /tmp/ingestify/celerybeat-schedule
     environment:
       - REDIS_HOST=${REDIS_HOST:-redis}
       - REDIS_PORT=${REDIS_PORT:-6379}
@@ -212,9 +216,11 @@ services:
     networks:
       - ingestify-network
     volumes:
-      - ./backend/workers:/app/workers
-      - ./backend/shared:/app/shared
+      - ./backend/workers:/app/workers:ro
+      - ./backend/shared:/app/shared:ro
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
