@@ -74,8 +74,7 @@ class URLHandler(SourceHandler):
             async with httpx.AsyncClient(follow_redirects=False, timeout=30.0) as client:
                 url = source
                 for _ in range(self.MAX_REDIRECTS + 1):
-                    request = await _build_pinned_request(client, url)
-                    response = await client.send(request, stream=True)
+                    response = await _send_pinned(client, url)
                     try:
                         if response.is_redirect:
                             location = response.headers.get('location')
@@ -121,20 +120,31 @@ class URLHandler(SourceHandler):
             return False
 
 
+# NAT64 well-known prefix: the last 32 bits are an IPv4 address (RFC 6052)
+_NAT64_PREFIX = ipaddress.ip_network("64:ff9b::/96")
+
+
 def _is_public_ip(ip: "ipaddress.IPv4Address | ipaddress.IPv6Address") -> bool:
     """True only for globally routable unicast addresses"""
-    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped:
-        ip = ip.ipv4_mapped
+    if isinstance(ip, ipaddress.IPv6Address):
+        # IPv6 forms that embed an IPv4 address are judged by that address
+        if ip.ipv4_mapped:
+            ip = ip.ipv4_mapped
+        elif ip in _NAT64_PREFIX:
+            ip = ipaddress.IPv4Address(int(ip) & 0xFFFFFFFF)
     return ip.is_global and not ip.is_multicast
 
 
-async def _resolve_public_ip(host: str, port: int) -> str:
+async def _resolve_public_ips(host: str, port: int) -> list:
     """
     Resolve host and ensure every address is public.
 
     Blocks SSRF to loopback, private networks, link-local (cloud metadata at
     169.254.169.254), CGNAT and other reserved ranges, including internal
     Docker services such as redis, elasticsearch and minio.
+
+    Returns:
+        The validated addresses, in resolver order
     """
     loop = asyncio.get_running_loop()
     try:
@@ -142,7 +152,7 @@ async def _resolve_public_ip(host: str, port: int) -> str:
     except socket.gaierror as e:
         raise Exception(f"Could not resolve host {host}: {e}")
 
-    addresses = {info[4][0] for info in infos}
+    addresses = list(dict.fromkeys(info[4][0] for info in infos))
     if not addresses:
         raise Exception(f"Could not resolve host {host}")
 
@@ -150,16 +160,17 @@ async def _resolve_public_ip(host: str, port: int) -> str:
         if not _is_public_ip(ipaddress.ip_address(address.split('%')[0])):
             raise Exception(f"URL host {host} resolves to a non-public address, refusing to download")
 
-    return sorted(addresses)[0]
+    return addresses
 
 
-async def _build_pinned_request(client: httpx.AsyncClient, url: str) -> httpx.Request:
+async def _send_pinned(client: httpx.AsyncClient, url: str) -> httpx.Response:
     """
-    Validate a URL and build a request that connects to the already-validated IP.
+    Validate a URL and send a streamed GET to one of its already-validated IPs.
 
     Connecting to the resolved IP (instead of letting the HTTP client resolve the
     name again) prevents DNS rebinding between the check and the connection.
     The original host is kept in the Host header and TLS SNI/certificate check.
+    Addresses are tried in resolver order until one connects.
     """
     parsed = httpx.URL(url)
     if parsed.scheme not in ('http', 'https'):
@@ -169,20 +180,30 @@ async def _build_pinned_request(client: httpx.AsyncClient, url: str) -> httpx.Re
     if parsed.userinfo:
         raise Exception("URLs with credentials are not allowed")
 
+    # ASCII form of the host (IDNA "xn--" for internationalized names)
+    host = parsed.raw_host.decode('ascii')
     port = parsed.port or (443 if parsed.scheme == 'https' else 80)
-    ip = await _resolve_public_ip(parsed.host, port)
+    addresses = await _resolve_public_ips(host, port)
 
-    host_header = parsed.host if parsed.port is None else f"{parsed.host}:{parsed.port}"
-    if ':' in parsed.host and not parsed.host.startswith('['):
-        host_header = f"[{parsed.host}]" if parsed.port is None else f"[{parsed.host}]:{parsed.port}"
+    host_header = f"[{host}]" if ':' in host else host
+    if parsed.port is not None:
+        host_header = f"{host_header}:{parsed.port}"
 
-    pinned_url = parsed.copy_with(host=ip)
-    return client.build_request(
-        'GET',
-        pinned_url,
-        headers={'Host': host_header},
-        extensions={'sni_hostname': parsed.host},
-    )
+    last_error = None
+    for ip in addresses:
+        request = client.build_request(
+            'GET',
+            parsed.copy_with(host=ip),
+            headers={'Host': host_header},
+            extensions={'sni_hostname': host},
+        )
+        try:
+            return await client.send(request, stream=True)
+        except (httpx.ConnectError, httpx.ConnectTimeout) as e:
+            logger.warning(f"Could not connect to {host} at {ip}: {e}")
+            last_error = e
+
+    raise last_error
 
 
 class GoogleDriveHandler(SourceHandler):
