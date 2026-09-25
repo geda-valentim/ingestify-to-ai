@@ -48,6 +48,11 @@ if settings.monitoring_enabled:
             'schedule': crontab(hour='2', minute='0'),  # Daily at 2 AM UTC
             'options': {'expires': 3600}  # Expire after 1 hour if not picked up
         },
+        'cleanup-stale-files': {
+            'task': 'workers.monitoring.cleanup_stale_files',
+            'schedule': crontab(hour='3', minute='0'),  # Daily at 3 AM UTC
+            'options': {'expires': 3600}
+        },
         'health-check': {
             'task': 'workers.monitoring.health_check',
             'schedule': crontab(minute='*/1'),  # Every minute (verify beat is running)
