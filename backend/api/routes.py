@@ -25,6 +25,7 @@ from shared.database import SessionLocal, get_db
 from shared.models import Job, Page, JobStatus as DBJobStatus, User
 from shared.config import get_settings
 from shared.auth import get_current_active_user
+from shared.utils import sanitize_upload_filename
 from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
@@ -86,7 +87,7 @@ async def upload_and_convert(
 
     # Read file contents
     file_contents = await file.read()
-    filename = file.filename
+    filename = sanitize_upload_filename(file.filename)
     file_size_mb = len(file_contents) / (1024 * 1024)
     file_size_bytes = len(file_contents)
 
@@ -316,7 +317,7 @@ async def transcribe_audio(
 
     # Read file contents
     file_contents = await file.read()
-    filename = file.filename
+    filename = sanitize_upload_filename(file.filename)
     file_size_mb = len(file_contents) / (1024 * 1024)
     file_size_bytes = len(file_contents)
 
@@ -614,7 +615,7 @@ async def convert_document(
 
     if file:
         file_contents = await file.read()
-        filename = file.filename
+        filename = sanitize_upload_filename(file.filename)
         file_size_mb = len(file_contents) / (1024 * 1024)
         file_size_bytes = len(file_contents)
         mime_type = file.content_type or "application/octet-stream"
