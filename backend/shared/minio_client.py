@@ -1,5 +1,4 @@
 import io
-import json
 import logging
 from typing import Optional, BinaryIO
 from datetime import timedelta
@@ -41,7 +40,7 @@ class MinIOClient:
 
         # Initialize buckets on startup
         self._ensure_buckets_exist()
-        self._set_public_read_policies()
+        self._remove_public_read_policies()
 
     def _ensure_buckets_exist(self):
         """Create buckets if they don't exist"""
@@ -64,38 +63,39 @@ class MinIOClient:
                 logger.error(f"Error ensuring bucket {bucket_name} exists: {e}")
                 raise
 
-    def _set_public_read_policies(self):
-        """Set public read access policy for buckets"""
-        # Buckets that should be publicly accessible
-        public_buckets = [
+    def _remove_public_read_policies(self):
+        """
+        Make sure no bucket allows anonymous reads.
+
+        Earlier versions set a public "s3:GetObject for *" policy on the uploads,
+        pages and results buckets, exposing every user's documents to anyone who
+        could guess an object key. Files are now served through the API after an
+        ownership check, so the policy is removed from existing buckets too.
+        """
+        for bucket_name in [
             self.bucket_uploads,
             self.bucket_pages,
+            self.bucket_audio,
             self.bucket_results,
-            # Note: bucket_audio and bucket_crawled are intentionally excluded from public access
-            # (crawled content is attacker-influenced; serve it with presigned URLs)
-        ]
-
-        for bucket_name in public_buckets:
+            self.bucket_crawled,
+        ]:
+            # Fail closed: if the policy can't be checked or removed, the client is not
+            # created (get_minio_client retries on the next call) instead of silently
+            # running with buckets that may still be publicly readable.
             try:
-                # Define policy for public read access
-                policy = {
-                    "Version": "2012-10-17",
-                    "Statement": [
-                        {
-                            "Effect": "Allow",
-                            "Principal": {"AWS": "*"},
-                            "Action": ["s3:GetObject"],
-                            "Resource": [f"arn:aws:s3:::{bucket_name}/*"]
-                        }
-                    ]
-                }
-
-                # Set bucket policy
-                self.client.set_bucket_policy(bucket_name, json.dumps(policy))
-                logger.info(f"Set public read policy for bucket: {bucket_name}")
+                policy = self.client.get_bucket_policy(bucket_name)
             except S3Error as e:
-                logger.warning(f"Failed to set public policy for {bucket_name}: {e}")
-                # Don't raise - this is not critical, presigned URLs can still be used
+                if e.code == "NoSuchBucketPolicy":
+                    continue
+                raise RuntimeError(f"Could not verify that bucket {bucket_name} is private: {e}") from e
+
+            if not policy:
+                continue
+            try:
+                self.client.delete_bucket_policy(bucket_name)
+                logger.info(f"Removed public read policy from bucket: {bucket_name}")
+            except S3Error as e:
+                raise RuntimeError(f"Could not remove the public policy from bucket {bucket_name}: {e}") from e
 
     def health_check(self) -> bool:
         """Check MinIO connection by listing buckets"""
@@ -202,6 +202,15 @@ class MinIOClient:
             logger.error(f"Failed to download from MinIO: {e}")
             raise
 
+    def open_object(self, bucket_name: str, object_name: str):
+        """
+        Open an object for streaming.
+
+        Returns the urllib3 response: iterate with .stream(chunk_size), then call
+        .close() and .release_conn(). Raises S3Error if the object does not exist.
+        """
+        return self.client.get_object(bucket_name, object_name)
+
     def delete_file(self, bucket_name: str, object_name: str) -> bool:
         """
         Delete a file from MinIO
@@ -296,37 +305,6 @@ class MinIOClient:
         except S3Error as e:
             logger.error(f"Failed to generate presigned URL: {e}")
             raise
-
-    def get_public_url(self, bucket_name: str, object_name: str, request_host: str = None) -> str:
-        """
-        Get public URL for a file (works if bucket has public read policy)
-
-        Args:
-            bucket_name: Name of the bucket
-            object_name: Object name in MinIO
-            request_host: Optional host from request (e.g., "example.com:8000", "192.168.1.10:8000")
-                         If provided, uses same host but with MinIO port (9000)
-
-        Returns:
-            str: Public URL accessible from outside Docker network
-        """
-        settings = get_settings()
-
-        # Determine endpoint to use
-        if request_host:
-            # Extract host without port and use MinIO port
-            host_without_port = request_host.split(':')[0]
-            public_endpoint = f"{host_without_port}:9000"
-        else:
-            # Use configured public endpoint
-            public_endpoint = settings.minio_public_endpoint
-
-        # Construct public URL
-        # Format: http://public-endpoint/bucket-name/object-name
-        protocol = "https" if settings.minio_secure else "http"
-        url = f"{protocol}://{public_endpoint}/{bucket_name}/{object_name}"
-
-        return url
 
     def list_objects(self, bucket_name: str, prefix: str = "") -> list:
         """
