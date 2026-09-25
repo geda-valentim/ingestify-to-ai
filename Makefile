@@ -1,4 +1,4 @@
-.PHONY: help start stop restart logs status clean infra-start infra-stop infra-status ps build rebuild dev prod scale test check-services check-redis check-mysql check-elasticsearch check-minio smart-start validate
+.PHONY: help ensure-jwt-secret start stop restart logs status clean infra-start infra-stop infra-status ps build rebuild dev prod scale test check-services check-redis check-mysql check-elasticsearch check-minio smart-start validate
 
 # Default target
 .DEFAULT_GOAL := help
@@ -107,7 +107,7 @@ validate: ## Validate frontend TypeScript
 	@echo "$(CYAN)🔍 Validating frontend TypeScript...$(NC)"
 	@./validate-frontend.sh
 
-smart-start: ## Smart start: only start services if not accessible
+smart-start: ensure-jwt-secret ## Smart start: only start services if not accessible
 	@echo ""
 	@echo "$(CYAN)=== Smart Service Startup ===$(NC)"
 	@echo ""
@@ -167,6 +167,9 @@ smart-start: ## Smart start: only start services if not accessible
 # ======================================
 # APPLICATION COMMANDS
 # ======================================
+ensure-jwt-secret: ## Generate JWT_SECRET_KEY in .env if missing
+	@./scripts/ensure_jwt_secret.sh
+
 start: ## Start application (auto-detect shared infrastructure)
 	@./start.sh
 
@@ -224,17 +227,17 @@ infra-logs: ## View shared infrastructure logs
 # ======================================
 # DEVELOPMENT COMMANDS
 # ======================================
-dev: ## Start in development mode with hot reload
+dev: ensure-jwt-secret ## Start in development mode with hot reload
 	@echo "$(CYAN)🔧 Starting development mode...$(NC)"
 	@docker compose up -d
 	@echo "$(GREEN)✅ Development mode ready!$(NC)"
 
-prod: ## Start in production mode
+prod: ensure-jwt-secret ## Start in production mode
 	@echo "$(CYAN)🚀 Starting production mode...$(NC)"
 	@docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
 	@echo "$(GREEN)✅ Production mode ready!$(NC)"
 
-scale: ## Scale workers (usage: make scale n=10)
+scale: ensure-jwt-secret ## Scale workers (usage: make scale n=10)
 	@if [ -z "$(n)" ]; then \
 		echo "$(RED)❌ Error: Please specify number of workers (e.g., make scale n=10)$(NC)"; \
 		exit 1; \
