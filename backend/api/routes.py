@@ -86,27 +86,16 @@ async def upload_and_convert(
       -F "docling_preset=quality"
     ```
     """
-    from shared.utils import calculate_file_checksum
-
     redis_client = get_redis_client()
 
-    # Read file contents
-    file_contents = await file.read()
     filename = sanitize_upload_filename(file.filename)
-    file_size_mb = len(file_contents) / (1024 * 1024)
-    file_size_bytes = len(file_contents)
 
-    # Validate file size
-    if file_size_mb > settings.max_file_size_mb:
-        raise HTTPException(
-            status_code=413,
-            detail=f"Arquivo muito grande: {file_size_mb:.2f}MB. Máximo: {settings.max_file_size_mb}MB"
-        )
+    # Stream the upload to disk in chunks (size limit + checksum) instead of reading it into memory
+    staging_path = _upload_staging_path(filename)
+    file_size_bytes, file_checksum = await _stream_upload_to_file(file, staging_path, settings.max_file_size_mb)
+    file_size_mb = file_size_bytes / (1024 * 1024)
 
     logger.info(f"File uploaded: {filename} ({file_size_mb:.2f}MB)")
-
-    # Calculate file checksum for deduplication
-    file_checksum = calculate_file_checksum(file_contents)
     logger.info(f"File checksum: {file_checksum}")
 
     # Check if file already processed by this user
@@ -118,6 +107,7 @@ async def upload_and_convert(
 
     if existing_job:
         logger.info(f"Duplicate file detected! Returning existing job: {existing_job.id}")
+        staging_path.unlink(missing_ok=True)
         return JobCreatedResponse(
             job_id=existing_job.id,
             status="queued",  # Use current status from DB
@@ -176,16 +166,19 @@ async def upload_and_convert(
     # Save file to MinIO and temporarily to filesystem
     try:
         from workers.tasks import process_conversion
-        from pathlib import Path
 
-        # Save to MinIO
+        # Move the streamed upload to the job's directory (read by the worker)
+        temp_file_path = _move_upload_to_job_dir(staging_path, job_id, filename)
+        logger.info(f"File saved to filesystem: {temp_file_path}")
+
+        # Save to MinIO (streamed from disk)
         minio_client = get_minio_client()
         minio_object_name = f"uploads/{job_id}/{filename}"
         try:
             minio_client.upload_file(
                 bucket_name=minio_client.bucket_uploads,
                 object_name=minio_object_name,
-                file_data=file_contents,
+                file_path=str(temp_file_path),
                 content_type=file.content_type or "application/octet-stream",
             )
             logger.info(f"File uploaded to MinIO: {minio_object_name}")
@@ -201,16 +194,6 @@ async def upload_and_convert(
             logger.error(f"Failed to upload file to MinIO: {e}")
             # Continue with filesystem fallback
 
-        # Also save to filesystem temporarily for processing
-        temp_dir = Path(settings.temp_storage_path) / "uploads" / str(job_id)
-        temp_dir.mkdir(parents=True, exist_ok=True)
-        temp_file_path = temp_dir / filename
-
-        with open(temp_file_path, "wb") as f:
-            f.write(file_contents)
-
-        logger.info(f"File saved to filesystem: {temp_file_path}")
-
         # Enqueue task
         process_conversion.delay(
             job_id=str(job_id),
@@ -221,6 +204,8 @@ async def upload_and_convert(
         logger.info(f"MAIN JOB {job_id} enqueued to Celery successfully")
 
     except ImportError as e:
+        if staging_path:
+            staging_path.unlink(missing_ok=True)
         logger.error(f"Celery tasks not available: {e}")
         redis_client.set_job_status(
             job_id=str(job_id),
@@ -238,6 +223,8 @@ async def upload_and_convert(
             db.rollback()
         raise HTTPException(status_code=503, detail="Sistema de processamento indisponível")
     except Exception as e:
+        if staging_path:
+            staging_path.unlink(missing_ok=True)
         logger.error(f"Error enqueueing job {job_id}: {e}", exc_info=True)
         redis_client.set_job_status(
             job_id=str(job_id),
@@ -280,6 +267,20 @@ VIDEO_EXTENSIONS = ['.mp4', '.m4v', '.mkv', '.mov', '.avi', '.webm', '.wmv', '.f
 
 
 UPLOAD_CHUNK_SIZE = 1024 * 1024  # 1MB
+
+
+def _upload_staging_path(filename: str) -> Path:
+    """Temporary location for an upload before its job exists (unique per request)"""
+    return Path(settings.temp_storage_path) / "uploads" / ".staging" / f"{uuid4()}{Path(filename).suffix}"
+
+
+def _move_upload_to_job_dir(staging_path: Path, job_id, filename: str) -> Path:
+    """Move a streamed upload to {temp}/uploads/{job_id}/, where the worker reads it"""
+    temp_dir = Path(settings.temp_storage_path) / "uploads" / str(job_id)
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    temp_file_path = temp_dir / filename
+    os.replace(staging_path, temp_file_path)
+    return temp_file_path
 
 
 async def _stream_upload_to_file(file: UploadFile, destination: Path, max_size_mb: int) -> Tuple[int, str]:
@@ -665,34 +666,23 @@ async def convert_document(
     if source_type in ["gdrive", "dropbox"] and not authorization:
         raise HTTPException(status_code=401, detail="Authorization header é obrigatório para esta fonte")
 
-    # Read file contents if uploaded
-    file_contents = None
+    # Stream the uploaded file (if any) to disk in chunks (size limit + checksum)
+    staging_path = None
     filename = None
     file_size_bytes = 0
     mime_type = None
     file_checksum = None
 
     if file:
-        file_contents = await file.read()
         filename = sanitize_upload_filename(file.filename)
-        file_size_mb = len(file_contents) / (1024 * 1024)
-        file_size_bytes = len(file_contents)
         mime_type = file.content_type or "application/octet-stream"
 
-        if not file_contents:
-            raise HTTPException(status_code=400, detail="Arquivo enviado está vazio")
-
-        # Validate file size
-        if file_size_mb > settings.max_file_size_mb:
-            raise HTTPException(
-                status_code=413,
-                detail=f"Arquivo muito grande: {file_size_mb:.2f}MB. Máximo: {settings.max_file_size_mb}MB"
-            )
+        # Rejects empty uploads (400) and files over the limit (413)
+        staging_path = _upload_staging_path(filename)
+        file_size_bytes, file_checksum = await _stream_upload_to_file(file, staging_path, settings.max_file_size_mb)
+        file_size_mb = file_size_bytes / (1024 * 1024)
 
         logger.info(f"File uploaded: {filename} ({file_size_mb:.2f}MB)")
-
-        # Calculate file checksum for deduplication
-        file_checksum = calculate_file_checksum(file_contents)
         logger.info(f"File checksum: {file_checksum}")
 
         # Check if file already processed by this user
@@ -704,6 +694,7 @@ async def convert_document(
 
         if existing_job:
             logger.info(f"Duplicate file detected! Returning existing job: {existing_job.id}")
+            staging_path.unlink(missing_ok=True)
             return JobCreatedResponse(
                 job_id=existing_job.id,
                 status="queued",
@@ -788,15 +779,20 @@ async def convert_document(
             task_kwargs["auth_token"] = authorization.replace("Bearer ", "")
 
         # Save file to MinIO and temporarily to filesystem if uploaded
-        if file_contents:
-            # Save to MinIO
+        if staging_path:
+            # Move the streamed upload to the job's directory (read by the worker)
+            temp_file_path = _move_upload_to_job_dir(staging_path, job_id, filename)
+            task_kwargs["source"] = str(temp_file_path)
+            logger.info(f"File saved to filesystem: {temp_file_path}")
+
+            # Save to MinIO (streamed from disk)
             minio_client = get_minio_client()
             minio_object_name = f"uploads/{job_id}/{filename}"
             try:
                 minio_client.upload_file(
                     bucket_name=minio_client.bucket_uploads,
                     object_name=minio_object_name,
-                    file_data=file_contents,
+                    file_path=str(temp_file_path),
                     content_type=mime_type or "application/octet-stream",
                 )
                 logger.info(f"File uploaded to MinIO: {minio_object_name}")
@@ -812,22 +808,13 @@ async def convert_document(
                 logger.error(f"Failed to upload file to MinIO: {e}")
                 # Continue with filesystem fallback
 
-            # Also save to filesystem temporarily for processing
-            temp_dir = Path(settings.temp_storage_path) / "uploads" / str(job_id)
-            temp_dir.mkdir(parents=True, exist_ok=True)
-            temp_file_path = temp_dir / filename
-
-            with open(temp_file_path, "wb") as f:
-                f.write(file_contents)
-
-            task_kwargs["source"] = str(temp_file_path)
-            logger.info(f"File saved to filesystem: {temp_file_path}")
-
         # Enqueue task
         process_conversion.delay(**task_kwargs)
         logger.info(f"MAIN JOB {job_id} enqueued to Celery successfully")
 
     except ImportError as e:
+        if staging_path:
+            staging_path.unlink(missing_ok=True)
         logger.error(f"Celery tasks not available: {e}")
         redis_client.set_job_status(
             job_id=str(job_id),
@@ -845,6 +832,8 @@ async def convert_document(
             db.rollback()
         raise HTTPException(status_code=503, detail="Sistema de processamento indisponível")
     except Exception as e:
+        if staging_path:
+            staging_path.unlink(missing_ok=True)
         logger.error(f"Error enqueueing job {job_id}: {e}", exc_info=True)
         redis_client.set_job_status(
             job_id=str(job_id),
