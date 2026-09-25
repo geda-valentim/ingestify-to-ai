@@ -30,6 +30,17 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --index-url ${TORCH_INDEX_URL} --extra-index-url https://pypi.org/simple \
                 -r ${REQUIREMENTS_FILE}
 
+# Optional GPU support for Whisper (faster-whisper / CTranslate2 needs cuBLAS + cuDNN 9).
+# The NVIDIA driver comes from the host via the NVIDIA Container Toolkit.
+# Build with: docker compose -f docker-compose.yml -f docker-compose.gpu.yml build worker
+ARG INSTALL_CUDA_LIBS=false
+RUN --mount=type=cache,target=/root/.cache/pip \
+    if [ "$INSTALL_CUDA_LIBS" = "true" ]; then \
+        pip install "nvidia-cublas-cu12" "nvidia-cudnn-cu12==9.*"; \
+    fi
+# Harmless when the libraries are not installed
+ENV LD_LIBRARY_PATH=/usr/local/lib/python3.13/site-packages/nvidia/cublas/lib:/usr/local/lib/python3.13/site-packages/nvidia/cudnn/lib
+
 # Copy application code
 COPY backend/workers/ ./workers/
 COPY backend/shared/ ./shared/
@@ -40,7 +51,13 @@ RUN mkdir -p /tmp/doc2md
 # HuggingFace cache mount point. Model weights are NEVER baked into the image:
 # compose backs this path with the named volume `hf_cache` so ~0.5GB of
 # Florence-2 weights survive restarts and are shared across replicas.
-RUN mkdir -p /models/huggingface
+# Run as an unprivileged user (the entrypoint fixes temp storage and model cache
+# ownership, then drops root)
+RUN useradd --create-home --uid 10001 --user-group app \
+    && mkdir -p /tmp/ingestify /models/huggingface \
+    && chown -R app:app /tmp/ingestify /models/huggingface
+COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 
 # Run Celery worker with isolated queue and unique hostname
 CMD ["celery", "-A", "workers.celery_app", "worker", "--loglevel=info", "--concurrency=2", "-Q", "ingestify", "-n", "ingestify-worker@%h"]

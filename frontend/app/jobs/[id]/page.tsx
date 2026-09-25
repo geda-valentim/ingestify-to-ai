@@ -97,6 +97,7 @@ export default function JobStatusPage({ params }: PageProps) {
 
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [selectedPage, setSelectedPage] = useState<PageInfo | null>(null);
+
   const [activeTab, setActiveTab] = useState<"pdf" | "markdown">("pdf");
   const [numPdfPages, setNumPdfPages] = useState<number>(0);
   const [pdfError, setPdfError] = useState<string | null>(null);

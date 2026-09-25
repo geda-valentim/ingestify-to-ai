@@ -406,7 +406,7 @@ def resolve_whisper_compute_type(device: str) -> str:
     from shared.config import get_settings
 
     configured = (get_settings().whisper_compute_type or "").strip()
-    if configured:
+    if configured and configured.lower() != "auto":
         return configured
 
     return "float16" if device.startswith(CUDA) else "int8"

@@ -11,6 +11,7 @@ Tests PDF conversion with full monitoring:
 - Detailed report generation
 """
 
+import os
 import sys
 import time
 import json
@@ -21,8 +22,8 @@ from typing import Dict, List, Optional
 import requests
 
 # Configuration
-API_URL = "http://localhost:8000"
-API_KEY = "doc2md_sk_uu7rQmvJGsOmYUG6QPz41vntpeV71WDb7WwsyxA1NiQ"
+API_URL = os.environ.get("API_URL", "http://localhost:8000")
+API_KEY = os.environ.get("INGESTIFY_API_KEY", "")
 
 # Colors for terminal output
 class Colors:
@@ -339,7 +340,11 @@ def generate_report(results: List[Dict]):
 def main():
     """Main execution"""
     if len(sys.argv) < 2:
-        print("Usage: python test_conversion_monitor.py <pdf_file1> [pdf_file2] ...")
+        print("Usage: INGESTIFY_API_KEY=doc2md_sk_... python test_conversion_monitor.py <pdf_file1> [pdf_file2] ...")
+        sys.exit(1)
+
+    if not API_KEY:
+        print("Error: set the INGESTIFY_API_KEY environment variable")
         sys.exit(1)
 
     pdf_files = [Path(arg) for arg in sys.argv[1:]]

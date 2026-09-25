@@ -2,6 +2,7 @@ import logging
 import re
 from functools import lru_cache
 from typing import List
+from urllib.parse import quote
 
 from pydantic import Field, ValidationError, ValidationInfo, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -111,9 +112,10 @@ class Settings(BaseSettings):
     # CHANGED (was "int8"): empty means "derive from the resolved audio device"
     # (float16 on cuda, int8 on cpu). Stops a device flip leaving CTranslate2 on
     # a CPU-shaped int8 quantisation it silently downgrades rather than rejects.
-    whisper_compute_type: str = ""
+    whisper_compute_type: str = ""  # "auto" is accepted as a synonym of empty
     enable_audio_transcription: bool = True  # Feature flag to enable/disable audio transcription
     max_audio_file_size_mb: int = 50  # Maximum audio file size
+    max_video_file_size_mb: int = 500  # Maximum video file size (only the audio track is transcribed)
     max_audio_duration_seconds: int = 3600  # Maximum audio duration (1 hour)
     openai_api_key: str = ""  # Required for openai-api provider
 
@@ -172,6 +174,7 @@ class Settings(BaseSettings):
     monitoring_max_retry_count: int = 3  # Maximum retry attempts per page
     monitoring_check_interval_minutes: int = 5  # How often to run monitoring tasks
     monitoring_batch_size: int = 100  # Max jobs to process per monitoring cycle
+    temp_files_retention_hours: int = 72  # Delete leftover local files (failed jobs, aborted uploads) after X hours
 
     # Google Drive (optional)
     google_drive_credentials_path: str = "/secrets/gdrive.json"
@@ -201,6 +204,36 @@ class Settings(BaseSettings):
     minio_bucket_pages: str = "ingestify-pages"
     minio_bucket_audio: str = "ingestify-audio"
     minio_bucket_results: str = "ingestify-results"
+    minio_bucket_crawled: str = "ingestify-crawled"  # Crawler files storage
+
+    # Crawler Configuration
+    crawler_enabled: bool = True
+    crawler_max_concurrent_downloads: int = 5  # Max parallel file downloads
+    crawler_max_concurrent_assets: int = 10  # Max parallel asset downloads
+    crawler_download_timeout_seconds: int = 60  # Timeout for single file download
+    crawler_user_agent: str = "IngestifyBot/1.0 (+https://ingestify.ai/bot)"
+    crawler_respect_robots_txt: bool = True  # Respect robots.txt rules
+    crawler_rate_limit_per_second: int = 2  # Max requests per second per domain
+
+    # Crawler Engine Defaults
+    crawler_default_engine: str = "beautifulsoup"  # beautifulsoup or playwright
+
+    # Playwright Configuration
+    playwright_headless: bool = True  # Run browser in headless mode
+    playwright_timeout_seconds: int = 30  # Page load timeout
+    playwright_wait_for_selector: str = ""  # Optional: wait for specific selector before extract
+    playwright_browser_type: str = "chromium"  # chromium, firefox, or webkit
+
+    # Proxy Configuration
+    proxy_enabled: bool = False  # Enable proxy support
+    proxy_pool_enabled: bool = False  # Enable proxy pool rotation
+    proxy_rotation_strategy: str = "round_robin"  # round_robin or random
+
+    # Retry Configuration
+    crawler_retry_enabled: bool = True  # Enable automatic retries on failure
+    crawler_max_retries: int = 3  # Maximum retry attempts
+    crawler_retry_delay_base_seconds: int = 5  # Base delay between retries (exponential backoff)
+    crawler_retry_strategy_default: str = "conservative"  # conservative or aggressive
 
     # JWT Authentication
     # REQUIRED - intentionally no default. A hardcoded default here would be a
@@ -211,6 +244,9 @@ class Settings(BaseSettings):
 
     # Authentication
     auth_enabled: bool = True  # Feature flag to enable/disable auth
+    # Comma-separated user IDs (UUIDs) allowed to use /admin endpoints. Empty = no admins.
+    # IDs are used instead of emails because registration does not verify email ownership.
+    admin_user_ids: str = ""
 
     # CORS
     # Comma-separated list of origins allowed to call the API from a browser.
@@ -224,10 +260,16 @@ class Settings(BaseSettings):
     )
 
     # Rate Limiting
-    rate_limit_per_minute: int = 10
+    rate_limit_per_minute: int = 10  # Login attempts per client IP per minute
+    login_max_failed_attempts: int = 5  # Failed logins per account before a temporary lockout
+    login_lockout_seconds: int = 900  # Lockout window (counted from the first failure)
+    register_limit_per_hour: int = 5  # Registrations per client IP per hour
 
     # Environment
-    environment: str = "development"
+    # "production" unless explicitly set: development mode returns exception
+    # messages to clients and skips the startup fail-fast checks
+    environment: str = "production"
+    sql_echo: bool = False  # Log every SQL statement with its parameters (debug only)
     log_level: str = "INFO"
 
     model_config = SettingsConfigDict(
@@ -376,6 +418,16 @@ def _format_settings_error(exc: ValidationError) -> str:
         "See .env.example for the full list of required environment variables."
     )
     return "\n".join(lines)
+
+
+def redis_url_with_password(url: str, password: str) -> str:
+    """Add REDIS_PASSWORD to a redis:// URL that has no credentials (for Celery broker/backend)"""
+    if not password or not url.startswith(("redis://", "rediss://")):
+        return url
+    scheme, rest = url.split("://", 1)
+    if "@" in rest.split("/", 1)[0]:
+        return url  # credentials already in the URL
+    return f"{scheme}://:{quote(password, safe='')}@{rest}"
 
 
 @lru_cache()

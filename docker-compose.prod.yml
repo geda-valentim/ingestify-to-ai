@@ -21,6 +21,7 @@ services:
       - ENVIRONMENT=production
       - PYTHONUNBUFFERED=1
       - LOG_LEVEL=INFO
+      - ENVIRONMENT=production  # generic 500 errors, fail-fast startup checks
     restart: unless-stopped
 
   worker:
@@ -33,6 +34,7 @@ services:
     environment:
       - ENVIRONMENT=production
       - PYTHONUNBUFFERED=1
+      - ENVIRONMENT=production
     restart: unless-stopped
     # Scale workers in production
     deploy:

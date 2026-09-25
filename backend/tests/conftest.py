@@ -28,6 +28,8 @@ os.environ.setdefault("MINIO_SECRET_KEY", "test-secret-key")
 os.environ.setdefault("VISION_PROVIDER", "stub")
 
 import pytest  # noqa: E402
+from datetime import datetime, timezone  # noqa: E402
+from unittest.mock import AsyncMock, MagicMock  # noqa: E402
 
 
 @pytest.fixture
@@ -37,3 +39,40 @@ def fake_redis():
     from shared.redis_client import RedisClient
 
     return RedisClient(client=fakeredis.FakeRedis(decode_responses=True))
+
+
+
+@pytest.fixture
+def mock_datetime():
+    """Fixture for mocking datetime."""
+    return datetime(2025, 1, 13, 12, 0, 0, tzinfo=timezone.utc)
+
+
+@pytest.fixture
+def sample_user_id():
+    """Fixture for test user ID."""
+    return "test-user-123"
+
+
+@pytest.fixture
+def sample_job_id():
+    """Fixture for test job ID."""
+    return "test-job-456"
+
+
+@pytest.fixture
+def sample_crawler_url():
+    """Fixture for test crawler URL."""
+    return "https://example.com/page"
+
+
+@pytest.fixture
+def mock_db_session():
+    """Fixture for mocking database session."""
+    session = MagicMock()
+    session.query = MagicMock()
+    session.add = MagicMock()
+    session.commit = AsyncMock()
+    session.refresh = AsyncMock()
+    session.close = MagicMock()
+    return session

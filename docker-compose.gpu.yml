@@ -46,10 +46,33 @@ services:
               capabilities: [gpu]
 
   worker:
+    build:
+      args:
+        # Same CUDA dependency set as worker-vision (shared image layers). The
+        # cu129 torch brings the cu12 cuBLAS/cuDNN 9 wheels CTranslate2 needs,
+        # and shared.device decides `auto` via torch.cuda - so INSTALL_CUDA_LIBS
+        # is deliberately NOT set: its unpinned cuDNN could shadow torch's.
+        REQUIREMENTS_FILE: requirements-vision-cuda.txt
+        TORCH_INDEX_URL: https://download.pytorch.org/whl/cu129
     environment:
-      # Deliberate. `replicas: 5` x `--concurrency=2` = 10 processes, each
-      # resolving auto -> cuda:0 and each allocating its own CUDA context plus
-      # docling layout/table weights: a near-certain OOM on one consumer GPU.
-      # Moving docling/whisper onto the GPU is a separate, deliberate change
-      # that must come with reduced replicas and concurrency. See docs/GPU.md.
+      # Docling stays on CPU. `replicas x --concurrency` processes each
+      # resolving auto -> cuda:0 would each allocate their own CUDA context
+      # plus docling layout/table weights: a near-certain OOM on one consumer
+      # GPU. See docs/GPU.md.
       - DEVICE=cpu
+      # Whisper alone goes to the GPU: a non-empty WHISPER_DEVICE overrides
+      # DEVICE for audio. `auto` falls back to CPU if CUDA is not usable
+      # (detected once per worker process, and again if the model fails on GPU).
+      - WHISPER_DEVICE=${WHISPER_DEVICE:-auto}
+      - WHISPER_COMPUTE_TYPE=${WHISPER_COMPUTE_TYPE:-}
+    # Each worker process loads its own Whisper model into GPU memory:
+    # keep replicas x concurrency low to avoid running out of VRAM.
+    command: celery -A workers.celery_app worker --loglevel=info --concurrency=1 -Q ingestify -n ingestify-worker@%h
+    deploy:
+      replicas: 1
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

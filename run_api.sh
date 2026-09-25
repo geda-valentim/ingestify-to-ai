@@ -51,10 +51,14 @@ mkdir -p /tmp/ingestify
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 cd "$SCRIPT_DIR"
 
+# The API refuses to start without JWT_SECRET_KEY (read from .env by the app)
+./scripts/ensure_jwt_secret.sh
+
 # Add backend directory to PYTHONPATH so imports work correctly
 export PYTHONPATH="$SCRIPT_DIR/backend:$PYTHONPATH"
 
 # Set environment variables for local development
+export ENVIRONMENT="${ENVIRONMENT:-development}"
 export REDIS_HOST="localhost"
 export CELERY_BROKER_URL="redis://localhost:6379/0"
 export CELERY_RESULT_BACKEND="redis://localhost:6379/1"
