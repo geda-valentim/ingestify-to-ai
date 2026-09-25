@@ -71,8 +71,8 @@ class MinIOClient:
             self.bucket_uploads,
             self.bucket_pages,
             self.bucket_results,
-            self.bucket_crawled,
-            # Note: bucket_audio is intentionally excluded from public access
+            # Note: bucket_audio and bucket_crawled are intentionally excluded from public access
+            # (crawled content is attacker-influenced; serve it with presigned URLs)
         ]
 
         for bucket_name in public_buckets:

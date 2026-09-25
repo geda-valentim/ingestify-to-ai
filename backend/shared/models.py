@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Boolean, DateTime, ForeignKey, Text, Integer, Enum, JSON
+from sqlalchemy import Column, String, Boolean, DateTime, ForeignKey, Text, Integer, BigInteger, Enum, JSON
 from sqlalchemy.orm import relationship
 from datetime import datetime
 import uuid
@@ -182,7 +182,7 @@ class CrawledFile(Base):
     # File metadata
     file_type = Column(String(50))  # pdf, jpg, css, js, etc.
     mime_type = Column(String(255))  # application/pdf, image/jpeg, etc.
-    size_bytes = Column(Integer, default=0)
+    size_bytes = Column(BigInteger, default=0)
 
     # MinIO storage
     minio_path = Column(String(1024))  # crawled/{execution_id}/files/...
@@ -190,7 +190,11 @@ class CrawledFile(Base):
     public_url = Column(Text)
 
     # Status tracking
-    status = Column(Enum(FileStatus), default=FileStatus.PENDING, nullable=False, index=True)
+    # Store the lowercase values ('pending', ...) as in migrations/003_add_crawled_files_table.sql
+    status = Column(
+        Enum(FileStatus, values_callable=lambda enum: [member.value for member in enum]),
+        default=FileStatus.PENDING, nullable=False, index=True,
+    )
     error_message = Column(Text)
 
     # Timestamps
