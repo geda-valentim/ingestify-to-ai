@@ -1,16 +1,11 @@
 """Admin endpoints must only be reachable by users listed in ADMIN_USER_IDS."""
-import sys
 from types import SimpleNamespace
-from unittest.mock import MagicMock
 
 import pytest
 from fastapi import HTTPException
 
-# admin_routes imports Celery worker modules (Docling, etc.); stub them out
-for module in ("workers.celery_app", "workers.tasks", "workers.monitoring"):
-    sys.modules.setdefault(module, MagicMock())
-
-from api import admin_routes  # noqa: E402
+import workers.celery_app  # noqa: F401  (import order used by the worker; avoids a circular import)
+from api import admin_routes
 
 USER = SimpleNamespace(id="11111111-1111-1111-1111-111111111111", email="user@example.com")
 
