@@ -105,6 +105,7 @@ services:
       - CELERY_TASK_DEFAULT_QUEUE=ingestify
       - CELERY_WORKER_NAME=ingestify-worker
       - ENVIRONMENT=development
+      - SQL_ECHO=${SQL_ECHO:-false}  # true = log every SQL statement (debug only)
       - JWT_SECRET_KEY=${JWT_SECRET_KEY:-}
       - LOG_LEVEL=INFO
       - MAX_FILE_SIZE_MB=50
@@ -146,6 +147,7 @@ services:
       - CELERY_TASK_DEFAULT_QUEUE=ingestify
       - CELERY_WORKER_NAME=ingestify-worker
       - ENVIRONMENT=development
+      - SQL_ECHO=${SQL_ECHO:-false}  # true = log every SQL statement (debug only)
       - LOG_LEVEL=INFO
       - MAX_FILE_SIZE_MB=50
       - CONVERSION_TIMEOUT_SECONDS=600
@@ -189,6 +191,7 @@ services:
       - CELERY_TASK_DEFAULT_QUEUE=ingestify
       - CELERY_WORKER_NAME=ingestify-beat
       - ENVIRONMENT=development
+      - SQL_ECHO=${SQL_ECHO:-false}  # true = log every SQL statement (debug only)
       - LOG_LEVEL=INFO
       - DATABASE_URL=${DATABASE_URL:-mysql+pymysql://root:root@host.docker.internal:3306/ingestify}
       - ELASTICSEARCH_URL=${ELASTICSEARCH_URL:-http://${ELASTICSEARCH_HOST:-elasticsearch}:9200}
