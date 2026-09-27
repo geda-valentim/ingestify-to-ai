@@ -28,12 +28,15 @@ from shared.elasticsearch_client import get_es_client
 from shared.minio_client import get_minio_client
 from shared.transcripts import TRANSCRIPT_CONTENT_TYPES, TRANSCRIPT_FORMATS, transcript_object_name
 from shared.database import SessionLocal, get_db
-from shared.models import Job, Page, JobStatus as DBJobStatus, User
+from shared.models import Job, JobTag, Page, JobStatus as DBJobStatus, User
 from shared.config import get_settings
 from shared.utils import calculate_file_checksum
 from shared.auth import get_current_active_user
 from api.deps import get_owned_job, get_owned_page_or_none
 from shared.utils import sanitize_upload_filename
+from shared.tags import set_job_tags
+from api.tag_routes import TAGS_FORM_DESCRIPTION, add_tags_to_existing_job, parse_tags_or_422
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
@@ -57,6 +60,7 @@ PAGE_PDF_URL_TTL_SECONDS = 15 * 60
 async def upload_and_convert(
     file: UploadFile = File(..., description="Arquivo para conversão (PDF, DOCX, HTML, etc.)"),
     name: Optional[str] = Form(None, description="Nome de identificação (opcional, padrão: nome do arquivo)"),
+    tags: Optional[str] = Form(None, description=TAGS_FORM_DESCRIPTION),
     docling_preset: Optional[str] = Form(
         "fast",
         description="Quality/speed preset for PDF conversion: 'fast' (~35s/MB, text-only), 'balanced' (~70-105s/MB, with images), 'quality' (~350s/MB, with OCR)"
@@ -101,6 +105,7 @@ async def upload_and_convert(
       -F "docling_preset=quality"
     ```
     """
+    tag_list = parse_tags_or_422(tags)
     redis_client = get_redis_client()
 
     filename = sanitize_upload_filename(file.filename)
@@ -123,6 +128,7 @@ async def upload_and_convert(
 
         if existing_job:
             logger.info(f"Duplicate file detected! Returning existing job: {existing_job.id}")
+            add_tags_to_existing_job(db, existing_job, tag_list)
             return JobCreatedResponse(
                 job_id=existing_job.id,
                 status="queued",  # Use current status from DB
@@ -169,6 +175,7 @@ async def upload_and_convert(
                 created_at=created_at,
             )
             db.add(db_job)
+            set_job_tags(db_job, tag_list)
             db.commit()
             logger.info(f"Job {job_id} created in MySQL with name: {job_name} and checksum: {file_checksum}")
         except Exception as e:
@@ -342,6 +349,7 @@ async def _stream_upload_to_file(file: UploadFile, destination: Path, max_size_m
 async def transcribe_audio(
     file: UploadFile = File(..., description="Arquivo de áudio (MP3, WAV, M4A, FLAC, OGG...) ou vídeo (MP4, MKV, MOV, WEBM, AVI...)"),
     name: Optional[str] = Form(None, description="Nome de identificação (opcional, padrão: nome do arquivo)"),
+    tags: Optional[str] = Form(None, description=TAGS_FORM_DESCRIPTION),
     language: Optional[str] = Form(None, description="Código do idioma (ex: 'en', 'pt'). Auto-detectar se não fornecido"),
     include_timestamps: bool = Form(True, description="Incluir marcadores de tempo na transcrição"),
     include_word_timestamps: bool = Form(False, description="Incluir timestamps em nível de palavra (mais detalhado)"),
@@ -403,6 +411,7 @@ async def transcribe_audio(
             detail="Audio transcription is currently disabled"
         )
 
+    tag_list = parse_tags_or_422(tags)
     redis_client = get_redis_client()
 
     filename = sanitize_upload_filename(file.filename)
@@ -453,6 +462,7 @@ async def transcribe_audio(
 
         if existing_job:
             logger.info(f"Duplicate audio file detected! Returning existing job: {existing_job.id}")
+            add_tags_to_existing_job(db, existing_job, tag_list)
             # The latest request decides the default result format of the reused job
             redis_client.set_job_output_format(str(existing_job.id), output_format)
             return JobCreatedResponse(
@@ -499,6 +509,7 @@ async def transcribe_audio(
                 created_at=created_at,
             )
             db.add(db_job)
+            set_job_tags(db_job, tag_list)
             db.commit()
             logger.info(f"Audio transcription job {job_id} created in MySQL with name: {job_name} and checksum: {file_checksum}")
         except Exception as e:
@@ -626,6 +637,7 @@ async def convert_document(
         None,
         description="Nome de identificação opcional (padrão: nome do arquivo ou URL)"
     ),
+    tags: Optional[str] = Form(None, description=TAGS_FORM_DESCRIPTION),
     authorization: Optional[str] = Header(
         None,
         description="Token de autenticação no formato 'Bearer {token}' (obrigatório para gdrive e dropbox)"
@@ -688,6 +700,8 @@ async def convert_document(
     if source_type != "file" and not source:
         raise HTTPException(status_code=400, detail=f"source é obrigatório para source_type={source_type}")
 
+    tag_list = parse_tags_or_422(tags)
+
     # Validate authentication for gdrive and dropbox
     if source_type in ["gdrive", "dropbox"] and not authorization:
         raise HTTPException(status_code=401, detail="Authorization header é obrigatório para esta fonte")
@@ -721,6 +735,7 @@ async def convert_document(
 
             if existing_job:
                 logger.info(f"Duplicate file detected! Returning existing job: {existing_job.id}")
+                add_tags_to_existing_job(db, existing_job, tag_list)
                 return JobCreatedResponse(
                     job_id=existing_job.id,
                     status="queued",
@@ -776,6 +791,7 @@ async def convert_document(
                 created_at=created_at,
             )
             db.add(db_job)
+            set_job_tags(db_job, tag_list)
             db.commit()
             checksum_info = f" and checksum: {file_checksum}" if file_checksum else ""
             logger.info(f"Job {job_id} created in MySQL with name: {job_name} (source_type: {source_type}){checksum_info}")
@@ -949,7 +965,12 @@ async def get_job_status(
         "started_at": started_at,
         "completed_at": completed_at,
         "error": status_data.get("error"),
-        "name": status_data.get("name"),
+        # Workers rewrite the Redis status without the name, so MySQL (where
+        # /upload, /convert and /transcribe store it) is the fallback.
+        "name": status_data.get("name") or (
+            owned_job.name if owned_job is not None and str(owned_job.id) == job_id else None
+        ),
+        "tags": owned_job.tags if owned_job is not None and str(owned_job.id) == job_id else [],
     }
 
     # Add parent_job_id for child jobs (split, page, merge)
@@ -1696,112 +1717,127 @@ async def get_page_result_by_number(
     }
 
 
+# `kind` of a job, derived from Job.source_type: what the user sees it as.
+JOB_KINDS = ("document", "transcription", "image")
+_KIND_SOURCE_TYPES = {"transcription": "audio", "image": "image"}
+
+# MySQL's PENDING is the API's "queued".
+_DB_TO_API_STATUS = {
+    DBJobStatus.PENDING: "queued",
+    DBJobStatus.PROCESSING: "processing",
+    DBJobStatus.COMPLETED: "completed",
+    DBJobStatus.FAILED: "failed",
+    DBJobStatus.CANCELLED: "cancelled",
+}
+_API_TO_DB_STATUS = {api: db for db, api in _DB_TO_API_STATUS.items()}
+
+
+def job_kind(source_type: Optional[str]) -> str:
+    for kind, st in _KIND_SOURCE_TYPES.items():
+        if source_type == st:
+            return kind
+    return "document"
+
+
 @router.get("/jobs", summary="Listar jobs do usuário")
 async def list_jobs(
     limit: int = 50,
     offset: int = 0,
     status: Optional[str] = None,
     job_type: str = "main",
+    tag: Optional[List[str]] = Query(None, description="Só jobs com esta tag. Repita para exigir várias (E)."),
+    q: Optional[str] = Query(None, description="Busca no nome e no nome do arquivo (não no conteúdo; para isso use /search)."),
+    kind: Optional[str] = Query(None, description="document, transcription ou image"),
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
 ):
     """
-    Lista jobs do usuário autenticado
+    Lista os jobs do usuário autenticado, do mais recente para o mais antigo.
+
+    A lista vem do MySQL (fonte da verdade); o Redis só complementa o status e
+    o progresso ao vivo dos jobs em andamento.
 
     ## Parâmetros:
-    - `limit`: Número máximo de jobs a retornar (padrão: 50, máximo: 100)
-    - `offset`: Quantidade de jobs a pular (paginação)
-    - `status`: Filtrar por status: queued, processing, completed, failed
-    - `job_type`: Filtrar por tipo (padrão: "main" - apenas jobs principais)
-      - "main": Jobs principais do usuário (recomendado)
-      - "page": Jobs de página individual
-      - "all": Todos os tipos de jobs
+    - `limit`: Máximo de jobs (padrão: 50, máximo: 100)
+    - `offset`: Quantos pular (paginação)
+    - `status`: queued, processing, completed, failed ou cancelled
+    - `tag`: Filtra por tag; `?tag=a&tag=b` exige as duas
+    - `q`: Texto no nome do job ou do arquivo
+    - `kind`: `document`, `transcription` ou `image`
+    - `job_type`: `main` (padrão) ou `all`
 
     ## Retorno:
-    Lista de jobs com seus IDs, status e informações básicas
-
-    ## Exemplos:
-    - `/jobs` - Lista apenas jobs principais (padrão)
-    - `/jobs?job_type=all` - Lista todos os tipos de jobs
-    - `/jobs?status=processing` - Apenas jobs principais em processamento
-    - `/jobs?status=completed&limit=10` - Últimos 10 jobs principais completados
+    `{total, limit, offset, jobs, counts}`. `total` é o total filtrado antes da
+    paginação; `counts` traz quantos jobs há em cada status com os demais
+    filtros aplicados (para montar os filtros da interface).
     """
+    limit = max(1, min(limit, 100))
+    offset = max(0, offset)
+
+    if status is not None and status not in _API_TO_DB_STATUS:
+        raise HTTPException(status_code=422, detail=f"status inválido: {status}")
+    if kind is not None and kind not in JOB_KINDS:
+        raise HTTPException(status_code=422, detail=f"kind inválido: {kind}. Use: {', '.join(JOB_KINDS)}")
+    tag_filter = parse_tags_or_422(tag)
+
+    query = db.query(Job).filter(Job.user_id == current_user.id)
+    if job_type != "all":
+        query = query.filter(func.upper(Job.job_type) == job_type.upper())
+    for t in tag_filter:
+        query = query.filter(Job.tag_rows.any(JobTag.tag == t))
+    if q and q.strip():
+        like = f"%{q.strip()}%"
+        query = query.filter(or_(Job.name.ilike(like), Job.filename.ilike(like)))
+    if kind == "document":
+        query = query.filter(or_(Job.source_type.is_(None), Job.source_type.notin_(list(_KIND_SOURCE_TYPES.values()))))
+    elif kind is not None:
+        query = query.filter(Job.source_type == _KIND_SOURCE_TYPES[kind])
+
+    counts = {"all": 0, **{api: 0 for api in _API_TO_DB_STATUS}}
+    for db_status, n in query.with_entities(Job.status, func.count(Job.id)).group_by(Job.status).all():
+        counts[_DB_TO_API_STATUS.get(db_status, "queued")] += n
+        counts["all"] += n
+
+    if status is not None:
+        query = query.filter(Job.status == _API_TO_DB_STATUS[status])
+
+    total = query.count()
+    rows = query.order_by(Job.created_at.desc()).offset(offset).limit(limit).all()
+
     redis_client = get_redis_client()
+    jobs = []
+    for job in rows:
+        job_id = str(job.id)
+        db_status = _DB_TO_API_STATUS.get(job.status, "queued")
+        live = None
+        if db_status in ("queued", "processing"):
+            try:
+                live = redis_client.get_job_status(job_id)
+            except Exception as e:
+                logger.warning(f"Redis unavailable for job {job_id} status: {e}")
 
-    # Validate limit
-    if limit > 100:
-        limit = 100
-
-    # Get all job keys from Redis
-    try:
-        # Get only jobs belonging to current user
-        user_job_ids = redis_client.get_user_jobs(current_user.id, limit=1000)
-
-        if not user_job_ids:
-            return {
-                "total": 0,
-                "limit": limit,
-                "offset": offset,
-                "jobs": [],
-            }
-
-        # Get status for each job
-        jobs_list = []
-        for job_id in user_job_ids:
-            status_data = redis_client.get_job_status(job_id)
-            if status_data:
-                # Filter by job_type (skip if not "all" and doesn't match)
-                job_data_type = status_data.get("type", "main").lower()
-                if job_type != "all" and job_data_type != job_type:
-                    continue
-
-                # Filter by status if specified
-                if status and status_data.get("status") != status:
-                    continue
-
-                # Get additional data from MySQL (name, timestamps)
-                db_job = db.query(Job).filter(Job.id == job_id).first()
-
-                job_info = {
-                    "job_id": job_id,
-                    "type": job_data_type,
-                    "status": status_data.get("status"),
-                    "progress": status_data.get("progress", 0),
-                    "name": db_job.name if db_job and db_job.name else status_data.get("name"),
-                    "created_at": db_job.created_at.isoformat() if db_job and db_job.created_at else None,
-                    "completed_at": db_job.completed_at.isoformat() if db_job and db_job.completed_at else None,
-                }
-
-                # Add total_pages for main jobs if available
-                if status_data.get("type") == "main":
-                    total_pages = redis_client.get_job_pages_total(job_id)
-                    if total_pages:
-                        job_info["total_pages"] = total_pages
-                        job_info["pages_completed"] = redis_client.count_completed_page_jobs(job_id)
-
-                # Add page_number for page jobs
-                if status_data.get("type") == "page":
-                    job_info["page_number"] = status_data.get("page_number")
-                    job_info["parent_job_id"] = status_data.get("parent_job_id")
-
-                jobs_list.append(job_info)
-
-        # Sort by created_at (most recent first)
-        jobs_list.sort(key=lambda x: x.get("created_at") or "", reverse=True)
-
-        # Apply pagination
-        paginated_jobs = jobs_list[offset : offset + limit]
-
-        return {
-            "total": len(jobs_list),
-            "limit": limit,
-            "offset": offset,
-            "jobs": paginated_jobs,
+        item = {
+            "job_id": job_id,
+            "type": (job.job_type or "main").lower(),
+            "status": (live or {}).get("status") or db_status,
+            "progress": (live or {}).get("progress", 100 if db_status == "completed" else (job.progress or 0)),
+            "name": job.name or job.filename,
+            "filename": job.filename,
+            "kind": job_kind(job.source_type),
+            "source_type": job.source_type,
+            "mime_type": job.mime_type,
+            "file_size_bytes": job.file_size_bytes,
+            "tags": job.tags,
+            "error": job.error_message,
+            "created_at": job.created_at.isoformat() if job.created_at else None,
+            "completed_at": job.completed_at.isoformat() if job.completed_at else None,
         }
+        if job.total_pages:
+            item["total_pages"] = job.total_pages
+            item["pages_completed"] = job.pages_completed or 0
+        jobs.append(item)
 
-    except Exception as e:
-        logger.error(f"Error listing jobs: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Erro ao listar jobs")
+    return {"total": total, "limit": limit, "offset": offset, "jobs": jobs, "counts": counts}
 
 
 @router.get("/search", summary="Buscar jobs por conteúdo")

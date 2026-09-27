@@ -345,6 +345,10 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.frontend
+      args:
+        # Set in .env to serve the app to other machines, e.g.
+        # NEXT_PUBLIC_API_URL=http://192.168.1.5:8000 (baked in at build time)
+        - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-}
     container_name: ingestify-frontend
     ports:
       - "3000:3000"

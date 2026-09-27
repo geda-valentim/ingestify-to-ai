@@ -4,7 +4,6 @@ import { use, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
-  ArrowLeft,
   CheckCircle2,
   XCircle,
   Clock,
@@ -18,13 +17,20 @@ import {
   Calendar,
   Layers,
   AlertTriangle,
-  Eye,
   Copy,
+  Mic,
+  Timer,
+  Languages,
+  Cpu,
+  HardDrive,
+  ArrowLeft,
 } from "lucide-react";
 import { jobsApi } from "@/lib/api";
 import { useAuthStore } from "@/lib/store/auth";
-import { formatApiError } from "@/lib/utils";
+import { loginUrl } from "@/lib/session";
+import { formatApiError, formatBytes, formatDuration } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { AppHeader } from "@/components/app-header";
 import {
   Card,
   CardContent,
@@ -61,6 +67,9 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { formatDistanceToNow } from "date-fns";
 import { useToast } from "@/hooks/use-toast";
 import dynamic from "next/dynamic";
+import { DocumentView, TranscriptView } from "@/components/job/result-views";
+import { JobTagsCard } from "@/components/job/job-tags-card";
+import type { JobResultResponse, JobStatusResponse } from "@/types/api";
 
 // Dynamically import PDF viewer to avoid canvas module issues
 const PdfViewer = dynamic(
@@ -105,12 +114,12 @@ export default function JobStatusPage({ params }: PageProps) {
 
   useEffect(() => {
     if (hasHydrated && !isAuthenticated) {
-      router.push("/login");
+      router.replace(loginUrl());
     }
   }, [isAuthenticated, hasHydrated, router]);
 
   // Poll for job status
-  const { data: status, isLoading } = useQuery({
+  const { data: status, isLoading, isError: isStatusError } = useQuery({
     queryKey: ["job-status", resolvedParams.id, token],
     queryFn: () => jobsApi.getStatus(resolvedParams.id),
     enabled: !!token,
@@ -341,19 +350,6 @@ export default function JobStatusPage({ params }: PageProps) {
     bulkRetryMutation.mutate(pageNumbers);
   };
 
-  const downloadMarkdown = () => {
-    if (!result) return;
-    const blob = new Blob([result.result.markdown], { type: "text/markdown" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${status?.name || resolvedParams.id}.md`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-  };
-
   const onDocumentLoadSuccess = ({ numPages }: { numPages: number }) => {
     setNumPdfPages(numPages);
     setPdfError(null);
@@ -388,31 +384,42 @@ export default function JobStatusPage({ params }: PageProps) {
     );
   }
 
+  if (isStatusError || !status) {
+    return (
+      <div className="min-h-screen bg-background">
+        <AppHeader />
+        <div className="flex flex-col items-center justify-center p-12 text-center">
+          <AlertCircle className="h-12 w-12 text-muted-foreground mb-4" />
+          <h1 className="text-lg font-semibold">Job not found</h1>
+          <p className="text-sm text-muted-foreground mt-1">It may have been deleted, or it belongs to another account.</p>
+          <Button variant="outline" className="mt-6" onClick={() => router.push("/jobs")}>
+            Back to My Jobs
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
+  const metadata = result?.result.metadata;
+  // Only /transcribe jobs produce subtitle formats.
+  const isTranscript = !!metadata?.available_formats?.includes("vtt");
+  const hasPages = pages.length > 0;
+  const fileName = status.name || resolvedParams.id;
+
   // No cache-buster: the query string is part of the presigned signature, and
   // appending to it turns every request into a 403.
   const pdfUrl = selectedPage && pdfUrlData && isPdfUrlUsable() ? pdfUrlData.url : null;
 
   return (
     <TooltipProvider>
-      <div className="min-h-screen bg-background">
+      <div className="min-h-screen lg:h-screen flex flex-col bg-background">
         {/* Header */}
-        <header className="border-b bg-background/95 backdrop-blur sticky top-0 z-10">
-          <div className="container mx-auto px-4 py-3">
-            <Button
-              variant="ghost"
-              onClick={() => router.push("/dashboard")}
-              size="sm"
-            >
-              <ArrowLeft className="h-4 w-4 mr-2" />
-              Back to Dashboard
-            </Button>
-          </div>
-        </header>
+        <AppHeader className="sticky top-0 z-10" />
 
-        {/* Split Layout */}
-        <div className="flex h-[calc(100vh-57px)]">
-          {/* Left Sidebar - 30% */}
-          <aside className="w-[30%] border-r overflow-y-auto p-4 space-y-4">
+        {/* Split layout: stacked on small screens, sidebar + content from lg up */}
+        <div className="flex-1 min-h-0 flex flex-col lg:flex-row">
+          {/* Sidebar */}
+          <aside className="lg:w-[30%] lg:max-w-md border-b lg:border-b-0 lg:border-r lg:overflow-y-auto p-4 space-y-4">
             {/* Job Header */}
             <div>
               <div className="flex items-center gap-3 mb-2">
@@ -426,15 +433,23 @@ export default function JobStatusPage({ params }: PageProps) {
                   </p>
                 </div>
               </div>
-              <Badge
-                variant="outline"
-                className={getStatusColor(status?.status)}
-              >
-                {status?.status}
-              </Badge>
+              <div className="flex flex-wrap gap-2">
+                <Badge
+                  variant="outline"
+                  className={getStatusColor(status?.status)}
+                >
+                  {status?.status}
+                </Badge>
+                {metadata && (
+                  <Badge variant="secondary">
+                    {isTranscript ? "Transcription" : "Document"}
+                  </Badge>
+                )}
+              </div>
             </div>
 
-            {/* Progress Section */}
+            {/* Progress Section: hidden once a job without pages is done */}
+            {(status.status !== "completed" || hasPages) && (
             <Card>
               <CardHeader className="pb-3">
                 <CardTitle className="text-base">Progress</CardTitle>
@@ -483,6 +498,7 @@ export default function JobStatusPage({ params }: PageProps) {
                 )}
               </CardContent>
             </Card>
+            )}
 
             {/* Job Details */}
             <Card>
@@ -490,13 +506,31 @@ export default function JobStatusPage({ params }: PageProps) {
                 <CardTitle className="text-base">Details</CardTitle>
               </CardHeader>
               <CardContent className="space-y-3 text-sm">
-                <div className="flex items-start gap-2">
-                  <File className="h-4 w-4 text-muted-foreground mt-0.5" />
-                  <div className="flex-1 min-w-0">
-                    <p className="text-muted-foreground">Type</p>
-                    <p className="font-medium capitalize">{status?.type || "Unknown"}</p>
+                {metadata && (
+                  <div className="grid grid-cols-2 gap-3 pb-3 border-b">
+                    <DetailItem icon={isTranscript ? Mic : File} label="Format" value={metadata.format.toUpperCase()} />
+                    <DetailItem icon={HardDrive} label="Size" value={formatBytes(metadata.size_bytes)} />
+                    {metadata.duration != null && (
+                      <DetailItem icon={Timer} label="Duration" value={formatDuration(metadata.duration)} />
+                    )}
+                    {metadata.language && (
+                      <DetailItem icon={Languages} label="Language" value={metadata.language.toUpperCase()} />
+                    )}
+                    {metadata.pages != null && (
+                      <DetailItem icon={Layers} label="Pages" value={String(metadata.pages)} />
+                    )}
+                    {metadata.words != null && (
+                      <DetailItem icon={FileText} label="Words" value={metadata.words.toLocaleString()} />
+                    )}
+                    {metadata.device && (
+                      <DetailItem
+                        icon={Cpu}
+                        label="Ran on"
+                        value={metadata.device === "cuda" ? "GPU" : metadata.device === "cpu" ? "CPU" : metadata.device}
+                      />
+                    )}
                   </div>
-                </div>
+                )}
 
                 <div className="flex items-start gap-2">
                   <Calendar className="h-4 w-4 text-muted-foreground mt-0.5" />
@@ -563,6 +597,8 @@ export default function JobStatusPage({ params }: PageProps) {
               </CardContent>
             </Card>
 
+            <JobTagsCard jobId={resolvedParams.id} tags={status.tags ?? []} />
+
             {/* Error Section */}
             {status?.error && (
               <Card className="border-destructive/50">
@@ -580,14 +616,6 @@ export default function JobStatusPage({ params }: PageProps) {
 
             {/* Actions */}
             <div className="space-y-2">
-              {status?.status === "completed" && (
-                <>
-                  <Button onClick={downloadMarkdown} className="w-full" size="sm">
-                    <Download className="h-4 w-4 mr-2" />
-                    Download Markdown
-                  </Button>
-                </>
-              )}
               <Button
                 variant="destructive"
                 className="w-full"
@@ -760,8 +788,8 @@ export default function JobStatusPage({ params }: PageProps) {
             )}
           </aside>
 
-          {/* Right Panel - 70% - Content Display */}
-          <main className="w-[70%] overflow-hidden flex flex-col">
+          {/* Content */}
+          <main className="flex-1 min-w-0 min-h-[70vh] lg:min-h-0 overflow-hidden flex flex-col">
             {selectedPage ? (
               selectedPage.status === "failed" ? (
                 // Failed page error display
@@ -825,11 +853,17 @@ export default function JobStatusPage({ params }: PageProps) {
                 // Completed page content display
                 <div className="flex-1 flex flex-col overflow-hidden p-6">
                   <div className="mb-4 flex items-center justify-between">
-                    <div>
-                      <h2 className="text-xl font-semibold">Page {selectedPage.page_number}</h2>
-                      <p className="text-sm text-muted-foreground">
-                        View content in PDF or Markdown format
-                      </p>
+                    <div className="flex items-center gap-3">
+                      <Button variant="ghost" size="sm" onClick={() => setSelectedPage(null)}>
+                        <ArrowLeft className="h-4 w-4 mr-2" />
+                        Full document
+                      </Button>
+                      <div>
+                        <h2 className="text-xl font-semibold">Page {selectedPage.page_number}</h2>
+                        <p className="text-sm text-muted-foreground">
+                          View content in PDF or Markdown format
+                        </p>
+                      </div>
                     </div>
                     {selectedPage.retry_count > 0 && (
                       <Badge variant="secondary">
@@ -920,16 +954,15 @@ export default function JobStatusPage({ params }: PageProps) {
                 </div>
               )
             ) : (
-              // No page selected - show placeholder
-              <div className="flex-1 flex flex-col items-center justify-center p-8 text-center">
-                <FileText className="h-16 w-16 text-muted-foreground mb-4" />
-                <h3 className="text-lg font-semibold mb-2">No Page Selected</h3>
-                <p className="text-sm text-muted-foreground max-w-md">
-                  {pages.length > 0
-                    ? "Select a page from the sidebar to view its content"
-                    : "No pages available for this job yet"}
-                </p>
-              </div>
+              // No page selected: the job's own result
+              <JobResultPanel
+                status={status}
+                result={result}
+                isTranscript={isTranscript}
+                hasPages={hasPages}
+                fileName={fileName}
+                token={token}
+              />
             )}
           </main>
         </div>
@@ -971,5 +1004,103 @@ export default function JobStatusPage({ params }: PageProps) {
         </AlertDialog>
       </div>
     </TooltipProvider>
+  );
+}
+
+function DetailItem({
+  icon: Icon,
+  label,
+  value,
+}: {
+  icon: React.ComponentType<{ className?: string }>;
+  label: string;
+  value: string;
+}) {
+  return (
+    <div className="flex items-start gap-2 min-w-0">
+      <Icon className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
+      <div className="min-w-0">
+        <p className="text-muted-foreground text-xs">{label}</p>
+        <p className="font-medium truncate">{value}</p>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * What the main panel shows when no PDF page is selected: progress while the
+ * job runs, the error if it failed, otherwise the result in the view that fits
+ * it - a transcript for audio/video, rendered Markdown for documents.
+ */
+function JobResultPanel({
+  status,
+  result,
+  isTranscript,
+  hasPages,
+  fileName,
+  token,
+}: {
+  status: JobStatusResponse;
+  result?: JobResultResponse;
+  isTranscript: boolean;
+  hasPages: boolean;
+  fileName: string;
+  token: string | null;
+}) {
+  if (status.status === "failed") {
+    return (
+      <div className="flex-1 flex flex-col items-center justify-center p-8 text-center">
+        <XCircle className="h-16 w-16 text-destructive mb-4" />
+        <h3 className="text-lg font-semibold mb-2">Processing failed</h3>
+        <p className="text-sm text-muted-foreground max-w-md break-words">
+          {status.error || "An unknown error occurred"}
+        </p>
+      </div>
+    );
+  }
+
+  if (status.status !== "completed") {
+    return (
+      <div className="flex-1 flex flex-col items-center justify-center p-8 text-center">
+        <Loader2 className="h-12 w-12 text-primary animate-spin mb-4" />
+        <h3 className="text-lg font-semibold mb-1">
+          {status.status === "processing" ? "Processing…" : "Waiting in the queue…"}
+        </h3>
+        <p className="text-sm text-muted-foreground">
+          {status.progress}% — the result shows up here as soon as it is ready.
+        </p>
+      </div>
+    );
+  }
+
+  if (!result) {
+    return (
+      <div className="flex-1 flex items-center justify-center">
+        <Loader2 className="h-8 w-8 animate-spin text-primary" />
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex-1 overflow-y-auto p-4 md:p-6 space-y-4">
+      <div>
+        <h2 className="text-xl font-semibold">{isTranscript ? "Transcription" : "Converted document"}</h2>
+        {hasPages && (
+          <p className="text-sm text-muted-foreground">
+            All pages merged. Select a page in the sidebar to see its PDF next to its text.
+          </p>
+        )}
+      </div>
+      {isTranscript ? (
+        <TranscriptView
+          jobId={status.job_id}
+          markdown={result.result.markdown}
+          fileName={fileName}
+          token={token}
+        />
+      ) : (
+        <DocumentView markdown={result.result.markdown} fileName={fileName} />
+      )}
+    </div>
   );
 }

@@ -44,7 +44,7 @@ import logging
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
@@ -66,7 +66,9 @@ from shared.schemas import (
     VisionCapabilitiesResponse,
     VisionModelInfo,
 )
+from shared.tags import set_job_tags
 from shared.utils import calculate_file_checksum
+from api.tag_routes import TAGS_FORM_DESCRIPTION, parse_tags_or_422
 # As regras de entrada de imagem (decode, limite de tamanho, magic bytes) moram
 # em `workers/vision/image_input.py` e em lugar nenhum mais. Importar daqui é de
 # graça: aquele módulo puxa apenas base64/re e os erros tipados de visão — nada
@@ -287,6 +289,7 @@ def _create_vision_job(
     checksum: str,
     current_user: User,
     db: Session,
+    tags: Optional[List[str]] = None,
 ) -> Optional[Job]:
     """
     Cria o job antes do despacho, exatamente como `/transcribe`.
@@ -324,6 +327,7 @@ def _create_vision_job(
     )
     try:
         db.add(db_job)
+        set_job_tags(db_job, tags or [])
         db.commit()
     except Exception as e:
         # Mesmo tratamento do resto do repositório: o MySQL fora do ar degrada
@@ -480,6 +484,7 @@ async def _run_vision(
     task: Optional[str],
     current_user: User,
     db: Session,
+    tags: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """
     Valida, cria o job, despacha e espera — para os quatro pontos de entrada.
@@ -501,6 +506,7 @@ async def _run_vision(
         checksum=checksum,
         current_user=current_user,
         db=db,
+        tags=tags,
     )
 
     logger.info(
@@ -647,6 +653,7 @@ async def describe_image(
         task=request.task,
         current_user=current_user,
         db=db,
+        tags=parse_tags_or_422(request.tags),
     )
     return _describe_response(common, request.task)
 
@@ -662,6 +669,7 @@ async def describe_image_upload(
         DEFAULT_VISION_CAPTION_TASK,
         description="<MORE_DETAILED_CAPTION>, <DETAILED_CAPTION> ou <CAPTION>",
     ),
+    tags: Optional[str] = Form(None, description=TAGS_FORM_DESCRIPTION),
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
 ):
@@ -693,6 +701,7 @@ async def describe_image_upload(
         task=task,
         current_user=current_user,
         db=db,
+        tags=parse_tags_or_422(tags),
     )
     return _describe_response(common, task)
 
@@ -723,6 +732,7 @@ async def ocr_image(
         task=None,
         current_user=current_user,
         db=db,
+        tags=parse_tags_or_422(request.tags),
     )
     return _ocr_response(common)
 
@@ -730,6 +740,7 @@ async def ocr_image(
 @router.post("/ocr/upload", response_model=ImageOcrResponse, summary="OCR de imagem (multipart)")
 async def ocr_image_upload(
     file: UploadFile = File(..., description="Imagem (PNG, JPEG, WEBP, BMP, GIF, TIFF)"),
+    tags: Optional[str] = Form(None, description=TAGS_FORM_DESCRIPTION),
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
 ):
@@ -744,6 +755,7 @@ async def ocr_image_upload(
         task=None,
         current_user=current_user,
         db=db,
+        tags=parse_tags_or_422(tags),
     )
     return _ocr_response(common)
 

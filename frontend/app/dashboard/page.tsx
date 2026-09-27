@@ -3,10 +3,12 @@
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { FileText, Upload as UploadIcon, LogOut, Key, Search, Link as LinkIcon, Cloud } from "lucide-react";
+import { FileText, Upload as UploadIcon, Link as LinkIcon, Cloud } from "lucide-react";
 import { useAuthStore } from "@/lib/store/auth";
+import { loginUrl } from "@/lib/session";
 import { jobsApi } from "@/lib/api";
 import { Button } from "@/components/ui/button";
+import { AppHeader } from "@/components/app-header";
 import {
   Card,
   CardContent,
@@ -21,18 +23,20 @@ import {
   TabsTrigger,
 } from "@/components/ui/tabs";
 import { FileUpload } from "@/components/upload/file-upload";
+import { TagInput } from "@/components/tag-input";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import type { SourceType } from "@/types/api";
 
 export default function DashboardPage() {
   const router = useRouter();
-  const { user, clearAuth } = useAuthStore();
+  const { user } = useAuthStore();
   const token = useAuthStore((state) => state.token);
   const isAuthenticated = useAuthStore((state) => state.token !== null && state.user !== null);
   const hasHydrated = useAuthStore((state) => state._hasHydrated);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [customName, setCustomName] = useState("");
+  const [tags, setTags] = useState<string[]>([]);
   const [uploadSuccess, setUploadSuccess] = useState<string | null>(null);
   const [urlSource, setUrlSource] = useState("");
   const [gdriveSource, setGdriveSource] = useState("");
@@ -42,17 +46,18 @@ export default function DashboardPage() {
 
   useEffect(() => {
     if (hasHydrated && !isAuthenticated) {
-      router.push("/login");
+      router.replace(loginUrl());
     }
   }, [isAuthenticated, hasHydrated, router]);
 
   const uploadMutation = useMutation({
-    mutationFn: (request: { file: File; name?: string }) => jobsApi.upload(request),
+    mutationFn: (request: { file: File; name?: string; tags?: string[] }) => jobsApi.upload(request),
     onSuccess: (data) => {
       setUploadSuccess(data.job_id);
       // Clear all forms
       setSelectedFile(null);
       setCustomName("");
+      setTags([]);
       setUrlSource("");
       setGdriveSource("");
       setGdriveToken("");
@@ -65,16 +70,12 @@ export default function DashboardPage() {
     },
   });
 
-  const handleLogout = () => {
-    clearAuth();
-    router.push("/login");
-  };
-
   const handleFileUpload = () => {
     if (!selectedFile) return;
     uploadMutation.mutate({
       file: selectedFile,
-      name: customName || undefined
+      name: customName || undefined,
+      tags,
     });
   };
 
@@ -107,41 +108,7 @@ export default function DashboardPage() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-background via-background to-muted">
       {/* Header */}
-      <header className="border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-        <div className="container mx-auto px-4 py-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center space-x-2">
-              <FileText className="h-6 w-6 text-primary" />
-              <h1 className="text-2xl font-bold">Doc2MD</h1>
-            </div>
-            <div className="flex items-center space-x-4">
-              <span className="text-sm text-muted-foreground">
-                Welcome, <span className="font-medium text-foreground">{user.username}</span>
-              </span>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => router.push("/api-keys")}
-              >
-                <Key className="h-4 w-4 mr-2" />
-                API Keys
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => router.push("/jobs")}
-              >
-                <Search className="h-4 w-4 mr-2" />
-                My Jobs
-              </Button>
-              <Button variant="ghost" size="sm" onClick={handleLogout}>
-                <LogOut className="h-4 w-4 mr-2" />
-                Logout
-              </Button>
-            </div>
-          </div>
-        </div>
-      </header>
+      <AppHeader />
 
       {/* Main Content */}
       <main className="container mx-auto px-4 py-12">
@@ -211,6 +178,11 @@ export default function DashboardPage() {
                     />
                   </div>
 
+                  <div className="space-y-2">
+                    <Label htmlFor="tagsFile">Tags (Optional)</Label>
+                    <TagInput id="tagsFile" value={tags} onChange={setTags} />
+                  </div>
+
                   <Button
                     onClick={handleFileUpload}
                     disabled={!selectedFile || uploadMutation.isPending}
@@ -246,6 +218,11 @@ export default function DashboardPage() {
                       value={customName}
                       onChange={(e) => setCustomName(e.target.value)}
                     />
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="tagsUrl">Tags (Optional)</Label>
+                    <TagInput id="tagsUrl" value={tags} onChange={setTags} />
                   </div>
 
                   <Button
@@ -299,6 +276,11 @@ export default function DashboardPage() {
                     />
                   </div>
 
+                  <div className="space-y-2">
+                    <Label htmlFor="tagsGdrive">Tags (Optional)</Label>
+                    <TagInput id="tagsGdrive" value={tags} onChange={setTags} />
+                  </div>
+
                   <Button
                     onClick={handleGdriveConvert}
                     disabled={!gdriveSource || !gdriveToken || uploadMutation.isPending}
@@ -348,6 +330,11 @@ export default function DashboardPage() {
                       value={customName}
                       onChange={(e) => setCustomName(e.target.value)}
                     />
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="tagsDropbox">Tags (Optional)</Label>
+                    <TagInput id="tagsDropbox" value={tags} onChange={setTags} />
                   </div>
 
                   <Button

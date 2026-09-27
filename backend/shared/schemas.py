@@ -134,6 +134,7 @@ class JobStatusResponse(BaseModel):
 
     # Nome de identificação
     name: Optional[str] = None
+    tags: List[str] = []
 
     # Para MAIN jobs
     parent_job_id: Optional[UUID] = None
@@ -328,6 +329,9 @@ class ImageDescribeRequest(BaseModel):
             "removido. Formatos: PNG, JPEG, WEBP, BMP, GIF, TIFF."
         ),
     )
+    tags: Optional[List[str]] = Field(
+        None, description="Tags do job (ex.: [\"cliente-x\", \"nf\"]). Viram minúsculas; até 20 de até 50 caracteres."
+    )
     filename: Optional[str] = Field(
         None, description="Nome de identificação opcional (usado no job e no storage)."
     )
@@ -355,6 +359,9 @@ class ImageOcrRequest(BaseModel):
             "Imagem em base64. Um prefixo `data:image/png;base64,` é aceito e "
             "removido. Formatos: PNG, JPEG, WEBP, BMP, GIF, TIFF."
         ),
+    )
+    tags: Optional[List[str]] = Field(
+        None, description="Tags do job (ex.: [\"cliente-x\", \"nf\"]). Viram minúsculas; até 20 de até 50 caracteres."
     )
     filename: Optional[str] = Field(None, description="Nome de identificação opcional.")
 

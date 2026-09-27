@@ -4,18 +4,19 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  ArrowLeft,
   Key,
   Plus,
   Copy,
   Trash2,
   CheckCircle2,
 } from "lucide-react";
-import { apiKeysApi } from "@/lib/api";
+import { API_URL, apiKeysApi } from "@/lib/api";
 import { useAuthStore } from "@/lib/store/auth";
+import { loginUrl } from "@/lib/session";
 import { formatApiError } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
+import { AppHeader } from "@/components/app-header";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -42,7 +43,7 @@ export default function ApiKeysPage() {
 
   useEffect(() => {
     if (hasHydrated && !isAuthenticated) {
-      router.push("/login");
+      router.replace(loginUrl());
     }
   }, [isAuthenticated, hasHydrated, router]);
 
@@ -103,14 +104,7 @@ export default function ApiKeysPage() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-background via-background to-muted">
       {/* Header */}
-      <header className="border-b bg-background/95 backdrop-blur">
-        <div className="container mx-auto px-4 py-4">
-          <Button variant="ghost" onClick={() => router.push("/dashboard")}>
-            <ArrowLeft className="h-4 w-4 mr-2" />
-            Back to Dashboard
-          </Button>
-        </div>
-      </header>
+      <AppHeader />
 
       {/* Main Content */}
       <main className="container mx-auto px-4 py-12">
@@ -300,7 +294,7 @@ export default function ApiKeysPage() {
               <div>
                 <p className="font-medium mb-2">Include the API key in your requests:</p>
                 <pre className="bg-muted p-4 rounded-lg overflow-x-auto">
-                  {`curl -X POST http://localhost:8080/upload \\
+                  {`curl -X POST ${API_URL}/upload \\
   -H "X-API-Key: doc2md_sk_..." \\
   -F "file=@document.pdf"`}
                 </pre>
