@@ -1,7 +1,7 @@
 {
   "openapi": "3.1.0",
   "info": {
-    "title": "Doc2MD API",
+    "title": "Ingestify API",
     "description": "\nAPI assíncrona para conversão de documentos para Markdown usando Docling\n\n## Autenticação\n\nEsta API suporta dois métodos de autenticação:\n\n### 1. Bearer Token (JWT)\n1. Registre um usuário em `/auth/register`\n2. Faça login em `/auth/login` para obter o token\n3. Clique no botão **\"Authorize\"** (cadeado 🔒) no topo desta página\n4. Cole o token no campo \"bearerAuth\" (sem prefixo \"Bearer\")\n5. Clique em \"Authorize\"\n\n### 2. API Key\n1. Faça login para obter um token JWT\n2. Crie uma API Key em `/api-keys/`\n3. Clique no botão **\"Authorize\"** (cadeado 🔒)\n4. Cole a API Key no campo \"apiKeyAuth\"\n5. Clique em \"Authorize\"\n\nApós autorizar, todos os endpoints protegidos usarão automaticamente suas credenciais.\n",
     "version": "1.0.0"
   },
@@ -88,6 +88,33 @@
             }
           }
         }
+      }
+    },
+    "/auth/refresh": {
+      "post": {
+        "tags": [
+          "Authentication"
+        ],
+        "summary": "Refresh Token",
+        "description": "Troca um JWT ainda válido por um novo, com validade renovada.\n\nÉ o \"heartbeat\" do frontend: enquanto a pessoa usa o app, a sessão é\nrenovada antes de expirar; parada por mais que `JWT_EXPIRATION_MINUTES`,\nela expira e o login é pedido de novo.\n\nSó aceita `Authorization: Bearer <jwt>`. Uma API key não vira sessão.\n\n## Erros:\n- 401: token ausente, expirado ou inválido, ou usuário inativo",
+        "operationId": "refresh_token_auth_refresh_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Token"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
       }
     },
     "/auth/me": {
@@ -763,6 +790,97 @@
         ]
       }
     },
+    "/tags": {
+      "get": {
+        "tags": [
+          "Tags"
+        ],
+        "summary": "Listar as tags do usuário",
+        "description": "Todas as tags usadas nos jobs do usuário, com quantos jobs têm cada uma.\n\nOrdenadas da mais usada para a menos usada. Serve para autocompletar e\npara montar filtros; filtre a lista com `GET /jobs?tag=...`.",
+        "operationId": "list_tags_tags_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TagListResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
+          }
+        ]
+      }
+    },
+    "/jobs/{job_id}/tags": {
+      "put": {
+        "tags": [
+          "Tags"
+        ],
+        "summary": "Definir as tags de um job",
+        "description": "Substitui as tags do job pela lista enviada (`[]` remove todas).\n\nAs tags são normalizadas como na criação: minúsculas, sem `#`, sem repetição.",
+        "operationId": "replace_job_tags_jobs__job_id__tags_put",
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JobTagsUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobTagsResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/upload": {
       "post": {
         "tags": [
@@ -1299,7 +1417,7 @@
           "Conversion"
         ],
         "summary": "Listar jobs do usuário",
-        "description": "Lista jobs do usuário autenticado\n\n## Parâmetros:\n- `limit`: Número máximo de jobs a retornar (padrão: 50, máximo: 100)\n- `offset`: Quantidade de jobs a pular (paginação)\n- `status`: Filtrar por status: queued, processing, completed, failed\n- `job_type`: Filtrar por tipo (padrão: \"main\" - apenas jobs principais)\n  - \"main\": Jobs principais do usuário (recomendado)\n  - \"page\": Jobs de página individual\n  - \"all\": Todos os tipos de jobs\n\n## Retorno:\nLista de jobs com seus IDs, status e informações básicas\n\n## Exemplos:\n- `/jobs` - Lista apenas jobs principais (padrão)\n- `/jobs?job_type=all` - Lista todos os tipos de jobs\n- `/jobs?status=processing` - Apenas jobs principais em processamento\n- `/jobs?status=completed&limit=10` - Últimos 10 jobs principais completados",
+        "description": "Lista os jobs do usuário autenticado, do mais recente para o mais antigo.\n\nA lista vem do MySQL (fonte da verdade); o Redis só complementa o status e\no progresso ao vivo dos jobs em andamento.\n\n## Parâmetros:\n- `limit`: Máximo de jobs (padrão: 50, máximo: 100)\n- `offset`: Quantos pular (paginação)\n- `status`: queued, processing, completed, failed ou cancelled\n- `tag`: Filtra por tag; `?tag=a&tag=b` exige as duas\n- `q`: Texto no nome do job ou do arquivo\n- `kind`: `document`, `transcription` ou `image`\n- `job_type`: `main` (padrão) ou `all`\n\n## Retorno:\n`{total, limit, offset, jobs, counts}`. `total` é o total filtrado antes da\npaginação; `counts` traz quantos jobs há em cada status com os demais\nfiltros aplicados (para montar os filtros da interface).",
         "operationId": "list_jobs_jobs_get",
         "security": [
           {
@@ -1355,6 +1473,63 @@
               "default": "main",
               "title": "Job Type"
             }
+          },
+          {
+            "name": "tag",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Só jobs com esta tag. Repita para exigir várias (E).",
+              "title": "Tag"
+            },
+            "description": "Só jobs com esta tag. Repita para exigir várias (E)."
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Busca no nome e no nome do arquivo (não no conteúdo; para isso use /search).",
+              "title": "Q"
+            },
+            "description": "Busca no nome e no nome do arquivo (não no conteúdo; para isso use /search)."
+          },
+          {
+            "name": "kind",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "document, transcription ou image",
+              "title": "Kind"
+            },
+            "description": "document, transcription ou image"
           }
         ],
         "responses": {
@@ -1768,6 +1943,18 @@
             ],
             "title": "Name",
             "description": "Nome de identificação opcional (padrão: nome do arquivo ou URL)"
+          },
+          "tags": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tags",
+            "description": "Tags separadas por vírgula (ex.: 'cliente-x, reunião'). Viram minúsculas; até 20 tags de até 50 caracteres. Enviar um arquivo repetido adiciona as tags ao job existente."
           }
         },
         "type": "object",
@@ -1789,6 +1976,18 @@
             "title": "Task",
             "description": "<MORE_DETAILED_CAPTION>, <DETAILED_CAPTION> ou <CAPTION>",
             "default": "<MORE_DETAILED_CAPTION>"
+          },
+          "tags": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tags",
+            "description": "Tags separadas por vírgula (ex.: 'cliente-x, reunião'). Viram minúsculas; até 20 tags de até 50 caracteres. Enviar um arquivo repetido adiciona as tags ao job existente."
           }
         },
         "type": "object",
@@ -1822,6 +2021,18 @@
             "format": "binary",
             "title": "File",
             "description": "Imagem (PNG, JPEG, WEBP, BMP, GIF, TIFF)"
+          },
+          "tags": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tags",
+            "description": "Tags separadas por vírgula (ex.: 'cliente-x, reunião'). Viram minúsculas; até 20 tags de até 50 caracteres. Enviar um arquivo repetido adiciona as tags ao job existente."
           }
         },
         "type": "object",
@@ -1849,6 +2060,18 @@
             ],
             "title": "Name",
             "description": "Nome de identificação (opcional, padrão: nome do arquivo)"
+          },
+          "tags": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tags",
+            "description": "Tags separadas por vírgula (ex.: 'cliente-x, reunião'). Viram minúsculas; até 20 tags de até 50 caracteres. Enviar um arquivo repetido adiciona as tags ao job existente."
           },
           "language": {
             "anyOf": [
@@ -1906,6 +2129,18 @@
             ],
             "title": "Name",
             "description": "Nome de identificação (opcional, padrão: nome do arquivo)"
+          },
+          "tags": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tags",
+            "description": "Tags separadas por vírgula (ex.: 'cliente-x, reunião'). Viram minúsculas; até 20 tags de até 50 caracteres. Enviar um arquivo repetido adiciona as tags ao job existente."
           },
           "docling_preset": {
             "anyOf": [
@@ -2159,6 +2394,21 @@
             "title": "Image Base64",
             "description": "Imagem em base64. Um prefixo `data:image/png;base64,` é aceito e removido. Formatos: PNG, JPEG, WEBP, BMP, GIF, TIFF."
           },
+          "tags": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tags",
+            "description": "Tags do job (ex.: [\"cliente-x\", \"nf\"]). Viram minúsculas; até 20 de até 50 caracteres."
+          },
           "filename": {
             "anyOf": [
               {
@@ -2265,6 +2515,21 @@
             "type": "string",
             "title": "Image Base64",
             "description": "Imagem em base64. Um prefixo `data:image/png;base64,` é aceito e removido. Formatos: PNG, JPEG, WEBP, BMP, GIF, TIFF."
+          },
+          "tags": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tags",
+            "description": "Tags do job (ex.: [\"cliente-x\", \"nf\"]). Viram minúsculas; até 20 de até 50 caracteres."
           },
           "filename": {
             "anyOf": [
@@ -2565,6 +2830,14 @@
             ],
             "title": "Name"
           },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Tags",
+            "default": []
+          },
           "parent_job_id": {
             "anyOf": [
               {
@@ -2655,6 +2928,44 @@
           "created_at"
         ],
         "title": "JobStatusResponse"
+      },
+      "JobTagsResponse": {
+        "properties": {
+          "job_id": {
+            "type": "string",
+            "title": "Job Id"
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Tags"
+          }
+        },
+        "type": "object",
+        "required": [
+          "job_id",
+          "tags"
+        ],
+        "title": "JobTagsResponse"
+      },
+      "JobTagsUpdate": {
+        "properties": {
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Tags",
+            "description": "A lista completa de tags do job (substitui as atuais)."
+          }
+        },
+        "type": "object",
+        "required": [
+          "tags"
+        ],
+        "title": "JobTagsUpdate"
       },
       "JobType": {
         "type": "string",
@@ -2750,6 +3061,40 @@
         ],
         "title": "PageJobInfo",
         "description": "Informação de um page job"
+      },
+      "TagCount": {
+        "properties": {
+          "tag": {
+            "type": "string",
+            "title": "Tag"
+          },
+          "count": {
+            "type": "integer",
+            "title": "Count"
+          }
+        },
+        "type": "object",
+        "required": [
+          "tag",
+          "count"
+        ],
+        "title": "TagCount"
+      },
+      "TagListResponse": {
+        "properties": {
+          "tags": {
+            "items": {
+              "$ref": "#/components/schemas/TagCount"
+            },
+            "type": "array",
+            "title": "Tags"
+          }
+        },
+        "type": "object",
+        "required": [
+          "tags"
+        ],
+        "title": "TagListResponse"
       },
       "Token": {
         "properties": {

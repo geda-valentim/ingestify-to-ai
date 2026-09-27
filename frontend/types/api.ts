@@ -57,6 +57,36 @@ export interface DocumentMetadata {
   size_bytes: number;
   title?: string | null;
   author?: string | null;
+  // Audio / video transcription only
+  language?: string | null;
+  duration?: number | null;
+  device?: string | null; // "cuda", "cpu" or "remote"
+  available_formats?: TranscriptFormat[] | null;
+}
+
+/** Formats `GET /jobs/{id}/result?format=` serves for transcription jobs. */
+export type TranscriptFormat = "markdown" | "vtt" | "srt" | "txt" | "json";
+
+export interface TranscriptWord {
+  word: string;
+  start: number;
+  end: number;
+  probability: number;
+}
+
+export interface TranscriptSegment {
+  start: number;
+  end: number;
+  text: string;
+  words?: TranscriptWord[];
+}
+
+/** Body of `?format=json` on a transcription job. */
+export interface TranscriptJson {
+  language: string;
+  duration: number;
+  text: string;
+  segments: TranscriptSegment[];
 }
 
 export interface ConversionResult {
@@ -87,6 +117,7 @@ export interface JobStatusResponse {
   completed_at?: string | null;
   error?: string | null;
   name?: string | null;
+  tags?: string[];
   parent_job_id?: string | null;
   total_pages?: number | null;
   pages_completed?: number | null;
@@ -159,19 +190,34 @@ export interface ConvertRequest {
   source?: string;
   file?: File;
   name?: string;
+  tags?: string[];
   authToken?: string; // OAuth token for gdrive/dropbox
 }
 
 export interface UploadRequest {
   file: File;
   name?: string;
+  tags?: string[];
 }
+
+/** What a job is, from the user's point of view (derived from its source). */
+export type JobKind = "document" | "transcription" | "image";
 
 export interface JobsListParams {
   limit?: number;
   offset?: number;
   status?: JobStatus;
-  job_type?: JobType;
+  job_type?: JobType | "all";
+  /** Every tag must be present (AND). */
+  tags?: string[];
+  /** Matches the job name or file name, not the content (that is /search). */
+  q?: string;
+  kind?: JobKind;
+}
+
+export interface TagCount {
+  tag: string;
+  count: number;
 }
 
 export interface SearchParams {
@@ -182,11 +228,10 @@ export interface SearchParams {
 /**
  * One row of `GET /jobs`.
  *
- * Deliberately not `JobStatusResponse`: the list handler builds these by hand
- * from Redis + MySQL and returns strictly less than the detail endpoint - no
- * `started_at`, no `pages`, no `child_jobs` - and `created_at`/`completed_at`
- * are null whenever the MySQL row is missing. Reusing `JobStatusResponse` here
- * would be the same kind of false claim that hid this bug in the first place.
+ * Deliberately not `JobStatusResponse`: the list handler builds these from the
+ * MySQL row (plus live Redis progress) and returns a different set of fields
+ * than the detail endpoint - no `started_at`, no `pages`, no `child_jobs`, but
+ * file and tag information the detail endpoint does not carry.
  */
 export interface JobListItem {
   job_id: string;
@@ -194,6 +239,13 @@ export interface JobListItem {
   status: JobStatus;
   progress: number;
   name?: string | null;
+  filename?: string | null;
+  kind: JobKind;
+  source_type?: string | null;
+  mime_type?: string | null;
+  file_size_bytes?: number | null;
+  tags: string[];
+  error?: string | null;
   created_at?: string | null;
   completed_at?: string | null;
   total_pages?: number;
@@ -214,6 +266,8 @@ export interface JobsListResponse {
   limit: number;
   offset: number;
   jobs: JobListItem[];
+  /** Jobs per status with every other filter applied - for the filter tabs. */
+  counts: Record<JobStatus | "all", number>;
 }
 
 /**

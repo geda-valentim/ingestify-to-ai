@@ -1,3 +1,5 @@
+import { useAuthStore } from "@/lib/store/auth";
+import { expireSession } from "@/lib/session";
 import type {
   UserCreate,
   UserLogin,
@@ -11,6 +13,8 @@ import type {
   JobResultResponse,
   JobPagesResponse,
   PagePdfUrlResponse,
+  TagCount,
+  TranscriptFormat,
   ConvertRequest,
   UploadRequest,
   JobsListParams,
@@ -19,11 +23,25 @@ import type {
   SearchResponse,
 } from "@/types/api";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080";
+export const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080";
 
 function getAuthToken(): string | null {
   if (typeof window === "undefined") return null;
-  return localStorage.getItem("auth_token");
+  // The store is the source of truth; `auth_token` is where older builds kept it.
+  return useAuthStore.getState().token ?? localStorage.getItem("auth_token");
+}
+
+/**
+ * fetch, plus: a 401 on a request that carried our session token means the
+ * session is over (expired or revoked), so it is ended everywhere at once
+ * instead of leaving each page to spin or show a raw error.
+ */
+async function apiFetch(input: string, init?: RequestInit): Promise<Response> {
+  const response = await fetch(input, init);
+  if (response.status === 401 && new Headers(init?.headers).has("Authorization")) {
+    expireSession();
+  }
+  return response;
 }
 
 function getHeaders(includeAuth = false): HeadersInit {
@@ -42,7 +60,7 @@ function getHeaders(includeAuth = false): HeadersInit {
 // Auth API
 export const authApi = {
   async register(data: UserCreate): Promise<{ message: string }> {
-    const response = await fetch(`${API_URL}/auth/register`, {
+    const response = await apiFetch(`${API_URL}/auth/register`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -63,7 +81,7 @@ export const authApi = {
     formData.append("username", data.username);
     formData.append("password", data.password);
 
-    const response = await fetch(`${API_URL}/auth/login`, {
+    const response = await apiFetch(`${API_URL}/auth/login`, {
       method: "POST",
       headers: {
         "Content-Type": "application/x-www-form-urlencoded",
@@ -79,8 +97,22 @@ export const authApi = {
     return response.json();
   },
 
+  /** Trade the current, still valid JWT for a fresh one (the session heartbeat). */
+  async refresh(): Promise<Token> {
+    const response = await apiFetch(`${API_URL}/auth/refresh`, {
+      method: "POST",
+      headers: getHeaders(true),
+    });
+
+    if (!response.ok) {
+      throw new Error(`Session refresh failed: ${response.statusText}`);
+    }
+
+    return response.json();
+  },
+
   async me(): Promise<UserResponse> {
-    const response = await fetch(`${API_URL}/auth/me`, {
+    const response = await apiFetch(`${API_URL}/auth/me`, {
       headers: getHeaders(true),
     });
 
@@ -110,11 +142,15 @@ export const jobsApi = {
       formData.append("name", request.name);
     }
 
+    if (request.tags?.length) {
+      formData.append("tags", request.tags.join(","));
+    }
+
     if (request.authToken) {
       formData.append("auth_token", request.authToken);
     }
 
-    const response = await fetch(`${API_URL}/convert`, {
+    const response = await apiFetch(`${API_URL}/convert`, {
       method: "POST",
       headers: getHeaders(true),
       body: formData,
@@ -135,7 +171,11 @@ export const jobsApi = {
       formData.append("name", request.name);
     }
 
-    const response = await fetch(`${API_URL}/upload`, {
+    if (request.tags?.length) {
+      formData.append("tags", request.tags.join(","));
+    }
+
+    const response = await apiFetch(`${API_URL}/upload`, {
       method: "POST",
       headers: getHeaders(true),
       body: formData,
@@ -149,7 +189,7 @@ export const jobsApi = {
   },
 
   async getStatus(jobId: string): Promise<JobStatusResponse> {
-    const response = await fetch(`${API_URL}/jobs/${jobId}`, {
+    const response = await apiFetch(`${API_URL}/jobs/${jobId}`, {
       headers: getHeaders(true),
     });
 
@@ -161,7 +201,9 @@ export const jobsApi = {
   },
 
   async getResult(jobId: string): Promise<JobResultResponse> {
-    const response = await fetch(`${API_URL}/jobs/${jobId}/result`, {
+    // Explicit format: a transcription job created with output_format=vtt (or
+    // srt/txt/json) answers a bare /result with that file, not with this JSON.
+    const response = await apiFetch(`${API_URL}/jobs/${jobId}/result?format=markdown`, {
       headers: getHeaders(true),
     });
 
@@ -172,8 +214,21 @@ export const jobsApi = {
     return response.json();
   },
 
+  /** One transcript format of a transcription job, as raw text (VTT, SRT, TXT or JSON). */
+  async getTranscriptFile(jobId: string, format: Exclude<TranscriptFormat, "markdown">): Promise<string> {
+    const response = await apiFetch(`${API_URL}/jobs/${jobId}/result?format=${format}`, {
+      headers: getHeaders(true),
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to fetch ${format} transcript: ${response.statusText}`);
+    }
+
+    return response.text();
+  },
+
   async getPages(jobId: string): Promise<JobPagesResponse> {
-    const response = await fetch(`${API_URL}/jobs/${jobId}/pages`, {
+    const response = await apiFetch(`${API_URL}/jobs/${jobId}/pages`, {
       headers: getHeaders(true),
     });
 
@@ -199,9 +254,12 @@ export const jobsApi = {
     if (params?.offset) searchParams.set("offset", params.offset.toString());
     if (params?.status) searchParams.set("status", params.status);
     if (params?.job_type) searchParams.set("job_type", params.job_type);
+    if (params?.q) searchParams.set("q", params.q);
+    if (params?.kind) searchParams.set("kind", params.kind);
+    params?.tags?.forEach((tag) => searchParams.append("tag", tag));
 
     const url = `${API_URL}/jobs${searchParams.toString() ? `?${searchParams}` : ""}`;
-    const response = await fetch(url, {
+    const response = await apiFetch(url, {
       headers: getHeaders(true),
     });
 
@@ -224,7 +282,7 @@ export const jobsApi = {
     searchParams.set("query", params.query);
     if (params.limit) searchParams.set("limit", params.limit.toString());
 
-    const response = await fetch(`${API_URL}/search?${searchParams}`, {
+    const response = await apiFetch(`${API_URL}/search?${searchParams}`, {
       headers: getHeaders(true),
     });
 
@@ -260,7 +318,7 @@ export const jobsApi = {
   },
 
   async delete(jobId: string): Promise<{ message: string }> {
-    const response = await fetch(`${API_URL}/jobs/${jobId}`, {
+    const response = await apiFetch(`${API_URL}/jobs/${jobId}`, {
       method: "DELETE",
       headers: getHeaders(true),
     });
@@ -283,7 +341,7 @@ export const jobsApi = {
    * `new_page_job_id`; the old client read `new_job_id`, which never exists.
    */
   async retryPage(jobId: string, pageNumber: number): Promise<string> {
-    const response = await fetch(
+    const response = await apiFetch(
       `${API_URL}/jobs/${jobId}/pages/${pageNumber}/retry`,
       {
         method: "POST",
@@ -311,7 +369,7 @@ export const jobsApi = {
    * string is part of the signature.
    */
   async getPagePdf(jobId: string, pageNumber: number): Promise<PagePdfUrlResponse> {
-    const response = await fetch(`${API_URL}/jobs/${jobId}/pages/${pageNumber}/pdf`, {
+    const response = await apiFetch(`${API_URL}/jobs/${jobId}/pages/${pageNumber}/pdf`, {
       headers: getHeaders(true),
     });
 
@@ -323,10 +381,42 @@ export const jobsApi = {
   },
 };
 
+// Tags API
+export const tagsApi = {
+  /** Every tag on the user's jobs, most used first. */
+  async list(): Promise<TagCount[]> {
+    const response = await apiFetch(`${API_URL}/tags`, {
+      headers: getHeaders(true),
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to fetch tags: ${response.statusText}`);
+    }
+
+    return (await response.json()).tags;
+  },
+
+  /** Replace a job's tags (normalised by the server; the result is what was stored). */
+  async setForJob(jobId: string, tags: string[]): Promise<string[]> {
+    const response = await apiFetch(`${API_URL}/jobs/${jobId}/tags`, {
+      method: "PUT",
+      headers: { ...getHeaders(true), "Content-Type": "application/json" },
+      body: JSON.stringify({ tags }),
+    });
+
+    if (!response.ok) {
+      const detail = await response.json().catch(() => null);
+      throw new Error(detail?.detail || `Failed to save tags: ${response.statusText}`);
+    }
+
+    return (await response.json()).tags;
+  },
+};
+
 // API Keys API
 export const apiKeysApi = {
   async list(): Promise<APIKeyInfo[]> {
-    const response = await fetch(`${API_URL}/api-keys`, {
+    const response = await apiFetch(`${API_URL}/api-keys`, {
       headers: getHeaders(true),
     });
 
@@ -340,7 +430,7 @@ export const apiKeysApi = {
   },
 
   async create(request: APIKeyCreate): Promise<APIKeyResponse> {
-    const response = await fetch(`${API_URL}/api-keys`, {
+    const response = await apiFetch(`${API_URL}/api-keys`, {
       method: "POST",
       headers: {
         ...getHeaders(true),
@@ -364,7 +454,7 @@ export const apiKeysApi = {
    * the revoke succeeded and the UI reported failure.
    */
   async revoke(keyId: string): Promise<void> {
-    const response = await fetch(`${API_URL}/api-keys/${keyId}`, {
+    const response = await apiFetch(`${API_URL}/api-keys/${keyId}`, {
       method: "DELETE",
       headers: getHeaders(true),
     });

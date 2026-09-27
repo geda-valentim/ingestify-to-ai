@@ -78,7 +78,7 @@ def upload_file(data=DATA, name="report.pdf"):
 
 def upload(data=DATA, db=None):
     return asyncio.run(routes.upload_and_convert(
-        file=upload_file(data), name=None, docling_preset="fast", current_user=USER, db=db or FakeDB(),
+        file=upload_file(data), name=None, tags=None, docling_preset="fast", current_user=USER, db=db or FakeDB(),
     ))
 
 
@@ -116,7 +116,7 @@ def test_duplicate_upload_discards_staged_file(env):
 
 def test_convert_streams_the_uploaded_file(env):
     response = asyncio.run(routes.convert_document(
-        source_type="file", source=None, file=upload_file(), name=None,
+        source_type="file", source=None, file=upload_file(), name=None, tags=None,
         authorization=None, current_user=USER, db=FakeDB(),
     ))
     saved = env.tmp / "uploads" / str(response.job_id) / "report.pdf"
@@ -145,7 +145,7 @@ def test_staged_file_removed_when_setup_fails_before_enqueue(env):
 def test_convert_staged_file_removed_when_setup_fails(env):
     with pytest.raises(RuntimeError):
         asyncio.run(routes.convert_document(
-            source_type="file", source=None, file=upload_file(), name=None,
+            source_type="file", source=None, file=upload_file(), name=None, tags=None,
             authorization=None, current_user=USER, db=BrokenDB(),
         ))
     assert staging_files(env.tmp) == []

@@ -12,6 +12,7 @@ from api.auth_routes import router as auth_router
 from api.apikey_routes import router as apikey_router
 from api.admin_routes import router as admin_router
 from api.image_routes import router as image_router
+from api.tag_routes import router as tag_router
 
 # Configure logging
 logging.basicConfig(
@@ -28,7 +29,7 @@ security_scheme_apikey = APIKeyHeader(name="X-API-Key")
 
 # Create FastAPI app
 app = FastAPI(
-    title="Doc2MD API",
+    title="Ingestify API",
     description="""
 API assíncrona para conversão de documentos para Markdown usando Docling
 
@@ -129,7 +130,7 @@ app.add_middleware(
     allow_origins=cors_origins,
     allow_credentials=True,
     # Methods actually exposed by the API (plus the CORS preflight verb).
-    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     # Headers the frontend / API clients actually send.
     allow_headers=["Authorization", "Content-Type", "Accept", "X-API-Key"],
 )
@@ -161,7 +162,7 @@ async def global_exception_handler(request: Request, exc: Exception):
 @app.on_event("startup")
 async def startup_event():
     """Initialize services on startup"""
-    logger.info("Starting Doc2MD API...")
+    logger.info("Starting Ingestify API...")
     logger.info(f"Environment: {settings.environment}")
     logger.info(f"Redis host: {settings.redis_host}:{settings.redis_port}")
     logger.info(f"MySQL database: {settings.database_url.split('@')[-1] if '@' in settings.database_url else 'N/A'}")
@@ -238,7 +239,7 @@ async def startup_event():
 @app.on_event("shutdown")
 async def shutdown_event():
     """Cleanup on shutdown"""
-    logger.info("Shutting down Doc2MD API...")
+    logger.info("Shutting down Ingestify API...")
 
 
 # Include routers
@@ -246,6 +247,7 @@ app.include_router(auth_router, prefix="/auth", tags=["Authentication"])
 app.include_router(apikey_router, prefix="/api-keys", tags=["API Keys"])
 app.include_router(admin_router)  # Admin routes (already has /admin prefix)
 app.include_router(image_router)  # Vision routes (already has /images prefix)
+app.include_router(tag_router)  # GET /tags, PUT /jobs/{job_id}/tags
 app.include_router(router)
 
 
@@ -254,7 +256,7 @@ app.include_router(router)
 async def root():
     """Root endpoint"""
     return {
-        "name": "Doc2MD API",
+        "name": "Ingestify API",
         "version": "1.0.0",
         "status": "running",
         "timestamp": datetime.utcnow().isoformat(),

@@ -132,8 +132,37 @@ class Job(Base):
         single_parent=True
     )
 
+    tag_rows = relationship(
+        "JobTag",
+        back_populates="job",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        lazy="selectin",
+        order_by="JobTag.tag",
+    )
+
+    @property
+    def tags(self):
+        """The job's tags, normalised and sorted (see shared/tags.py)."""
+        return [row.tag for row in self.tag_rows]
+
     def __repr__(self):
         return f"<Job(id={self.id}, status={self.status}, filename={self.filename})>"
+
+
+class JobTag(Base):
+    """
+    A user-defined label on a job. One row per (job, tag).
+
+    A table rather than a JSON column so "every job tagged X" is an indexed
+    lookup and GET /tags can count tags with a GROUP BY.
+    """
+    __tablename__ = "job_tags"
+
+    job_id = Column(String(36), ForeignKey("jobs.id", ondelete="CASCADE"), primary_key=True)
+    tag = Column(String(50), primary_key=True, index=True)
+
+    job = relationship("Job", back_populates="tag_rows")
 
 
 class Page(Base):

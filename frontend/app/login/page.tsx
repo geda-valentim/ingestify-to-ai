@@ -1,11 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { useMutation } from "@tanstack/react-query";
 import { authApi } from "@/lib/api";
 import { useAuthStore } from "@/lib/store/auth";
+import { consumeExpiredFlag, safeNextPath } from "@/lib/session";
 import { formatApiError } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -18,7 +19,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { AlertCircle, Loader2 } from "lucide-react";
+import { AlertCircle, Clock, Loader2 } from "lucide-react";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -26,17 +27,20 @@ export default function LoginPage() {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
+  const [expired, setExpired] = useState(false);
+
+  // Set by lib/session.ts when a session ran out mid-use.
+  useEffect(() => setExpired(consumeExpiredFlag()), []);
 
   const loginMutation = useMutation({
     mutationFn: authApi.login,
     onSuccess: async (data) => {
-      // Save token first so it's available for subsequent requests
-      localStorage.setItem("auth_token", data.access_token);
-
-      // Get user info with the token now in localStorage
+      // The token goes into the store first: authApi.me() reads it from there.
+      useAuthStore.getState().setToken(data.access_token);
       const userResponse = await authApi.me();
       setAuth(userResponse, data.access_token);
-      router.push("/dashboard");
+      // Back to the page the session expired on, if any.
+      router.replace(safeNextPath(new URLSearchParams(window.location.search).get("next")));
     },
     onError: (error: any) => {
       setError(formatApiError(error));
@@ -54,7 +58,7 @@ export default function LoginPage() {
       <Card className="w-full max-w-md">
         <CardHeader className="space-y-1">
           <CardTitle className="text-3xl font-bold text-center">
-            Welcome to Doc2MD
+            Welcome to Ingestify
           </CardTitle>
           <CardDescription className="text-center">
             Enter your credentials to access your account
@@ -62,6 +66,12 @@ export default function LoginPage() {
         </CardHeader>
         <form onSubmit={handleSubmit}>
           <CardContent className="space-y-4">
+            {expired && !error && (
+              <div className="rounded-md bg-muted border p-3 text-sm flex items-start gap-2">
+                <Clock className="h-4 w-4 mt-0.5 flex-shrink-0 text-muted-foreground" />
+                <p>Your session expired. Sign in again to continue where you left off.</p>
+              </div>
+            )}
             {error && (
               <div className="rounded-md bg-destructive/10 border border-destructive/20 p-3 text-sm text-destructive flex items-start gap-2 animate-in slide-in-from-top-2">
                 <AlertCircle className="h-4 w-4 mt-0.5 flex-shrink-0" />

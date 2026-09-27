@@ -1,30 +1,31 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { Suspense, useEffect, useState } from "react";
+import Link from "next/link";
+import { useRouter, useSearchParams } from "next/navigation";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  ArrowLeft,
-  Search,
+  ChevronLeft,
+  ChevronRight,
   FileText,
-  CheckCircle2,
-  XCircle,
-  Clock,
+  Image as ImageIcon,
   Loader2,
+  Mic,
+  Plus,
+  Search,
   Trash2,
+  X,
 } from "lucide-react";
-import { jobsApi } from "@/lib/api";
+import { format, formatDistanceToNow } from "date-fns";
+import { jobsApi, tagsApi } from "@/lib/api";
 import { useAuthStore } from "@/lib/store/auth";
-import { formatApiError } from "@/lib/utils";
+import { loginUrl } from "@/lib/session";
+import { cn, formatApiError, formatBytes } from "@/lib/utils";
+import { useToast } from "@/hooks/use-toast";
+import { AppHeader } from "@/components/app-header";
+import { TagChip } from "@/components/tag-input";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -35,404 +36,446 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { formatDistanceToNow } from "date-fns";
-import { useToast } from "@/hooks/use-toast";
-import type { JobStatus } from "@/types/api";
+import type { JobKind, JobListItem, JobStatus } from "@/types/api";
 
-export default function JobsListPage() {
+const PAGE_SIZE = 20;
+
+const STATUS_TABS: { value: JobStatus | "all"; label: string }[] = [
+  { value: "all", label: "All" },
+  { value: "processing", label: "Processing" },
+  { value: "queued", label: "Queued" },
+  { value: "completed", label: "Completed" },
+  { value: "failed", label: "Failed" },
+];
+
+const KINDS: { value: JobKind | "all"; label: string }[] = [
+  { value: "all", label: "All types" },
+  { value: "document", label: "Documents" },
+  { value: "transcription", label: "Transcriptions" },
+  { value: "image", label: "Images" },
+];
+
+const KIND_ICONS: Record<JobKind, React.ComponentType<{ className?: string }>> = {
+  document: FileText,
+  transcription: Mic,
+  image: ImageIcon,
+};
+
+const STATUS_STYLES: Record<string, string> = {
+  completed: "bg-green-500/10 text-green-700 dark:text-green-400 border-green-500/20",
+  failed: "bg-red-500/10 text-red-700 dark:text-red-400 border-red-500/20",
+  processing: "bg-blue-500/10 text-blue-700 dark:text-blue-400 border-blue-500/20",
+  queued: "bg-yellow-500/10 text-yellow-700 dark:text-yellow-400 border-yellow-500/20",
+  cancelled: "bg-muted text-muted-foreground",
+};
+
+function relative(date?: string | null) {
+  if (!date) return null;
+  const d = new Date(date);
+  return isNaN(d.getTime()) ? null : { text: formatDistanceToNow(d, { addSuffix: true }), full: format(d, "PPpp") };
+}
+
+export default function JobsPage() {
+  // useSearchParams needs a Suspense boundary in the App Router.
+  return (
+    <Suspense
+      fallback={
+        <div className="flex min-h-screen items-center justify-center">
+          <Loader2 className="h-8 w-8 animate-spin text-primary" />
+        </div>
+      }
+    >
+      <JobsList />
+    </Suspense>
+  );
+}
+
+function JobsList() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const token = useAuthStore((state) => state.token);
   const isAuthenticated = useAuthStore((state) => state.token !== null && state.user !== null);
   const hasHydrated = useAuthStore((state) => state._hasHydrated);
-  const [searchQuery, setSearchQuery] = useState("");
-  const [statusFilter, setStatusFilter] = useState<JobStatus | "all">("all");
-  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
-  const [jobToDelete, setJobToDelete] = useState<string | null>(null);
-  const [page, setPage] = useState(0);
-  const PAGE_SIZE = 20;
+
+  // Filters live in the URL: back/forward, reload and shared links all keep them.
+  const status = (searchParams.get("status") as JobStatus | null) ?? "all";
+  const kind = (searchParams.get("kind") as JobKind | null) ?? "all";
+  const tags = searchParams.getAll("tag");
+  const q = searchParams.get("q") ?? "";
+  const contentMode = searchParams.get("in") === "content";
+  const page = Math.max(0, Number(searchParams.get("page") ?? 1) - 1);
+
+  const [searchDraft, setSearchDraft] = useState(q);
+  const [jobToDelete, setJobToDelete] = useState<JobListItem | null>(null);
 
   useEffect(() => {
-    if (hasHydrated && !isAuthenticated) {
-      router.push("/login");
-    }
+    if (hasHydrated && !isAuthenticated) router.replace(loginUrl());
   }, [isAuthenticated, hasHydrated, router]);
 
-  // Reset page when filter changes
-  useEffect(() => {
-    setPage(0);
-  }, [statusFilter]);
+  const setParams = (updates: Record<string, string | string[] | null>, { replace = false } = {}) => {
+    const next = new URLSearchParams(searchParams.toString());
+    for (const [key, value] of Object.entries(updates)) {
+      next.delete(key);
+      if (Array.isArray(value)) value.forEach((v) => next.append(key, v));
+      else if (value) next.set(key, value);
+    }
+    // Any filter change starts again from the first page.
+    if (!("page" in updates)) next.delete("page");
+    const url = `/jobs${next.toString() ? `?${next}` : ""}`;
+    if (replace) router.replace(url, { scroll: false });
+    else router.push(url, { scroll: false });
+  };
 
-  const { data: jobsData, isLoading, error } = useQuery({
-    queryKey: ["jobs", statusFilter, page, token],
-    queryFn: () => jobsApi.list({
-      limit: PAGE_SIZE,
-      offset: page * PAGE_SIZE,
-      status: statusFilter === "all" ? undefined : statusFilter,
-      job_type: "main",
-    }),
-    refetchInterval: 10000, // Refresh every 10 seconds
-    enabled: !!token,
+  // Typing updates the URL after a pause, without a history entry per key.
+  useEffect(() => {
+    if (searchDraft === q) return;
+    const t = setTimeout(() => setParams({ q: searchDraft.trim() || null }, { replace: true }), 300);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchDraft]);
+
+  useEffect(() => setSearchDraft(q), [q]);
+
+  const jobsQuery = useQuery({
+    queryKey: ["jobs", { status, kind, tags, q, page }, token],
+    queryFn: () =>
+      jobsApi.list({
+        limit: PAGE_SIZE,
+        offset: page * PAGE_SIZE,
+        status: status === "all" ? undefined : status,
+        kind: kind === "all" ? undefined : kind,
+        tags,
+        q: q || undefined,
+        job_type: "main",
+      }),
+    enabled: !!token && !contentMode,
+    placeholderData: keepPreviousData,
+    // Poll fast only while something on screen is still moving.
+    refetchInterval: (query) =>
+      query.state.data?.jobs.some((j) => j.status === "queued" || j.status === "processing") ? 3000 : 30000,
   });
 
-  const { data: searchData, isLoading: isSearching, error: searchError } = useQuery({
-    queryKey: ["search", searchQuery, token],
-    queryFn: () => jobsApi.search({
-      query: searchQuery,
-      limit: 100,
-    }),
-    enabled: searchQuery.length > 0 && !!token,
+  const contentSearch = useQuery({
+    queryKey: ["search", q, token],
+    queryFn: () => jobsApi.search({ query: q, limit: 100 }),
+    enabled: !!token && contentMode && q.length > 0,
+  });
+
+  const { data: knownTags = [] } = useQuery({
+    queryKey: ["tags", token],
+    queryFn: () => tagsApi.list(),
+    enabled: !!token,
+    staleTime: 60_000,
   });
 
   const deleteMutation = useMutation({
-    // This was `() => Promise.resolve()`, so every delete reported success and
-    // deleted nothing. `jobsApi.delete` hits the live `DELETE /jobs/{job_id}`.
     mutationFn: (jobId: string) => jobsApi.delete(jobId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["jobs"] });
-      toast({
-        title: "Job deleted",
-        description: "The job has been successfully deleted.",
-      });
-      setDeleteDialogOpen(false);
+      queryClient.invalidateQueries({ queryKey: ["tags"] });
+      toast({ title: "Job deleted", description: "The job and its files were removed." });
       setJobToDelete(null);
     },
-    onError: (error: any) => {
-      toast({
-        title: "Error deleting job",
-        description: formatApiError(error),
-        variant: "destructive",
-      });
+    onError: (error) => {
+      toast({ title: "Error deleting job", description: formatApiError(error), variant: "destructive" });
     },
   });
 
-  const handleDeleteClick = (jobId: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-    setJobToDelete(jobId);
-    setDeleteDialogOpen(true);
-  };
-
-  const handleDeleteConfirm = () => {
-    if (jobToDelete) {
-      deleteMutation.mutate(jobToDelete);
-    }
-  };
-
-  // `GET /jobs` answers `{total, limit, offset, jobs}`. `jobs` is only the
-  // current page; `total` is the full filtered count and is what the pager
-  // must count against - `jobs.length` would cap the pager at one page.
-  const jobs = jobsData?.jobs ?? [];
-  const totalJobs = jobsData?.total ?? 0;
-  const searchResults = searchData?.results ?? [];
-  const isSearchMode = searchQuery.length > 0;
-  const firstShown = totalJobs === 0 ? 0 : page * PAGE_SIZE + 1;
-  const lastShown = page * PAGE_SIZE + jobs.length;
-  const totalPages = Math.max(1, Math.ceil(totalJobs / PAGE_SIZE));
-  const hasNextPage = page < totalPages - 1;
-  const hasPrevPage = page > 0;
-
-  const formatDate = (dateString: string | null | undefined) => {
-    if (!dateString) return "Unknown";
-    try {
-      const date = new Date(dateString);
-      if (isNaN(date.getTime())) return "Unknown";
-      return formatDistanceToNow(date, { addSuffix: true });
-    } catch {
-      return "Unknown";
-    }
-  };
-
-  const getStatusIcon = (status: JobStatus) => {
-    switch (status) {
-      case "completed":
-        return <CheckCircle2 className="h-5 w-5 text-green-500" />;
-      case "failed":
-        return <XCircle className="h-5 w-5 text-red-500" />;
-      case "processing":
-        return <Loader2 className="h-5 w-5 text-blue-500 animate-spin" />;
-      default:
-        return <Clock className="h-5 w-5 text-yellow-500" />;
-    }
-  };
-
-  const getStatusColor = (status: JobStatus) => {
-    switch (status) {
-      case "completed":
-        return "text-green-500";
-      case "failed":
-        return "text-red-500";
-      case "processing":
-        return "text-blue-500";
-      default:
-        return "text-yellow-500";
-    }
-  };
+  const data = jobsQuery.data;
+  const jobs = data?.jobs ?? [];
+  const total = data?.total ?? 0;
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const hasFilters = status !== "all" || kind !== "all" || tags.length > 0 || q.length > 0;
+  const toggleTag = (tag: string) =>
+    setParams({ tag: tags.includes(tag) ? tags.filter((t) => t !== tag) : [...tags, tag] });
+  const suggestedTags = knownTags.filter((t) => !tags.includes(t.tag)).slice(0, 12);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-background via-background to-muted">
-      {/* Header */}
-      <header className="border-b bg-background/95 backdrop-blur">
-        <div className="container mx-auto px-4 py-4">
-          <Button variant="ghost" onClick={() => router.push("/dashboard")}>
-            <ArrowLeft className="h-4 w-4 mr-2" />
-            Back to Dashboard
-          </Button>
-        </div>
-      </header>
+      <AppHeader />
 
-      {/* Main Content */}
-      <main className="container mx-auto px-4 py-12">
-        <div className="max-w-5xl mx-auto space-y-6">
-          <div>
-            <h1 className="text-3xl font-bold">My Jobs</h1>
-            <p className="text-muted-foreground mt-1">
-              View and manage your document conversion jobs
-            </p>
+      <main className="container mx-auto px-4 py-8">
+        <div className="max-w-6xl mx-auto space-y-6">
+          {/* Title */}
+          <div className="flex flex-wrap items-end justify-between gap-4">
+            <div>
+              <h1 className="text-3xl font-bold">My Jobs</h1>
+              <p className="text-muted-foreground mt-1">
+                {data ? `${data.counts.all} job${data.counts.all === 1 ? "" : "s"}` : "Your conversions and transcriptions"}
+              </p>
+            </div>
+            <Button asChild>
+              <Link href="/dashboard">
+                <Plus className="h-4 w-4 mr-2" />
+                New upload
+              </Link>
+            </Button>
           </div>
 
-          {/* Search and Filter */}
-          <Card>
-            <CardContent className="pt-6">
-              <div className="flex flex-col md:flex-row gap-4">
-                <div className="relative flex-1">
-                  <Search className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
-                  <Input
-                    placeholder="Search jobs by content..."
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    className="pl-9"
-                  />
-                </div>
-                <div className="flex gap-2">
-                  {["all", "queued", "processing", "completed", "failed"].map((status) => (
-                    <Button
-                      key={status}
-                      variant={statusFilter === status ? "default" : "outline"}
-                      size="sm"
-                      onClick={() => setStatusFilter(status as JobStatus | "all")}
-                      className="capitalize"
-                    >
-                      {status}
-                    </Button>
-                  ))}
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-
-          {/* Jobs List */}
-          {error && (
-            <Card className="border-destructive">
-              <CardContent className="py-6 text-center text-destructive">
-                <XCircle className="h-12 w-12 mx-auto mb-4" />
-                <p className="font-semibold">Error loading jobs</p>
-                <p className="text-sm mt-2">{error instanceof Error ? error.message : "Unknown error"}</p>
-              </CardContent>
-            </Card>
-          )}
-          {searchError && (
-            <Card className="border-destructive">
-              <CardContent className="py-6 text-center text-destructive">
-                <XCircle className="h-12 w-12 mx-auto mb-4" />
-                <p className="font-semibold">Search failed</p>
-                <p className="text-sm mt-2">
-                  {searchError instanceof Error ? searchError.message : "Unknown error"}
-                </p>
-              </CardContent>
-            </Card>
-          )}
-          {isLoading || isSearching ? (
-            <div className="flex justify-center py-12">
-              <Loader2 className="h-8 w-8 animate-spin text-primary" />
-            </div>
-          ) : isSearchMode ? (
-            /*
-             * Search hits are rendered as hits, not as job cards.
-             *
-             * `GET /search` returns matches inside indexed document content:
-             * filename, size, and the snippet that matched. It carries no
-             * `status`/`progress`/`name`, and the previous code rendered those
-             * fields anyway - producing blank titles and 0% progress bars on
-             * every result. Making the server synthesize them would mean a
-             * Redis lookup per hit and would silently drop any document whose
-             * Redis key had expired, i.e. exactly the old documents search
-             * exists to find. So the UI shows what a hit actually is.
-             */
-            searchResults.length > 0 ? (
-              <div className="space-y-4">
-                {searchResults.map((hit) => (
-                  <Card
-                    key={hit.job_id}
-                    className="hover:shadow-md transition-shadow cursor-pointer"
-                    onClick={() => router.push(`/jobs/${hit.job_id}`)}
+          {/* Filters */}
+          <div className="rounded-xl border bg-background p-4 space-y-4">
+            <div className="flex flex-col md:flex-row gap-3">
+              <div className="relative flex-1">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                <Input
+                  value={searchDraft}
+                  onChange={(e) => setSearchDraft(e.target.value)}
+                  placeholder={contentMode ? "Search inside converted content…" : "Search by name…"}
+                  className="pl-9 pr-9"
+                />
+                {searchDraft && (
+                  <button
+                    type="button"
+                    onClick={() => setSearchDraft("")}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                    aria-label="Clear search"
                   >
-                    <CardHeader>
-                      <CardTitle className="text-lg flex items-center gap-2">
-                        <FileText className="h-5 w-5" />
-                        {hit.filename || hit.job_id}
-                      </CardTitle>
-                      <CardDescription className="mt-1 flex flex-wrap gap-x-4">
-                        <span>Created {formatDate(hit.created_at ?? undefined)}</span>
-                        {typeof hit.total_pages === "number" && (
-                          <span>{hit.total_pages} pages</span>
-                        )}
-                        {typeof hit.char_count === "number" && (
-                          <span>{hit.char_count.toLocaleString()} characters</span>
-                        )}
-                      </CardDescription>
-                    </CardHeader>
-                    <CardContent>
-                      <p className="text-sm text-muted-foreground line-clamp-3">
-                        {hit.preview}
-                      </p>
-                    </CardContent>
-                  </Card>
+                    <X className="h-4 w-4" />
+                  </button>
+                )}
+              </div>
+              <div className="flex rounded-md border p-0.5 w-fit" role="group" aria-label="Search in">
+                {[
+                  { value: false, label: "Names" },
+                  { value: true, label: "Content" },
+                ].map((opt) => (
+                  <button
+                    key={opt.label}
+                    type="button"
+                    onClick={() => setParams({ in: opt.value ? "content" : null })}
+                    aria-pressed={contentMode === opt.value}
+                    className={cn(
+                      "px-3 py-1.5 text-sm rounded-sm transition-colors",
+                      contentMode === opt.value ? "bg-secondary font-medium" : "text-muted-foreground hover:text-foreground"
+                    )}
+                  >
+                    {opt.label}
+                  </button>
                 ))}
               </div>
-            ) : (
-              <Card>
-                <CardContent className="py-12 text-center text-muted-foreground">
-                  <Search className="h-12 w-12 mx-auto mb-4 opacity-50" />
-                  <p>No documents match “{searchQuery}”</p>
-                  <p className="text-sm mt-2">
-                    Search looks inside converted content, so only finished
-                    conversions can match.
-                  </p>
-                </CardContent>
-              </Card>
-            )
-          ) : jobs.length > 0 ? (
-            <div className="space-y-4">
-              {jobs.map((job) => (
-                <Card
-                  key={job.job_id}
-                  className="hover:shadow-md transition-shadow cursor-pointer"
-                  onClick={() => router.push(`/jobs/${job.job_id}`)}
-                >
-                  <CardHeader>
-                    <div className="flex items-start justify-between">
-                      <div className="flex-1">
-                        <CardTitle className="text-lg flex items-center gap-2">
-                          <FileText className="h-5 w-5" />
-                          {job.name || job.job_id}
-                        </CardTitle>
-                        <CardDescription className="mt-1">
-                          Created {formatDate(job.created_at)}
-                        </CardDescription>
-                      </div>
-                      <div className="flex items-center gap-3">
-                        {getStatusIcon(job.status)}
-                        <span className={`font-medium capitalize ${getStatusColor(job.status)}`}>
-                          {job.status}
-                        </span>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="text-destructive hover:text-destructive hover:bg-destructive/10"
-                          onClick={(e) => handleDeleteClick(job.job_id, e)}
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
-                      </div>
-                    </div>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="flex items-center justify-between">
-                      <div className="text-sm text-muted-foreground">
-                        {job.total_pages && (
-                          <span>
-                            {job.pages_completed || 0} / {job.total_pages} pages completed
-                          </span>
-                        )}
-                      </div>
-                      <div className="flex items-center gap-4 text-sm">
-                        <span className="text-muted-foreground">
-                          Progress: <span className="font-medium">{job.progress}%</span>
-                        </span>
-                        {job.completed_at && (
-                          <span className="text-muted-foreground">
-                            Completed {formatDate(job.completed_at)}
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                    {/* Progress Bar */}
-                    <div className="w-full bg-secondary rounded-full h-1.5 mt-3">
-                      <div
-                        className="bg-primary h-1.5 rounded-full transition-all duration-300"
-                        style={{ width: `${job.progress}%` }}
-                      />
-                    </div>
-                  </CardContent>
-                </Card>
-              ))}
             </div>
-          ) : (
-            <Card>
-              <CardContent className="py-12 text-center text-muted-foreground">
-                <FileText className="h-12 w-12 mx-auto mb-4 opacity-50" />
-                <p>No jobs found</p>
-              </CardContent>
-            </Card>
-          )}
 
-          {/* Pagination Controls */}
-          {!isSearchMode && jobs.length > 0 && (
-            <Card>
-              <CardContent className="py-4">
-                <div className="flex items-center justify-between">
-                  <div className="text-sm text-muted-foreground">
-                    Showing {firstShown} - {lastShown} of {totalJobs} jobs
+            {!contentMode && (
+              <>
+                {/* Status tabs */}
+                <div className="flex items-center gap-x-1 overflow-x-auto whitespace-nowrap border-b -mx-4 px-4">
+                  {STATUS_TABS.map((tab) => {
+                    const active = status === tab.value;
+                    const count = data?.counts?.[tab.value];
+                    return (
+                      <button
+                        key={tab.value}
+                        type="button"
+                        onClick={() => setParams({ status: tab.value === "all" ? null : tab.value })}
+                        className={cn(
+                          "-mb-px border-b-2 px-3 pb-2 text-sm transition-colors",
+                          active
+                            ? "border-primary font-medium text-foreground"
+                            : "border-transparent text-muted-foreground hover:text-foreground"
+                        )}
+                      >
+                        {tab.label}
+                        {count !== undefined && (
+                          <span
+                            className={cn(
+                              "ml-1.5 rounded-full px-1.5 py-0.5 text-xs tabular-nums",
+                              active ? "bg-primary text-primary-foreground" : "bg-muted"
+                            )}
+                          >
+                            {count}
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {/* Kind + tags */}
+                <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                  <div className="flex flex-wrap gap-1.5">
+                    {KINDS.map((k) => (
+                      <Button
+                        key={k.value}
+                        size="sm"
+                        variant={kind === k.value ? "secondary" : "ghost"}
+                        className="h-8"
+                        onClick={() => setParams({ kind: k.value === "all" ? null : k.value })}
+                      >
+                        {k.label}
+                      </Button>
+                    ))}
                   </div>
-                  <div className="flex items-center gap-2">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => setPage(p => Math.max(0, p - 1))}
-                      disabled={!hasPrevPage || isLoading}
-                    >
-                      Previous
-                    </Button>
-                    <div className="text-sm text-muted-foreground px-2">
-                      Page {page + 1} of {totalPages}
+
+                  {(tags.length > 0 || suggestedTags.length > 0) && (
+                    <div className="flex flex-wrap items-center gap-1.5 lg:justify-end lg:max-w-[60%]">
+                      <span className="text-xs text-muted-foreground mr-1">Tags:</span>
+                      {tags.map((tag) => (
+                        <TagChip key={tag} tag={tag} active onRemove={() => toggleTag(tag)} />
+                      ))}
+                      {suggestedTags.map((t) => (
+                        <TagChip
+                          key={t.tag}
+                          tag={`${t.tag} · ${t.count}`}
+                          onClick={() => toggleTag(t.tag)}
+                          className="cursor-pointer"
+                        />
+                      ))}
                     </div>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => setPage(p => p + 1)}
-                      disabled={!hasNextPage || isLoading}
+                  )}
+                </div>
+
+                {hasFilters && (
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="text-muted-foreground">
+                      {total} matching job{total === 1 ? "" : "s"}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSearchDraft("");
+                        router.push("/jobs");
+                      }}
+                      className="text-primary hover:underline underline-offset-4"
                     >
-                      Next
-                    </Button>
+                      Clear all filters
+                    </button>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+
+          {/* Results */}
+          {contentMode ? (
+            <ContentResults
+              q={q}
+              isLoading={contentSearch.isLoading}
+              error={contentSearch.error}
+              results={contentSearch.data?.results ?? []}
+            />
+          ) : jobsQuery.error ? (
+            <div className="rounded-xl border border-destructive/50 p-8 text-center text-destructive">
+              <p className="font-semibold">Could not load your jobs</p>
+              <p className="text-sm mt-1">{formatApiError(jobsQuery.error)}</p>
+            </div>
+          ) : jobsQuery.isLoading ? (
+            <div className="rounded-xl border bg-background divide-y">
+              {Array.from({ length: 6 }).map((_, i) => (
+                <div key={i} className="flex items-center gap-4 p-4">
+                  <div className="h-10 w-10 rounded-lg bg-muted animate-pulse" />
+                  <div className="flex-1 space-y-2">
+                    <div className="h-4 w-1/3 rounded bg-muted animate-pulse" />
+                    <div className="h-3 w-1/2 rounded bg-muted animate-pulse" />
                   </div>
                 </div>
-              </CardContent>
-            </Card>
+              ))}
+            </div>
+          ) : jobs.length === 0 ? (
+            <div className="rounded-xl border bg-background py-16 px-6 text-center">
+              <FileText className="h-12 w-12 mx-auto mb-4 text-muted-foreground/50" />
+              {hasFilters ? (
+                <>
+                  <p className="font-medium">No jobs match these filters</p>
+                  <Button variant="link" onClick={() => router.push("/jobs")}>
+                    Clear all filters
+                  </Button>
+                </>
+              ) : (
+                <>
+                  <p className="font-medium">No jobs yet</p>
+                  <p className="text-sm text-muted-foreground mt-1">Upload a document, audio or video to get started.</p>
+                  <Button asChild className="mt-4">
+                    <Link href="/dashboard">
+                      <Plus className="h-4 w-4 mr-2" />
+                      New upload
+                    </Link>
+                  </Button>
+                </>
+              )}
+            </div>
+          ) : (
+            <>
+              <ul
+                className={cn(
+                  "rounded-xl border bg-background divide-y overflow-hidden transition-opacity",
+                  jobsQuery.isPlaceholderData && "opacity-60"
+                )}
+              >
+                {jobs.map((job) => (
+                  <JobRow
+                    key={job.job_id}
+                    job={job}
+                    activeTags={tags}
+                    onTag={toggleTag}
+                    onDelete={() => setJobToDelete(job)}
+                  />
+                ))}
+              </ul>
+
+              {/* Pagination */}
+              <div className="flex flex-wrap items-center justify-between gap-3 text-sm">
+                <span className="text-muted-foreground">
+                  {page * PAGE_SIZE + 1}–{page * PAGE_SIZE + jobs.length} of {total}
+                </span>
+                {totalPages > 1 && (
+                  <div className="flex items-center gap-1">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={page === 0}
+                      onClick={() => setParams({ page: page > 1 ? String(page) : null })}
+                    >
+                      <ChevronLeft className="h-4 w-4" />
+                      <span className="sr-only">Previous page</span>
+                    </Button>
+                    {pageNumbers(page, totalPages).map((n, i) =>
+                      n === null ? (
+                        <span key={`gap-${i}`} className="px-2 text-muted-foreground">
+                          …
+                        </span>
+                      ) : (
+                        <Button
+                          key={n}
+                          variant={n === page ? "secondary" : "ghost"}
+                          size="sm"
+                          className="min-w-9"
+                          onClick={() => setParams({ page: n > 0 ? String(n + 1) : null })}
+                        >
+                          {n + 1}
+                        </Button>
+                      )
+                    )}
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={page >= totalPages - 1}
+                      onClick={() => setParams({ page: String(page + 2) })}
+                    >
+                      <ChevronRight className="h-4 w-4" />
+                      <span className="sr-only">Next page</span>
+                    </Button>
+                  </div>
+                )}
+              </div>
+            </>
           )}
         </div>
       </main>
 
-      {/* Delete Confirmation Dialog */}
-      <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+      <AlertDialog open={jobToDelete !== null} onOpenChange={(open) => !open && setJobToDelete(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Are you sure?</AlertDialogTitle>
+            <AlertDialogTitle>Delete “{jobToDelete?.name || jobToDelete?.job_id}”?</AlertDialogTitle>
             <AlertDialogDescription>
-              This action cannot be undone. This will permanently delete the job and all its
-              associated data including:
-              <ul className="list-disc list-inside mt-2 space-y-1">
-                <li>Job metadata</li>
-                <li>All pages and content</li>
-                <li>Markdown content</li>
-                <li>Temporary processing data</li>
-              </ul>
+              This permanently removes the job, its pages, its result and its stored files. It cannot be undone.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
-              onClick={handleDeleteConfirm}
+              onClick={() => jobToDelete && deleteMutation.mutate(jobToDelete.job_id)}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
               disabled={deleteMutation.isPending}
             >
@@ -449,5 +492,186 @@ export default function JobsListPage() {
         </AlertDialogContent>
       </AlertDialog>
     </div>
+  );
+}
+
+/** 0-based page indexes to show, with `null` for a gap: 1 … 4 5 6 … 12 */
+function pageNumbers(current: number, total: number): (number | null)[] {
+  const pages = new Set([0, total - 1, current - 1, current, current + 1]);
+  const sorted = Array.from(pages).filter((p) => p >= 0 && p < total).sort((a, b) => a - b);
+  const out: (number | null)[] = [];
+  sorted.forEach((p, i) => {
+    if (i > 0 && p - sorted[i - 1] > 1) out.push(null);
+    out.push(p);
+  });
+  return out;
+}
+
+function JobRow({
+  job,
+  activeTags,
+  onTag,
+  onDelete,
+}: {
+  job: JobListItem;
+  activeTags: string[];
+  onTag: (tag: string) => void;
+  onDelete: () => void;
+}) {
+  const router = useRouter();
+  const Icon = KIND_ICONS[job.kind] ?? FileText;
+  const created = relative(job.created_at);
+  const href = `/jobs/${job.job_id}`;
+  const running = job.status === "processing" || job.status === "queued";
+  const title = job.name || job.filename || job.job_id;
+
+  const meta = [
+    job.filename && job.filename !== title ? job.filename : null,
+    job.file_size_bytes ? formatBytes(job.file_size_bytes) : null,
+    job.total_pages ? `${job.pages_completed ?? 0}/${job.total_pages} pages` : null,
+  ].filter(Boolean);
+
+  return (
+    <li
+      className="group relative flex flex-col gap-3 p-4 hover:bg-muted/40 transition-colors cursor-pointer sm:flex-row sm:items-center"
+      onClick={(e) => {
+        // Chips and buttons handle their own clicks; anything else opens the job.
+        if ((e.target as HTMLElement).closest("a,button")) return;
+        router.push(href);
+      }}
+    >
+      <div className="flex min-w-0 flex-1 items-start gap-3">
+        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+          <Icon className="h-5 w-5" />
+        </div>
+        <div className="min-w-0 flex-1 space-y-1">
+          <Link href={href} className="block truncate font-medium hover:underline underline-offset-4" title={title}>
+            {title}
+          </Link>
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+            <span className="capitalize">{job.kind}</span>
+            {meta.map((m) => (
+              <span key={m as string} className="before:content-['·'] before:mr-2 truncate max-w-[18rem]">
+                {m}
+              </span>
+            ))}
+            {created && (
+              <span className="before:content-['·'] before:mr-2" title={created.full}>
+                {created.text}
+              </span>
+            )}
+          </div>
+          {job.tags.length > 0 && (
+            <div className="flex flex-wrap gap-1 pt-1">
+              {job.tags.map((tag) => (
+                <TagChip
+                  key={tag}
+                  tag={tag}
+                  active={activeTags.includes(tag)}
+                  onClick={() => onTag(tag)}
+                  className="cursor-pointer"
+                />
+              ))}
+            </div>
+          )}
+          {job.status === "failed" && job.error && (
+            <p className="text-xs text-destructive line-clamp-1" title={job.error}>
+              {job.error}
+            </p>
+          )}
+        </div>
+      </div>
+
+      <div className="flex items-center justify-between gap-3 pl-[3.25rem] sm:pl-0 sm:justify-end">
+        <div className="flex flex-col items-start gap-1.5 sm:items-end sm:w-36">
+          <span
+            className={cn(
+              "inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-2.5 py-0.5 text-xs font-medium capitalize",
+              STATUS_STYLES[job.status] ?? STATUS_STYLES.cancelled
+            )}
+          >
+            {running && <Loader2 className="h-3 w-3 animate-spin" />}
+            {job.status}
+            {job.status === "processing" && ` · ${job.progress}%`}
+          </span>
+          {running && (
+            <div className="h-1 w-28 rounded-full bg-secondary">
+              <div className="h-1 rounded-full bg-primary transition-all" style={{ width: `${job.progress}%` }} />
+            </div>
+          )}
+        </div>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="text-muted-foreground hover:text-destructive hover:bg-destructive/10 sm:opacity-0 sm:group-hover:opacity-100 focus-visible:opacity-100"
+          onClick={onDelete}
+          aria-label={`Delete ${title}`}
+        >
+          <Trash2 className="h-4 w-4" />
+        </Button>
+      </div>
+    </li>
+  );
+}
+
+function ContentResults({
+  q,
+  isLoading,
+  error,
+  results,
+}: {
+  q: string;
+  isLoading: boolean;
+  error: unknown;
+  results: { job_id: string; filename?: string | null; total_pages?: number | null; created_at?: string | null; preview: string }[];
+}) {
+  if (!q) {
+    return (
+      <div className="rounded-xl border bg-background py-16 text-center text-muted-foreground">
+        <Search className="h-10 w-10 mx-auto mb-3 opacity-50" />
+        Type to search inside the text of your finished conversions.
+      </div>
+    );
+  }
+  if (isLoading) {
+    return (
+      <div className="flex justify-center py-12">
+        <Loader2 className="h-8 w-8 animate-spin text-primary" />
+      </div>
+    );
+  }
+  if (error) {
+    return (
+      <div className="rounded-xl border border-destructive/50 p-8 text-center text-destructive">
+        <p className="font-semibold">Search failed</p>
+        <p className="text-sm mt-1">{formatApiError(error)}</p>
+      </div>
+    );
+  }
+  if (results.length === 0) {
+    return (
+      <div className="rounded-xl border bg-background py-16 text-center">
+        <p className="font-medium">Nothing inside your documents matches “{q}”</p>
+        <p className="text-sm text-muted-foreground mt-1">Only finished conversions are searchable.</p>
+      </div>
+    );
+  }
+  return (
+    <ul className="rounded-xl border bg-background divide-y overflow-hidden">
+      {results.map((hit) => {
+        const created = relative(hit.created_at);
+        return (
+          <li key={hit.job_id}>
+            <Link href={`/jobs/${hit.job_id}`} className="block p-4 hover:bg-muted/40 transition-colors">
+              <p className="font-medium truncate">{hit.filename || hit.job_id}</p>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                {[created?.text, hit.total_pages ? `${hit.total_pages} pages` : null].filter(Boolean).join(" · ")}
+              </p>
+              <p className="text-sm text-muted-foreground mt-2 line-clamp-2">{hit.preview}</p>
+            </Link>
+          </li>
+        );
+      })}
+    </ul>
   );
 }
