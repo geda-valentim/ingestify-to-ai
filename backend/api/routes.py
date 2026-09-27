@@ -5,6 +5,7 @@ from typing import Optional, List, Tuple
 from pathlib import Path
 import hashlib
 import os
+import shutil
 from uuid import uuid4
 from datetime import datetime, timedelta, timezone
 import logging
@@ -123,7 +124,9 @@ async def upload_and_convert(
         existing_job = db.query(Job).filter(
             Job.user_id == current_user.id,
             Job.file_checksum == file_checksum,
-            Job.job_type == "MAIN"
+            Job.job_type == "MAIN",
+            # A failed job must not swallow a resubmission: sending the file again is the retry
+            Job.status != DBJobStatus.FAILED,
         ).first()
 
         if existing_job:
@@ -357,6 +360,10 @@ async def transcribe_audio(
         "markdown",
         description="Formato padrão do resultado em /jobs/{job_id}/result: markdown, vtt, srt, txt ou json",
     ),
+    purge_source: bool = Form(
+        False,
+        description="Apagar o áudio/vídeo enviado assim que a transcrição terminar (guarda só o texto)",
+    ),
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
 ):
@@ -364,20 +371,34 @@ async def transcribe_audio(
     Transcrever áudio ou vídeo para texto usando Whisper (STT)
 
     Aceita áudio ou vídeo (só a faixa de áudio do vídeo é transcrita).
-    O job entra na fila; o worker usa GPU quando disponível (detectada uma vez por
-    worker, com fallback automático para CPU).
+    O job entra na fila própria de transcrição (`ingestify-audio`), consumida por
+    workers dedicados, e não disputa vaga com a conversão de documentos.
+
+    ## Autenticação
+    Obrigatória: header `X-API-Key: <chave>` ou `Authorization: Bearer <token JWT>`.
+    Sem ele a resposta é 401.
 
     Todos os formatos são gerados: Markdown, legendas WebVTT e SRT, texto puro e
     JSON com segmentos. Escolha o formato em `GET /jobs/{job_id}/result?format=vtt`
     (ou defina o padrão com `output_format`).
 
     ## Parâmetros:
-    - `file`: Arquivo de áudio para transcrição
+    - `file`: Arquivo de áudio ou vídeo para transcrição
     - `name`: Nome de identificação opcional
+    - `tags`: Tags do job, separadas por vírgula (ex: `focus,aula`)
     - `language`: Código de idioma ISO 639-1 (ex: 'en', 'pt', 'es'). Auto-detecta se não fornecido
     - `include_timestamps`: Adicionar marcadores de tempo [MM:SS] na transcrição
     - `include_word_timestamps`: Adicionar timestamps em cada palavra (mais detalhado)
     - `output_format`: Formato padrão do resultado (`markdown`, `vtt`, `srt`, `txt`, `json`)
+    - `purge_source`: Se `true`, apaga o arquivo enviado (disco e MinIO) quando o job
+      termina com sucesso; ficam só as transcrições. `DELETE /jobs/{job_id}` também
+      apaga o arquivo de origem e as transcrições
+
+    ## Arquivo repetido
+    Reenviar um arquivo idêntico (mesmo SHA-256) que já tem job **não falho** devolve
+    esse job em vez de criar outro: as tags novas são somadas às dele e o
+    `output_format` enviado passa a ser o padrão do resultado. Se o job anterior
+    falhou, o reenvio cria um job novo; é assim que se tenta de novo.
 
     ## Formatos suportados
     - Áudio: MP3, WAV, M4A, FLAC, OGG, OPUS, WEBM, WMA, AAC
@@ -387,15 +408,38 @@ async def transcribe_audio(
     - Áudio: até 50MB (MAX_AUDIO_FILE_SIZE_MB)
     - Vídeo: até 500MB (MAX_VIDEO_FILE_SIZE_MB)
 
+    ## Tempo limite
+    Definido pelo worker de transcrição (`TRANSCRIPTION_TIMEOUT_SECONDS`, padrão 3h),
+    independente do `CONVERSION_TIMEOUT_SECONDS` dos documentos. Um job que estoura o
+    tempo falha sem novas tentativas automáticas.
+
     ## Retorno
     Retorna imediatamente um `job_id` para consultar o progresso via `/jobs/{job_id}`
 
-    ## Exemplo:
+    ## Erros
+    - 401: sem autenticação
+    - 413: arquivo acima do limite
+    - 422: formato não suportado, `output_format` inválido ou `tags` inválidas
+    - 503: transcrição desabilitada ou workers indisponíveis
+
+    ## Exemplos:
     ```bash
     curl -X POST http://localhost:8080/transcribe \\
+      -H "X-API-Key: $INGESTIFY_API_KEY" \\
       -F "file=@meeting.mp3" \\
       -F "language=pt" \\
       -F "include_timestamps=true"
+    ```
+
+    Vídeo com legenda SRT como padrão, tags e descarte do arquivo ao terminar:
+    ```bash
+    curl -X POST http://localhost:8080/transcribe \\
+      -H "Authorization: Bearer $TOKEN" \\
+      -F "file=@aula.mp4" \\
+      -F "language=pt" \\
+      -F "output_format=srt" \\
+      -F "tags=focus,aula" \\
+      -F "purge_source=true"
     ```
 
     ## Resultado
@@ -457,7 +501,9 @@ async def transcribe_audio(
         existing_job = db.query(Job).filter(
             Job.user_id == current_user.id,
             Job.file_checksum == file_checksum,
-            Job.job_type == "MAIN"
+            Job.job_type == "MAIN",
+            # A failed job must not swallow a resubmission: sending the file again is the retry
+            Job.status != DBJobStatus.FAILED,
         ).first()
 
         if existing_job:
@@ -559,15 +605,20 @@ async def transcribe_audio(
                 "include_word_timestamps": include_word_timestamps,
                 "output_format": output_format,
                 "media_kind": media_kind,
-                "is_audio": True  # Flag to indicate this is audio transcription
+                "is_audio": True,  # Flag to indicate this is audio transcription
+                "purge_source": purge_source,
             }
 
             # Enqueue task (use 'file' source type since audio is already saved locally)
-            process_conversion.delay(
-                job_id=str(job_id),
-                source_type="file",
-                source=str(temp_file_path),
-                options=options,
+            # on the transcription queue, served by the dedicated worker-audio service
+            process_conversion.apply_async(
+                kwargs=dict(
+                    job_id=str(job_id),
+                    source_type="file",
+                    source=str(temp_file_path),
+                    options=options,
+                ),
+                queue=settings.transcription_queue,
             )
             logger.info(f"AUDIO JOB {job_id} enqueued to Celery successfully")
 
@@ -1120,6 +1171,7 @@ async def delete_job(
     - Metadados do MySQL (job e pages)
     - Conteúdo do Elasticsearch (markdown)
     - Status temporário do Redis
+    - Para transcrições: o áudio/vídeo enviado e as transcrições guardadas no MinIO
 
     **Atenção:** Esta operação é irreversível!
 
@@ -1172,6 +1224,18 @@ async def delete_job(
             logger.info(f"Failed to delete job {job_id} from Elasticsearch: {e}")
     else:
         logger.info(f"Elasticsearch not available, skipping content deletion for job {job_id}")
+
+    # Transcriptions: the uploaded media and the stored transcript formats
+    if db_job and db_job.source_type == "audio":
+        try:
+            minio_client = get_minio_client()
+            if db_job.minio_upload_path:
+                minio_client.delete_file(minio_client.bucket_audio, db_job.minio_upload_path)
+            minio_client.delete_folder(minio_client.bucket_audio, f"transcripts/{job_id}/")
+        except Exception as e:
+            logger.warning(f"Failed to delete audio objects of job {job_id} from MinIO: {e}")
+        # Local copy left behind by a failed job (a completed one has none)
+        shutil.rmtree(Path(settings.temp_storage_path) / "audio" / job_id, ignore_errors=True)
 
     # 2. Delete from MySQL
     try:
