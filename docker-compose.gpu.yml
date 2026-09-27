@@ -65,11 +65,37 @@ services:
       # (detected once per worker process, and again if the model fails on GPU).
       - WHISPER_DEVICE=${WHISPER_DEVICE:-auto}
       - WHISPER_COMPUTE_TYPE=${WHISPER_COMPUTE_TYPE:-}
-    # Each worker process loads its own Whisper model into GPU memory:
-    # keep replicas x concurrency low to avoid running out of VRAM.
+    # Transcriptions no longer run here: /transcribe enqueues on ingestify-audio,
+    # served by worker-audio below.
     command: celery -A workers.celery_app worker --loglevel=info --concurrency=1 -Q ingestify -n ingestify-worker@%h
     deploy:
       replicas: 1
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  # Transcription workers: N replicas, one resident Whisper model each, all on
+  # the same GPU and all pulling from the ingestify-audio queue (prefetch 1, so
+  # a free replica always takes the next job). A float16 turbo model plus its
+  # CUDA context is ~2-3 GB of VRAM per replica; size AUDIO_WORKER_REPLICAS
+  # against `nvidia-smi` (the vision worker also lives on this card).
+  worker-audio:
+    build:
+      args:
+        REQUIREMENTS_FILE: requirements-vision-cuda.txt
+        TORCH_INDEX_URL: https://download.pytorch.org/whl/cu129
+    environment:
+      # Docling never runs here; only Whisper, and only on the GPU. Explicit
+      # cuda: a container that lost the GPU fails its jobs loudly instead of
+      # crawling on CPU until the time limit.
+      - DEVICE=cpu
+      - WHISPER_DEVICE=cuda
+      - WHISPER_COMPUTE_TYPE=${WHISPER_COMPUTE_TYPE:-float16}
+    deploy:
+      replicas: ${AUDIO_WORKER_REPLICAS:-4}
       resources:
         reservations:
           devices:

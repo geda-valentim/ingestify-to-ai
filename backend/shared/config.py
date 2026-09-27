@@ -117,6 +117,11 @@ class Settings(BaseSettings):
     max_audio_file_size_mb: int = 50  # Maximum audio file size
     max_video_file_size_mb: int = 500  # Maximum video file size (only the audio track is transcribed)
     max_audio_duration_seconds: int = 3600  # Maximum audio duration (1 hour)
+    # Transcriptions go to their own queue, consumed by the worker-audio service
+    # (GPU replicas in docker-compose.gpu.yml), so a batch of long recordings never
+    # blocks document conversion. Its time limit is that worker's
+    # CONVERSION_TIMEOUT_SECONDS (set from TRANSCRIPTION_TIMEOUT_SECONDS in compose).
+    transcription_queue: str = "ingestify-audio"
     openai_api_key: str = ""  # Required for openai-api provider
 
     # Vision Settings (Florence-2)

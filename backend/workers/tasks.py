@@ -17,6 +17,7 @@ import json
 import logging
 import asyncio
 import shutil
+import time
 
 from workers.celery_app import celery_app
 from workers.converter import get_converter
@@ -180,9 +181,11 @@ def process_conversion(
                 }
 
                 # Uses the GPU when available (detected once per worker) and falls back to CPU
+                transcription_started = time.monotonic()
                 result, transcriber = transcribe_with_gpu_fallback(
                     file_path, transcription_options, force_provider=provider_override
                 )
+                processing_seconds = round(time.monotonic() - transcription_started, 1)
 
                 logger.info(
                     f"[MAIN JOB {job_id}] Transcription complete with {transcriber.__class__.__name__} "
@@ -221,6 +224,9 @@ def process_conversion(
                         'provider': result.get('provider', 'unknown'),
                         'model': result.get('model', 'unknown'),
                         'device': result.get('device'),
+                        'compute_type': getattr(transcriber, 'compute_type', None),
+                        'language_probability': result.get('language_probability'),
+                        'processing_seconds': processing_seconds,
                         'output_format': options.get('output_format', 'markdown'),
                         'available_formats': ['markdown'] + list(transcript_outputs),
                     },
@@ -280,6 +286,8 @@ def process_conversion(
                 )
 
                 _remove_job_files(job_id)
+                if options.get('purge_source'):
+                    _purge_audio_source(job_id)
                 logger.info(f"[MAIN JOB {job_id}] ✓ Audio transcription completed successfully")
                 return
 
@@ -408,6 +416,8 @@ def process_conversion(
         logger.warning(f"[MAIN JOB {job_id}] Soft timeout exceeded - marking as failed for retry")
 
         error_msg = f"Task exceeded soft time limit ({settings.conversion_timeout_seconds - 30}s)"
+        # A transcription that ran out of time will run out of time again: fail for good
+        is_audio_job = bool(options.get('is_audio'))
 
         # Update Redis
         redis_client.set_job_status(
@@ -440,6 +450,9 @@ def process_conversion(
                 shutil.rmtree(temp_dir, ignore_errors=True)
         except Exception:
             pass
+
+        if is_audio_job:
+            return {"job_id": job_id, "status": "failed", "error": error_msg}
 
         # Retry with backoff
         raise self.retry(countdown=60 * (2 ** self.request.retries))
@@ -1150,6 +1163,24 @@ def send_callback(callback_url: str, job_id: str, status: str, result: dict = No
     except Exception as e:
         logger.error(f"Failed to send callback: {e}")
         raise
+
+
+def _purge_audio_source(job_id: str) -> None:
+    """Delete a transcription's uploaded media from MinIO, keeping only the transcripts (purge_source=true)"""
+    db = SessionLocal()
+    try:
+        job = db.query(Job).filter(Job.id == job_id).first()
+        if not job or not job.minio_upload_path:
+            return
+        minio_client = get_minio_client()
+        if minio_client.delete_file(minio_client.bucket_audio, job.minio_upload_path):
+            job.minio_upload_path = None
+            db.commit()
+            logger.info(f"[MAIN JOB {job_id}] Source media purged")
+    except Exception as e:
+        logger.error(f"[MAIN JOB {job_id}] Could not purge source media: {e}")
+    finally:
+        db.close()
 
 
 def _store_transcript_outputs(job_id: str, outputs: dict) -> None:

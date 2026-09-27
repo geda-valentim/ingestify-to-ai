@@ -218,6 +218,23 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
+  # Dedicated worker for /transcribe (queue ingestify-audio).
+  #
+  # Long recordings (lectures up to ~3h) would otherwise hold `worker` slots for
+  # many minutes and blow its CONVERSION_TIMEOUT_SECONDS, which is sized for
+  # documents. Here the per-task limit is TRANSCRIPTION_TIMEOUT_SECONDS. Each
+  # process keeps its own Whisper model resident, hence --concurrency=1: scale
+  # with replicas (AUDIO_WORKER_REPLICAS). docker-compose.gpu.yml puts it on CUDA.
+  worker-audio:
+    extends:
+      service: worker
+    command: celery -A workers.celery_app worker --loglevel=info --concurrency=1 -Q ingestify-audio -n ingestify-audio@%h
+    environment:
+      - CELERY_WORKER_NAME=ingestify-audio
+      - CONVERSION_TIMEOUT_SECONDS=${TRANSCRIPTION_TIMEOUT_SECONDS:-10800}
+    deploy:
+      replicas: ${AUDIO_WORKER_REPLICAS:-1}
+
   # Dedicated worker for the synchronous vision endpoints (/images/*).
   #
   # Its own queue is not an optimisation: on the shared `ingestify` queue a 60s
