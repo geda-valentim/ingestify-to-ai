@@ -136,7 +136,7 @@ if is_container_running "$SHARED_REDIS" && \
 
     echo ""
     echo -e "${CYAN}📦 Starting application services only...${NC}"
-    docker compose up -d --build api worker beat frontend
+    docker compose up -d --build api worker worker-audio worker-vision beat frontend
 else
     echo -e "${YELLOW}⚠️  Shared infrastructure not found${NC}"
     echo -e "${CYAN}📦 Starting with local infrastructure...${NC}"

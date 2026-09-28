@@ -234,7 +234,7 @@ reservation.
 make gpu
 ```
 
-which is exactly:
+which is exactly (plus `-f docker-compose.override.yml` when that file exists):
 
 ```bash
 DOCKER_BUILDKIT=1 docker compose \
@@ -242,6 +242,21 @@ DOCKER_BUILDKIT=1 docker compose \
   -f docker-compose.gpu.yml \
   up -d --build
 ```
+
+### Make the GPU the default on a GPU host
+
+`make gpu` is the only command that passes the overlay. Every other start path — a plain
+`docker compose up`, `start.sh`, `rebuild.sh`, `make dev`, `make start` — loads only the base
+file (and the override), **rebuilds the workers with CPU torch** and silently moves Docling and
+Whisper off the GPU. On a host that has one, pin the file set in `.env`:
+
+```bash
+COMPOSE_FILE=docker-compose.yml:docker-compose.gpu.yml:docker-compose.override.yml
+COMPOSE_PROFILES=infra   # only if redis/elasticsearch/minio run in this stack
+```
+
+Docker Compose reads both variables from `.env`, so every command above then brings up the GPU
+stack. Leave them unset on machines without an NVIDIA GPU.
 
 Production:
 

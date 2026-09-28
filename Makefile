@@ -206,7 +206,7 @@ rebuild: ## Rebuild and restart all services
 # ======================================
 # GPU COMMANDS (opt-in - see docs/GPU.md)
 # ======================================
-GPU_COMPOSE := -f docker-compose.yml -f docker-compose.gpu.yml
+GPU_COMPOSE := -f docker-compose.yml -f docker-compose.gpu.yml $(if $(wildcard docker-compose.override.yml),-f docker-compose.override.yml)
 
 gpu-check: ## Check the host is ready to run the GPU stack
 	@echo ""
@@ -235,8 +235,8 @@ gpu-build: gpu-check ## Build the GPU images (pulls ~2.5GB of CUDA wheels)
 	@echo "$(YELLOW)🔨 Building GPU images (CUDA)...$(NC)"
 	@DOCKER_BUILDKIT=1 docker compose $(GPU_COMPOSE) build
 
-gpu: gpu-check ## Start the stack with GPU acceleration for the vision worker
-	@echo "$(CYAN)🚀 Starting with GPU (worker-vision on CUDA)...$(NC)"
+gpu: gpu-check ## Start the stack with GPU acceleration (docling, whisper and vision on CUDA)
+	@echo "$(CYAN)🚀 Starting with GPU (docling, whisper and vision on CUDA)...$(NC)"
 	@DOCKER_BUILDKIT=1 docker compose $(GPU_COMPOSE) up -d --build
 	@echo "$(GREEN)✅ GPU stack started. Verify with: make logs-vision$(NC)"
 
