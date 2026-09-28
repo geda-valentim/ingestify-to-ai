@@ -108,7 +108,6 @@ def process_conversion(
 
     # Get preset from options
     preset = options.get('docling_preset') if options else None
-    converter = get_converter(preset=preset)
 
     logger.info(f"[MAIN JOB {job_id}] Starting conversion: {source_type} (preset={preset})")
 
@@ -346,6 +345,7 @@ def process_conversion(
             # Documento não-PDF ou PDF single page - processar direto
             logger.info(f"[MAIN JOB {job_id}] Single document - converting directly")
 
+            converter = get_converter(preset=preset)
             result = converter.convert_to_markdown(file_path, options)
 
             logger.info(f"[MAIN JOB {job_id}] Conversion complete")
