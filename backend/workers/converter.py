@@ -1,4 +1,5 @@
 import os
+from functools import lru_cache
 from pathlib import Path
 from typing import Dict, Any
 import logging
@@ -271,7 +272,15 @@ def get_converter(preset: str = None) -> DoclingConverter:
         enable_images = settings.docling_enable_images
         enable_table_structure = settings.docling_enable_table_structure
 
-    # Always create new instance for different presets
+    return _cached_converter(enable_ocr, enable_table_structure, enable_images)
+
+
+# One converter per option set and process: building one loads docling's layout
+# and table models (onto the GPU when DEVICE=cuda), so a fresh instance per task
+# reloaded the weights for every page. Two slots cover a preset plus the default
+# without letting every combination pile up in VRAM.
+@lru_cache(maxsize=2)
+def _cached_converter(enable_ocr: bool, enable_table_structure: bool, enable_images: bool) -> DoclingConverter:
     return DoclingConverter(
         enable_ocr=enable_ocr,
         enable_table_structure=enable_table_structure,
