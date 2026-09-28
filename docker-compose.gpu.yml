@@ -55,18 +55,22 @@ services:
         REQUIREMENTS_FILE: requirements-vision-cuda.txt
         TORCH_INDEX_URL: https://download.pytorch.org/whl/cu129
     environment:
-      # Docling stays on CPU. `replicas x --concurrency` processes each
-      # resolving auto -> cuda:0 would each allocate their own CUDA context
-      # plus docling layout/table weights: a near-certain OOM on one consumer
-      # GPU. See docs/GPU.md.
-      - DEVICE=cpu
+      # Docling on the GPU. Safe only because this overlay runs exactly ONE
+      # process here (replicas: 1, --concurrency=1): each extra process would
+      # add its own CUDA context plus layout/table weights on a card already
+      # holding the Whisper and vision models. Scale documents with care: every
+      # replica costs ~1-2 GB of VRAM (check `nvidia-smi`). Explicit cuda, not
+      # auto: a lost GPU fails the job loudly instead of crawling on CPU.
+      # See docs/GPU.md.
+      - DEVICE=cuda
       # Whisper alone goes to the GPU: a non-empty WHISPER_DEVICE overrides
       # DEVICE for audio. `auto` falls back to CPU if CUDA is not usable
       # (detected once per worker process, and again if the model fails on GPU).
       - WHISPER_DEVICE=${WHISPER_DEVICE:-auto}
       - WHISPER_COMPUTE_TYPE=${WHISPER_COMPUTE_TYPE:-}
     # Transcriptions no longer run here: /transcribe enqueues on ingestify-audio,
-    # served by worker-audio below.
+    # served by worker-audio below. --concurrency=1 is what keeps docling to a
+    # single CUDA context: do NOT raise it, add replicas instead.
     command: celery -A workers.celery_app worker --loglevel=info --concurrency=1 -Q ingestify -n ingestify-worker@%h
     deploy:
       replicas: 1
@@ -88,7 +92,8 @@ services:
         REQUIREMENTS_FILE: requirements-vision-cuda.txt
         TORCH_INDEX_URL: https://download.pytorch.org/whl/cu129
     environment:
-      # Docling never runs here; only Whisper, and only on the GPU. Explicit
+      # Docling never runs here (process_conversion builds its converter only on
+      # the document branch); only Whisper, and only on the GPU. Explicit
       # cuda: a container that lost the GPU fails its jobs loudly instead of
       # crawling on CPU until the time limit.
       - DEVICE=cpu
