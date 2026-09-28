@@ -68,6 +68,10 @@ class FasterWhisperTranscriber(AudioTranscriber):
             download_root=download_root
         )
 
+        # Bounded-memory spectrogram; the stock one grows with the audio length
+        from workers.audio.feature_extractor import install
+        install(self.model)
+
         logger.info(f"FasterWhisper model '{model_size}' loaded successfully")
 
     def transcribe(self, audio_path: Path, options: Dict[str, Any] = None) -> Dict[str, Any]:
