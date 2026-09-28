@@ -20,7 +20,7 @@ import { format, formatDistanceToNow } from "date-fns";
 import { jobsApi, tagsApi } from "@/lib/api";
 import { useAuthStore } from "@/lib/store/auth";
 import { loginUrl } from "@/lib/session";
-import { cn, formatApiError, formatBytes } from "@/lib/utils";
+import { cn, formatApiError, formatBytes, parseApiDate } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
 import { AppHeader } from "@/components/app-header";
 import { TagChip } from "@/components/tag-input";
@@ -71,7 +71,7 @@ const STATUS_STYLES: Record<string, string> = {
 
 function relative(date?: string | null) {
   if (!date) return null;
-  const d = new Date(date);
+  const d = parseApiDate(date);
   return isNaN(d.getTime()) ? null : { text: formatDistanceToNow(d, { addSuffix: true }), full: format(d, "PPpp") };
 }
 

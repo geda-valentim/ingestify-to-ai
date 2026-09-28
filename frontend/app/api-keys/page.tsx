@@ -13,7 +13,7 @@ import {
 import { API_URL, apiKeysApi } from "@/lib/api";
 import { useAuthStore } from "@/lib/store/auth";
 import { loginUrl } from "@/lib/session";
-import { formatApiError } from "@/lib/utils";
+import { formatApiError, parseApiDate } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
 import { AppHeader } from "@/components/app-header";
@@ -247,16 +247,16 @@ export default function ApiKeysPage() {
                         <p className="font-medium">{key.name}</p>
                         <div className="flex gap-4 mt-1 text-sm text-muted-foreground">
                           <span>
-                            Created {formatDistanceToNow(new Date(key.created_at), { addSuffix: true })}
+                            Created {formatDistanceToNow(parseApiDate(key.created_at), { addSuffix: true })}
                           </span>
                           {key.last_used_at && (
                             <span>
-                              Last used {formatDistanceToNow(new Date(key.last_used_at), { addSuffix: true })}
+                              Last used {formatDistanceToNow(parseApiDate(key.last_used_at), { addSuffix: true })}
                             </span>
                           )}
                           {key.expires_at && (
                             <span>
-                              Expires {formatDistanceToNow(new Date(key.expires_at), { addSuffix: true })}
+                              Expires {formatDistanceToNow(parseApiDate(key.expires_at), { addSuffix: true })}
                             </span>
                           )}
                         </div>
