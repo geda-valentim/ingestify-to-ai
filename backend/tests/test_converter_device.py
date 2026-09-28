@@ -180,13 +180,14 @@ class TestFailureModesAreNotSymmetric:
         default, and the conversion goes ahead.
         """
         settings_override(DEVICE="cpu")
+        # A None entry makes `import` raise ImportError even where the real
+        # docling is installed (the api/worker images); deleting the entry
+        # would just let it be imported again from disk.
         for name in (
-            "docling",
-            "docling.datamodel",
             "docling.datamodel.accelerator_options",
             "docling.datamodel.pipeline_options",
         ):
-            monkeypatch.delitem(sys.modules, name, raising=False)
+            monkeypatch.setitem(sys.modules, name, None)
         options = _PipelineOptions()
 
         # No exception: a docling shortcoming must never stop a conversion.
