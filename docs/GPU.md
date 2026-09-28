@@ -37,15 +37,22 @@ default configuration deliberately does not move all three at once.
 |---|---|---|---|
 | **Florence-2** | `POST /images/describe`, `POST /images/ocr` | transformers + torch | **Yes**, when you opt in — this is the whole point of the GPU path |
 | **Whisper** | `POST /transcribe` | faster-whisper (CTranslate2) | Follows `DEVICE`, with a safety gate |
-| **Docling** | PDF/DOCX → Markdown conversion | docling + torch | **No** — pinned to CPU in the GPU overlay, on purpose |
+| **Docling** | PDF/DOCX → Markdown conversion | docling + torch | **Yes** in the GPU overlay — `worker` runs `DEVICE=cuda` as a single process |
 
-Docling being pinned to CPU surprises people, so: the `worker` service runs `replicas: 5` at
-`--concurrency=2`. That is **10 processes**. If each one resolved `auto → cuda:0` it would
-allocate its own CUDA context *plus* its own copy of the layout and table-recognition weights.
-On a single consumer GPU that is a near-certain out-of-memory, and it presents as a generic
-`Failed to convert document` with nothing useful in the logs. Moving Docling onto a GPU is a
-separate, deliberate change that must come with reduced `replicas` and `concurrency` —
-see [`docker-compose.gpu.yml`](../docker-compose.gpu.yml).
+Docling on the GPU is only safe because the overlay runs the `worker` service as **one process**
+(`replicas: 1`, `--concurrency=1`). The base file runs `replicas: 5` at `--concurrency=2`: ten
+processes, each with its own CUDA context and its own copy of the layout and table-recognition
+weights — a near-certain out-of-memory on a consumer GPU, presenting as a generic
+`Failed to convert document`. That is why the base file never asks for a GPU and the overlay
+cuts the worker to one process before switching it to `cuda`.
+
+Each process keeps one converter per option set (`workers/converter.py`, at most two resident),
+so the weights load once per process rather than once per page. Measured on a 15-page edital
+(RTX 5060 Ti): **5.6 s** per conversion on the GPU against ~50 s on CPU, identical Markdown,
+**~0.9 GB** of VRAM. The first conversion in a process also pays ~15 s of model loading.
+
+To scale documents, add replicas and budget ~1–1.5 GB of VRAM each against `nvidia-smi`;
+never raise `--concurrency`.
 
 ### The one knob
 
@@ -217,8 +224,9 @@ Nothing else in the stack is rebuilt against CUDA.
 
 ### Level 2 — runtime: device selection and the GPU reservation
 
-The same overlay sets `DEVICE=cuda` on `worker-vision` and reserves one GPU for it, while
-pinning `worker` to `DEVICE=cpu`.
+The same overlay sets `DEVICE=cuda` on `worker-vision` and `worker` (Docling), cuts `worker` to
+a single process, and runs `worker-audio` with `WHISPER_DEVICE=cuda`, each with a GPU
+reservation.
 
 ### Do it
 
@@ -361,6 +369,7 @@ Measured with the shipped defaults: Florence-2-base-ft in float16, Whisper `turb
 | Florence-2 | `Florence-2-large-ft` (0.77 B) | ~1.6 GB | ~2.5–3.5 GB | Not the default; only worth it if quality matters more than latency |
 | Whisper | `turbo` | ~1.6 GB | **~2.0–2.5 GB** | CTranslate2, float16 |
 | Whisper | `base` | ~0.3 GB | ~0.5 GB | |
+| Docling | layout + TableFormer | — | **~0.9 GB** | Measured, 15-page PDF, tables on, OCR off |
 | CUDA context | — | — | ~0.3 GB **per process** | Unavoidable per-process overhead |
 
 **Both together, default models, one process each: budget ~4 GB of VRAM.** An 8 GB card is
@@ -372,11 +381,12 @@ Three things blow this budget, in descending order of likelihood:
 1. **Raising `--concurrency` on `worker-vision`.** It is `1` on purpose: one resident model per
    box. Concurrency 2 means two full copies of the weights *and* two CUDA contexts. Scale with
    `docker compose up -d --scale worker-vision=N` if you have the VRAM, never with concurrency.
-2. **Letting Docling onto the GPU.** 10 worker processes × (CUDA context + layout/table weights)
-   is several GB before a single page is converted. This is why `docker-compose.gpu.yml` pins
-   `worker` to `DEVICE=cpu`.
+2. **Running Docling on the GPU in more than one process.** 10 worker processes × (CUDA
+   context + layout/table weights) is several GB before a single page is converted. The GPU
+   overlay runs `worker` as exactly one process on `DEVICE=cuda`; add replicas deliberately,
+   never `--concurrency`.
 3. **Whisper and Florence-2 landing in the same process.** They do not, in the shipped compose —
-   audio runs on `worker`, vision on `worker-vision`. Keep it that way.
+   audio runs on `worker-audio`, vision on `worker-vision`. Keep it that way.
 
 Cheap knobs if you are tight on VRAM or latency:
 

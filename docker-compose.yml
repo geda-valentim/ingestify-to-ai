@@ -194,7 +194,8 @@ services:
       # NOTE: `auto` on a GPU host puts docling on the GPU in EVERY one of these
       # replicas x concurrency processes, each with its own CUDA context and
       # layout/table weights - a near-certain VRAM OOM. docker-compose.gpu.yml
-      # therefore pins this service to cpu. See docs/GPU.md.
+      # therefore cuts this service to ONE process before setting DEVICE=cuda.
+      # See docs/GPU.md.
       - DEVICE=${DEVICE:-auto}
       # Caps docling's intra-op threads so replicas x concurrency stop
       # oversubscribing the host CPU.
