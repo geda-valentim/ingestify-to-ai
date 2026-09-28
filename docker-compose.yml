@@ -232,6 +232,11 @@ services:
     environment:
       - CELERY_WORKER_NAME=ingestify-audio
       - CONVERSION_TIMEOUT_SECONDS=${TRANSCRIPTION_TIMEOUT_SECONDS:-10800}
+    # Per-replica cap: a long (45min+) audio drove each replica past 4 GB and,
+    # uncapped, the host OOM killer took down whatever it picked. With the cap,
+    # only the offending container is killed. Equal memswap_limit = no swap.
+    mem_limit: ${AUDIO_WORKER_MEM_LIMIT:-6g}
+    memswap_limit: ${AUDIO_WORKER_MEM_LIMIT:-6g}
     deploy:
       replicas: ${AUDIO_WORKER_REPLICAS:-1}
 
