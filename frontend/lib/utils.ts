@@ -77,3 +77,13 @@ export function formatBytes(bytes: number): string {
   }
   return `${value.toFixed(value < 10 ? 1 : 0)} ${units[i]}`
 }
+
+/**
+ * Parse a timestamp from the API. The backend stores and returns naive UTC
+ * ("2026-09-28T02:50:52"); `new Date()` would read that as local time and shift
+ * every date by the browser's UTC offset, so a missing offset is taken as UTC.
+ */
+export function parseApiDate(value: string): Date {
+  const hasOffset = /(Z|[+-]\d{2}:?\d{2})$/i.test(value)
+  return new Date(hasOffset ? value : `${value}Z`)
+}

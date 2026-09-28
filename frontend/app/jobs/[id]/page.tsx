@@ -28,7 +28,7 @@ import {
 import { jobsApi } from "@/lib/api";
 import { useAuthStore } from "@/lib/store/auth";
 import { loginUrl } from "@/lib/session";
-import { formatApiError, formatBytes, formatDuration } from "@/lib/utils";
+import { formatApiError, formatBytes, formatDuration, parseApiDate } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { AppHeader } from "@/components/app-header";
 import {
@@ -538,7 +538,7 @@ export default function JobStatusPage({ params }: PageProps) {
                     <p className="text-muted-foreground">Created</p>
                     <p className="font-medium">
                       {status?.created_at
-                        ? formatDistanceToNow(new Date(status.created_at), {
+                        ? formatDistanceToNow(parseApiDate(status.created_at), {
                             addSuffix: true,
                           })
                         : "-"}
@@ -552,7 +552,7 @@ export default function JobStatusPage({ params }: PageProps) {
                     <div className="flex-1 min-w-0">
                       <p className="text-muted-foreground">Started</p>
                       <p className="font-medium">
-                        {formatDistanceToNow(new Date(status.started_at), {
+                        {formatDistanceToNow(parseApiDate(status.started_at), {
                           addSuffix: true,
                         })}
                       </p>
@@ -566,7 +566,7 @@ export default function JobStatusPage({ params }: PageProps) {
                     <div className="flex-1 min-w-0">
                       <p className="text-muted-foreground">Completed</p>
                       <p className="font-medium">
-                        {formatDistanceToNow(new Date(status.completed_at), {
+                        {formatDistanceToNow(parseApiDate(status.completed_at), {
                           addSuffix: true,
                         })}
                       </p>
