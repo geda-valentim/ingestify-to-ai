@@ -47,7 +47,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from sqlalchemy.orm import Session
 
 from shared.auth import get_current_active_user
@@ -69,6 +69,15 @@ from shared.schemas import (
 from shared.tags import set_job_tags
 from shared.utils import calculate_file_checksum
 from api.tag_routes import TAGS_FORM_DESCRIPTION, parse_tags_or_422
+from api.projects_api import (
+    LocationError,
+    LocationFields,
+    UploadLocation,
+    UploadPlan,
+    prepare_upload_location,
+    resolve_upload_location,
+    upload_location_form,
+)
 # As regras de entrada de imagem (decode, limite de tamanho, magic bytes) moram
 # em `workers/vision/image_input.py` e em lugar nenhum mais. Importar daqui é de
 # graça: aquele módulo puxa apenas base64/re e os erros tipados de visão — nada
@@ -143,6 +152,26 @@ def _error(
 def _require_vision_enabled() -> None:
     if not settings.enable_image_description:
         raise _error(503, "VISION_DISABLED", VISION_DISABLED_MESSAGE)
+
+
+def _location_step(fn, *args):
+    """
+    Run a project/folder step (api/projects_api.py) and put its failure in this
+    module's error envelope, so `/images/*` answers `{"detail": {"error_code",
+    "message", "job_id"}}` for a missing project too.
+    """
+    try:
+        return fn(*args)
+    except LocationError as exc:
+        raise _error(exc.status_code, exc.error_code, str(exc.detail))
+    except HTTPException as exc:  # limits (422) and database errors (503) of get-or-add
+        code = "DATABASE_UNAVAILABLE" if exc.status_code == 503 else "INVALID_LOCATION"
+        raise _error(exc.status_code, code, str(exc.detail))
+
+
+def _plan_location(db: Session, user: User, http_request: Request, fields: LocationFields) -> UploadPlan:
+    """Parse and plan the location before touching the image (nothing is written on 422/404)."""
+    return _location_step(prepare_upload_location, db, user, http_request, fields)
 
 
 # ============================================
@@ -290,6 +319,7 @@ def _create_vision_job(
     current_user: User,
     db: Session,
     tags: Optional[List[str]] = None,
+    location: Optional[UploadLocation] = None,
 ) -> Optional[Job]:
     """
     Cria o job antes do despacho, exatamente como `/transcribe`.
@@ -324,6 +354,8 @@ def _create_vision_job(
         status=DBJobStatus.PENDING,
         job_type="MAIN",
         created_at=created_at,
+        project_id=location.project_id if location else None,
+        folder_id=location.folder_id if location else None,
     )
     try:
         db.add(db_job)
@@ -485,6 +517,8 @@ async def _run_vision(
     current_user: User,
     db: Session,
     tags: Optional[List[str]] = None,
+    plan: Optional[UploadPlan] = None,
+    path: str = "",
 ) -> Dict[str, Any]:
     """
     Valida, cria o job, despacha e espera — para os quatro pontos de entrada.
@@ -497,6 +531,11 @@ async def _run_vision(
     safe_name = _safe_filename(filename, mime)
     checksum = calculate_file_checksum(image_bytes)
 
+    # Get-or-add only once the image is known to be valid
+    location = (
+        _location_step(resolve_upload_location, db, current_user, plan, path) if plan is not None else None
+    )
+
     job_id = str(uuid4())
     db_job = _create_vision_job(
         job_id=job_id,
@@ -507,6 +546,7 @@ async def _run_vision(
         current_user=current_user,
         db=db,
         tags=tags,
+        location=location,
     )
 
     logger.info(
@@ -592,8 +632,15 @@ async def _run_vision(
         "height": payload["height"],
         "model": _model_info(payload),
         "duration_ms": int(payload.get("duration_ms", 0)),
+        "project": location.project_info() if location else None,
+        "folder": location.folder_info() if location else None,
         "_payload": payload,
     }
+
+
+def _json_location(body) -> LocationFields:
+    return LocationFields(project=body.project, project_id=body.project_id,
+                          folder=body.folder, folder_id=body.folder_id)
 
 
 def _describe_response(common: Dict[str, Any], requested_task: str) -> ImageDescribeResponse:
@@ -622,6 +669,7 @@ def _ocr_response(common: Dict[str, Any]) -> ImageOcrResponse:
 )
 async def describe_image(
     request: ImageDescribeRequest,
+    http_request: Request,
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
 ):
@@ -633,6 +681,8 @@ async def describe_image(
       é aceito e removido)
     - `filename`: nome opcional, usado no job e no storage
     - `task`: `<MORE_DETAILED_CAPTION>` (padrão), `<DETAILED_CAPTION>` ou `<CAPTION>`
+    - `project` / `project_id` (obrigatório, salvo API key vinculada a um projeto),
+      `folder` / `folder_id` (opcional): onde o job fica
 
     ## Retorno
     A descrição, os metadados da imagem e o eco de `image_base64` — os bytes
@@ -645,6 +695,8 @@ async def describe_image(
     """
     _require_vision_enabled()
 
+    tags = parse_tags_or_422(request.tags)
+    plan = _plan_location(db, current_user, http_request, _json_location(request))
     image_bytes = _decode_base64_image(request.image_base64)
     common = await _run_vision(
         kind="describe",
@@ -653,7 +705,9 @@ async def describe_image(
         task=request.task,
         current_user=current_user,
         db=db,
-        tags=parse_tags_or_422(request.tags),
+        tags=tags,
+        plan=plan,
+        path=http_request.url.path,
     )
     return _describe_response(common, request.task)
 
@@ -670,6 +724,8 @@ async def describe_image_upload(
         description="<MORE_DETAILED_CAPTION>, <DETAILED_CAPTION> ou <CAPTION>",
     ),
     tags: Optional[str] = Form(None, description=TAGS_FORM_DESCRIPTION),
+    http_request: Request = None,
+    location: LocationFields = Depends(upload_location_form),
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
 ):
@@ -693,6 +749,8 @@ async def describe_image_upload(
             f"<DETAILED_CAPTION>, <CAPTION>.",
         )
 
+    tag_list = parse_tags_or_422(tags)
+    plan = _plan_location(db, current_user, http_request, location)
     image_bytes = await file.read()
     common = await _run_vision(
         kind="describe",
@@ -701,7 +759,9 @@ async def describe_image_upload(
         task=task,
         current_user=current_user,
         db=db,
-        tags=parse_tags_or_422(tags),
+        tags=tag_list,
+        plan=plan,
+        path=http_request.url.path if http_request is not None else "",
     )
     return _describe_response(common, task)
 
@@ -709,6 +769,7 @@ async def describe_image_upload(
 @router.post("/ocr", response_model=ImageOcrResponse, summary="OCR de imagem (JSON base64)")
 async def ocr_image(
     request: ImageOcrRequest,
+    http_request: Request,
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
 ):
@@ -724,6 +785,8 @@ async def ocr_image(
     """
     _require_vision_enabled()
 
+    tags = parse_tags_or_422(request.tags)
+    plan = _plan_location(db, current_user, http_request, _json_location(request))
     image_bytes = _decode_base64_image(request.image_base64)
     common = await _run_vision(
         kind="ocr",
@@ -732,7 +795,9 @@ async def ocr_image(
         task=None,
         current_user=current_user,
         db=db,
-        tags=parse_tags_or_422(request.tags),
+        tags=tags,
+        plan=plan,
+        path=http_request.url.path,
     )
     return _ocr_response(common)
 
@@ -741,12 +806,16 @@ async def ocr_image(
 async def ocr_image_upload(
     file: UploadFile = File(..., description="Imagem (PNG, JPEG, WEBP, BMP, GIF, TIFF)"),
     tags: Optional[str] = Form(None, description=TAGS_FORM_DESCRIPTION),
+    http_request: Request = None,
+    location: LocationFields = Depends(upload_location_form),
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
 ):
     """Igual a `POST /images/ocr`, com a imagem em `multipart/form-data`."""
     _require_vision_enabled()
 
+    tag_list = parse_tags_or_422(tags)
+    plan = _plan_location(db, current_user, http_request, location)
     image_bytes = await file.read()
     common = await _run_vision(
         kind="ocr",
@@ -755,7 +824,9 @@ async def ocr_image_upload(
         task=None,
         current_user=current_user,
         db=db,
-        tags=parse_tags_or_422(tags),
+        tags=tag_list,
+        plan=plan,
+        path=http_request.url.path if http_request is not None else "",
     )
     return _ocr_response(common)
 

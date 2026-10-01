@@ -73,11 +73,29 @@ class ConvertRequest(BaseModel):
         return v
 
 
+class UploadProjectInfo(BaseModel):
+    """Where an upload went (spec 0003): the project and how it was chosen."""
+    id: str
+    name: str
+    created: bool = Field(..., description="true when this upload created the project (get-or-add)")
+    source: Literal["request", "api_key", "fallback"] = Field(
+        ..., description="request: named in the request; api_key: the key's bound project; "
+                         "fallback: UPLOAD_FALLBACK_PROJECT (emergency valve)")
+
+
+class UploadFolderInfo(BaseModel):
+    id: str
+    name: str
+    created: bool
+
+
 class JobCreatedResponse(BaseModel):
     job_id: UUID
     status: Literal["queued"]
     created_at: datetime
     message: str
+    project: Optional[UploadProjectInfo] = None
+    folder: Optional[UploadFolderInfo] = None
 
 
 class PageStatus(BaseModel):
@@ -339,6 +357,12 @@ class ImageDescribeRequest(BaseModel):
     filename: Optional[str] = Field(
         None, description="Nome de identificação opcional (usado no job e no storage)."
     )
+    project: Optional[str] = Field(
+        None, description="Nome do projeto (get-or-add). Obrigatório, a menos que a API key esteja vinculada a um projeto."
+    )
+    project_id: Optional[str] = Field(None, description="ID de um projeto existente (alternativa a `project`).")
+    folder: Optional[str] = Field(None, description="Nome da pasta no projeto (opcional, get-or-add, sem '/').")
+    folder_id: Optional[str] = Field(None, description="ID de uma pasta existente do projeto.")
     task: Literal[
         "<MORE_DETAILED_CAPTION>",
         "<DETAILED_CAPTION>",
@@ -368,6 +392,12 @@ class ImageOcrRequest(BaseModel):
         None, description="Tags do job (ex.: [\"cliente-x\", \"nf\"]). Viram minúsculas; até 20 de até 50 caracteres."
     )
     filename: Optional[str] = Field(None, description="Nome de identificação opcional.")
+    project: Optional[str] = Field(
+        None, description="Nome do projeto (get-or-add). Obrigatório, a menos que a API key esteja vinculada a um projeto."
+    )
+    project_id: Optional[str] = Field(None, description="ID de um projeto existente (alternativa a `project`).")
+    folder: Optional[str] = Field(None, description="Nome da pasta no projeto (opcional, get-or-add, sem '/').")
+    folder_id: Optional[str] = Field(None, description="ID de uma pasta existente do projeto.")
 
 
 class OcrLine(BaseModel):
@@ -408,6 +438,8 @@ class _ImageEchoResponse(BaseModel):
     height: int
     model: VisionModelInfo
     duration_ms: int
+    project: Optional[UploadProjectInfo] = None
+    folder: Optional[UploadFolderInfo] = None
 
 
 class ImageDescribeResponse(_ImageEchoResponse):

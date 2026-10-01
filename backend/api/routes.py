@@ -37,6 +37,14 @@ from api.deps import get_owned_job, get_owned_page_or_none
 from shared.utils import sanitize_upload_filename
 from shared.tags import set_job_tags
 from api.tag_routes import TAGS_FORM_DESCRIPTION, add_tags_to_existing_job, parse_tags_or_422
+from api.projects_api import (
+    LocationFields,
+    existing_job_location,
+    find_duplicate_job,
+    prepare_upload_location,
+    resolve_upload_location,
+    upload_location_form,
+)
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
@@ -57,6 +65,11 @@ settings = get_settings()
 PAGE_PDF_URL_TTL_SECONDS = 15 * 60
 
 
+def _request_path(request) -> str:
+    url = getattr(request, "url", None)
+    return getattr(url, "path", "") or ""
+
+
 @router.post("/upload", response_model=JobCreatedResponse, summary="Upload e converter arquivo")
 async def upload_and_convert(
     file: UploadFile = File(..., description="Arquivo para conversão (PDF, DOCX, HTML, etc.)"),
@@ -66,6 +79,8 @@ async def upload_and_convert(
         "fast",
         description="Quality/speed preset for PDF conversion: 'fast' (~35s/MB, text-only), 'balanced' (~70-105s/MB, with images), 'quality' (~350s/MB, with OCR)"
     ),
+    request: Request = None,
+    location: LocationFields = Depends(upload_location_form),
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
 ):
@@ -90,14 +105,16 @@ async def upload_and_convert(
     PDF, DOCX, DOC, HTML, PPTX, XLSX, RTF, ODT
 
     ## Retorno
-    Retorna imediatamente um `job_id` para consultar o progresso via `/jobs/{job_id}`
+    Retorna imediatamente um `job_id` para consultar o progresso via `/jobs/{job_id}`,
+    e onde o job ficou (`project`, `folder`)
 
     ## Exemplos:
     ```bash
     # Fast mode (default)
     curl -X POST http://localhost:8000/upload \
       -H "X-API-Key: your-api-key" \
-      -F "file=@documento.pdf"
+      -F "file=@documento.pdf" \
+      -F "project=Cliente X"
 
     # Quality mode with OCR
     curl -X POST http://localhost:8000/upload \
@@ -107,6 +124,8 @@ async def upload_and_convert(
     ```
     """
     tag_list = parse_tags_or_422(tags)
+    # Where the job goes, decided before anything is written (422/404 here leave no file behind)
+    plan = prepare_upload_location(db, current_user, request, location)
     redis_client = get_redis_client()
 
     filename = sanitize_upload_filename(file.filename)
@@ -120,14 +139,10 @@ async def upload_and_convert(
         logger.info(f"File uploaded: {filename} ({file_size_mb:.2f}MB)")
         logger.info(f"File checksum: {file_checksum}")
 
-        # Check if file already processed by this user
-        existing_job = db.query(Job).filter(
-            Job.user_id == current_user.id,
-            Job.file_checksum == file_checksum,
-            Job.job_type == "MAIN",
-            # A failed job must not swallow a resubmission: sending the file again is the retry
-            Job.status != DBJobStatus.FAILED,
-        ).first()
+        upload_location = resolve_upload_location(db, current_user, plan, _request_path(request))
+
+        # Check if file already processed by this user in this project
+        existing_job, reprocess_note = find_duplicate_job(db, current_user.id, file_checksum, upload_location)
 
         if existing_job:
             logger.info(f"Duplicate file detected! Returning existing job: {existing_job.id}")
@@ -136,7 +151,8 @@ async def upload_and_convert(
                 job_id=existing_job.id,
                 status="queued",  # Use current status from DB
                 created_at=existing_job.created_at,
-                message=f"Arquivo já foi processado anteriormente (job existente: {existing_job.id})"
+                message=f"Arquivo já foi processado anteriormente (job existente: {existing_job.id})",
+                **existing_job_location(db, existing_job, upload_location),
             )
 
         # Generate job ID for new file
@@ -176,6 +192,8 @@ async def upload_and_convert(
                 status=DBJobStatus.PENDING,
                 job_type="MAIN",
                 created_at=created_at,
+                project_id=upload_location.project_id,
+                folder_id=upload_location.folder_id,
             )
             db.add(db_job)
             set_job_tags(db_job, tag_list)
@@ -267,7 +285,9 @@ async def upload_and_convert(
             job_id=job_id,
             status="queued",
             created_at=created_at,
-            message="Job enfileirado para processamento"
+            message=reprocess_note or "Job enfileirado para processamento",
+            project=upload_location.project_info(),
+            folder=upload_location.folder_info(),
         )
     finally:
         # Remove the staged upload unless it was moved to the job directory
@@ -364,6 +384,8 @@ async def transcribe_audio(
         False,
         description="Apagar o áudio/vídeo enviado assim que a transcrição terminar (guarda só o texto)",
     ),
+    request: Request = None,
+    location: LocationFields = Depends(upload_location_form),
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
 ):
@@ -394,9 +416,14 @@ async def transcribe_audio(
       termina com sucesso; ficam só as transcrições. `DELETE /jobs/{job_id}` também
       apaga o arquivo de origem e as transcrições
 
+    ## Projeto
+    Todo job pertence a um projeto: envie `project` (nome; criado se não existir) ou
+    `project_id`, e opcionalmente `folder`/`folder_id`. Uma API key vinculada a um
+    projeto dispensa o campo. Sem projeto: 422.
+
     ## Arquivo repetido
-    Reenviar um arquivo idêntico (mesmo SHA-256) que já tem job **não falho** devolve
-    esse job em vez de criar outro: as tags novas são somadas às dele e o
+    Reenviar um arquivo idêntico (mesmo SHA-256) que já tem job **não falho** no mesmo
+    projeto devolve esse job em vez de criar outro: as tags novas são somadas às dele e o
     `output_format` enviado passa a ser o padrão do resultado. Se o job anterior
     falhou, o reenvio cria um job novo; é assim que se tenta de novo.
 
@@ -427,6 +454,7 @@ async def transcribe_audio(
     curl -X POST http://localhost:8080/transcribe \\
       -H "X-API-Key: $INGESTIFY_API_KEY" \\
       -F "file=@meeting.mp3" \\
+      -F "project=Reuniões" \\
       -F "language=pt" \\
       -F "include_timestamps=true"
     ```
@@ -487,6 +515,9 @@ async def transcribe_audio(
     media_kind = "video" if is_video else "audio"
     max_size_mb = settings.max_video_file_size_mb if is_video else settings.max_audio_file_size_mb
 
+    # Where the job goes, decided before anything is written (422/404 here leave no file behind)
+    plan = prepare_upload_location(db, current_user, request, location)
+
     # Stream the upload to disk in chunks (size limit + checksum) instead of
     # holding up to max_size_mb in memory
     staging_path = _upload_staging_path(filename, "audio")
@@ -497,14 +528,10 @@ async def transcribe_audio(
         logger.info(f"{media_kind.capitalize()} file uploaded: {filename} ({file_size_mb:.2f}MB, {mime_type})")
         logger.info(f"Audio file checksum: {file_checksum}")
 
-        # Check if file already processed by this user
-        existing_job = db.query(Job).filter(
-            Job.user_id == current_user.id,
-            Job.file_checksum == file_checksum,
-            Job.job_type == "MAIN",
-            # A failed job must not swallow a resubmission: sending the file again is the retry
-            Job.status != DBJobStatus.FAILED,
-        ).first()
+        upload_location = resolve_upload_location(db, current_user, plan, _request_path(request))
+
+        # Check if file already processed by this user in this project
+        existing_job, reprocess_note = find_duplicate_job(db, current_user.id, file_checksum, upload_location)
 
         if existing_job:
             logger.info(f"Duplicate audio file detected! Returning existing job: {existing_job.id}")
@@ -515,7 +542,8 @@ async def transcribe_audio(
                 job_id=existing_job.id,
                 status="queued",
                 created_at=existing_job.created_at,
-                message=f"Arquivo de áudio já foi processado anteriormente (job existente: {existing_job.id})"
+                message=f"Arquivo de áudio já foi processado anteriormente (job existente: {existing_job.id})",
+                **existing_job_location(db, existing_job, upload_location),
             )
 
         # Generate job ID for new file
@@ -553,6 +581,8 @@ async def transcribe_audio(
                 status=DBJobStatus.PENDING,
                 job_type="MAIN",
                 created_at=created_at,
+                project_id=upload_location.project_id,
+                folder_id=upload_location.folder_id,
             )
             db.add(db_job)
             set_job_tags(db_job, tag_list)
@@ -661,7 +691,9 @@ async def transcribe_audio(
             job_id=job_id,
             status="queued",
             created_at=created_at,
-            message="Job de transcrição de áudio enfileirado para processamento"
+            message=reprocess_note or "Job de transcrição de áudio enfileirado para processamento",
+            project=upload_location.project_info(),
+            folder=upload_location.folder_info(),
         )
     finally:
         # Remove the staged upload unless it was moved to the job directory
@@ -693,6 +725,8 @@ async def convert_document(
         None,
         description="Token de autenticação no formato 'Bearer {token}' (obrigatório para gdrive e dropbox)"
     ),
+    request: Request = None,
+    location: LocationFields = Depends(upload_location_form),
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
 ):
@@ -722,6 +756,12 @@ async def convert_document(
     - `source`: "/documents/report.pdf" (path do arquivo)
     - `authorization`: "Bearer sl.B1a2c3..." (access token)
     - `file`: Deixe vazio
+
+    ## Projeto (obrigatório) e pasta
+    `project` (nome; criado se não existir) ou `project_id`, e opcionalmente
+    `folder`/`folder_id`. Uma API key vinculada a um projeto dispensa o campo
+    (só sem JWT). Sem projeto: 422. Um arquivo repetido só é reaproveitado
+    dentro do mesmo projeto.
 
     ## Formatos suportados
     PDF, DOCX, DOC, HTML, PPTX, XLSX, RTF, ODT
@@ -757,6 +797,9 @@ async def convert_document(
     if source_type in ["gdrive", "dropbox"] and not authorization:
         raise HTTPException(status_code=401, detail="Authorization header é obrigatório para esta fonte")
 
+    # Where the job goes, decided before anything is written (422/404 here leave no file behind)
+    plan = prepare_upload_location(db, current_user, request, location)
+
     # Stream the uploaded file (if any) to disk in chunks (size limit + checksum)
     staging_path = None
     try:
@@ -777,12 +820,13 @@ async def convert_document(
             logger.info(f"File uploaded: {filename} ({file_size_mb:.2f}MB)")
             logger.info(f"File checksum: {file_checksum}")
 
-            # Check if file already processed by this user
-            existing_job = db.query(Job).filter(
-                Job.user_id == current_user.id,
-                Job.file_checksum == file_checksum,
-                Job.job_type == "MAIN"
-            ).first()
+        upload_location = resolve_upload_location(db, current_user, plan, _request_path(request))
+        reprocess_note = None
+
+        if file_checksum:
+            # Check if file already processed by this user in this project
+            # (a failed job does not count: sending the file again is the retry)
+            existing_job, reprocess_note = find_duplicate_job(db, current_user.id, file_checksum, upload_location)
 
             if existing_job:
                 logger.info(f"Duplicate file detected! Returning existing job: {existing_job.id}")
@@ -791,7 +835,8 @@ async def convert_document(
                     job_id=existing_job.id,
                     status="queued",
                     created_at=existing_job.created_at,
-                    message=f"Arquivo já foi processado anteriormente (job existente: {existing_job.id})"
+                    message=f"Arquivo já foi processado anteriormente (job existente: {existing_job.id})",
+                    **existing_job_location(db, existing_job, upload_location),
                 )
 
         # Generate job ID for new conversion
@@ -840,6 +885,8 @@ async def convert_document(
                 status=DBJobStatus.PENDING,
                 job_type="MAIN",
                 created_at=created_at,
+                project_id=upload_location.project_id,
+                folder_id=upload_location.folder_id,
             )
             db.add(db_job)
             set_job_tags(db_job, tag_list)
@@ -944,7 +991,9 @@ async def convert_document(
             job_id=job_id,
             status="queued",
             created_at=created_at,
-            message="Job enfileirado para processamento"
+            message=reprocess_note or "Job enfileirado para processamento",
+            project=upload_location.project_info(),
+            folder=upload_location.folder_info(),
         )
     finally:
         # Remove the staged upload unless it was moved to the job directory
