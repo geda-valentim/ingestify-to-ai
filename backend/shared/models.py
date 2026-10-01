@@ -25,7 +25,7 @@ KEY_TYPE = String(200).with_variant(_BINARY_KEY, "mysql").with_variant(_BINARY_K
 
 # New tables state charset/collation explicitly instead of inheriting the schema
 # default, so create_all (dev/CI) and scripts/migrate_0003_projects.py agree.
-_UTF8MB4_TABLE = {"mysql_charset": "utf8mb4", "mysql_collate": "utf8mb4_general_ci"}
+_UTF8MB4_TABLE = {"mysql_engine": "InnoDB", "mysql_charset": "utf8mb4", "mysql_collate": "utf8mb4_general_ci"}
 
 # Name of the composite index on jobs used by project counts and GET /jobs filters.
 JOBS_PROJECT_INDEX = "ix_jobs_user_type_project_folder"
