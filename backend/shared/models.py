@@ -1,4 +1,5 @@
-from sqlalchemy import Column, String, Boolean, DateTime, ForeignKey, Text, Integer, BigInteger, Enum, JSON
+from sqlalchemy import Column, String, Boolean, DateTime, ForeignKey, Text, Integer, BigInteger, Enum, JSON, Index, UniqueConstraint
+from sqlalchemy.dialects import mysql
 from sqlalchemy.orm import relationship
 from datetime import datetime
 import uuid
@@ -9,6 +10,26 @@ from shared.database import Base
 def generate_uuid():
     """Generate UUID as string"""
     return str(uuid.uuid4())
+
+
+# Column type of a project/folder `name_key` (see shared/projects.py).
+#
+# Binary collation on MariaDB: the unique index must compare exactly what the
+# Python normalisation computed. With utf8mb4_general_ci it would consider equal
+# keys that name_key() keeps apart (e.g. Cyrillic "й"/"и"), the INSERT would
+# collide and the Python-equality re-read would never find the row.
+# With mysql+pymysql the dialect is called "mysql" even against MariaDB; the
+# "mariadb" variant covers a mariadb+pymysql URL.
+_BINARY_KEY = mysql.VARCHAR(200, charset="utf8mb4", collation="utf8mb4_bin")
+KEY_TYPE = String(200).with_variant(_BINARY_KEY, "mysql").with_variant(_BINARY_KEY, "mariadb")
+
+# New tables state charset/collation explicitly instead of inheriting the schema
+# default, so create_all (dev/CI) and scripts/migrate_0003_projects.py agree.
+_UTF8MB4_TABLE = {"mysql_charset": "utf8mb4", "mysql_collate": "utf8mb4_general_ci"}
+
+# Name of the composite index on jobs used by project counts and GET /jobs filters.
+JOBS_PROJECT_INDEX = "ix_jobs_user_type_project_folder"
+JOBS_PROJECT_INDEX_COLUMNS = ("user_id", "job_type", "project_id", "folder_id", "status", "created_at")
 
 
 class JobStatus(str, enum.Enum):
@@ -63,6 +84,10 @@ class APIKey(Base):
     expires_at = Column(DateTime)
     is_active = Column(Boolean, default=True, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    # Project that uploads made with this key go to when the request names none.
+    # No ForeignKey on purpose (spec 0003 § 4.2): the binding is checked by the
+    # application when it is written and again when it is used.
+    project_id = Column(String(36), nullable=True)
 
     # Relationship
     user = relationship("User", back_populates="api_keys")
@@ -74,6 +99,12 @@ class APIKey(Base):
 class Job(Base):
     """Job model - stores metadata about conversion jobs"""
     __tablename__ = "jobs"
+    __table_args__ = (
+        # Covers the per-project counts (GROUP BY project_id, folder_id, status)
+        # and GET /jobs filtered by project/folder ordered by date. The migration
+        # script creates the same index under the same name.
+        Index(JOBS_PROJECT_INDEX, *JOBS_PROJECT_INDEX_COLUMNS),
+    )
 
     id = Column(String(36), primary_key=True, default=generate_uuid)  # job_id
     user_id = Column(String(36), ForeignKey("users.id", ondelete="SET NULL"), index=True)
@@ -104,6 +135,12 @@ class Job(Base):
     # Hierarchical job tracking
     parent_job_id = Column(String(36), ForeignKey("jobs.id", ondelete="CASCADE"))
     job_type = Column(String(20))  # MAIN, SPLIT, PAGE, MERGE, DOWNLOAD, CRAWLER
+
+    # Location (MAIN jobs only; children inherit through the parent). No
+    # ForeignKey on purpose: adding one to `jobs` rebuilds the table
+    # (ALGORITHM=COPY) on MariaDB. Integrity is kept by the application.
+    project_id = Column(String(36), nullable=True)
+    folder_id = Column(String(36), nullable=True)
 
     # Crawler-specific fields (STI pattern - only for job_type='crawler')
     crawler_config = Column(JSON, nullable=True)  # CrawlerConfig (mode, engine, retry, assets, proxy)
@@ -163,6 +200,62 @@ class JobTag(Base):
     tag = Column(String(50), primary_key=True, index=True)
 
     job = relationship("Job", back_populates="tag_rows")
+
+
+class Project(Base):
+    """
+    A user's project. Every MAIN job belongs to exactly one (spec 0003).
+
+    `name` is the display name (case and accents kept); `name_key` is the
+    normalised, immutable identity used by get-or-add (shared/projects.py).
+    """
+    __tablename__ = "projects"
+    __table_args__ = (
+        UniqueConstraint("user_id", "name_key", name="uq_projects_user_key"),
+        _UTF8MB4_TABLE,
+    )
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    user_id = Column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    name = Column(String(100), nullable=False)
+    name_key = Column(KEY_TYPE, nullable=False)
+    description = Column(Text)
+    archived_at = Column(DateTime)  # phase 2; the column exists from the start
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    def __repr__(self):
+        return f"<Project(id={self.id}, user_id={self.user_id}, name={self.name})>"
+
+
+class Folder(Base):
+    """A folder inside a project (one level only; '/' is reserved in names)."""
+    __tablename__ = "folders"
+    __table_args__ = (
+        UniqueConstraint("project_id", "name_key", name="uq_folders_project_key"),
+        _UTF8MB4_TABLE,
+    )
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    project_id = Column(String(36), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    # Denormalised from the project so ownership checks are a single lookup.
+    user_id = Column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    name = Column(String(100), nullable=False)
+    name_key = Column(KEY_TYPE, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    def __repr__(self):
+        return f"<Folder(id={self.id}, project_id={self.project_id}, name={self.name})>"
+
+
+class AppMigration(Base):
+    """Markers of one-shot data migrations (e.g. "0003_backfill", "0003_tail")."""
+    __tablename__ = "app_migrations"
+    __table_args__ = (_UTF8MB4_TABLE,)
+
+    name = Column(String(64), primary_key=True)
+    applied_at = Column(DateTime, nullable=False)  # UTC, application clock
 
 
 class Page(Base):
