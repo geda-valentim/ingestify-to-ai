@@ -130,7 +130,7 @@ app.add_middleware(
     allow_origins=cors_origins,
     allow_credentials=True,
     # Methods actually exposed by the API (plus the CORS preflight verb).
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     # Headers the frontend / API clients actually send.
     allow_headers=["Authorization", "Content-Type", "Accept", "X-API-Key"],
 )
@@ -158,6 +158,40 @@ async def global_exception_handler(request: Request, exc: Exception):
     )
 
 
+def init_database_on_boot() -> None:
+    """
+    Schema guard, create_all and the spec 0003 boot steps (§ 4.3, step 5).
+
+    The guard runs BEFORE init_db and OUTSIDE the try below on purpose: that
+    try swallows every error unless ENVIRONMENT == "production", and production
+    runs with ENVIRONMENT=development. A database that has `jobs` but not the
+    0003 columns ends the process (SystemExit(1)) whatever ENVIRONMENT says.
+    """
+    from shared import database
+    from shared.migration_0003 import boot_schema_guard, finish_boot_migration
+
+    db_state = boot_schema_guard(database.engine)
+
+    # Initialize MySQL database (create tables if they don't exist)
+    try:
+        logger.info("Initializing MySQL database...")
+        database.init_db()
+        logger.info("✓ MySQL database initialized successfully")
+    except Exception as e:
+        logger.error(f"✗ Failed to initialize MySQL database: {e}")
+        if settings.environment == "production":
+            raise  # Fail fast in production
+
+    if db_state == "unreachable":
+        return
+    try:
+        finish_boot_migration(database.engine, fresh=db_state == "empty")
+    except Exception as e:
+        logger.error(f"✗ Spec 0003 boot migration step failed: {e}", exc_info=True)
+        if settings.environment == "production":
+            raise
+
+
 # Startup/Shutdown events
 @app.on_event("startup")
 async def startup_event():
@@ -179,16 +213,7 @@ async def startup_event():
     from shared.auth import validate_jwt_secret
     validate_jwt_secret(settings.jwt_secret_key)
 
-    # Initialize MySQL database (create tables if they don't exist)
-    try:
-        from shared.database import init_db
-        logger.info("Initializing MySQL database...")
-        init_db()
-        logger.info("✓ MySQL database initialized successfully")
-    except Exception as e:
-        logger.error(f"✗ Failed to initialize MySQL database: {e}")
-        if settings.environment == "production":
-            raise  # Fail fast in production
+    init_database_on_boot()
 
     # Check Elasticsearch connection
     try:
