@@ -78,8 +78,10 @@ def test_ddl_only_adds_what_is_missing(legacy):
 def test_mariadb_statements_never_copy_the_jobs_table():
     alter = m.sql_add_columns("jobs", ["project_id", "folder_id"], mysql=True)
     assert alter == [
-        "ALTER TABLE jobs WAIT 5 ADD COLUMN project_id VARCHAR(36) NULL, "
-        "ADD COLUMN folder_id VARCHAR(36) NULL, ALGORITHM=INSTANT"
+        "ALTER TABLE jobs WAIT 5 "
+        "ADD COLUMN project_id VARCHAR(36) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NULL, "
+        "ADD COLUMN folder_id VARCHAR(36) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NULL, "
+        "ALGORITHM=INSTANT"
     ]
     index = m.sql_create_index(mysql=True)
     assert "WAIT 5 ALGORITHM=INPLACE LOCK=NONE" in index

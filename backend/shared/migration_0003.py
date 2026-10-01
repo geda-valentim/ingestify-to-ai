@@ -168,7 +168,13 @@ def sql_add_columns(table: str, columns: Iterable[str], mysql: bool) -> List[str
     if not columns:
         return []
     if mysql:
-        adds = ", ".join(f"ADD COLUMN {c} VARCHAR(36) NULL" for c in columns)
+        # Same charset/collation as projects.id / folders.id, whatever the table's
+        # own default: the GET /jobs LEFT JOIN on these ids must never hit
+        # "Illegal mix of collations".
+        adds = ", ".join(
+            f"ADD COLUMN {c} VARCHAR(36) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NULL"
+            for c in columns
+        )
         return [f"ALTER TABLE {table} WAIT {LOCK_WAIT_SECONDS} {adds}, ALGORITHM=INSTANT"]
     return [f"ALTER TABLE {table} ADD COLUMN {c} VARCHAR(36) NULL" for c in columns]
 

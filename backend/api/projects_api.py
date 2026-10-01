@@ -218,7 +218,13 @@ def prepare_upload_location(db: Session, user: User, request, fields: LocationFi
     """Steps 1 and 2 together: parse the fields, then plan without writing."""
     parsed = parse_location_or_422(fields)
     api_key = getattr(getattr(request, "state", None), "api_key", None)
-    return plan_upload_location(db, user, api_key, parsed)
+    plan = plan_upload_location(db, user, api_key, parsed)
+    # Planning only reads. End that transaction before the upload is streamed:
+    # otherwise its read view (and metadata locks on api_keys/projects/folders)
+    # stays open for the whole stream, and the dedup query after it would read
+    # the pre-stream snapshot. ORM objects in the plan are reloaded on access.
+    db.rollback()
+    return plan
 
 
 # ---------------------------------------------------------------------------

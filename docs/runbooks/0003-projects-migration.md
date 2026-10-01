@@ -15,7 +15,7 @@ from the API image is enough. It does not touch the running containers:
 
 ```bash
 NEW=/path/to/checkout-of-the-new-code
-IMG=$(docker inspect --format '{{.Config.Image}}' ingestify-to-ai-api-1)
+IMG=$(docker inspect --format '{{.Config.Image}}' ingestify-api)
 docker run --rm -it --network host -v "$NEW":/mig:ro -w /mig --entrypoint python "$IMG" \
   scripts/migrate_0003_projects.py --database-url 'mysql+pymysql://USER:PASS@127.0.0.1:3306/ingestify' --check
 ```
@@ -32,12 +32,25 @@ docker run --rm -it --network host -v "$NEW":/mig:ro -w /mig --entrypoint python
 | 1 | DDL | the same command without `--check`. It asks for confirmation; `--yes` skips the prompt. A lock timeout is retried 5× at 30 s intervals, then the script aborts cleanly. |
 | 2 | Code pre-flight | printed right after step 1. Continue only on `OK`. |
 | 3 | Backfill | runs right after step 2. It prints the API keys bound to "Inbox"; re-bind the ones that deserve their own project. |
-| 4 | Deploy | api + workers + frontend |
+| 4 | Deploy | **Only now** `git pull` / merge into `/var/app/ingestify-to-ai`, never before step 2 printed `OK`: that tree is bind-mounted, so any worker restarting (an OOM kill is enough) would load the new `models.py` and fail on the missing columns. Then restart api + workers and rebuild the frontend. |
 | 5 | API boot | automatic: the schema guard runs, then the one-shot tail backfill, then the invariant check. If the guard fails, the API exits with `SystemExit(1)`. |
 
 The process-level environment variables are `UPLOAD_FALLBACK_PROJECT` (empty by default),
-`MAX_PROJECTS_PER_USER` (200) and `MAX_FOLDERS_PER_PROJECT` (500). The API container only
-sees them if `docker-compose.yml` passes them in its `environment:` block.
+`MAX_PROJECTS_PER_USER` (200) and `MAX_FOLDERS_PER_PROJECT` (500); `docker-compose.yml`
+passes them to the `api` service, so set them in `.env`.
+
+## Staging checklist (before production)
+
+Against a copy of the production database (`mariadb-dump` from step 0b restored into a
+scratch MariaDB 10.11):
+
+- Run steps 0–3 and time step 1 with a long transcription holding a session open.
+- Concurrent get-or-add on real InnoDB: fire ~20 parallel uploads naming the same new
+  project; exactly one project row must exist afterwards and every upload must succeed
+  (the unit test runs on SQLite, which serialises writers and cannot reproduce the
+  REPEATABLE READ snapshot the rollback-before-re-read guards against).
+- Replay the production client's request (`POST /transcribe` with only its API key,
+  `output_format=json`, `purge_source=true`) and check it lands in the bound project.
 
 ## Rollback
 
