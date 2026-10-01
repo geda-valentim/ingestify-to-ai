@@ -29,24 +29,38 @@ disk for a request that is going to fail:
 
 import logging
 from dataclasses import dataclass, field
-from typing import Optional, Tuple
+from datetime import datetime
+from typing import Dict, List, Optional, Tuple
 
-from fastapi import Form, HTTPException
-from sqlalchemy import or_
+from fastapi import APIRouter, Depends, Form, Query
+from pydantic import BaseModel, Field
+from sqlalchemy import func, or_
 from sqlalchemy.exc import InterfaceError, OperationalError
 from sqlalchemy.orm import Session
 
+from api.deps import (
+    FOLDER_NOT_FOUND_DETAIL,
+    PROJECT_NOT_FOUND_DETAIL,
+    LocationError,
+    get_owned_project,
+    owned_folder_or_404,
+    owned_project_or_404,
+)
+from shared.auth import get_current_active_user
 from shared.config import get_settings
-from shared.models import Folder, Job, JobStatus as DBJobStatus, Project, User
+from shared.database import get_db
+from shared.models import APIKey, Folder, Job, JobStatus as DBJobStatus, Project, User
 from shared.projects import (
     DB_UNAVAILABLE_DETAIL,
     InvalidNameError,
+    find_folder,
     find_project,
     get_or_create_folder,
     get_or_create_project,
+    name_key,
     validate_name,
 )
-from shared.schemas import UploadFolderInfo, UploadProjectInfo
+from shared.schemas import ProjectRef, UploadFolderInfo, UploadProjectInfo
 
 logger = logging.getLogger(__name__)
 
@@ -60,8 +74,6 @@ KEY_PROJECT_GONE_DETAIL = (
     "O projeto vinculado a esta API key não existe mais. Informe o campo 'project' "
     "(nome; é criado se não existir) ou 'project_id', ou vincule a key a outro projeto em /api-keys."
 )
-PROJECT_NOT_FOUND_DETAIL = "Projeto não encontrado"
-FOLDER_NOT_FOUND_DETAIL = "Pasta não encontrada"
 FOLDER_NOT_IN_PROJECT_DETAIL = "A pasta não pertence ao projeto informado"
 PROJECT_ARCHIVED_DETAIL = "Projeto arquivado"
 
@@ -72,14 +84,6 @@ PROJECT_FORM_DESCRIPTION = (
 PROJECT_ID_FORM_DESCRIPTION = "ID de um projeto existente (alternativa a 'project'; nunca cria)."
 FOLDER_FORM_DESCRIPTION = "Nome da pasta dentro do projeto (opcional; criada se não existir; sem '/')."
 FOLDER_ID_FORM_DESCRIPTION = "ID de uma pasta existente do projeto (alternativa a 'folder')."
-
-
-class LocationError(HTTPException):
-    """An HTTPException that also carries a machine-readable code (used by /images/*)."""
-
-    def __init__(self, status_code: int, error_code: str, detail: str):
-        super().__init__(status_code=status_code, detail=detail)
-        self.error_code = error_code
 
 
 # ---------------------------------------------------------------------------
@@ -138,24 +142,6 @@ def parse_location_or_422(fields: LocationFields) -> ParsedLocation:
         raise LocationError(422, "INVALID_LOCATION", str(e))
     return ParsedLocation(project_name=project_name, project_id=project_id,
                           folder_name=folder_name, folder_id=folder_id)
-
-
-# ---------------------------------------------------------------------------
-# Ownership (404 for "does not exist" and "not yours" alike)
-# ---------------------------------------------------------------------------
-
-def owned_project_or_404(db: Session, project_id: str, user: User) -> Project:
-    project = db.get(Project, str(project_id)) if project_id else None
-    if project is None or project.user_id != user.id:
-        raise LocationError(404, "PROJECT_NOT_FOUND", PROJECT_NOT_FOUND_DETAIL)
-    return project
-
-
-def owned_folder_or_404(db: Session, folder_id: str, user: User) -> Folder:
-    folder = db.get(Folder, str(folder_id)) if folder_id else None
-    if folder is None or folder.user_id != user.id:
-        raise LocationError(404, "FOLDER_NOT_FOUND", FOLDER_NOT_FOUND_DETAIL)
-    return folder
 
 
 def bound_project(db: Session, api_key, user: User) -> Optional[Project]:
@@ -349,3 +335,177 @@ def existing_job_location(db: Session, job: Job, location: UploadLocation) -> di
         "project": location.project_info(),
         "folder": UploadFolderInfo(id=folder.id, name=folder.name, created=False) if folder else None,
     }
+
+
+# ===========================================================================
+# Read API (phase 1): GET /projects, name resolution
+# ===========================================================================
+
+class ProjectFolderSummary(BaseModel):
+    id: str
+    name: str
+    job_count: int
+
+
+class ProjectSummary(BaseModel):
+    id: str
+    name: str
+    description: Optional[str] = None
+    archived: bool
+    job_count: int
+    root_job_count: int = Field(..., description="Jobs of the project that are in no folder")
+    failed_count: int
+    active_count: int = Field(..., description="Jobs queued or processing")
+    last_job_at: Optional[datetime] = None
+    api_keys: List[ProjectRef] = Field(..., description="API keys bound to this project")
+    folders: Optional[List[ProjectFolderSummary]] = Field(None, description="Only with ?include=folders")
+
+
+class ProjectLimits(BaseModel):
+    max_projects: int
+    max_folders_per_project: int
+
+
+class ProjectListResponse(BaseModel):
+    projects: List[ProjectSummary]
+    limits: ProjectLimits
+
+
+class NameResolveResponse(BaseModel):
+    valid: bool
+    match: Optional[ProjectRef] = Field(None, description="The existing project/folder, or null if it would be created")
+    error: Optional[str] = Field(None, description="Why the name is not acceptable (valid=false)")
+
+
+router = APIRouter(tags=["Projects"])
+
+_ACTIVE = (DBJobStatus.PENDING, DBJobStatus.PROCESSING)
+
+
+@router.get(
+    "/projects",
+    response_model=ProjectListResponse,
+    response_model_exclude_unset=True,
+    summary="Listar projetos com contagens",
+)
+async def list_projects(
+    include: Optional[str] = Query(None, description="`folders` inclui as pastas de cada projeto"),
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Os projetos do usuário, com contagens de jobs MAIN, os mais recentes primeiro
+    (`last_job_at` desc, depois nome). `?include=folders` traz as pastas de cada
+    projeto, com contagem.
+
+    As contagens vêm de um único `GROUP BY project_id, folder_id, status`.
+    """
+    with_folders = "folders" in {part.strip() for part in (include or "").split(",")}
+
+    projects = db.query(Project).filter(Project.user_id == current_user.id).all()
+    stats = {p.id: {"job_count": 0, "root_job_count": 0, "failed_count": 0, "active_count": 0,
+                    "last_job_at": None} for p in projects}
+    folder_counts: Dict[str, int] = {}
+
+    rows = (
+        db.query(Job.project_id, Job.folder_id, Job.status, func.count(Job.id), func.max(Job.created_at))
+        .filter(Job.user_id == current_user.id, Job.job_type == "MAIN", Job.project_id.isnot(None))
+        .group_by(Job.project_id, Job.folder_id, Job.status)
+        .all()
+    )
+    for project_id, folder_id, status, count, last in rows:
+        st = stats.get(project_id)
+        if st is None:
+            continue  # a job pointing at a deleted project
+        st["job_count"] += count
+        if folder_id is None:
+            st["root_job_count"] += count
+        else:
+            folder_counts[folder_id] = folder_counts.get(folder_id, 0) + count
+        if status == DBJobStatus.FAILED:
+            st["failed_count"] += count
+        elif status in _ACTIVE:
+            st["active_count"] += count
+        if last is not None and (st["last_job_at"] is None or last > st["last_job_at"]):
+            st["last_job_at"] = last
+
+    keys_by_project: Dict[str, List[ProjectRef]] = {}
+    for key_id, key_name, project_id in (
+        db.query(APIKey.id, APIKey.name, APIKey.project_id)
+        .filter(APIKey.user_id == current_user.id, APIKey.project_id.isnot(None))
+        .order_by(APIKey.name)
+    ):
+        keys_by_project.setdefault(project_id, []).append(ProjectRef(id=key_id, name=key_name or ""))
+
+    folders_by_project: Dict[str, List[ProjectFolderSummary]] = {}
+    if with_folders:
+        for folder in db.query(Folder).filter(Folder.user_id == current_user.id).all():
+            folders_by_project.setdefault(folder.project_id, []).append(ProjectFolderSummary(
+                id=folder.id, name=folder.name, job_count=folder_counts.get(folder.id, 0)))
+        for folders in folders_by_project.values():
+            folders.sort(key=lambda f: name_key(f.name))  # accent-insensitive, like the keys
+
+    projects.sort(key=lambda p: p.name_key)
+    projects.sort(key=lambda p: stats[p.id]["last_job_at"] or datetime.min, reverse=True)
+
+    summaries = []
+    for p in projects:
+        fields = dict(
+            id=p.id, name=p.name, description=p.description, archived=p.archived_at is not None,
+            api_keys=keys_by_project.get(p.id, []), **stats[p.id],
+        )
+        if with_folders:
+            fields["folders"] = folders_by_project.get(p.id, [])
+        summaries.append(ProjectSummary(**fields))
+
+    settings = get_settings()
+    return ProjectListResponse(
+        projects=summaries,
+        limits=ProjectLimits(max_projects=settings.max_projects_per_user,
+                             max_folders_per_project=settings.max_folders_per_project),
+    )
+
+
+def _resolve(kind: str, name: str, find) -> NameResolveResponse:
+    try:
+        _display, key = validate_name(name, kind)
+    except InvalidNameError as e:
+        return NameResolveResponse(valid=False, error=str(e))
+    found = find(key)
+    return NameResolveResponse(valid=True, match=ProjectRef(id=found.id, name=found.name) if found else None)
+
+
+@router.get(
+    "/projects/resolve",
+    response_model=NameResolveResponse,
+    response_model_exclude_unset=True,
+    summary="Um nome de projeto casa com um projeto existente?",
+)
+async def resolve_project_name(
+    name: str = Query(..., description="O texto digitado"),
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Diz, sem criar nada, se `name` é um projeto existente (pela regra de
+    normalização do backend: `reuniao` casa com "Reunião") ou se seria criado.
+
+    `{"valid": true, "match": {"id", "name"}}`, `{"valid": true, "match": null}`
+    ou `{"valid": false, "error": "..."}`. Sempre 200.
+    """
+    return _resolve("project", name, lambda key: find_project(db, current_user.id, key))
+
+
+@router.get(
+    "/projects/{project_id}/folders/resolve",
+    response_model=NameResolveResponse,
+    response_model_exclude_unset=True,
+    summary="Um nome de pasta casa com uma pasta existente do projeto?",
+)
+async def resolve_folder_name(
+    name: str = Query(..., description="O texto digitado"),
+    project: Project = Depends(get_owned_project),
+    db: Session = Depends(get_db),
+):
+    """Igual a `GET /projects/resolve`, para uma pasta do projeto. Projeto alheio: 404."""
+    return _resolve("folder", name, lambda key: find_folder(db, project.id, key))

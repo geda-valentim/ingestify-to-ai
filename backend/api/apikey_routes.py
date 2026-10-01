@@ -1,12 +1,14 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from datetime import datetime, timedelta
-from typing import List
+from typing import Dict, List, Optional
 from uuid import UUID
 
+from api.deps import owned_project_or_404
 from shared.database import get_db
-from shared.models import User, APIKey
-from shared.schemas import APIKeyCreate, APIKeyResponse, APIKeyInfo
+from shared.models import User, APIKey, Project
+from shared.projects import InvalidNameError, get_or_create_project
+from shared.schemas import APIKeyCreate, APIKeyResponse, APIKeyInfo, APIKeyProjectUpdate, ProjectRef
 from shared.auth import (
     generate_api_key,
     hash_api_key,
@@ -14,6 +16,32 @@ from shared.auth import (
 )
 
 router = APIRouter()
+
+
+def _project_ref(project: Optional[Project]) -> Optional[ProjectRef]:
+    return ProjectRef(id=project.id, name=project.name) if project is not None else None
+
+
+def _bound_project(db: Session, key: APIKey, projects: Optional[Dict[str, Project]] = None) -> Optional[Project]:
+    """The key's project if the binding is valid (exists, same owner); else None."""
+    if not key.project_id:
+        return None
+    project = projects.get(key.project_id) if projects is not None else db.get(Project, key.project_id)
+    if project is None or project.user_id != key.user_id:
+        return None
+    return project
+
+
+def _key_info(key: APIKey, project: Optional[Project]) -> APIKeyInfo:
+    return APIKeyInfo(
+        id=UUID(key.id),
+        name=key.name,
+        last_used_at=key.last_used_at,
+        expires_at=key.expires_at,
+        is_active=key.is_active,
+        created_at=key.created_at,
+        project=_project_ref(project),
+    )
 
 
 @router.post("/", response_model=APIKeyResponse, status_code=status.HTTP_201_CREATED)
@@ -29,9 +57,14 @@ async def create_api_key(
     ```json
     {
       "name": "Production Server",
-      "expires_in_days": 30  // optional, null = never expires
+      "expires_in_days": 30,  // optional, null = never expires
+      "project": "Transcrições automáticas"  // optional: name (get-or-add) or "project_id"
     }
     ```
+
+    Uploads made with a key bound to a project, that do not name a project,
+    go to that project. A request that also sends a JWT is a JWT request and
+    does not use the binding.
 
     ## Returns:
     ```json
@@ -52,6 +85,20 @@ async def create_api_key(
     ## Errors:
     - 401: Not authenticated
     """
+    # Bound project, resolved before anything else is written (get-or-add commits)
+    project = None
+    project_name = (key_data.project or "").strip() or None
+    project_id = (key_data.project_id or "").strip() or None
+    if project_name and project_id:
+        raise HTTPException(status_code=422, detail="Envie 'project' ou 'project_id', não os dois")
+    if project_id:
+        project = owned_project_or_404(db, project_id, current_user)
+    elif project_name:
+        try:
+            project, _created = get_or_create_project(db, current_user.id, project_name, origin="api_key_create")
+        except InvalidNameError as e:
+            raise HTTPException(status_code=422, detail=str(e))
+
     # Generate API key
     plain_key = generate_api_key()
     key_hash = hash_api_key(plain_key)
@@ -68,6 +115,7 @@ async def create_api_key(
         name=key_data.name,
         expires_at=expires_at,
         is_active=True,
+        project_id=project.id if project is not None else None,
     )
 
     db.add(new_key)
@@ -81,6 +129,7 @@ async def create_api_key(
         api_key=plain_key,  # Plain key - only shown once!
         expires_at=new_key.expires_at,
         created_at=new_key.created_at,
+        project=_project_ref(_bound_project(db, new_key)),
     )
 
 
@@ -115,18 +164,42 @@ async def list_api_keys(
     - 401: Not authenticated
     """
     keys = db.query(APIKey).filter(APIKey.user_id == current_user.id).all()
+    projects = {p.id: p for p in db.query(Project).filter(Project.user_id == current_user.id)}
 
-    return [
-        APIKeyInfo(
-            id=UUID(key.id),
-            name=key.name,
-            last_used_at=key.last_used_at,
-            expires_at=key.expires_at,
-            is_active=key.is_active,
-            created_at=key.created_at,
-        )
-        for key in keys
-    ]
+    return [_key_info(key, _bound_project(db, key, projects)) for key in keys]
+
+
+@router.patch("/{key_id}", response_model=APIKeyInfo)
+async def update_api_key_project(
+    key_id: UUID,
+    body: APIKeyProjectUpdate,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Bind the key to a project, or unbind it (`{"project_id": null}`)
+
+    Uploads made with this key that name no project go to the bound project.
+    A key without a project must send `project` on every upload (422 otherwise).
+    Re-binding changes where new uploads go; a file already processed in another
+    project is processed again in the new one.
+
+    ## Errors:
+    - 404: API key or project not found (or not yours)
+    """
+    key = db.query(APIKey).filter(
+        APIKey.id == str(key_id),
+        APIKey.user_id == current_user.id
+    ).first()
+    if not key:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="API key not found")
+
+    project_id = (body.project_id or "").strip() or None
+    project = owned_project_or_404(db, project_id, current_user) if project_id else None
+    key.project_id = project.id if project is not None else None
+    db.commit()
+    db.refresh(key)
+    return _key_info(key, project)
 
 
 @router.delete("/{key_id}", status_code=status.HTTP_204_NO_CONTENT)
