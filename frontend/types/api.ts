@@ -130,7 +130,7 @@ export interface NameResolveResponse {
 export interface UploadProjectInfo extends ProjectRef {
   created: boolean;
   /** "api_key": the request named no project and the key's binding was used. */
-  source: "request" | "api_key";
+  source: "request" | "api_key" | "fallback";
 }
 
 /** `folder` in an upload response. */
