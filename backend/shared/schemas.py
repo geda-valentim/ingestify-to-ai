@@ -73,6 +73,17 @@ class ConvertRequest(BaseModel):
         return v
 
 
+class ProjectRef(BaseModel):
+    """A project as other resources point at it."""
+    id: str
+    name: str
+
+
+class FolderRef(BaseModel):
+    id: str
+    name: str
+
+
 class UploadProjectInfo(BaseModel):
     """Where an upload went (spec 0003): the project and how it was chosen."""
     id: str
@@ -153,6 +164,10 @@ class JobStatusResponse(BaseModel):
     # Nome de identificação
     name: Optional[str] = None
     tags: List[str] = []
+
+    # Onde o job está (spec 0003). Jobs filhos herdam do job MAIN.
+    project: Optional[ProjectRef] = None
+    folder: Optional[FolderRef] = None
 
     # Para MAIN jobs
     parent_job_id: Optional[UUID] = None
@@ -269,6 +284,17 @@ class APIKeyCreate(BaseModel):
     """Schema for creating API key"""
     name: str = Field(..., min_length=1, max_length=100, example="Production Server")
     expires_in_days: Optional[int] = Field(None, ge=1, le=365, example=30)
+    project: Optional[str] = Field(
+        None, description="Projeto vinculado, por nome (criado se não existir). Exclusivo com project_id."
+    )
+    project_id: Optional[str] = Field(None, description="Projeto vinculado, por ID. Exclusivo com project.")
+
+
+class APIKeyProjectUpdate(BaseModel):
+    """PATCH /api-keys/{key_id}: bind the key to a project, or unbind it with null."""
+    project_id: Optional[str] = Field(
+        ..., description="Projeto para onde vão os uploads desta key que não dizem o projeto; null desvincula."
+    )
 
 
 class APIKeyResponse(BaseModel):
@@ -278,6 +304,7 @@ class APIKeyResponse(BaseModel):
     api_key: str  # Only returned once during creation
     expires_at: Optional[datetime] = None
     created_at: datetime
+    project: Optional[ProjectRef] = None
 
     class Config:
         from_attributes = True
@@ -291,6 +318,7 @@ class APIKeyInfo(BaseModel):
     expires_at: Optional[datetime] = None
     is_active: bool
     created_at: datetime
+    project: Optional[ProjectRef] = None
 
     class Config:
         from_attributes = True

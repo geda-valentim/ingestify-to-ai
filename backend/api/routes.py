@@ -29,11 +29,11 @@ from shared.elasticsearch_client import get_es_client
 from shared.minio_client import get_minio_client
 from shared.transcripts import TRANSCRIPT_CONTENT_TYPES, TRANSCRIPT_FORMATS, transcript_object_name
 from shared.database import SessionLocal, get_db
-from shared.models import Job, JobTag, Page, JobStatus as DBJobStatus, User
+from shared.models import Folder, Job, JobTag, Page, Project, JobStatus as DBJobStatus, User
 from shared.config import get_settings
 from shared.utils import calculate_file_checksum
 from shared.auth import get_current_active_user
-from api.deps import get_owned_job, get_owned_page_or_none
+from api.deps import get_owned_job, get_owned_page_or_none, owned_folder_or_404, owned_project_or_404
 from shared.utils import sanitize_upload_filename
 from shared.tags import set_job_tags
 from api.tag_routes import TAGS_FORM_DESCRIPTION, add_tags_to_existing_job, parse_tags_or_422
@@ -1001,6 +1001,16 @@ async def convert_document(
             staging_path.unlink(missing_ok=True)
 
 
+def _job_location_refs(db: Session, job: Optional[Job]) -> dict:
+    """`project` / `folder` of a job as {id, name} (None when it has none)."""
+    project = db.get(Project, job.project_id) if job is not None and job.project_id else None
+    folder = db.get(Folder, job.folder_id) if job is not None and job.folder_id else None
+    return {
+        "project": {"id": project.id, "name": project.name} if project else None,
+        "folder": {"id": folder.id, "name": folder.name} if folder else None,
+    }
+
+
 @router.get("/jobs/{job_id}", response_model=JobStatusResponse)
 async def get_job_status(
     job_id: str,
@@ -1071,6 +1081,8 @@ async def get_job_status(
             owned_job.name if owned_job is not None and str(owned_job.id) == job_id else None
         ),
         "tags": owned_job.tags if owned_job is not None and str(owned_job.id) == job_id else [],
+        # Children have no row of their own: they inherit the MAIN job's location
+        **_job_location_refs(db, owned_job),
     }
 
     # Add parent_job_id for child jobs (split, page, merge)
@@ -1866,6 +1878,10 @@ async def list_jobs(
     tag: Optional[List[str]] = Query(None, description="Só jobs com esta tag. Repita para exigir várias (E)."),
     q: Optional[str] = Query(None, description="Busca no nome e no nome do arquivo (não no conteúdo; para isso use /search)."),
     kind: Optional[str] = Query(None, description="document, transcription ou image"),
+    project_id: Optional[str] = Query(None, description="Só jobs deste projeto."),
+    folder_id: Optional[str] = Query(
+        None, description="Só jobs desta pasta, ou `root` para os jobs do projeto que não estão em pasta nenhuma "
+                          "(`root` exige `project_id`)."),
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
 ):
@@ -1882,12 +1898,16 @@ async def list_jobs(
     - `tag`: Filtra por tag; `?tag=a&tag=b` exige as duas
     - `q`: Texto no nome do job ou do arquivo
     - `kind`: `document`, `transcription` ou `image`
+    - `project_id`: só jobs do projeto (projeto alheio: 404)
+    - `folder_id`: só jobs da pasta (pasta alheia: 404), ou `root` com `project_id`
+      para os jobs sem pasta. Sem `project_id`, o projeto é o da pasta.
     - `job_type`: `main` (padrão) ou `all`
 
     ## Retorno:
     `{total, limit, offset, jobs, counts}`. `total` é o total filtrado antes da
     paginação; `counts` traz quantos jobs há em cada status com os demais
-    filtros aplicados (para montar os filtros da interface).
+    filtros aplicados (para montar os filtros da interface). Cada job traz
+    `project: {id, name}` e `folder: {id, name} | null`.
     """
     limit = max(1, min(limit, 100))
     offset = max(0, offset)
@@ -1897,8 +1917,23 @@ async def list_jobs(
     if kind is not None and kind not in JOB_KINDS:
         raise HTTPException(status_code=422, detail=f"kind inválido: {kind}. Use: {', '.join(JOB_KINDS)}")
     tag_filter = parse_tags_or_422(tag)
+    project_id = (project_id or "").strip() or None
+    folder_id = (folder_id or "").strip() or None
 
     query = db.query(Job).filter(Job.user_id == current_user.id)
+    # Location filters, ownership checked against MySQL (404 for unknown and foreign alike)
+    project = owned_project_or_404(db, project_id, current_user) if project_id else None
+    if folder_id == "root":
+        if project is None:
+            raise HTTPException(status_code=422, detail="folder_id=root exige project_id")
+        query = query.filter(Job.project_id == project.id, Job.folder_id.is_(None))
+    elif folder_id:
+        folder = owned_folder_or_404(db, folder_id, current_user)
+        if project is not None and folder.project_id != project.id:
+            raise HTTPException(status_code=422, detail="A pasta não pertence ao projeto informado")
+        query = query.filter(Job.project_id == folder.project_id, Job.folder_id == folder.id)
+    elif project is not None:
+        query = query.filter(Job.project_id == project.id)
     if job_type != "all":
         query = query.filter(func.upper(Job.job_type) == job_type.upper())
     for t in tag_filter:
@@ -1920,11 +1955,20 @@ async def list_jobs(
         query = query.filter(Job.status == _API_TO_DB_STATUS[status])
 
     total = query.count()
-    rows = query.order_by(Job.created_at.desc()).offset(offset).limit(limit).all()
+    # One LEFT JOIN per location table for the page (no N+1)
+    rows = (
+        query.outerjoin(Project, Project.id == Job.project_id)
+        .outerjoin(Folder, Folder.id == Job.folder_id)
+        .add_columns(Project.name, Folder.name)
+        .order_by(Job.created_at.desc())
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
 
     redis_client = get_redis_client()
     jobs = []
-    for job in rows:
+    for job, project_name, folder_name in rows:
         job_id = str(job.id)
         db_status = _DB_TO_API_STATUS.get(job.status, "queued")
         live = None
@@ -1946,6 +1990,8 @@ async def list_jobs(
             "mime_type": job.mime_type,
             "file_size_bytes": job.file_size_bytes,
             "tags": job.tags,
+            "project": {"id": job.project_id, "name": project_name} if project_name is not None else None,
+            "folder": {"id": job.folder_id, "name": folder_name} if folder_name is not None else None,
             "error": job.error_message,
             "created_at": job.created_at.isoformat() if job.created_at else None,
             "completed_at": job.completed_at.isoformat() if job.completed_at else None,

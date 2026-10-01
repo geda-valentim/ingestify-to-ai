@@ -99,6 +99,10 @@ FRONTEND_OPERATIONS = [
     ("get", "/api-keys/", "apiKeysApi.list"),
     ("post", "/api-keys/", "apiKeysApi.create"),
     ("delete", "/api-keys/{key_id}", "apiKeysApi.revoke"),
+    ("patch", "/api-keys/{key_id}", "apiKeysApi.setProject - the key's bound project"),
+    ("get", "/projects", "projectsApi.list - upload combobox and /jobs sidebar"),
+    ("get", "/projects/resolve", "projectsApi.resolve - 'use X' vs 'create X' while typing"),
+    ("get", "/projects/{project_id}/folders/resolve", "projectsApi.resolveFolder"),
 ]
 
 # Paths the frontend must never call, because each one resolves to something

@@ -13,6 +13,7 @@ from api.apikey_routes import router as apikey_router
 from api.admin_routes import router as admin_router
 from api.image_routes import router as image_router
 from api.tag_routes import router as tag_router
+from api.projects_api import router as projects_router
 
 # Configure logging
 logging.basicConfig(
@@ -52,6 +53,28 @@ Esta API suporta dois métodos de autenticação:
 5. Clique em "Authorize"
 
 Após autorizar, todos os endpoints protegidos usarão automaticamente suas credenciais.
+
+Se um request trouxer **os dois** (Bearer e `X-API-Key`), vale o JWT.
+
+## Projetos e pastas
+
+Todo job pertence a um **projeto** (obrigatório) e, opcionalmente, a uma **pasta** do
+projeto (um nível). Os endpoints que criam jobs (`/upload`, `/convert`, `/transcribe`,
+`/images/*`) aceitam:
+
+- `project`: nome do projeto. É criado se não existir (*get-or-add*). Caixa, espaços e
+  acentos sobre letras latinas não contam: `Reunião` e ` reuniao ` são o mesmo projeto;
+- `project_id`: ID de um projeto existente (nunca cria);
+- `folder` / `folder_id`: a pasta dentro do projeto (o nome não pode ter `/`).
+
+Sem `project`/`project_id`, o job vai para o projeto **vinculado à API key** (veja
+`PATCH /api-keys/{key_id}`). Isso só vale para requests autenticados apenas pela key: com
+JWT, o vínculo é ignorado. Sem projeto no request e sem vínculo, a resposta é **422**.
+Um arquivo repetido só é reaproveitado dentro do mesmo projeto.
+
+```bash
+curl -H "X-API-Key: ..." -F "file=@aula.mp3" -F "project=Aulas" -F "folder=Setembro" .../transcribe
+```
 """,
     version="1.0.0",
     docs_url="/docs",
@@ -273,6 +296,7 @@ app.include_router(apikey_router, prefix="/api-keys", tags=["API Keys"])
 app.include_router(admin_router)  # Admin routes (already has /admin prefix)
 app.include_router(image_router)  # Vision routes (already has /images prefix)
 app.include_router(tag_router)  # GET /tags, PUT /jobs/{job_id}/tags
+app.include_router(projects_router)  # GET /projects, /projects/resolve, /projects/{id}/folders/resolve
 app.include_router(router)
 
 

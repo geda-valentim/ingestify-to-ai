@@ -42,12 +42,27 @@ from sqlalchemy.orm import Session
 
 from shared.auth import get_current_active_user
 from shared.database import get_db
-from shared.models import Job, Page, User
+from shared.models import Folder, Job, Page, Project, User
 
 logger = logging.getLogger(__name__)
 
 # Mensagem única para "não existe" e "não é seu": evita enumeração de recursos.
 JOB_NOT_FOUND_DETAIL = "Job não encontrado"
+PROJECT_NOT_FOUND_DETAIL = "Projeto não encontrado"
+FOLDER_NOT_FOUND_DETAIL = "Pasta não encontrada"
+
+
+class LocationError(HTTPException):
+    """
+    HTTPException de projeto/pasta com um código legível por máquina.
+
+    O `error_code` é usado pelas rotas de `/images/*`, cujo envelope de erro é
+    `{"detail": {"error_code", "message", "job_id"}}`.
+    """
+
+    def __init__(self, status_code: int, error_code: str, detail: str):
+        super().__init__(status_code=status_code, detail=detail)
+        self.error_code = error_code
 
 # Profundidade máxima ao subir a hierarquia MAIN -> SPLIT/PAGE/MERGE.
 MAX_PARENT_CHAIN_DEPTH = 5
@@ -228,3 +243,41 @@ async def get_owned_page_or_none(
         .filter(Page.job_id == job_id, Page.page_number == page_number)
         .first()
     )
+
+
+# ============================================
+# Projetos e pastas (spec 0003)
+# ============================================
+
+def owned_project_or_404(db: Session, project_id: Optional[str], user: User) -> Project:
+    """O projeto, se for do usuário; 404 igual para inexistente e alheio."""
+    project = db.get(Project, str(project_id)) if project_id else None
+    if project is None or project.user_id is None or project.user_id != user.id:
+        raise LocationError(404, "PROJECT_NOT_FOUND", PROJECT_NOT_FOUND_DETAIL)
+    return project
+
+
+def owned_folder_or_404(db: Session, folder_id: Optional[str], user: User) -> Folder:
+    """A pasta, se for do usuário; 404 igual para inexistente e alheia."""
+    folder = db.get(Folder, str(folder_id)) if folder_id else None
+    if folder is None or folder.user_id is None or folder.user_id != user.id:
+        raise LocationError(404, "FOLDER_NOT_FOUND", FOLDER_NOT_FOUND_DETAIL)
+    return folder
+
+
+async def get_owned_project(
+    project_id: str,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+) -> Project:
+    """Dependência de autorização para rotas `/projects/{project_id}/...`."""
+    return owned_project_or_404(db, project_id, current_user)
+
+
+async def get_owned_folder(
+    folder_id: str,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+) -> Folder:
+    """Dependência de autorização para rotas `/folders/{folder_id}/...`."""
+    return owned_folder_or_404(db, folder_id, current_user)
