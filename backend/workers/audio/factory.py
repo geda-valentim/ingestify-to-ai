@@ -9,7 +9,7 @@ import logging
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Tuple
 
-from workers.audio.base_transcriber import AudioTranscriber
+from workers.audio.base_transcriber import AudioTranscriber, ProgressCallback
 from workers.audio.device import (
     WhisperDevice,
     get_whisper_device,
@@ -177,6 +177,7 @@ def transcribe_with_gpu_fallback(
     audio_path: Path,
     options: Optional[Dict[str, Any]] = None,
     force_provider: Optional[str] = None,
+    on_progress: Optional[ProgressCallback] = None,
 ) -> Tuple[Dict[str, Any], AudioTranscriber]:
     """
     Transcribe with the configured transcriber, retrying once on CPU if the GPU fails.
@@ -185,9 +186,11 @@ def transcribe_with_gpu_fallback(
     runs, not when it loads. In that case the GPU is marked unavailable for this
     worker process, the transcriber is rebuilt on CPU and the job is retried.
     """
+    # Only passed when asked for, so a transcriber on the older two-argument interface still works
+    progress_kwargs = {"on_progress": on_progress} if on_progress else {}
     transcriber = get_audio_transcriber(force_provider=force_provider)
     try:
-        result = transcriber.transcribe(audio_path, options)
+        result = transcriber.transcribe(audio_path, options, **progress_kwargs)
     except Exception as e:
         if not str(getattr(transcriber, "device", "")).startswith("cuda") or not is_gpu_error(e):
             raise
@@ -195,7 +198,7 @@ def transcribe_with_gpu_fallback(
         mark_gpu_unavailable(str(e))
         reset_audio_transcriber()
         transcriber = get_audio_transcriber(force_provider=force_provider)
-        result = transcriber.transcribe(audio_path, options)
+        result = transcriber.transcribe(audio_path, options, **progress_kwargs)
 
     result.setdefault("device", getattr(transcriber, "device", None) or "remote")
     return result, transcriber

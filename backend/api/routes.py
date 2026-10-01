@@ -1032,6 +1032,11 @@ async def get_job_status(
     if "page_number" in status_data:
         response_data["page_number"] = status_data["page_number"]
 
+    # Transcription progress in media time (set by the audio worker as it goes)
+    for field in ("transcribed_seconds", "media_duration"):
+        if status_data.get(field) is not None:
+            response_data[field] = status_data[field]
+
     # Add child jobs info for main jobs
     if job_type == "main":
         # Get total_pages from MySQL first, fallback to Redis

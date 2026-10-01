@@ -56,7 +56,12 @@ class OpenAIAPITranscriber(AudioTranscriber):
         self.client = OpenAI(api_key=api_key)
         logger.info("Initialized OpenAI API transcriber")
 
-    def transcribe(self, audio_path: Path, options: Dict[str, Any] = None) -> Dict[str, Any]:
+    def transcribe(
+        self,
+        audio_path: Path,
+        options: Dict[str, Any] = None,
+        on_progress=None,  # whole-file result: no intermediate progress to report
+    ) -> Dict[str, Any]:
         """Transcribe audio file using OpenAI API"""
         if options is None:
             options = {}

@@ -8,11 +8,15 @@ openai-whisper, OpenAI API) or future transcription services.
 
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Dict, Any, List
+from typing import Any, Callable, Dict, List, Optional
 import logging
 
 logger = logging.getLogger(__name__)
 
+
+
+# on_progress(transcribed_seconds, total_seconds), called as the transcription advances
+ProgressCallback = Callable[[float, float], None]
 
 
 # Video containers whose audio track local Whisper can decode (via PyAV/ffmpeg)
@@ -28,7 +32,12 @@ class AudioTranscriber(ABC):
     """
 
     @abstractmethod
-    def transcribe(self, audio_path: Path, options: Dict[str, Any] = None) -> Dict[str, Any]:
+    def transcribe(
+        self,
+        audio_path: Path,
+        options: Dict[str, Any] = None,
+        on_progress: Optional[ProgressCallback] = None,
+    ) -> Dict[str, Any]:
         """
         Transcribe audio file to text
 
@@ -40,6 +49,8 @@ class AudioTranscriber(ABC):
                 - include_word_timestamps (bool): Include word-level timestamps (default: False)
                 - temperature (float): Sampling temperature (default: 0.0)
                 - beam_size (int): Beam size for beam search (default: 5)
+            on_progress: Optional callback (transcribed_seconds, total_seconds). Providers
+                that stream segments call it as they go; the others may never call it.
 
         Returns:
             Dictionary with transcription results:

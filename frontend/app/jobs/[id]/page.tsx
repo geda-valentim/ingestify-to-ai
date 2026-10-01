@@ -95,6 +95,13 @@ interface PageInfo {
   retry_count: number;
 }
 
+/** "12:30 of 57:27 transcribed" while a transcription runs, else null. */
+function transcriptionProgress(status?: JobStatusResponse | null): string | null {
+  if (!status || status.status !== "processing" || !status.media_duration) return null;
+  const done = Math.min(status.transcribed_seconds ?? 0, status.media_duration);
+  return `${formatDuration(done)} of ${formatDuration(status.media_duration)} transcribed`;
+}
+
 export default function JobStatusPage({ params }: PageProps) {
   const resolvedParams = use(params);
   const router = useRouter();
@@ -466,6 +473,9 @@ export default function JobStatusPage({ params }: PageProps) {
                       style={{ width: `${status?.progress || 0}%` }}
                     />
                   </div>
+                  {transcriptionProgress(status) && (
+                    <p className="text-xs text-muted-foreground mt-2">{transcriptionProgress(status)}</p>
+                  )}
                 </div>
 
                 {status?.total_pages && status.total_pages > 0 && (
@@ -1069,6 +1079,9 @@ function JobResultPanel({
         <p className="text-sm text-muted-foreground">
           {status.progress}% — the result shows up here as soon as it is ready.
         </p>
+        {transcriptionProgress(status) && (
+          <p className="text-sm text-muted-foreground mt-1">{transcriptionProgress(status)}</p>
+        )}
       </div>
     );
   }
