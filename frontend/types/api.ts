@@ -125,6 +125,9 @@ export interface JobStatusResponse {
   pages?: PageJobInfo[] | null;
   child_jobs?: ChildJobs | null;
   page_number?: number | null;
+  /** Transcriptions in progress: how much of the media is done, in seconds */
+  transcribed_seconds?: number | null;
+  media_duration?: number | null;
 }
 
 export interface JobResultResponse {

@@ -128,11 +128,12 @@ class RedisClient:
             logger.error("Failed to read cached status for job %s: %s", job_id, e)
             return None
 
-    def update_job_progress(self, job_id: str, progress: int) -> bool:
-        """Update job progress"""
+    def update_job_progress(self, job_id: str, progress: int, **details: Any) -> bool:
+        """Update job progress, plus optional detail fields kept alongside it"""
         status_data = self.get_job_status(job_id)
         if status_data:
             status_data["progress"] = progress
+            status_data.update(details)
             key = f"job:{job_id}:status"
             try:
                 self.client.set(key, json.dumps(status_data), ex=86400)

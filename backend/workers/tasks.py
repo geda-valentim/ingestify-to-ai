@@ -79,6 +79,42 @@ def _remove_job_files(job_id: str) -> None:
 # MAIN JOB - Ponto de entrada
 # ============================================
 
+# Transcription owns this slice of a job's overall progress (see process_conversion)
+TRANSCRIPTION_PROGRESS_START = 30
+TRANSCRIPTION_PROGRESS_END = 70
+
+
+def _transcription_progress(redis_client, job_id: str):
+    """
+    Progress callback for a transcription: maps the transcribed share of the media onto
+    the job's 30-70% slice and records how far in it is (transcribed_seconds of
+    media_duration), for the job page. Writes only when the percentage moves, so a
+    long recording costs at most ~40 Redis writes.
+    """
+    last = {"progress": None}
+
+    def on_progress(transcribed_seconds: float, total_seconds: float) -> None:
+        if not total_seconds or total_seconds <= 0:
+            return
+        share = min(max(transcribed_seconds / total_seconds, 0.0), 1.0)
+        span = TRANSCRIPTION_PROGRESS_END - TRANSCRIPTION_PROGRESS_START
+        progress = TRANSCRIPTION_PROGRESS_START + int(span * share)
+        if progress == last["progress"]:
+            return
+        last["progress"] = progress
+        try:
+            redis_client.update_job_progress(
+                job_id,
+                progress,
+                transcribed_seconds=round(transcribed_seconds, 1),
+                media_duration=round(total_seconds, 1),
+            )
+        except Exception as e:  # progress is cosmetic: never fail a transcription over it
+            logger.warning(f"[MAIN JOB {job_id}] Could not record transcription progress: {e}")
+
+    return on_progress
+
+
 @celery_app.task(bind=True, max_retries=3, name="workers.tasks.process_conversion")
 def process_conversion(
     self,
@@ -169,7 +205,7 @@ def process_conversion(
                 provider_override = options.get('transcriber_provider')
 
                 # Update progress
-                redis_client.update_job_progress(job_id, 30)
+                redis_client.update_job_progress(job_id, TRANSCRIPTION_PROGRESS_START)
 
                 # Transcribe audio
                 transcription_options = {
@@ -182,7 +218,10 @@ def process_conversion(
                 # Uses the GPU when available (detected once per worker) and falls back to CPU
                 transcription_started = time.monotonic()
                 result, transcriber = transcribe_with_gpu_fallback(
-                    file_path, transcription_options, force_provider=provider_override
+                    file_path,
+                    transcription_options,
+                    force_provider=provider_override,
+                    on_progress=_transcription_progress(redis_client, job_id),
                 )
                 processing_seconds = round(time.monotonic() - transcription_started, 1)
 
@@ -191,7 +230,7 @@ def process_conversion(
                     f"on {result.get('device')}: {result['word_count']} words, "
                     f"{result['duration']:.2f}s, language={result['language']}"
                 )
-                redis_client.update_job_progress(job_id, 70)
+                redis_client.update_job_progress(job_id, TRANSCRIPTION_PROGRESS_END)
 
                 # Format as markdown
                 include_timestamps = options.get('include_timestamps', True)

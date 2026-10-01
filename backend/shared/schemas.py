@@ -147,6 +147,10 @@ class JobStatusResponse(BaseModel):
     # Para PAGE jobs
     page_number: Optional[int] = None
 
+    # Transcrições em andamento: quanto da mídia já foi transcrito, em segundos
+    transcribed_seconds: Optional[float] = None
+    media_duration: Optional[float] = None
+
 
 class JobPagesResponse(BaseModel):
     """Detalhes de progresso por página"""

@@ -8,10 +8,10 @@ Repository: https://github.com/SYSTRAN/faster-whisper
 """
 
 from pathlib import Path
-from typing import Dict, Any, List
+from typing import Any, Dict, List, Optional
 import logging
 
-from workers.audio.base_transcriber import AudioTranscriber, VIDEO_FORMATS
+from workers.audio.base_transcriber import AudioTranscriber, ProgressCallback, VIDEO_FORMATS
 
 logger = logging.getLogger(__name__)
 
@@ -74,7 +74,12 @@ class FasterWhisperTranscriber(AudioTranscriber):
 
         logger.info(f"FasterWhisper model '{model_size}' loaded successfully")
 
-    def transcribe(self, audio_path: Path, options: Dict[str, Any] = None) -> Dict[str, Any]:
+    def transcribe(
+        self,
+        audio_path: Path,
+        options: Dict[str, Any] = None,
+        on_progress: Optional[ProgressCallback] = None,
+    ) -> Dict[str, Any]:
         """Transcribe audio file using faster-whisper"""
         if options is None:
             options = {}
@@ -102,8 +107,15 @@ class FasterWhisperTranscriber(AudioTranscriber):
                 vad_parameters=dict(min_silence_duration_ms=500)
             )
 
-            # Convert segments generator to list
-            segments_list = list(segments)
+            # Segments are decoded lazily as the generator is consumed; each one's
+            # end time (in the original audio, even with VAD) measures progress
+            if on_progress:
+                on_progress(0.0, info.duration)
+            segments_list = []
+            for segment in segments:
+                segments_list.append(segment)
+                if on_progress:
+                    on_progress(segment.end, info.duration)
 
             # Build result
             full_text = ' '.join([segment.text.strip() for segment in segments_list])
