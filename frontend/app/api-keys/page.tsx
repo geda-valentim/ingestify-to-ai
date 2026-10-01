@@ -27,6 +27,11 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { formatDistanceToNow } from "date-fns";
+import type { APIKeyCreate } from "@/types/api";
+import type { LocationChoice } from "@/components/projects/location-combobox";
+import { ProjectCombobox } from "@/components/projects/project-combobox";
+import { ApiKeyProject, ApiKeyProjectHelp } from "@/components/projects/api-key-project";
+import { useProjects } from "@/components/projects/use-projects";
 
 export default function ApiKeysPage() {
   const router = useRouter();
@@ -40,6 +45,10 @@ export default function ApiKeysPage() {
   const [expiresInDays, setExpiresInDays] = useState<number>(30);
   const [createdKey, setCreatedKey] = useState<string | null>(null);
   const [copiedKey, setCopiedKey] = useState(false);
+  const [newKeyProject, setNewKeyProject] = useState<LocationChoice | null>(null);
+
+  const projectsQuery = useProjects();
+  const projects = projectsQuery.data?.projects ?? [];
 
   useEffect(() => {
     if (hasHydrated && !isAuthenticated) {
@@ -54,13 +63,16 @@ export default function ApiKeysPage() {
   });
 
   const createMutation = useMutation({
-    mutationFn: (data: { name: string }) => apiKeysApi.create(data),
+    mutationFn: (data: APIKeyCreate) => apiKeysApi.create(data),
     onSuccess: (data) => {
       setCreatedKey(data.api_key);
       setNewKeyName("");
+      setNewKeyProject(null);
       setExpiresInDays(30);
       setShowCreateForm(false);
       queryClient.invalidateQueries({ queryKey: ["api-keys", token] });
+      // A project typed by name may have just been created.
+      queryClient.invalidateQueries({ queryKey: ["projects"] });
     },
   });
 
@@ -86,6 +98,11 @@ export default function ApiKeysPage() {
   const handleCreateKey = () => {
     createMutation.mutate({
       name: newKeyName,
+      ...(newKeyProject
+        ? newKeyProject.id
+          ? { project_id: newKeyProject.id }
+          : { project: newKeyProject.name }
+        : {}),
     });
   };
 
@@ -205,6 +222,27 @@ export default function ApiKeysPage() {
                     Leave at 30 days or set to 365 for long-term keys
                   </p>
                 </div>
+                <div className="space-y-2">
+                  <Label htmlFor="keyProject">Project (Optional)</Label>
+                  <ProjectCombobox
+                    id="keyProject"
+                    projects={projects}
+                    value={newKeyProject}
+                    onChange={setNewKeyProject}
+                    disabled={createMutation.isPending}
+                  />
+                  <ApiKeyProjectHelp />
+                  {!newKeyProject && (
+                    <p className="text-xs text-amber-700 dark:text-amber-400">
+                      Without a project, every upload with this key must send one, or it is rejected.
+                    </p>
+                  )}
+                </div>
+                {createMutation.isError && (
+                  <p role="alert" className="text-sm text-destructive whitespace-pre-line">
+                    {formatApiError(createMutation.error)}
+                  </p>
+                )}
                 <div className="flex gap-2">
                   <Button
                     onClick={handleCreateKey}
@@ -241,11 +279,11 @@ export default function ApiKeysPage() {
                   {apiKeys.map((key) => (
                     <div
                       key={key.id}
-                      className="flex items-center justify-between p-4 border rounded-lg"
+                      className="flex items-start justify-between gap-2 p-4 border rounded-lg"
                     >
-                      <div className="flex-1">
+                      <div className="flex-1 min-w-0 space-y-2">
                         <p className="font-medium">{key.name}</p>
-                        <div className="flex gap-4 mt-1 text-sm text-muted-foreground">
+                        <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm text-muted-foreground">
                           <span>
                             Created {formatDistanceToNow(parseApiDate(key.created_at), { addSuffix: true })}
                           </span>
@@ -260,6 +298,7 @@ export default function ApiKeysPage() {
                             </span>
                           )}
                         </div>
+                        <ApiKeyProject apiKey={key} projects={projects} />
                       </div>
                       <Button
                         variant="ghost"
@@ -296,11 +335,13 @@ export default function ApiKeysPage() {
                 <pre className="bg-muted p-4 rounded-lg overflow-x-auto">
                   {`curl -X POST ${API_URL}/upload \\
   -H "X-API-Key: doc2md_sk_..." \\
-  -F "file=@document.pdf"`}
+  -F "file=@document.pdf" \\
+  -F "project=Reports"`}
                 </pre>
               </div>
               <div className="text-muted-foreground">
                 <p>• API keys provide the same access as your user account</p>
+                <p>• Every upload needs a project: send <code>project</code> (a name, created if new) or <code>project_id</code>, or bind the key to a project above</p>
                 <p>• Keep your API keys secret and never commit them to version control</p>
                 <p>• Revoke any keys that may have been compromised</p>
                 <p>• Use different keys for different environments (dev, staging, prod)</p>
