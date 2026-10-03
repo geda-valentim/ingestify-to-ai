@@ -99,8 +99,15 @@ services:
       - DEVICE=cpu
       - WHISPER_DEVICE=cuda
       - WHISPER_COMPUTE_TYPE=${WHISPER_COMPUTE_TYPE:-float16}
+      # The model runs on the GPU, but CTranslate2 still applies the timestamp
+      # rules on the host between decode steps; with the default (active) policy
+      # the OpenMP pool busy-spins on its barrier in between, ~15% of a core per
+      # replica doing nothing.
+      - OMP_WAIT_POLICY=PASSIVE
     deploy:
-      replicas: ${AUDIO_WORKER_REPLICAS:-4}
+      # More replicas than the card can feed adds no throughput: once the GPU is
+      # saturated each extra replica only burns ~1 host core polling for it.
+      replicas: ${AUDIO_WORKER_REPLICAS:-2}
       resources:
         reservations:
           devices:
