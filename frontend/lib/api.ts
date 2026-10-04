@@ -12,6 +12,7 @@ import type {
   JobStatusResponse,
   JobResultResponse,
   JobPagesResponse,
+  PartialTranscriptResponse,
   PagePdfUrlResponse,
   TagCount,
   TranscriptFormat,
@@ -209,6 +210,19 @@ export const jobsApi = {
 
     if (!response.ok) {
       throw new Error(`Failed to fetch job result: ${response.statusText}`);
+    }
+
+    return response.json();
+  },
+
+  /** The text of a transcription while it runs, from segment `since` on. */
+  async getPartialTranscript(jobId: string, since: number): Promise<PartialTranscriptResponse> {
+    const response = await apiFetch(`${API_URL}/jobs/${jobId}/transcript/partial?since=${since}`, {
+      headers: getHeaders(true),
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to fetch live transcript: ${response.statusText}`);
     }
 
     return response.json();

@@ -15,8 +15,9 @@ logger = logging.getLogger(__name__)
 
 
 
-# on_progress(transcribed_seconds, total_seconds), called as the transcription advances
-ProgressCallback = Callable[[float, float], None]
+# on_progress(transcribed_seconds, total_seconds, segment=None), called as the transcription
+# advances; segment is the just-decoded {"start", "end", "text"}, for showing the text live
+ProgressCallback = Callable[..., None]
 
 
 # Video containers whose audio track local Whisper can decode (via PyAV/ffmpeg)
@@ -49,8 +50,9 @@ class AudioTranscriber(ABC):
                 - include_word_timestamps (bool): Include word-level timestamps (default: False)
                 - temperature (float): Sampling temperature (default: 0.0)
                 - beam_size (int): Beam size for beam search (default: 5)
-            on_progress: Optional callback (transcribed_seconds, total_seconds). Providers
-                that stream segments call it as they go; the others may never call it.
+            on_progress: Optional callback (transcribed_seconds, total_seconds, segment=None).
+                Providers that stream segments call it as they go, passing each new segment;
+                the others may never call it.
 
         Returns:
             Dictionary with transcription results:

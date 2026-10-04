@@ -130,6 +130,22 @@ export interface JobStatusResponse {
   media_duration?: number | null;
 }
 
+/** One transcribed stretch of the media, in seconds */
+export interface TranscriptSegment {
+  start: number;
+  end: number;
+  text: string;
+}
+
+/** The text of a running transcription, from segment `since` on */
+export interface PartialTranscriptResponse {
+  job_id: string;
+  status: JobStatus;
+  segments: TranscriptSegment[];
+  /** Pass as `since` next time to get only what is new */
+  next: number;
+}
+
 export interface JobResultResponse {
   job_id: string;
   type: JobType;

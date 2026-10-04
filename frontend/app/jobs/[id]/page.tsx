@@ -1,6 +1,6 @@
 "use client";
 
-import { use, useEffect, useState } from "react";
+import { use, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
@@ -69,7 +69,7 @@ import { useToast } from "@/hooks/use-toast";
 import dynamic from "next/dynamic";
 import { DocumentView, TranscriptView } from "@/components/job/result-views";
 import { JobTagsCard } from "@/components/job/job-tags-card";
-import type { JobResultResponse, JobStatusResponse } from "@/types/api";
+import type { JobResultResponse, JobStatusResponse, TranscriptSegment } from "@/types/api";
 
 // Dynamically import PDF viewer to avoid canvas module issues
 const PdfViewer = dynamic(
@@ -100,6 +100,50 @@ function transcriptionProgress(status?: JobStatusResponse | null): string | null
   if (!status || status.status !== "processing" || !status.media_duration) return null;
   const done = Math.min(status.transcribed_seconds ?? 0, status.media_duration);
   return `${formatDuration(done)} of ${formatDuration(status.media_duration)} transcribed`;
+}
+
+/**
+ * The text of a running transcription, polled every 3s and accumulated: each
+ * request asks only for the segments after the ones already shown. Empty for
+ * providers that return the whole file at once (only faster-whisper streams).
+ */
+function useLiveTranscript(jobId: string, active: boolean): TranscriptSegment[] {
+  const [segments, setSegments] = useState<TranscriptSegment[]>([]);
+
+  useEffect(() => {
+    if (!active) return;
+    let since = 0;
+    let cancelled = false;
+
+    const poll = async () => {
+      try {
+        const data = await jobsApi.getPartialTranscript(jobId, since);
+        if (cancelled) return;
+        if (data.next < since) {
+          // The transcription restarted (e.g. GPU failed, retrying on CPU): start over
+          since = 0;
+          setSegments([]);
+          return;
+        }
+        since = data.next;
+        if (data.segments.length > 0) {
+          setSegments((prev) => [...prev, ...data.segments]);
+        }
+      } catch {
+        // Live text is a nicety: keep polling, the final result still arrives
+      }
+    };
+
+    setSegments([]);
+    poll();
+    const timer = setInterval(poll, 3000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [jobId, active]);
+
+  return segments;
 }
 
 export default function JobStatusPage({ params }: PageProps) {
@@ -1057,6 +1101,16 @@ function JobResultPanel({
   fileName: string;
   token: string | null;
 }) {
+  const liveSegments = useLiveTranscript(status.job_id, status.status === "processing");
+  // Follow the new text like a terminal, unless the reader scrolled up to read
+  const liveRef = useRef<HTMLDivElement>(null);
+  const followLive = useRef(true);
+
+  useEffect(() => {
+    const el = liveRef.current;
+    if (el && followLive.current) el.scrollTop = el.scrollHeight;
+  }, [liveSegments.length]);
+
   if (status.status === "failed") {
     return (
       <div className="flex-1 flex flex-col items-center justify-center p-8 text-center">
@@ -1065,6 +1119,38 @@ function JobResultPanel({
         <p className="text-sm text-muted-foreground max-w-md break-words">
           {status.error || "An unknown error occurred"}
         </p>
+      </div>
+    );
+  }
+
+  if (status.status !== "completed" && liveSegments.length > 0) {
+    return (
+      <div
+        ref={liveRef}
+        onScroll={(e) => {
+          const el = e.currentTarget;
+          followLive.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+        }}
+        className="flex-1 overflow-y-auto p-4 md:p-6 space-y-4"
+      >
+        <div>
+          <h2 className="text-xl font-semibold flex items-center gap-2">
+            <Loader2 className="h-5 w-5 text-primary animate-spin" />
+            Transcribing…
+          </h2>
+          <p className="text-sm text-muted-foreground mt-1">
+            {status.progress}%{transcriptionProgress(status) && ` — ${transcriptionProgress(status)}`}. The text
+            below grows as the audio is transcribed; the final transcript replaces it when it is done.
+          </p>
+        </div>
+        <div className="space-y-2 text-sm leading-relaxed">
+          {liveSegments.map((segment, i) => (
+            <p key={i}>
+              <span className="text-xs text-muted-foreground tabular-nums mr-2">{formatDuration(segment.start)}</span>
+              {segment.text}
+            </p>
+          ))}
+        </div>
       </div>
     );
   }

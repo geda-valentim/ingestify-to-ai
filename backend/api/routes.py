@@ -23,6 +23,7 @@ from shared.schemas import (
     JobType,
     JobStatus,
     ChildJobs,
+    PartialTranscriptResponse,
 )
 from shared.redis_client import get_redis_client
 from shared.elasticsearch_client import get_es_client
@@ -1440,6 +1441,41 @@ def _transcript_response(job_id: str, fmt: str, redis_client) -> Response:
         content=content,
         media_type=TRANSCRIPT_CONTENT_TYPES[fmt],
         headers={"Content-Disposition": f'inline; filename="{job_id}.{fmt}"'},
+    )
+
+
+@router.get("/jobs/{job_id}/transcript/partial", response_model=PartialTranscriptResponse)
+async def get_partial_transcript(
+    job_id: str,
+    since: int = Query(0, ge=0, description="Índice do primeiro segmento a retornar (o `next` da consulta anterior)"),
+    current_user: User = Depends(get_current_active_user),
+    owned_job: Optional[Job] = Depends(get_owned_job),
+):
+    """
+    Texto de uma transcrição enquanto ela acontece
+
+    Retorna os segmentos já transcritos a partir de `since`, e em `next` o valor de
+    `since` para a próxima consulta - assim cada consulta traz só o texto novo.
+    Só o provider faster-whisper transcreve em segmentos; com os providers da OpenAI
+    a lista fica vazia até o fim. Quando o job termina a lista também fica vazia:
+    o texto completo passa a estar em `GET /jobs/{job_id}/result`.
+
+    ## Permissões:
+    - Apenas o dono do job (verificado no MySQL) pode consultá-lo.
+      Jobs de outros usuários retornam 404.
+    """
+    redis_client = get_redis_client()
+
+    status_data = redis_client.get_job_status(job_id)
+    if not status_data:
+        raise HTTPException(status_code=404, detail="Job não encontrado ou expirado")
+
+    segments, total = redis_client.get_partial_transcript(job_id, since)
+    return PartialTranscriptResponse(
+        job_id=job_id,
+        status=status_data.get("status", "pending"),
+        segments=segments,
+        next=total,
     )
 
 

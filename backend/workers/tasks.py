@@ -83,25 +83,49 @@ def _remove_job_files(job_id: str) -> None:
 TRANSCRIPTION_PROGRESS_START = 30
 TRANSCRIPTION_PROGRESS_END = 70
 
+# Live text is pushed to Redis in batches, at most this often (wall-clock seconds)
+LIVE_TRANSCRIPT_FLUSH_SECONDS = 2.0
 
-def _transcription_progress(redis_client, job_id: str):
+
+def _transcription_progress(redis_client, job_id: str, clock=time.monotonic):
     """
     Progress callback for a transcription: maps the transcribed share of the media onto
     the job's 30-70% slice and records how far in it is (transcribed_seconds of
     media_duration), for the job page. Writes only when the percentage moves, so a
     long recording costs at most ~40 Redis writes.
-    """
-    last = {"progress": None}
 
-    def on_progress(transcribed_seconds: float, total_seconds: float) -> None:
+    Each decoded segment is also appended to the job's live transcript, in batches
+    every LIVE_TRANSCRIPT_FLUSH_SECONDS, so the job page can show the text as it comes.
+    A call at 0 seconds with no segment means the transcription (re)started - e.g. the
+    CPU retry after a GPU failure - and drops what the failed attempt had written.
+    """
+    state = {"progress": None, "pending": [], "flushed_at": clock()}
+
+    def flush() -> None:
+        pending, state["pending"] = state["pending"], []
+        state["flushed_at"] = clock()
+        redis_client.append_partial_transcript(job_id, pending)
+
+    def on_progress(transcribed_seconds: float, total_seconds: float, segment=None) -> None:
+        try:
+            if segment is None and transcribed_seconds <= 0:
+                state["pending"] = []
+                redis_client.delete_partial_transcript(job_id)
+            elif segment is not None and segment.get("text"):
+                state["pending"].append(segment)
+                if clock() - state["flushed_at"] >= LIVE_TRANSCRIPT_FLUSH_SECONDS:
+                    flush()
+        except Exception as e:  # live text is cosmetic: never fail a transcription over it
+            logger.warning(f"[MAIN JOB {job_id}] Could not record live transcript: {e}")
+
         if not total_seconds or total_seconds <= 0:
             return
         share = min(max(transcribed_seconds / total_seconds, 0.0), 1.0)
         span = TRANSCRIPTION_PROGRESS_END - TRANSCRIPTION_PROGRESS_START
         progress = TRANSCRIPTION_PROGRESS_START + int(span * share)
-        if progress == last["progress"]:
+        if progress == state["progress"]:
             return
-        last["progress"] = progress
+        state["progress"] = progress
         try:
             redis_client.update_job_progress(
                 job_id,
@@ -271,6 +295,7 @@ def process_conversion(
                     'transcript': transcript_outputs,
                 }
                 redis_client.set_job_result(job_id, result_with_markdown)
+                redis_client.delete_partial_transcript(job_id)  # the full result supersedes it
                 redis_client.update_job_progress(job_id, 80)
 
                 # Store result in Elasticsearch
