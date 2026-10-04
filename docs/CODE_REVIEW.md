@@ -1,5 +1,7 @@
 # Code Review — Ingestify
 
+> Para o estado atual dos achados de segurança, consulte [SECURITY_REVIEW.md](SECURITY_REVIEW.md). Os achados de segurança abaixo são históricos e alguns já foram corrigidos.
+
 > Revisão técnica do estado do repositório em **2026-08-24** (branch `main`, commit `b7bf521`).
 > Escopo: arquitetura, god files, dívida técnica, segurança, testes e documentação.
 > Método: inspeção estática do código-fonte (20.214 LOC em Python/TS, excluindo `node_modules`).
