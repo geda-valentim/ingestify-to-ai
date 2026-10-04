@@ -720,8 +720,9 @@ local**. Custos por GPU e tabela no Apêndice G.
 
 Cada item cabe num PR, na ordem. Fora das mudanças deliberadas de 0a/0b, zero-config intocado.
 
-- [ ] **0a — `visibility_timeout`** e alerta de `unacked`. **0b — Admin** (`make_admin.py`,
-      `is_effective_admin`, `is_admin`).
+- [x] **0a — `visibility_timeout`** e alerta de `unacked` (feita em 2026-10-04: 14.400 s em todos
+      os serviços, checagem `check_broker_unacked` no beat e `GET/POST /admin/broker/unacked`).
+- [ ] **0b — Admin** (`make_admin.py`, `is_effective_admin`, `is_admin`).
 - [ ] **1a — Extrair `finish_transcription`**. **1b — `whisper_core.py`** no local, com paridade.
 - [ ] **2 — Dados + selagem + redação + CLI de importação** (dry-run). Remotos **não ativáveis**.
 - [ ] **3a — Capacidade**: pegadas, bindings, guarda de VRAM, GPUs declaradas, heartbeats NVML,
