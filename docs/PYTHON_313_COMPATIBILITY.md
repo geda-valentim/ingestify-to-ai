@@ -20,7 +20,10 @@ setuptools>=75.0.0
 
 **Why?** The `docling` package depends on `pylatexenc`, which still uses the deprecated `distutils` module. Modern `setuptools` (75.0.0+) provides a compatibility layer that makes `distutils` available again.
 
-### 2. Updated Dockerfiles (Optional)
+### 2. Updated Dockerfiles (done)
+
+> Current state: both `docker/Dockerfile.api` and `docker/Dockerfile.worker` already use
+> `python:3.13-slim`. The steps below are kept as history.
 
 The Dockerfiles can now use Python 3.13 instead of 3.10:
 - `docker/Dockerfile.api`

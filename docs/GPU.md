@@ -387,7 +387,10 @@ Measured with the shipped defaults: Florence-2-base-ft in float16, Whisper `turb
 | Docling | layout + TableFormer | — | **~0.9 GB** | Measured, 15-page PDF, tables on, OCR off |
 | CUDA context | — | — | ~0.3 GB **per process** | Unavoidable per-process overhead |
 
-**Both together, default models, one process each: budget ~4 GB of VRAM.** An 8 GB card is
+**Both together, default models, one process each: budget ~4 GB of VRAM.** Note that
+`docker-compose.gpu.yml` runs `AUDIO_WORKER_REPLICAS` Whisper replicas (default **2**),
+each with its own model and CUDA context, plus one docling `worker` process on CUDA: budget
+roughly 2–2.5 GB per extra Whisper replica and ~1.2 GB for docling on top of that. An 8 GB card is
 comfortable. A 6 GB card works if you drop Whisper to `small` or keep audio on CPU
 (`WHISPER_DEVICE=cpu`). Below 6 GB, run vision on GPU and everything else on CPU.
 

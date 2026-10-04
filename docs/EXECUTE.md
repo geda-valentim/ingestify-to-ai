@@ -1,5 +1,7 @@
 # Como Executar o Doc2MD
 
+> **Documento histórico (out/2025) — obsoleto.** Nomes de contêiner (`doc2md-*`), portas e chamadas sem autenticação não valem mais: a API fica em `:8000` no compose base (`:8080` só com `run_api.sh` ou com o override local), há 5 réplicas de worker mais `worker-audio`, `worker-vision`, `beat` e `frontend`, e todo endpoint de negócio exige autenticação. Como subir hoje: [../README.md](../README.md), [SHARED_INFRASTRUCTURE.md](SHARED_INFRASTRUCTURE.md), [GPU.md](GPU.md) e a seção "Perfis de deploy" de [README.md](README.md).
+
 ## ⚠️ Importante: Permissão Docker
 
 Antes de executar, você precisa adicionar seu usuário ao grupo docker.

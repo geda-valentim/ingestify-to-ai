@@ -53,6 +53,12 @@ export COMPOSE_DOCKER_CLI_BUILD=1
 ### 3. Docker Compose para Desenvolvimento
 
 Criado `docker-compose.dev.yml` com:
+
+> **Atualização (2026-10-04):** `docker-compose.dev.yml` não existe mais no repositório.
+> O `docker-compose.yml` base já monta o código (`./backend/api`, `./backend/shared`,
+> `./backend/workers`) como volumes, e `make dev` sobe o modo de desenvolvimento. Os
+> comandos com `-f docker-compose.dev.yml` abaixo são históricos. Perfis atuais: seção
+> "Perfis de deploy" de [README.md](README.md).
 - **Volumes montados**: código atualiza sem rebuild
 - **Hot-reload**: uvicorn e celery recarregam automaticamente
 - **Pool solo**: Celery usa pool solo para hot-reload funcionar
