@@ -37,7 +37,7 @@ async def register(user_data: UserCreate, request: Request, db: Session = Depend
     ```
 
     ## Returns:
-    User object with id, email, username, is_active, created_at
+    User object with id, email, username, is_active, created_at, is_admin
 
     ## Errors:
     - 400: Email or username already exists
@@ -74,7 +74,7 @@ async def register(user_data: UserCreate, request: Request, db: Session = Depend
     db.commit()
     db.refresh(new_user)
 
-    return new_user
+    return UserResponse.for_user(new_user)
 
 
 def _lockout_identity(db: Session, login: str) -> str:
@@ -216,4 +216,4 @@ async def get_current_user_info(current_user: User = Depends(get_current_active_
     ## Errors:
     - 401: Not authenticated or invalid token/API key
     """
-    return current_user
+    return UserResponse.for_user(current_user)

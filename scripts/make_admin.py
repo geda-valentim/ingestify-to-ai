@@ -2,25 +2,28 @@
 """
 Promote an existing user to administrator (is_admin = True)
 
-Admin endpoints (/admin/*) are restricted to users with is_admin = True.
-Since there is no HTTP endpoint to grant that flag (on purpose), the first
-administrator must be bootstrapped from the server / container shell with
-this script.
+Admin endpoints (/admin/*) are restricted to administrators. Since there is no
+HTTP endpoint to grant that flag (on purpose), the first administrator must be
+bootstrapped from the server / container shell with this script.
 
 Usage:
-    python scripts/make_admin.py <username-or-email>
+    python scripts/make_admin.py --email alice@example.com
+    python scripts/make_admin.py --id 3f1c9a2e-...
 
-Examples:
-    python scripts/make_admin.py alice
-    python scripts/make_admin.py alice@example.com
+The user is identified by email or id only - never by username, which anyone can
+choose at registration (a username like "alice@example.com" would otherwise be
+mistaken for that email). The script shows who it found and asks to confirm;
+pass --yes to skip the question in automation.
 
 Inside Docker:
-    docker compose exec api python scripts/make_admin.py alice@example.com
+    docker compose exec api python scripts/make_admin.py --email alice@example.com
 
 Requires the same DATABASE_URL environment the API uses
 (see backend/shared/config.py).
 """
 
+import argparse
+import logging
 import sys
 from pathlib import Path
 
@@ -32,34 +35,44 @@ sys.path.insert(0, str(ROOT_DIR / "backend"))
 # Import as `shared.*` so this works both from the repo root (backend/ is on
 # sys.path above) and inside the api container, where WORKDIR is /app and
 # shared/ sits at the top level.
+from shared.admin import AdminPromotionError, find_user_to_promote
 from shared.database import SessionLocal
-from shared.models import User
+
+logger = logging.getLogger("make_admin")
 
 
-def make_admin(identifier: str) -> int:
-    """Set is_admin = True for the user matching username or email"""
+def make_admin(email=None, user_id=None, assume_yes=False) -> int:
+    """Set is_admin = True for the user named by email or id, after confirmation"""
     db = SessionLocal()
 
     try:
-        user = db.query(User).filter(User.username == identifier).first()
-
-        if not user:
-            user = db.query(User).filter(User.email == identifier).first()
-
-        if not user:
-            print(f"\n❌ User not found: {identifier}")
-            print("   Pass an existing username or email address.")
+        try:
+            user = find_user_to_promote(db, email=email, user_id=user_id)
+        except AdminPromotionError as e:
+            print(f"\n❌ {e}")
             return 1
 
+        print(f"\n   id:       {user.id}")
+        print(f"   username: {user.username}")
+        print(f"   email:    {user.email}")
+
         if user.is_admin:
-            print(f"\n✅ User '{user.username}' ({user.email}) is already an admin.")
+            print("\n✅ Already an admin.")
             return 0
+
+        if not assume_yes:
+            if not sys.stdin.isatty():
+                print("\n❌ Not a terminal: pass --yes to confirm.")
+                return 1
+            if input("\nPromote this user to admin? [y/N] ").strip().lower() not in ("y", "yes"):
+                print("Aborted.")
+                return 1
 
         user.is_admin = True
         db.commit()
+        logger.warning(f"[ADMIN] User {user.id} ({user.email}) promoted to admin by make_admin.py")
 
-        print(f"\n✅ User '{user.username}' ({user.email}) is now an admin.")
-        print("   They can now access the /admin/* endpoints.")
+        print("\n✅ Promoted. They can now access the /admin/* endpoints.")
         return 0
 
     except Exception as e:
@@ -79,11 +92,14 @@ def main():
     print("Ingestify - Grant Admin Privileges")
     print("=" * 60)
 
-    if len(sys.argv) != 2:
-        print("\nUsage: python scripts/make_admin.py <username-or-email>")
-        sys.exit(1)
+    parser = argparse.ArgumentParser(description="Promote an existing user to administrator.")
+    target = parser.add_mutually_exclusive_group(required=True)
+    target.add_argument("--email", help="the user's email address")
+    target.add_argument("--id", dest="user_id", help="the user's id")
+    parser.add_argument("--yes", action="store_true", help="do not ask for confirmation")
+    args = parser.parse_args()
 
-    sys.exit(make_admin(sys.argv[1]))
+    sys.exit(make_admin(email=args.email, user_id=args.user_id, assume_yes=args.yes))
 
 
 if __name__ == "__main__":

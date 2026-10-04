@@ -31,7 +31,8 @@ Para visão, use `GET /images/capabilities` ([vision.md](vision.md)).
 
 ## Rotas de admin (`/admin`)
 
-Exigem um usuário admin: `users.is_admin = true` (via `python scripts/make_admin.py`) ou
+Exigem um usuário admin: `users.is_admin = true` (via `python scripts/make_admin.py --email …`;
+ver [auth-and-api-keys.md](auth-and-api-keys.md#autorização-de-recursos)) ou
 id listado em `ADMIN_USER_IDS`. Outros usuários recebem `403`. Não há UI no frontend.
 
 | Método e caminho | O que faz |

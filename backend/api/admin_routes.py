@@ -26,6 +26,7 @@ from shared.models import Job, Page, JobStatus
 from shared.database import SessionLocal
 from shared.redis_client import get_redis_client
 from shared.auth import get_current_active_user
+from shared.admin import is_effective_admin
 from workers.monitoring import detect_stuck_jobs, auto_retry_failed_pages, cleanup_old_jobs
 from uuid import uuid4
 
@@ -46,9 +47,7 @@ def require_admin(current_user=Depends(get_current_active_user)):
     Raises:
         HTTPException 403: If the authenticated user is not an admin
     """
-    admin_ids = {uid.strip() for uid in settings.admin_user_ids.split(",") if uid.strip()}
-    is_admin = getattr(current_user, "is_admin", False) is True or str(current_user.id) in admin_ids
-    if not is_admin:
+    if not is_effective_admin(current_user, settings):
         logger.warning(f"[ADMIN] Access denied for user {current_user.id}")
         raise HTTPException(
             status_code=403,

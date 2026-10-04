@@ -21,6 +21,8 @@ export interface UserResponse {
   username: string;
   is_active: boolean;
   created_at: string;
+  /** Effective admin (users.is_admin or ADMIN_USER_IDS). Absent in sessions saved by older builds. */
+  is_admin?: boolean;
 }
 
 export interface Token {

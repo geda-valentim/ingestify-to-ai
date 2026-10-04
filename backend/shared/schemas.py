@@ -242,9 +242,18 @@ class UserResponse(BaseModel):
     username: str
     is_active: bool
     created_at: datetime
+    # Effective admin rule (users.is_admin OR ADMIN_USER_IDS); the API fills it in,
+    # so the frontend can show admin-only screens
+    is_admin: bool = False
 
     class Config:
         from_attributes = True
+
+    @classmethod
+    def for_user(cls, user) -> "UserResponse":
+        from shared.admin import is_effective_admin
+
+        return cls.model_validate(user).model_copy(update={"is_admin": is_effective_admin(user)})
 
 
 class Token(BaseModel):
