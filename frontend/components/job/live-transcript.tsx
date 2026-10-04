@@ -13,13 +13,21 @@ const POLL_MS = 3000;
  * The text of a running transcription, polled every 3s and accumulated: each
  * request asks only for the segments after the ones already received. Empty for
  * providers that return the whole file at once (only faster-whisper streams).
+ *
+ * `preloaded` is how many segments already existed when the page opened (the
+ * first response): those are shown at once, only the ones after them flow in.
  */
-export function useLiveTranscript(jobId: string, active: boolean): TranscriptSegment[] {
+export function useLiveTranscript(
+  jobId: string,
+  active: boolean
+): { segments: TranscriptSegment[]; preloaded: number } {
   const [segments, setSegments] = useState<TranscriptSegment[]>([]);
+  const [preloaded, setPreloaded] = useState(0);
 
   useEffect(() => {
     if (!active) return;
     let since = 0;
+    let first = true;
     let cancelled = false;
 
     const poll = async () => {
@@ -30,7 +38,12 @@ export function useLiveTranscript(jobId: string, active: boolean): TranscriptSeg
           // The transcription restarted (e.g. GPU failed, retrying on CPU): start over
           since = 0;
           setSegments([]);
+          setPreloaded(0);
           return;
+        }
+        if (first) {
+          first = false;
+          setPreloaded(data.segments.length);
         }
         since = data.next;
         if (data.segments.length > 0) {
@@ -42,6 +55,7 @@ export function useLiveTranscript(jobId: string, active: boolean): TranscriptSeg
     };
 
     setSegments([]);
+    setPreloaded(0);
     poll();
     const timer = setInterval(poll, POLL_MS);
     return () => {
@@ -50,15 +64,16 @@ export function useLiveTranscript(jobId: string, active: boolean): TranscriptSeg
     };
   }, [jobId, active]);
 
-  return segments;
+  return { segments, preloaded };
 }
 
 /**
  * How many of the received segments to show. Segments arrive in batches every
  * few seconds; revealing them one at a time across the poll interval makes the
- * text flow in like captions instead of jumping a block at a time.
+ * text flow in like captions instead of jumping a block at a time. What was
+ * already there when the page opened (`preloaded`) shows up at once.
  */
-function useReveal(total: number): number {
+function useReveal(total: number, preloaded: number): number {
   const [shown, setShown] = useState(0);
 
   useEffect(() => {
@@ -66,12 +81,16 @@ function useReveal(total: number): number {
       setShown(total); // the list was reset
       return;
     }
+    if (shown < preloaded && preloaded <= total) {
+      setShown(preloaded);
+      return;
+    }
     if (shown === total) return;
     const pending = total - shown;
     const delay = Math.max(80, Math.min(700, (POLL_MS * 0.9) / pending));
     const timer = setTimeout(() => setShown((n) => n + 1), delay);
     return () => clearTimeout(timer);
-  }, [total, shown]);
+  }, [total, shown, preloaded]);
 
   return shown;
 }
@@ -85,20 +104,26 @@ function useReveal(total: number): number {
 export function LiveTranscriptView({
   status,
   segments,
+  preloaded,
 }: {
   status: JobStatusResponse;
   segments: TranscriptSegment[];
+  preloaded: number;
 }) {
-  const shown = useReveal(segments.length);
+  const shown = useReveal(segments.length, preloaded);
   const visible = segments.slice(0, shown);
   const containerRef = useRef<HTMLDivElement>(null);
   const [following, setFollowing] = useState(true);
   const [seenWhileAway, setSeenWhileAway] = useState(0);
   const lastScrollTop = useRef(0);
+  const reachedLiveEdge = useRef(false);
 
   useEffect(() => {
     const el = containerRef.current;
-    if (el && following) el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+    if (!el || !following) return;
+    // Jump straight to the end of what was already there; glide only for new lines
+    el.scrollTo({ top: el.scrollHeight, behavior: reachedLiveEdge.current ? "smooth" : "auto" });
+    if (shown > 0) reachedLiveEdge.current = true;
   }, [shown, following]);
 
   const onScroll = () => {
@@ -169,7 +194,7 @@ export function LiveTranscriptView({
                   key={`${segment.start}-${segment.end}`}
                   className={cn(
                     "flex gap-4 rounded-md px-2 py-2 border-l-2 transition-colors duration-1000",
-                    "animate-in fade-in slide-in-from-bottom-2 duration-500",
+                    i >= preloaded && "animate-in fade-in slide-in-from-bottom-2 duration-500",
                     newest ? "border-primary bg-primary/5" : "border-transparent"
                   )}
                 >

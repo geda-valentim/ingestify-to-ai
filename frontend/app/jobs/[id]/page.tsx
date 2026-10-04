@@ -1058,7 +1058,10 @@ function JobResultPanel({
   fileName: string;
   token: string | null;
 }) {
-  const liveSegments = useLiveTranscript(status.job_id, status.status === "processing");
+  const { segments: liveSegments, preloaded: livePreloaded } = useLiveTranscript(
+    status.job_id,
+    status.status === "processing"
+  );
   if (status.status === "failed") {
     return (
       <div className="flex-1 flex flex-col items-center justify-center p-8 text-center">
@@ -1073,7 +1076,7 @@ function JobResultPanel({
 
   // faster-whisper reports media time and streams its text: show the captions as they come
   if (status.status === "processing" && (status.media_duration || liveSegments.length > 0)) {
-    return <LiveTranscriptView status={status} segments={liveSegments} />;
+    return <LiveTranscriptView status={status} segments={liveSegments} preloaded={livePreloaded} />;
   }
 
   if (status.status !== "completed") {
