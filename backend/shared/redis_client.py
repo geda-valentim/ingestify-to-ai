@@ -24,7 +24,7 @@ Do not reintroduce a ``verify_job_ownership``-style helper here.
 import redis
 import json
 import logging
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Tuple
 from datetime import datetime
 from shared.config import get_settings
 
@@ -168,11 +168,49 @@ class RedisClient:
     def delete_job(self, job_id: str) -> bool:
         """Delete job data from Redis"""
         try:
-            self.client.delete(f"job:{job_id}:status", f"job:{job_id}:result")
+            self.client.delete(
+                f"job:{job_id}:status", f"job:{job_id}:result", f"job:{job_id}:transcript:partial"
+            )
             return True
         except Exception as e:
             logger.error("Failed to evict cache entries for job %s: %s", job_id, e)
             return False
+
+    def append_partial_transcript(self, job_id: str, segments: List[Dict[str, Any]]) -> bool:
+        """Append transcribed segments ({start, end, text}) to a running transcription's live text"""
+        if not segments:
+            return True
+        key = f"job:{job_id}:transcript:partial"
+        try:
+            pipe = self.client.pipeline()
+            pipe.rpush(key, *(json.dumps(s, ensure_ascii=False) for s in segments))
+            pipe.expire(key, 86400)
+            pipe.execute()
+            return True
+        except Exception as e:
+            logger.error("Failed to append live transcript for job %s: %s", job_id, e)
+            return False
+
+    def get_partial_transcript(self, job_id: str, since: int = 0) -> Tuple[List[Dict[str, Any]], int]:
+        """
+        Segments of a running transcription from index ``since`` on, and how many
+        there are in all (the ``since`` for the next call). Empty once it finishes.
+        """
+        key = f"job:{job_id}:transcript:partial"
+        try:
+            total = self.client.llen(key)
+            raw = self.client.lrange(key, since, -1) if since < total else []
+            return [json.loads(s) for s in raw], total
+        except Exception as e:
+            logger.error("Failed to read live transcript for job %s: %s", job_id, e)
+            return [], since
+
+    def delete_partial_transcript(self, job_id: str) -> None:
+        """Drop the live text once the full result is stored"""
+        try:
+            self.client.delete(f"job:{job_id}:transcript:partial")
+        except Exception as e:
+            logger.warning("Failed to drop live transcript for job %s: %s", job_id, e)
 
     def close(self):
         """Close Redis connection"""

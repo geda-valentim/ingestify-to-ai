@@ -115,7 +115,11 @@ class FasterWhisperTranscriber(AudioTranscriber):
             for segment in segments:
                 segments_list.append(segment)
                 if on_progress:
-                    on_progress(segment.end, info.duration)
+                    on_progress(
+                        segment.end,
+                        info.duration,
+                        segment={"start": segment.start, "end": segment.end, "text": segment.text.strip()},
+                    )
 
             # Build result
             full_text = ' '.join([segment.text.strip() for segment in segments_list])

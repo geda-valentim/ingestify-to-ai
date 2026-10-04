@@ -152,6 +152,21 @@ class JobStatusResponse(BaseModel):
     media_duration: Optional[float] = None
 
 
+class TranscriptSegment(BaseModel):
+    """Trecho transcrito, com início e fim em segundos da mídia"""
+    start: float
+    end: float
+    text: str
+
+
+class PartialTranscriptResponse(BaseModel):
+    """Texto de uma transcrição em andamento, a partir do segmento `since`"""
+    job_id: UUID
+    status: JobStatus
+    segments: List[TranscriptSegment]
+    next: int  # passe como `since` na próxima consulta para receber só o que é novo
+
+
 class JobPagesResponse(BaseModel):
     """Detalhes de progresso por página"""
     job_id: UUID
