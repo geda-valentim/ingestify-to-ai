@@ -1,5 +1,7 @@
 # Requisitos Funcionais (RF) - Doc2MD API
 
+> **Documento histórico (out/2025).** Os requisitos aqui eram aspiracionais e várias marcações não batem com o código (ex.: `callback_url` em `/convert` e rate limit por token com headers `X-RateLimit-*` não existem; a limpeza não é horária). O comportamento real está em [features/](features/) — índice em [README.md](README.md).
+
 ## RF001 - Conversão de Documentos
 
 ### RF001.1 - Suporte a Múltiplas Fontes

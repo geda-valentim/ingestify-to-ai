@@ -1,4 +1,7 @@
 # Sprint 3: Application Layer & Use Cases
+
+> **Plano de sprint (crawler) — não concluído.** Estado real do crawler no código: [../features/crawler.md](../features/crawler.md).
+
 **Duração:** Semanas 5-6
 **Objetivo:** Lógica de negócio (Use Cases)
 

@@ -1,4 +1,7 @@
 # Sprint 1: Foundation & Data Models - STI Pattern
+
+> **Plano de sprint (crawler) — não concluído.** Estado real do crawler no código: [../features/crawler.md](../features/crawler.md).
+
 **Duração:** Semanas 1-2
 **Objetivo:** Estrutura de dados com reuso máximo (Single Table Inheritance)
 **Estimativa:** 6-8h

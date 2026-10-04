@@ -365,7 +365,7 @@ a única parte da documentação que o código não consegue contar sozinho.
 - [ ] `@contextmanager db_session()` e migrar as 37 chamadas manuais (§ 6.1)
 
 ### P2 — Arquitetura (1 mês)
-- [ ] **Decidir § 2 (A ou B)** e executar; até lá, marcar os docs de Clean Arch como "não implementado"
+- [x] **Decidir § 2 (A ou B)** e executar → decidido na [spec 0001](specs/0001-remover-clean-architecture-morta.md) (camadas removidas em `9a6310d`). *Nota 2026-10-04:* o merge do crawler (`f1b5917`) recolocou em `backend/domain|application|infrastructure` só os arquivos do crawler, ainda dormentes — ver [features/crawler.md](features/crawler.md).
 - [ ] Unificar `convert_page_task` / `process_page` (§ 3.2)
 - [ ] Extrair `create_job_from_source()` e eliminar a duplicação `upload`/`convert` (§ 3.1)
 - [ ] Quebrar `api/routes.py` em módulos por recurso (§ 3.1)
@@ -415,8 +415,10 @@ No `cleanup_old_jobs` o efeito era pior que um erro: cada `delete` lançava `Att
 capturado, logado — e `cleaned_count += 1` acontecia mesmo assim. A task registrava
 `"Cleanup complete: N jobs cleaned"` enquanto o Redis crescia sem limite.
 
-Dois nomes de chave também estavam errados: o status de página vive em `job:{id}:page:{n}`
+Dois nomes de chave também estavam errados: o status de página vivia em `job:{id}:page:{n}`
 (não `:status`) e `job:{id}:child_jobs` nunca existiu — child jobs ficam dentro do JSON de status.
+*Nota 2026-10-04:* o esquema `job:{id}:page:{n}` foi removido depois (`d971e82`); cada página
+é um job próprio em `job:{page_job_id}:status`.
 
 **Corrigido.** Também passou a limpar `job:{id}:owner` e a remover o job de `user:{id}:jobs`,
 e um job cujo delete falha não é mais contado como limpo.
@@ -480,7 +482,9 @@ precisaria de um flag separado.
 ### 11.5 🟠 `calculate_job_progress` não é o que a documentação diz
 
 `CLAUDE.md` e § 2 do `SPECS.md` descrevem uma ponderação 10% split / 80% páginas / 10% merge.
-A implementação (`redis_client.py:255`) é uma razão simples `completed / total * 100`. Os testes
+A implementação (`redis_client.py:255`) é uma razão simples `completed / total * 100`.
+*Nota 2026-10-04:* `calculate_job_progress` foi removido como código morto; a fórmula viva é
+`20 + int(completed / total * 70)`, inline em `backend/workers/tasks.py`. Os testes
 fixam o comportamento **real**; ou a documentação ou o código precisa mudar — decisão de produto.
 
 ### 11.6 🟠 Dívidas menores identificadas e não corrigidas

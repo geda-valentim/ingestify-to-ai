@@ -107,8 +107,11 @@ MINIO_ROOT_PASSWORD=minioadmin
 ```
 
 **Standalone Mode:**
-- No `.env` file needed
-- Uses defaults from `docker-compose.yml`
+- A `.env` file is still required: `docker-compose.yml` refuses to start without
+  `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD`, and the API refuses to start without
+  `JWT_SECRET_KEY` (32+ chars) and `MINIO_ACCESS_KEY` / `MINIO_SECRET_KEY`
+  (see `.env.example`; `make ensure-jwt-secret` generates the JWT secret)
+- Everything else uses defaults from `docker-compose.yml`
 
 ## Infrastructure Management
 
@@ -144,7 +147,11 @@ Each project creates its own buckets automatically:
 - `ingestify-uploads` - Uploaded files
 - `ingestify-pages` - Extracted pages
 - `ingestify-audio` - Audio files
-- `ingestify-results` - Conversion results
+- `ingestify-results` - Conversion results (per-page Markdown)
+- `ingestify-crawled` - Reserved for the crawler, which is not implemented (always empty)
+
+All buckets are private; files are only served through short-lived presigned URLs.
+See [features/storage-and-retention.md](features/storage-and-retention.md).
 
 To create buckets for another project, the start script will detect and create them automatically.
 

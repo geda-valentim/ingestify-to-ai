@@ -1,4 +1,7 @@
 # Product Requirements Document (PRD)
+
+> **Planejado, não implementado.** Este PRD é idêntico a [crawler/CRAWLER.md](crawler/CRAWLER.md). Nada do crawler está ligado à API, aos workers ou ao frontend — ver [features/crawler.md](features/crawler.md) para o que existe de fato.
+
 # Website Scraper Application
 
 **Version:** 2.0

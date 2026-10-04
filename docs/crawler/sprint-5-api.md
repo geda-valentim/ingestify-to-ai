@@ -1,4 +1,7 @@
 # Sprint 5: API & Presentation Layer
+
+> **Plano de sprint (crawler) — não concluído.** Estado real do crawler no código: [../features/crawler.md](../features/crawler.md).
+
 **Duração:** Semanas 9-10
 **Objetivo:** Endpoints REST completos
 

@@ -1,4 +1,7 @@
 # Product Requirements Document (PRD)
+
+> **Planejado, não implementado.** Idêntico a [../WEBSCRAPPING_PRD.md](../WEBSCRAPPING_PRD.md). O que existe de fato no código (só peças dormentes): [../features/crawler.md](../features/crawler.md).
+
 # Website Scraper Application
 
 **Version:** 2.0

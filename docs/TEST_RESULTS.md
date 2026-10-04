@@ -1,5 +1,7 @@
 # Resultados de Testes - Doc2MD
 
+> **Snapshot histórico (2025-10-01).** Os "próximos testes" listados aqui hoje são cobertos pela suíte `pytest` em `backend/tests/`, e o PDF `AI-50p.pdf` citado não está no repositório.
+
 ## ✅ Teste de Divisão de PDF
 
 **Data:** 2025-10-01

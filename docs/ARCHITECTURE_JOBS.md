@@ -1,5 +1,12 @@
 # Arquitetura de Jobs - Doc2MD
 
+> **Parcialmente atualizado (2026-10-04).** A hierarquia MAIN → SPLIT → PAGE → MERGE descrita
+> aqui continua correta. A fórmula de progresso, os estados e as filas foram corrigidos
+> abaixo; exemplos de payload e a seção de "vantagens" são do desenho original. Para o
+> comportamento atual verificado no código, veja
+> [features/conversion.md](features/conversion.md) e [features/jobs-api.md](features/jobs-api.md).
+> As páginas extraídas ficam no MinIO (`ingestify-pages/pages/{job_id}/page_NNNN.pdf`).
+
 ## 📊 Hierarquia de Jobs
 
 ```
@@ -55,7 +62,6 @@ job:{page_job_id}:status = {
   "status": "completed",
   "parent_job_id": "main-abc-123",
   "page_number": 1,
-  "page_file_path": "/tmp/doc2md/.../page_0001.pdf",
   "created_at": "...",
   "started_at": "...",
   "completed_at": "...",
@@ -356,9 +362,9 @@ GET /jobs/main-abc-123/result
 - Pode refazer apenas parte do processo
 
 ### 5. **Escalabilidade**
-- Cada tipo de job pode ter workers dedicados
-- Fila separada para split, pages, merge
-- Priorização por tipo de operação
+- Split, pages e merge rodam todos na mesma fila `ingestify` (serviço `worker`).
+  As filas dedicadas que existem hoje são `ingestify-audio` (transcrição) e
+  `ingestify-vision` (Florence-2) — não há fila por tipo de job de documento.
 
 ## 📊 Tipos de Jobs
 
@@ -375,6 +381,7 @@ class JobType(str, Enum):
 
 ```python
 class JobStatus(str, Enum):
+    PENDING = "pending"       # Pendente (usado internamente; no MySQL é o estado inicial)
     QUEUED = "queued"         # Na fila
     PROCESSING = "processing" # Sendo processado
     COMPLETED = "completed"   # Concluído com sucesso
@@ -385,22 +392,16 @@ class JobStatus(str, Enum):
 ## 📈 Cálculo de Progress
 
 ### Main Job Progress
+
+> **Corrigido em 2026-10-04.** O cálculo 10/80/10 que constava aqui nunca foi implementado.
+> A fórmula real está inline em `backend/workers/tasks.py` (`_run_page_conversion`):
+
 ```python
-def calculate_main_job_progress(main_job_id):
-    page_jobs = get_all_page_jobs(main_job_id)
-    total = len(page_jobs)
-    completed = sum(1 for pj in page_jobs if pj.status == "completed")
-
-    # Pesos:
-    # Split: 10%
-    # Pages: 80% (distribuído entre páginas)
-    # Merge: 10%
-
-    split_done = 10 if split_job.status == "completed" else 0
-    pages_done = int((completed / total) * 80)
-    merge_done = 10 if merge_job.status == "completed" else 0
-
-    return split_done + pages_done + merge_done
+# 10% ao iniciar o MAIN; depois, a cada página concluída:
+completed_pages = redis_client.count_completed_page_jobs(parent_job_id)
+total_pages = redis_client.get_job_pages_total(parent_job_id)
+progress = 20 + int((completed_pages / total_pages) * 70)
+# 100% quando o merge_pages_task conclui
 ```
 
 ## 🗃️ Schema Unificado

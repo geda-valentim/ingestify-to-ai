@@ -1,4 +1,7 @@
 # Sprint 4: Workers Celery
+
+> **Plano de sprint (crawler) — não concluído.** Estado real do crawler no código: [../features/crawler.md](../features/crawler.md).
+
 **Duração:** Semanas 7-8
 **Objetivo:** Execução de crawls com Celery
 

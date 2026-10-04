@@ -1,5 +1,7 @@
 # Especificações Técnicas - Doc2MD API
 
+> **Documento histórico (out/2025, ainda "Doc2MD").** Não reflete o sistema atual: descreve `/convert` com corpo JSON (hoje é `multipart/form-data`), endpoints sem autenticação (hoje todos exigem JWT ou API key), progresso 20→80→100 e uma arquitetura só com Redis (faltam MySQL, MinIO e Elasticsearch). Referência atual: [README.md](README.md) e [features/](features/). Mantido apenas como registro.
+
 ## 1. Visão Geral da Arquitetura
 
 ### 1.1 Componentes do Sistema

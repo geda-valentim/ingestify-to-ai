@@ -1,5 +1,7 @@
 # Changelog - Hierarquia de Jobs Implementada
 
+> **Registro histórico (2025-10).** Não é mantido; para mudanças posteriores use `git log`. Observação: `workers/tasks_old.py`, citado abaixo, não existe (há um `workers/tasks.py.backup`).
+
 ## 2025-10-01: Job Hierarchy Architecture + CLI Tests
 
 ### ✅ Endpoint de Upload Ajustado (Adicionado)

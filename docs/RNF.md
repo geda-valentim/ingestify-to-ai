@@ -1,5 +1,7 @@
 # Requisitos Não-Funcionais (RNF) - Doc2MD API
 
+> **Documento histórico (out/2025).** Metas não verificadas; algumas afirmações não valem mais (não há `GET /metrics`/Prometheus; as imagens usam Python 3.13; `JWT_SECRET_KEY` e as credenciais do MinIO são obrigatórias, então a configuração padrão não sobe sozinha). Comportamento atual: [features/](features/) — índice em [README.md](README.md).
+
 ## RNF001 - Performance
 
 ### RNF001.1 - Tempo de Resposta da API
