@@ -90,10 +90,23 @@ e e-mail da mesma conta compartilham o contador de falhas. Se o Redis cair, o li
 - **Jobs:** só o dono acessa; ver [jobs-api.md](jobs-api.md#autorização). Negação é sempre
   `404`, nunca `403`.
 - **Busca e tags:** filtradas por `user_id` do usuário autenticado.
-- **Admin (`/admin/*`):** `require_admin` aceita o usuário se `users.is_admin` é verdadeiro
-  (defina com `python scripts/make_admin.py`) **ou** se o id está em `ADMIN_USER_IDS`
-  (UUIDs separados por vírgula). Caso contrário, `403`. Endpoints em
+- **Admin (`/admin/*`):** um usuário é admin se `users.is_admin` é verdadeiro **ou** se o id
+  está em `ADMIN_USER_IDS` (UUIDs separados por vírgula). A regra é uma só
+  (`shared/admin.py:is_effective_admin`) para as rotas admin e para o campo `is_admin` de
+  `GET /auth/me` e `POST /auth/register`. Quem não é admin recebe `403`. Endpoints em
   [monitoring-and-admin.md](monitoring-and-admin.md).
+- **Primeiro admin:** pelo shell do servidor ou do container, por e-mail ou id, nunca por
+  username (que qualquer um escolhe no cadastro):
+
+  ```bash
+  docker compose exec api python scripts/make_admin.py --email alice@example.com
+  docker compose exec api python scripts/make_admin.py --id <uuid> --yes   # sem pergunta
+  ```
+
+  O script mostra id, username e e-mail e pede confirmação. Ele recusa quando o e-mail
+  informado é também o *username* de outra conta (alguém poderia se cadastrar com o username
+  `ops@empresa.com` para ser promovido no lugar do dono desse e-mail); nesse caso, confira
+  quem é quem e use `--id`.
 
 ## Configuração
 
