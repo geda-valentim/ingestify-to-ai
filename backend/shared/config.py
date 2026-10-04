@@ -75,6 +75,12 @@ class Settings(BaseSettings):
     celery_result_backend: str = "redis://redis:6379/1"
     celery_task_default_queue: str = "ingestify"  # Namespace para isolar filas
     celery_worker_name: str = "ingestify-worker"  # Hostname único
+    # With acks_late, the Redis broker hands a message that is still unacknowledged
+    # after this long to another worker - even while the first is still running it.
+    # Must exceed the longest task time limit of ANY worker (worker-audio allows
+    # 10,800 s), and must be the same on every service, since any consumer restores
+    # every queue's stale messages. Kombu's default is 3,600 s.
+    celery_visibility_timeout_seconds: int = 14400
 
     # Conversion Settings
     max_file_size_mb: int = 50
@@ -179,6 +185,10 @@ class Settings(BaseSettings):
     monitoring_max_retry_count: int = 3  # Maximum retry attempts per page
     monitoring_check_interval_minutes: int = 5  # How often to run monitoring tasks
     monitoring_batch_size: int = 100  # Max jobs to process per monitoring cycle
+    # An unacknowledged broker message that no live worker holds is orphaned (its
+    # worker died) and would otherwise wait out the whole visibility timeout. Flag it
+    # once it is this old, so a message just delivered is never mistaken for one.
+    monitoring_unacked_grace_seconds: int = 600
     temp_files_retention_hours: int = 72  # Delete leftover local files (failed jobs, aborted uploads) after X hours
 
     # Google Drive (optional)
@@ -362,6 +372,18 @@ class Settings(BaseSettings):
                 "Look the sha up at "
                 f"https://huggingface.co/{self.vision_model_id}/commits/main "
                 "and set VISION_MODEL_REVISION=<sha>."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _visibility_timeout_must_outlast_tasks(self) -> "Settings":
+        # Otherwise a task still inside its time limit is redelivered to a second
+        # worker and runs twice (Celery's Redis broker, with task_acks_late)
+        if self.celery_visibility_timeout_seconds <= self.conversion_timeout_seconds:
+            raise ValueError(
+                f"CELERY_VISIBILITY_TIMEOUT_SECONDS ({self.celery_visibility_timeout_seconds}) must be "
+                f"greater than CONVERSION_TIMEOUT_SECONDS ({self.conversion_timeout_seconds}), or a task "
+                "still running would be handed to a second worker. Raise it on every service."
             )
         return self
 

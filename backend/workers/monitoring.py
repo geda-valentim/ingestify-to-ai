@@ -5,6 +5,7 @@ These periodic tasks run via Celery Beat to automatically detect and recover fro
 """
 
 from datetime import datetime, timedelta
+import json
 import logging
 import re
 from pathlib import Path
@@ -427,6 +428,61 @@ def remove_stale_temp_files(base: Path, max_age_seconds: int, now: float = None,
 
     logger.info(f"[MONITORING] Removed {removed} stale temp entries from {base}")
     return {"removed": removed}
+
+
+@celery_app.task(name="workers.monitoring.check_broker_unacked")
+def check_broker_unacked():
+    """
+    Flag broker messages left unacknowledged by a worker that died.
+
+    With acks_late, a message stays in the broker's `unacked` hash while its task
+    runs; if the worker dies (container recreated, OOM), it only returns to its queue
+    after the visibility timeout - hours. A message no live worker reports holding,
+    seen on two consecutive checks and older than the grace period, is orphaned:
+    logged as an error and listed for admins, who can put it back on its queue
+    (POST /admin/broker/unacked/{delivery_tag}/requeue). Never requeued here: a
+    worker that merely failed to answer the inspect would then run the task twice.
+    """
+    from shared import broker_unacked
+
+    inspect = celery_app.control.inspect(timeout=5)
+    live = broker_unacked.live_task_ids(inspect)
+    messages = broker_unacked.list_unacked(broker_unacked.broker_client())
+
+    cache = get_redis_client().client
+    previous = {}
+    try:
+        previous = json.loads(cache.get(broker_unacked.REPORT_KEY) or "{}")
+    except (ValueError, TypeError):
+        pass
+
+    if live is None:
+        logger.warning(
+            f"[MONITORING] No worker answered the inspect; skipping the check of "
+            f"{len(messages)} unacked broker messages"
+        )
+        return {"unacked": len(messages), "orphans": 0, "skipped": True}
+
+    suspects = broker_unacked.find_orphans(messages, live, settings.monitoring_unacked_grace_seconds)
+    seen_before = set(previous.get("suspect_task_ids") or [])
+    orphans = [m for m in suspects if m.task_id in seen_before]
+
+    for m in orphans:
+        logger.error(
+            f"[MONITORING] Orphaned broker message: task {m.task_name} id={m.task_id} "
+            f"job={m.job_id} queue={m.queue} unacked for {m.age_seconds:.0f}s with no live worker "
+            f"holding it; requeue with POST /admin/broker/unacked/{m.delivery_tag}/requeue"
+        )
+
+    report = {
+        "checked_at": datetime.utcnow().isoformat(),
+        "unacked_total": len(messages),
+        "visibility_timeout_seconds": settings.celery_visibility_timeout_seconds,
+        "suspect_task_ids": [m.task_id for m in suspects if m.task_id],
+        "orphans": [m.to_dict() for m in orphans],
+    }
+    cache.set(broker_unacked.REPORT_KEY, json.dumps(report), ex=3600)
+    return {"unacked": len(messages), "orphans": len(orphans), "skipped": False}
 
 
 @celery_app.task(name="workers.monitoring.health_check")

@@ -42,6 +42,8 @@ id listado em `ADMIN_USER_IDS`. Outros usuários recebem `403`. Não há UI no f
 | `POST /admin/jobs/{job_id}/retry-all-failed` | Marca para retry as páginas `failed` do job com `retry_count < MONITORING_MAX_RETRY_COUNT` (ver lacunas). |
 | `POST /admin/cleanup` | Executa `cleanup_old_jobs` na hora. |
 | `GET /admin/health/monitoring` | Tasks agendadas e registradas no Celery. |
+| `GET /admin/broker/unacked` | Mensagens que o broker guarda como entregues e não confirmadas, mais o resultado da última checagem de órfãs. |
+| `POST /admin/broker/unacked/{delivery_tag}/requeue` | Devolve uma mensagem órfã para o início da fila dela. `409` se a última checagem não a marcou como órfã ou se algum worker a está segurando agora. |
 
 ```bash
 curl -H "Authorization: Bearer $ADMIN_TOKEN" http://localhost:8000/admin/stats
@@ -56,6 +58,17 @@ completa e horários em [storage-and-retention.md](storage-and-retention.md#tare
   `started_at` mais antigo que o limite; uma página, quando está em `PROCESSING` com
   `created_at` mais antigo que o limite. Ambos viram `FAILED` no MySQL e no Redis.
 
+- **Mensagens órfãs no broker** (`check_broker_unacked`, a cada
+  `MONITORING_CHECK_INTERVAL_MINUTES`): com `acks_late`, a mensagem de uma task fica no hash
+  `unacked` do Redis enquanto ela roda. Se o worker morre (container recriado, OOM), ela só
+  volta para a fila depois de `CELERY_VISIBILITY_TIMEOUT_SECONDS` (4 h). A checagem pergunta aos
+  workers o que estão rodando, reservando ou reagendando; uma mensagem que nenhum deles segura,
+  vista em **duas checagens seguidas** e mais velha que `MONITORING_UNACKED_GRACE_SECONDS`, é
+  logada como erro e listada em `GET /admin/broker/unacked`. A checagem **nunca** reenfileira
+  sozinha (um worker que só não respondeu a tempo rodaria a task duas vezes): o admin decide com
+  `POST /admin/broker/unacked/{delivery_tag}/requeue`. Se nenhum worker responde, a checagem é
+  pulada.
+
 ## Configuração
 
 | Variável | Default | Efeito |
@@ -68,6 +81,8 @@ completa e horários em [storage-and-retention.md](storage-and-retention.md#tare
 | `MONITORING_MAX_RETRY_COUNT` | `3` | |
 | `MONITORING_BATCH_SIZE` | `100` | Máximo de itens por ciclo. |
 | `ADMIN_USER_IDS` | vazio | |
+| `CELERY_VISIBILITY_TIMEOUT_SECONDS` | `14400` | Tempo até o broker entregar a outro worker uma mensagem não confirmada. Precisa ser maior que o maior limite de tempo de task (o `worker-audio` aceita 10.800 s) e igual em todos os serviços; com valor menor, os serviços não sobem. O default do kombu (3.600 s) reentregava transcrições longas **enquanto ainda rodavam**. |
+| `MONITORING_UNACKED_GRACE_SECONDS` | `600` | Idade mínima para uma mensagem sem worker ser considerada órfã. |
 
 ## Limites e lacunas conhecidas
 

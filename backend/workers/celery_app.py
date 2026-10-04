@@ -25,6 +25,9 @@ celery_app.conf.update(
     task_time_limit=settings.conversion_timeout_seconds,
     task_soft_time_limit=settings.conversion_timeout_seconds - 30,
     broker_connection_retry_on_startup=True,
+    # Above every task time limit, so a long task is never redelivered while it runs;
+    # a message whose worker died is caught sooner by workers.monitoring.check_broker_unacked
+    broker_transport_options={"visibility_timeout": settings.celery_visibility_timeout_seconds},
     # Isolation settings
     task_default_queue=settings.celery_task_default_queue,  # Fila isolada
     worker_name=settings.celery_worker_name,  # Hostname único
@@ -52,6 +55,11 @@ if settings.monitoring_enabled:
             'task': 'workers.monitoring.cleanup_stale_files',
             'schedule': crontab(hour='3', minute='0'),  # Daily at 3 AM UTC
             'options': {'expires': 3600}
+        },
+        'check-broker-unacked': {
+            'task': 'workers.monitoring.check_broker_unacked',
+            'schedule': crontab(minute=f'*/{settings.monitoring_check_interval_minutes}'),
+            'options': {'expires': settings.monitoring_check_interval_minutes * 60}
         },
         'health-check': {
             'task': 'workers.monitoring.health_check',
