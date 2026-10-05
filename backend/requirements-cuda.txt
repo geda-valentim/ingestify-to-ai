@@ -1,0 +1,34 @@
+# ---------------------------------------------------------------------------
+# Ingestify - NVIDIA CUDA dependency set (OPT-IN)
+# ---------------------------------------------------------------------------
+# Install with:
+#     pip install -r backend/requirements-cuda.txt
+#
+# Only use this on a machine with an NVIDIA GPU and a working driver. It pulls
+# roughly 2.5GB of extra CUDA wheels. See docs/GPU.md.
+#
+# Why cu129 and not cu130 - this is load-bearing
+# ----------------------------------------------
+# cu13 torch builds depend on the `nvidia-*-cu13` wheels. ctranslate2 4.x, the
+# engine behind faster-whisper, links the *cu12* cuDNN 9 layout and dies with
+# the opaque `Unable to load libcudnn_ops.so.9` against a cu13 tree.
+# cu129 keeps torch on cu12 wheels and is >=12.8, so it still covers Blackwell
+# (sm_120). The two explicit `nvidia-*-cu12` lines below guarantee the cuDNN 9
+# cu12 layout is present regardless of what torch's own metadata pulls.
+#
+# To target a different CUDA runtime (cu126 / cu128 / cu130), override the
+# index at build time with the TORCH_INDEX_URL build arg rather than editing
+# this file - see docker-compose.gpu.yml.
+# ---------------------------------------------------------------------------
+
+--index-url https://download.pytorch.org/whl/cu129
+--extra-index-url https://pypi.org/simple
+
+torch==2.13.0
+torchvision==0.28.0
+
+# Required by ctranslate2 / faster-whisper on GPU. Pinned to the cu12 line.
+nvidia-cublas-cu12
+nvidia-cudnn-cu12>=9.0,<10.0
+
+-r requirements-base.txt

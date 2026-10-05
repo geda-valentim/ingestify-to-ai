@@ -4,7 +4,7 @@ Database query helpers for monitoring and recovery
 
 from datetime import datetime, timedelta
 from typing import List, Optional
-from sqlalchemy import and_, or_
+from sqlalchemy import and_, exists, or_
 from sqlalchemy.orm import Session
 
 from shared.models import Job, Page, JobStatus
@@ -12,6 +12,45 @@ from shared.database import SessionLocal
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+# A routed job whose attempt still heartbeats is long, not stuck (spec 0003, Appendix J):
+# a 3 h transcription outlives the stuck threshold. Its own sweeper recovers it if
+# the worker dies. Jobs with no usage row - every job without a route - are unaffected.
+LIVE_USAGE_HEARTBEAT_SECONDS = 600
+
+
+def _has_live_engine_usage():
+    from shared.models import EngineUsage
+
+    recent = datetime.utcnow() - timedelta(seconds=LIVE_USAGE_HEARTBEAT_SECONDS)
+    return exists().where(
+        EngineUsage.job_id == Job.id,
+        EngineUsage.status.in_(("reserved", "spawning", "running")),
+        EngineUsage.heartbeat_at >= recent,
+    )
+
+
+def _has_open_backlog_items():
+    """A split job whose routed pages wait in the backlog is queued, not stuck (spec 0003, slice 8)"""
+    from shared.models import JobDispatch
+
+    return exists().where(
+        JobDispatch.job_id == Job.id,
+        JobDispatch.state.in_(("probing", "waiting", "assigned", "running", "bypassed")),
+    )
+
+
+def _page_has_live_engine_usage():
+    from shared.models import EngineUsage
+
+    recent = datetime.utcnow() - timedelta(seconds=LIVE_USAGE_HEARTBEAT_SECONDS)
+    return exists().where(
+        EngineUsage.subject_type == "page",
+        EngineUsage.subject_id == Page.page_job_id,
+        EngineUsage.status.in_(("reserved", "spawning", "running")),
+        EngineUsage.heartbeat_at >= recent,
+    )
 
 
 def get_stuck_jobs(
@@ -36,7 +75,9 @@ def get_stuck_jobs(
             and_(
                 Job.status == JobStatus.PROCESSING,
                 Job.started_at.isnot(None),
-                Job.started_at < threshold_time
+                Job.started_at < threshold_time,
+                ~_has_live_engine_usage(),
+                ~_has_open_backlog_items(),
             )
         ).limit(batch_size).all()
 
@@ -71,7 +112,8 @@ def get_stuck_pages(
         stuck_pages = db.query(Page).filter(
             and_(
                 Page.status == JobStatus.PROCESSING,
-                Page.created_at < threshold_time  # Pages don't have started_at
+                Page.created_at < threshold_time,  # Pages don't have started_at
+                ~_page_has_live_engine_usage(),  # a routed page still heartbeating is running, not stuck
             )
         ).limit(batch_size).all()
 

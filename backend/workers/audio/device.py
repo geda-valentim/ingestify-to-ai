@@ -7,10 +7,9 @@ libraries missing when the model loads or runs), mark_gpu_unavailable()
 switches the cache to CPU permanently for this process, so the failure is
 not retried on every job.
 
-Configuration (WHISPER_DEVICE / WHISPER_COMPUTE_TYPE):
-- WHISPER_DEVICE=auto (default): use CUDA when a GPU is available, else CPU
-- WHISPER_DEVICE=cuda or cpu: force a device (cuda still falls back on failure)
-- WHISPER_COMPUTE_TYPE=auto (default): float16 on GPU, int8 on CPU
+The device itself is decided by shared.device.resolve_whisper_device()
+(WHISPER_DEVICE, else DEVICE; see docs/GPU.md). An explicit cuda still falls
+back to CPU here if the model then fails to load or run on the GPU.
 """
 
 import logging
@@ -73,45 +72,27 @@ def is_gpu_error(error: BaseException) -> bool:
 
 
 def _detect_device() -> WhisperDevice:
+    """
+    The one-time decision, delegated to shared.device so audio follows the same
+    rules as everything else: WHISPER_DEVICE (or DEVICE when it is empty), and
+    the CTranslate2 cuDNN gate that falls back to CPU before a model load would
+    die with `Unable to load libcudnn_ops.so.9`. This module only adds the
+    per-process cache and the runtime fallback on top.
+    """
     from shared.config import get_settings
+    from shared.device import resolve_whisper_compute_type, resolve_whisper_device
+
     settings = get_settings()
+    requested = (settings.whisper_device or settings.device or "auto").strip().lower()
 
-    requested = (settings.whisper_device or "auto").strip().lower()
-    requested_compute = (settings.whisper_compute_type or "auto").strip().lower()
+    device = resolve_whisper_device()
+    compute_type = resolve_whisper_compute_type(device)
 
-    if requested == "cpu":
-        device, reason = "cpu", "configured"
-    elif requested == "cuda":
-        device, reason = "cuda", "configured"
+    if requested == "auto":
+        reason = f"auto: {'CUDA device found' if device.startswith('cuda') else 'no usable CUDA device'}"
+    elif device.split(":")[0] != requested.split(":")[0]:
+        reason = f"requested {requested}, not usable here"
     else:
-        gpu_count = _cuda_device_count()
-        if gpu_count > 0:
-            device, reason = "cuda", f"auto: {gpu_count} CUDA device(s) found"
-        else:
-            device, reason = "cpu", "auto: no CUDA device found"
-
-    if requested_compute != "auto":
-        compute_type = requested_compute
-    else:
-        compute_type = GPU_COMPUTE_TYPE if device == "cuda" else CPU_COMPUTE_TYPE
+        reason = "configured"
 
     return WhisperDevice(device=device, compute_type=compute_type, reason=reason)
-
-
-def _cuda_device_count() -> int:
-    """Count usable CUDA devices without failing when no GPU stack is installed"""
-    # faster-whisper runs on CTranslate2, whose check does not need PyTorch
-    try:
-        import ctranslate2
-        return ctranslate2.get_cuda_device_count()
-    except Exception as e:
-        logger.debug(f"CTranslate2 CUDA check unavailable: {e}")
-
-    # openai-whisper runs on PyTorch
-    try:
-        import torch
-        return torch.cuda.device_count() if torch.cuda.is_available() else 0
-    except Exception as e:
-        logger.debug(f"PyTorch CUDA check unavailable: {e}")
-
-    return 0

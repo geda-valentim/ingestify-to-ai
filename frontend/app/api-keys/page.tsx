@@ -4,16 +4,19 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  ArrowLeft,
   Key,
   Plus,
   Copy,
   Trash2,
   CheckCircle2,
 } from "lucide-react";
-import { apiKeysApi } from "@/lib/api";
+import { API_URL, apiKeysApi } from "@/lib/api";
 import { useAuthStore } from "@/lib/store/auth";
+import { loginUrl } from "@/lib/session";
+import { formatApiError, parseApiDate } from "@/lib/utils";
+import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
+import { AppHeader } from "@/components/app-header";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -28,6 +31,7 @@ import { formatDistanceToNow } from "date-fns";
 export default function ApiKeysPage() {
   const router = useRouter();
   const queryClient = useQueryClient();
+  const { toast } = useToast();
   const token = useAuthStore((state) => state.token);
   const isAuthenticated = useAuthStore((state) => state.token !== null && state.user !== null);
   const hasHydrated = useAuthStore((state) => state._hasHydrated);
@@ -39,7 +43,7 @@ export default function ApiKeysPage() {
 
   useEffect(() => {
     if (hasHydrated && !isAuthenticated) {
-      router.push("/login");
+      router.replace(loginUrl());
     }
   }, [isAuthenticated, hasHydrated, router]);
 
@@ -64,6 +68,18 @@ export default function ApiKeysPage() {
     mutationFn: (id: string) => apiKeysApi.revoke(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["api-keys", token] });
+      toast({
+        title: "API key revoked",
+        description: "The key can no longer be used to access the API.",
+      });
+    },
+    // Without this, a failure was swallowed entirely: the UI just sat there.
+    onError: (error: unknown) => {
+      toast({
+        title: "Error revoking API key",
+        description: formatApiError(error),
+        variant: "destructive",
+      });
     },
   });
 
@@ -88,14 +104,7 @@ export default function ApiKeysPage() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-background via-background to-muted">
       {/* Header */}
-      <header className="border-b bg-background/95 backdrop-blur">
-        <div className="container mx-auto px-4 py-4">
-          <Button variant="ghost" onClick={() => router.push("/dashboard")}>
-            <ArrowLeft className="h-4 w-4 mr-2" />
-            Back to Dashboard
-          </Button>
-        </div>
-      </header>
+      <AppHeader />
 
       {/* Main Content */}
       <main className="container mx-auto px-4 py-12">
@@ -238,16 +247,16 @@ export default function ApiKeysPage() {
                         <p className="font-medium">{key.name}</p>
                         <div className="flex gap-4 mt-1 text-sm text-muted-foreground">
                           <span>
-                            Created {formatDistanceToNow(new Date(key.created_at), { addSuffix: true })}
+                            Created {formatDistanceToNow(parseApiDate(key.created_at), { addSuffix: true })}
                           </span>
                           {key.last_used_at && (
                             <span>
-                              Last used {formatDistanceToNow(new Date(key.last_used_at), { addSuffix: true })}
+                              Last used {formatDistanceToNow(parseApiDate(key.last_used_at), { addSuffix: true })}
                             </span>
                           )}
                           {key.expires_at && (
                             <span>
-                              Expires {formatDistanceToNow(new Date(key.expires_at), { addSuffix: true })}
+                              Expires {formatDistanceToNow(parseApiDate(key.expires_at), { addSuffix: true })}
                             </span>
                           )}
                         </div>
@@ -285,7 +294,7 @@ export default function ApiKeysPage() {
               <div>
                 <p className="font-medium mb-2">Include the API key in your requests:</p>
                 <pre className="bg-muted p-4 rounded-lg overflow-x-auto">
-                  {`curl -X POST http://localhost:8080/upload \\
+                  {`curl -X POST ${API_URL}/upload \\
   -H "X-API-Key: doc2md_sk_..." \\
   -F "file=@document.pdf"`}
                 </pre>

@@ -1,6 +1,61 @@
-from pydantic_settings import BaseSettings
+import logging
+import re
 from functools import lru_cache
+from typing import List
 from urllib.parse import quote
+
+from pydantic import Field, ValidationError, ValidationInfo, field_validator, model_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+logger = logging.getLogger(__name__)
+
+# Minimum length for the HMAC key used to sign JWTs (HS256).
+JWT_SECRET_MIN_LENGTH = 32
+
+# Accepted values for the single DEVICE knob: auto | cpu | cuda | cuda:N.
+_DEVICE_PATTERN = re.compile(r"^(auto|cpu|cuda(:\d+)?)$")
+
+# Default Florence-2 repo and the commit sha pinned for it. Kept as module
+# constants so the model_validator can tell "still the default pin" from
+# "deliberately re-pinned for another repo".
+DEFAULT_VISION_MODEL_ID = "florence-community/Florence-2-base-ft"
+DEFAULT_VISION_MODEL_REVISION = "0b03b6f15a4a211370fb204aee4e7dd48887ea37"
+
+# Placeholder values that used to ship as defaults in this file. They are now
+# rejected explicitly so an old .env cannot silently reintroduce them.
+_INSECURE_SECRETS = {
+    "your-secret-key-change-in-production-min-32-chars",
+    "change-me",
+    "changeme",
+    "secret",
+}
+
+_INSECURE_MINIO_CREDENTIALS = {"minioadmin"}
+
+# Actionable setup instructions, shown when a required setting is missing or invalid.
+# Keys are Settings field names.
+_SETUP_HINTS = {
+    "jwt_secret_key": (
+        "JWT_SECRET_KEY is required and must be at least "
+        f"{JWT_SECRET_MIN_LENGTH} characters.\n"
+        "    Generate one with:  openssl rand -hex 32\n"
+        "    Then set it in your .env file (see .env.example):\n"
+        "        JWT_SECRET_KEY=<generated value>"
+    ),
+    "minio_access_key": (
+        "MINIO_ACCESS_KEY is required (no default is provided).\n"
+        "    It must match the MinIO server's MINIO_ROOT_USER.\n"
+        "    Set it in your .env file (see .env.example):\n"
+        "        MINIO_ACCESS_KEY=<minio root user>"
+    ),
+    "minio_secret_key": (
+        "MINIO_SECRET_KEY is required (no default is provided).\n"
+        "    It must match the MinIO server's MINIO_ROOT_PASSWORD.\n"
+        "    Generate one with:  openssl rand -hex 24\n"
+        "    Then set it in your .env file (see .env.example):\n"
+        "        MINIO_SECRET_KEY=<generated value>"
+    ),
+}
 
 
 class Settings(BaseSettings):
@@ -20,6 +75,12 @@ class Settings(BaseSettings):
     celery_result_backend: str = "redis://redis:6379/1"
     celery_task_default_queue: str = "ingestify"  # Namespace para isolar filas
     celery_worker_name: str = "ingestify-worker"  # Hostname único
+    # With acks_late, the Redis broker hands a message that is still unacknowledged
+    # after this long to another worker - even while the first is still running it.
+    # Must exceed the longest task time limit of ANY worker (worker-audio allows
+    # 10,800 s), and must be the same on every service, since any consumer restores
+    # every queue's stale messages. Kombu's default is 3,600 s.
+    celery_visibility_timeout_seconds: int = 14400
 
     # Conversion Settings
     max_file_size_mb: int = 50
@@ -31,17 +92,86 @@ class Settings(BaseSettings):
     docling_enable_table_structure: bool = True  # Disable if no tables needed
     docling_enable_images: bool = False  # Disable image extraction for speed (text-only conversion)
     docling_use_v2_backend: bool = True  # Use beta backend (10x faster)
+    # Passed explicitly into docling's AcceleratorOptions(num_threads=...).
+    # NOTE: the name collides with docling's own DOCLING_-prefixed BaseSettings
+    # field, so docling reads the same DOCLING_NUM_THREADS variable. The
+    # collision is benign: both objects resolve to the same number. Exists so
+    # 5 worker replicas x concurrency 2 stop oversubscribing the CPU.
+    docling_num_threads: int = 4
+
+    # Device / GPU
+    # THE single device knob for the whole stack (Docling, Whisper, Florence-2).
+    # Accepted: auto | cpu | cuda | cuda:N.
+    #   auto -> CUDA when torch reports a usable device, else CPU, silently.
+    #   cuda -> hard error when it cannot be satisfied (never a silent downgrade).
+    # Resolution lives in shared/device.py; nothing else may probe torch.
+    # DOCLING_DEVICE is ignored from now on: we pass this value explicitly into
+    # AcceleratorOptions(device=...), and an init kwarg outranks the environment.
+    device: str = "auto"
 
     # Audio Transcription Settings
     audio_transcriber_provider: str = "faster-whisper"  # faster-whisper, openai-whisper, openai-api
     whisper_model: str = "turbo"  # tiny, base, small, medium, large, turbo
-    whisper_device: str = "auto"  # auto (GPU if available, detected once per worker), cuda or cpu
-    whisper_compute_type: str = "auto"  # auto (float16 on GPU, int8 on CPU), int8, float16, float32
+    # CHANGED (was "cpu"): empty means "inherit DEVICE". Any non-empty value is
+    # a per-component override that wins over DEVICE and is logged on every boot.
+    whisper_device: str = ""
+    # CHANGED (was "int8"): empty means "derive from the resolved audio device"
+    # (float16 on cuda, int8 on cpu). Stops a device flip leaving CTranslate2 on
+    # a CPU-shaped int8 quantisation it silently downgrades rather than rejects.
+    whisper_compute_type: str = ""  # "auto" is accepted as a synonym of empty
     enable_audio_transcription: bool = True  # Feature flag to enable/disable audio transcription
     max_audio_file_size_mb: int = 50  # Maximum audio file size
     max_video_file_size_mb: int = 500  # Maximum video file size (only the audio track is transcribed)
     max_audio_duration_seconds: int = 3600  # Maximum audio duration (1 hour)
+    # Transcriptions go to their own queue, consumed by the worker-audio service
+    # (GPU replicas in docker-compose.gpu.yml), so a batch of long recordings never
+    # blocks document conversion. Its time limit is that worker's
+    # CONVERSION_TIMEOUT_SECONDS (set from TRANSCRIPTION_TIMEOUT_SECONDS in compose).
+    transcription_queue: str = "ingestify-audio"
     openai_api_key: str = ""  # Required for openai-api provider
+
+    # Vision Settings (Florence-2)
+    # ONE flag covers /images/describe and /images/ocr: they are one model
+    # behind one loader, and two flags would allow a state that cannot exist.
+    enable_image_description: bool = True
+    vision_provider: str = "florence2"  # florence2 | stub
+    # The florence-community conversions are weights-only (safetensors + configs,
+    # no .py files, no `custom_code` tag) and load through transformers' NATIVE
+    # Florence2ForConditionalGeneration - that is what makes trust_remote_code
+    # unnecessary. base-ft (0.23B) over large-ft (0.77B) so a CPU laptop stays
+    # inside the 60s sync budget. Do NOT default this to a microsoft/Florence-2-* repo.
+    vision_model_id: str = DEFAULT_VISION_MODEL_ID
+    # Commit sha, never a branch name. Passed as revision= to every
+    # from_pretrained and snapshot_download call.
+    vision_model_revision: str = DEFAULT_VISION_MODEL_REVISION
+    # Escape hatch for the original microsoft/Florence-2-* repos, which execute
+    # Hub-supplied Python inside the worker process. Never inferred, never
+    # auto-enabled as a retry after a load failure.
+    vision_trust_remote_code: bool = False
+    vision_model_cache_dir: str = "/models/huggingface"
+    # False maps to local_files_only=True on every load (air-gapped / CI).
+    vision_allow_model_download: bool = True
+    # True makes a @worker_process_init handler load the weights up front.
+    vision_preload_model: bool = False
+    # Its own limit: images do NOT inherit max_file_size_mb.
+    vision_max_image_size_mb: int = 10
+    # Decompression-bomb guard. A 10MB PNG can expand to tens of gigabytes, so
+    # the byte limit alone does not protect the worker.
+    vision_max_image_pixels: int = 50_000_000
+    # API-side deadline only; must stay below any reverse-proxy read timeout.
+    vision_request_timeout_seconds: int = 60
+    # Per-task time_limit, deliberately double the request timeout so a request
+    # that 504s leaves a task still running to completion.
+    vision_task_timeout_seconds: int = 120
+    vision_max_new_tokens: int = 1024
+    vision_num_beams: int = 3  # 1 roughly halves CPU latency at some quality cost
+    vision_caption_task: str = "<MORE_DETAILED_CAPTION>"
+    # auto | float32 | float16 | bfloat16. auto = float16 on cuda, float32 on cpu
+    # (float16 on CPU is slow and numerically unstable for this model).
+    vision_torch_dtype: str = "auto"
+    # Dedicated Celery queue: on the shared queue a 60s request would sit behind
+    # a 10-minute PDF merge and 504 for reasons unrelated to vision.
+    vision_queue: str = "ingestify-vision"
 
     # Storage Settings
     result_ttl_seconds: int = 3600
@@ -55,6 +185,10 @@ class Settings(BaseSettings):
     monitoring_max_retry_count: int = 3  # Maximum retry attempts per page
     monitoring_check_interval_minutes: int = 5  # How often to run monitoring tasks
     monitoring_batch_size: int = 100  # Max jobs to process per monitoring cycle
+    # An unacknowledged broker message that no live worker holds is orphaned (its
+    # worker died) and would otherwise wait out the whole visibility timeout. Flag it
+    # once it is this old, so a message just delivered is never mistaken for one.
+    monitoring_unacked_grace_seconds: int = 600
     temp_files_retention_hours: int = 72  # Delete leftover local files (failed jobs, aborted uploads) after X hours
 
     # Google Drive (optional)
@@ -76,8 +210,10 @@ class Settings(BaseSettings):
     # MinIO Object Storage
     minio_endpoint: str = "127.0.0.1:9000"  # MinIO running on local machine
     minio_public_endpoint: str = "127.0.0.1:9000"  # Public-facing address for URLs
-    minio_access_key: str = "minioadmin"
-    minio_secret_key: str = "minioadmin"
+    # REQUIRED - intentionally no default so a missing value fails at startup
+    # instead of silently falling back to the well-known "minioadmin" credentials.
+    minio_access_key: str = Field(..., min_length=1)
+    minio_secret_key: str = Field(..., min_length=1)
     minio_secure: bool = False  # True for HTTPS in production
     minio_bucket_uploads: str = "ingestify-uploads"
     minio_bucket_pages: str = "ingestify-pages"
@@ -115,9 +251,9 @@ class Settings(BaseSettings):
     crawler_retry_strategy_default: str = "conservative"  # conservative or aggressive
 
     # JWT Authentication
-    # REQUIRED: no default. Generate with `openssl rand -hex 32` and set JWT_SECRET_KEY.
-    # The API refuses to start without a valid secret (see shared.auth.validate_jwt_secret).
-    jwt_secret_key: str = ""
+    # REQUIRED - intentionally no default. A hardcoded default here would be a
+    # published signing key: anyone with the source could forge valid tokens.
+    jwt_secret_key: str = Field(..., min_length=JWT_SECRET_MIN_LENGTH)
     jwt_algorithm: str = "HS256"
     jwt_expiration_minutes: int = 60  # 1 hour
 
@@ -126,6 +262,67 @@ class Settings(BaseSettings):
     # Comma-separated user IDs (UUIDs) allowed to use /admin endpoints. Empty = no admins.
     # IDs are used instead of emails because registration does not verify email ownership.
     admin_user_ids: str = ""
+
+    # Execution engines (spec 0003). Remote engine credentials are sealed to the
+    # public key; only worker-remote is given the private keys (a list, for
+    # rotation; or a file with one per line). No defaults: without the public key
+    # credentials cannot be stored, without a private key no remote engine runs.
+    # Generate a pair with: python scripts/engines.py keygen
+    engine_secrets_public_key: str = ""
+    engine_secrets_private_keys: str = ""
+    engine_secrets_private_keys_file: str = ""
+
+    # Routing (spec 0003, slice 3b). Only used once a feature has a route; with no
+    # row in feature_routes nothing here is read and no dispatcher is needed.
+    # The dispatcher's queue, consumed by the optional worker-dispatch service
+    # (compose profile `engines`)
+    dispatch_queue: str = "ingestify-dispatch"
+    # True only in worker-dispatch: its embedded beat (celery worker -B) ticks the
+    # dispatcher every 5 s and the sweeper every 30 s. Never in the shared beat,
+    # which would fill a queue nobody consumes on installs without the profile
+    engines_dispatch_beat: bool = False
+    # The API's watchdog loop (places routed local work while the dispatcher is
+    # down); with no route it only reads feature_routes every 15 s
+    engines_watchdog_enabled: bool = True
+    # The media probe reads at most this many bytes of an upload, for at most this long
+    probe_max_bytes: int = 8 * 1024 * 1024
+    probe_timeout_seconds: int = 10
+
+    # Remote engines (spec 0003, slice 4a): the optional worker-remote service
+    # (compose profile `engines`, thread pool) consumes both queues; it alone holds
+    # the private keys. Nothing is published to them without a remote route.
+    remote_queue: str = "ingestify-remote"
+    remote_ctl_queue: str = "ingestify-remote-ctl"
+    # Threads of worker-remote: each in-flight remote item holds one while it waits.
+    # Sum of remote capacity in routes must stay <= this - 2 (control tasks)
+    remote_worker_concurrency: int = 16
+    # Media sent at once (bytes go in the call: MinIO is not reachable from Modal)
+    remote_max_concurrent_uploads: int = 4
+    # True only in worker-remote: its embedded beat reconciles provider spend
+    engines_remote_beat: bool = False
+    # Engine alerts (budget soft/hard, exhaustion, billing unreadable, dispatcher down,
+    # cost divergence) are always logged; with a URL they are also POSTed as a small
+    # generic JSON body - engine slug, event, numbers; never secrets or user data
+    engine_alert_webhook_url: str = ""
+
+    def engine_private_keys(self) -> List[str]:
+        """Private keys from ENGINE_SECRETS_PRIVATE_KEYS (comma-separated) and/or the _FILE"""
+        keys = [k.strip() for k in self.engine_secrets_private_keys.split(",") if k.strip()]
+        if self.engine_secrets_private_keys_file:
+            with open(self.engine_secrets_private_keys_file) as f:
+                keys += [line.strip() for line in f if line.strip() and not line.startswith("#")]
+        return keys
+
+    # CORS
+    # Comma-separated list of origins allowed to call the API from a browser.
+    # Defaults cover local development only (Next.js frontend on :3000 and the
+    # API's own docs on :8000 in Docker / :8080 via run_api.sh).
+    # Production MUST override this with the real frontend origin(s).
+    cors_allowed_origins: str = (
+        "http://localhost:3000,http://127.0.0.1:3000,"
+        "http://localhost:8000,http://127.0.0.1:8000,"
+        "http://localhost:8080,http://127.0.0.1:8080"
+    )
 
     # Rate Limiting
     rate_limit_per_minute: int = 10  # Login attempts per client IP per minute
@@ -140,9 +337,164 @@ class Settings(BaseSettings):
     sql_echo: bool = False  # Log every SQL statement with its parameters (debug only)
     log_level: str = "INFO"
 
-    class Config:
-        env_file = ".env"
-        case_sensitive = False
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        case_sensitive=False,
+        extra="ignore",
+    )
+
+    @field_validator("jwt_secret_key")
+    @classmethod
+    def _validate_jwt_secret_key(cls, value: str) -> str:
+        secret = value.strip()
+        if secret.lower() in _INSECURE_SECRETS:
+            raise ValueError(
+                "refuses to use a well-known placeholder value"
+            )
+        if len(secret) < JWT_SECRET_MIN_LENGTH:
+            raise ValueError(
+                f"must be at least {JWT_SECRET_MIN_LENGTH} characters"
+            )
+        return secret
+
+    @field_validator("device")
+    @classmethod
+    def _validate_device(cls, value: str) -> str:
+        device = value.strip().lower()
+        if not _DEVICE_PATTERN.match(device):
+            raise ValueError(
+                f"DEVICE={value!r} is not a valid device. "
+                "Accepted values: 'auto' (CUDA when available, otherwise CPU), "
+                "'cpu', 'cuda', or 'cuda:N' for a specific GPU index."
+            )
+        return device
+
+    @field_validator("whisper_device")
+    @classmethod
+    def _warn_whisper_device_override(cls, value: str, info: ValidationInfo) -> str:
+        # Reconciliation is explicit, not silent: an existing .env keeps its
+        # exact current behaviour AND says so on every boot.
+        device = value.strip()
+        if device:
+            logger.warning(
+                "WHISPER_DEVICE=%s overrides DEVICE=%s for audio transcription only; "
+                "unset it to follow DEVICE",
+                device,
+                info.data.get("device", "auto"),
+            )
+        return device
+
+    @field_validator("whisper_compute_type")
+    @classmethod
+    def _log_whisper_compute_type_override(cls, value: str) -> str:
+        compute_type = value.strip()
+        if compute_type:
+            logger.info(
+                "WHISPER_COMPUTE_TYPE=%s overrides the value derived from the "
+                "resolved audio device; unset it to derive it automatically",
+                compute_type,
+            )
+        return compute_type
+
+    @field_validator("vision_torch_dtype")
+    @classmethod
+    def _validate_vision_torch_dtype(cls, value: str) -> str:
+        dtype = value.strip().lower()
+        allowed = {"auto", "float32", "float16", "bfloat16"}
+        if dtype not in allowed:
+            raise ValueError(
+                f"VISION_TORCH_DTYPE={value!r} is not valid. "
+                f"Accepted values: {', '.join(sorted(allowed))}."
+            )
+        return dtype
+
+    @model_validator(mode="after")
+    def _reject_partial_vision_model_override(self) -> "Settings":
+        # Stops a floating-branch pull sneaking in through a partial override:
+        # a new model id left paired with the pin for the default model.
+        if (
+            self.vision_model_id != DEFAULT_VISION_MODEL_ID
+            and self.vision_model_revision == DEFAULT_VISION_MODEL_REVISION
+        ):
+            raise ValueError(
+                f"VISION_MODEL_ID was changed to {self.vision_model_id} but "
+                "VISION_MODEL_REVISION is still the pin for the default model. "
+                "Look the sha up at "
+                f"https://huggingface.co/{self.vision_model_id}/commits/main "
+                "and set VISION_MODEL_REVISION=<sha>."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _visibility_timeout_must_outlast_tasks(self) -> "Settings":
+        # Otherwise a task still inside its time limit is redelivered to a second
+        # worker and runs twice (Celery's Redis broker, with task_acks_late)
+        if self.celery_visibility_timeout_seconds <= self.conversion_timeout_seconds:
+            raise ValueError(
+                f"CELERY_VISIBILITY_TIMEOUT_SECONDS ({self.celery_visibility_timeout_seconds}) must be "
+                f"greater than CONVERSION_TIMEOUT_SECONDS ({self.conversion_timeout_seconds}), or a task "
+                "still running would be handed to a second worker. Raise it on every service."
+            )
+        return self
+
+    @field_validator("minio_access_key", "minio_secret_key")
+    @classmethod
+    def _validate_minio_credentials(cls, value: str) -> str:
+        credential = value.strip()
+        if not credential:
+            raise ValueError("must not be empty")
+        return credential
+
+    @model_validator(mode="after")
+    def _reject_default_minio_credentials_in_production(self) -> "Settings":
+        # The well-known "minioadmin" credentials are tolerated for local
+        # development (the dev MinIO container is provisioned with them) but
+        # never in production.
+        if self.environment.strip().lower() == "production":
+            for field in ("minio_access_key", "minio_secret_key"):
+                if getattr(self, field).lower() in _INSECURE_MINIO_CREDENTIALS:
+                    raise ValueError(
+                        f"{field.upper()} uses the default MinIO credential "
+                        "'minioadmin', which is not allowed when "
+                        "ENVIRONMENT=production. Rotate the MinIO credentials "
+                        "and update MINIO_ROOT_USER / MINIO_ROOT_PASSWORD and "
+                        f"{field.upper()}."
+                    )
+        return self
+
+    @property
+    def cors_origins(self) -> List[str]:
+        """CORS allowlist parsed from the comma-separated setting."""
+        return [
+            origin.strip()
+            for origin in self.cors_allowed_origins.split(",")
+            if origin.strip()
+        ]
+
+
+def _format_settings_error(exc: ValidationError) -> str:
+    """Turn a Pydantic ValidationError into actionable setup instructions."""
+    lines = [
+        "Invalid application configuration - refusing to start.",
+        "",
+    ]
+    for error in exc.errors():
+        loc = error.get("loc") or ()
+        field = str(loc[0]) if loc else ""
+        message = error.get("msg", "invalid value")
+        hint = _SETUP_HINTS.get(field)
+        if hint:
+            lines.append(f"  - {hint}")
+        elif field:
+            lines.append(f"  - {field.upper()}: {message}")
+        else:
+            # Model-level validation error (no field location).
+            lines.append(f"  - {message.removeprefix('Value error, ')}")
+        lines.append("")
+    lines.append(
+        "See .env.example for the full list of required environment variables."
+    )
+    return "\n".join(lines)
 
 
 def redis_url_with_password(url: str, password: str) -> str:
@@ -158,4 +510,7 @@ def redis_url_with_password(url: str, password: str) -> str:
 @lru_cache()
 def get_settings() -> Settings:
     """Get cached settings instance"""
-    return Settings()
+    try:
+        return Settings()
+    except ValidationError as exc:
+        raise RuntimeError(_format_settings_error(exc)) from exc

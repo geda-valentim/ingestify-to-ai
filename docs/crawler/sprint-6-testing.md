@@ -1,4 +1,7 @@
 # Sprint 6: Testing, Monitoring & Documentation
+
+> **Plano de sprint (crawler) — não concluído.** Estado real do crawler no código: [../features/crawler.md](../features/crawler.md).
+
 **Duração:** Semanas 11-12
 **Objetivo:** Qualidade e observabilidade - produção pronta
 

@@ -8,7 +8,11 @@ This project is compatible with Python 3.13 and later versions. Previously, the 
 
 ### 1. Updated Requirements
 
-Added `setuptools>=75.0.0` to `backend/requirements.txt`:
+Added `setuptools>=75.0.0` to the shared package list, today
+[`backend/requirements-base.txt`](../backend/requirements-base.txt) — it was in
+`backend/requirements.txt` until that name became a one-line alias for the CPU set. Every
+`requirements-*.txt` pulls the base in, so the pin applies to all install paths:
+
 ```txt
 # Python 3.13+ compatibility - setuptools provides distutils
 setuptools>=75.0.0
@@ -16,7 +20,10 @@ setuptools>=75.0.0
 
 **Why?** The `docling` package depends on `pylatexenc`, which still uses the deprecated `distutils` module. Modern `setuptools` (75.0.0+) provides a compatibility layer that makes `distutils` available again.
 
-### 2. Updated Dockerfiles (Optional)
+### 2. Updated Dockerfiles (done)
+
+> Current state: both `docker/Dockerfile.api` and `docker/Dockerfile.worker` already use
+> `python:3.13-slim`. The steps below are kept as history.
 
 The Dockerfiles can now use Python 3.13 instead of 3.10:
 - `docker/Dockerfile.api`

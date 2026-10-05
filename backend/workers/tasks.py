@@ -17,6 +17,7 @@ import json
 import logging
 import asyncio
 import shutil
+import time
 
 from workers.celery_app import celery_app
 from workers.converter import get_converter
@@ -28,7 +29,13 @@ from shared.database import SessionLocal
 from shared.models import Job, Page, JobStatus
 from shared.config import get_settings
 from shared.pdf_splitter import PDFSplitter, should_split_pdf
-from shared.transcripts import TRANSCRIPT_CONTENT_TYPES, transcript_object_name
+from shared.engines.media import AUDIO_EXTENSIONS
+# Moved to workers.engines.pipeline; the old names stay importable from here
+from workers.engines.pipeline import (  # noqa: F401
+    finish_transcription,
+    purge_audio_source as _purge_audio_source,
+    store_transcript_outputs as _store_transcript_outputs,
+)
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -78,7 +85,267 @@ def _remove_job_files(job_id: str) -> None:
 # MAIN JOB - Ponto de entrada
 # ============================================
 
-@celery_app.task(bind=True, max_retries=3)
+# Transcription owns this slice of a job's overall progress (see process_conversion)
+TRANSCRIPTION_PROGRESS_START = 30
+TRANSCRIPTION_PROGRESS_END = 70
+
+# Live text is pushed to Redis in batches, at most this often (wall-clock seconds)
+LIVE_TRANSCRIPT_FLUSH_SECONDS = 2.0
+
+
+def _transcription_progress(redis_client, job_id: str, clock=time.monotonic):
+    """
+    Progress callback for a transcription: maps the transcribed share of the media onto
+    the job's 30-70% slice and records how far in it is (transcribed_seconds of
+    media_duration), for the job page. Writes only when the percentage moves, so a
+    long recording costs at most ~40 Redis writes.
+
+    Each decoded segment is also appended to the job's live transcript, in batches
+    every LIVE_TRANSCRIPT_FLUSH_SECONDS, so the job page can show the text as it comes.
+    A call at 0 seconds with no segment means the transcription (re)started - e.g. the
+    CPU retry after a GPU failure - and drops what the failed attempt had written.
+    """
+    state = {"progress": None, "pending": [], "flushed_at": clock()}
+
+    def flush() -> None:
+        pending, state["pending"] = state["pending"], []
+        state["flushed_at"] = clock()
+        redis_client.append_partial_transcript(job_id, pending)
+
+    def on_progress(transcribed_seconds: float, total_seconds: float, segment=None) -> None:
+        try:
+            if segment is None and transcribed_seconds <= 0:
+                state["pending"] = []
+                redis_client.delete_partial_transcript(job_id)
+            elif segment is not None and segment.get("text"):
+                state["pending"].append(segment)
+                if clock() - state["flushed_at"] >= LIVE_TRANSCRIPT_FLUSH_SECONDS:
+                    flush()
+        except Exception as e:  # live text is cosmetic: never fail a transcription over it
+            logger.warning(f"[MAIN JOB {job_id}] Could not record live transcript: {e}")
+
+        if not total_seconds or total_seconds <= 0:
+            return
+        share = min(max(transcribed_seconds / total_seconds, 0.0), 1.0)
+        span = TRANSCRIPTION_PROGRESS_END - TRANSCRIPTION_PROGRESS_START
+        progress = TRANSCRIPTION_PROGRESS_START + int(span * share)
+        if progress == state["progress"]:
+            return
+        state["progress"] = progress
+        try:
+            redis_client.update_job_progress(
+                job_id,
+                progress,
+                transcribed_seconds=round(transcribed_seconds, 1),
+                media_duration=round(total_seconds, 1),
+            )
+        except Exception as e:  # progress is cosmetic: never fail a transcription over it
+            logger.warning(f"[MAIN JOB {job_id}] Could not record transcription progress: {e}")
+
+    return on_progress
+
+
+class _AttemptNoLongerWanted(Exception):
+    """The job stopped being open (deleted, failed for good) while a routed attempt ran"""
+
+
+def _transcribe_audio(job_id: str, file_path: Path, options: dict, redis_client, es_client, guard=None) -> None:
+    """
+    Transcribe a media file and complete the job (outputs, index, status). `guard`,
+    when given, is asked right before the outputs are written; False aborts.
+    """
+    from workers.audio import transcribe_with_gpu_fallback
+
+    provider_override = options.get('transcriber_provider')
+
+    # Update progress
+    redis_client.update_job_progress(job_id, TRANSCRIPTION_PROGRESS_START)
+
+    # Transcribe audio
+    transcription_options = {
+        'language': options.get('audio_language') or options.get('language'),
+        'include_word_timestamps': options.get('include_word_timestamps', False),
+        'temperature': options.get('temperature', 0.0),
+        'beam_size': options.get('beam_size', 5)
+    }
+
+    # Uses the GPU when available (detected once per worker) and falls back to CPU
+    transcription_started = time.monotonic()
+    result, transcriber = transcribe_with_gpu_fallback(
+        file_path,
+        transcription_options,
+        force_provider=provider_override,
+        on_progress=_transcription_progress(redis_client, job_id),
+    )
+    processing_seconds = round(time.monotonic() - transcription_started, 1)
+
+    logger.info(
+        f"[MAIN JOB {job_id}] Transcription complete with {transcriber.__class__.__name__} "
+        f"on {result.get('device')}: {result['word_count']} words, "
+        f"{result['duration']:.2f}s, language={result['language']}"
+    )
+    redis_client.update_job_progress(job_id, TRANSCRIPTION_PROGRESS_END)
+
+    if guard is not None and not guard():
+        raise _AttemptNoLongerWanted(job_id)
+
+    finish_transcription(
+        job_id,
+        result,
+        options=options,
+        file_path=file_path,
+        processing_seconds=processing_seconds,
+        compute_type=getattr(transcriber, 'compute_type', None),
+        redis_client=redis_client,
+        es_client=es_client,
+    )
+
+
+def _divert_audio_to_backlog(job_id: str, file_path: Path, options: dict, redis_client):
+    """
+    process_conversion without usage_id met audio and transcription has a route:
+    move the file to the shared audio directory, put the job back to PENDING and
+    hand it to dispatch.submit (spec 0003, 4.3). Returns (diverted, file path).
+    Without an active route it returns at once and touches nothing.
+    """
+    from shared.admin import is_effective_admin
+    from shared.engines import dispatch as engine_dispatch
+    from shared.engines import routing
+
+    route = routing.get_route("transcription", session_factory=SessionLocal)
+    if route is None or not route.active:
+        return False, file_path
+
+    audio_dir = Path(settings.temp_storage_path) / "audio" / job_id
+    if not file_path.resolve().is_relative_to(audio_dir.resolve()):
+        audio_dir.mkdir(parents=True, exist_ok=True)
+        moved = audio_dir / file_path.name
+        shutil.move(str(file_path), moved)
+        file_path = moved
+
+    db = SessionLocal()
+    try:
+        job = db.query(Job).filter(Job.id == job_id).first()
+        user_id = job.user_id if job else None
+        is_admin = is_effective_admin(job.user) if job is not None and job.user is not None else False
+        name = job.name if job else None
+        if job:
+            job.status = JobStatus.PENDING
+            job.started_at = None
+            db.commit()
+    finally:
+        db.close()
+    redis_client.set_job_status(job_id=job_id, job_type="main", status="queued", progress=0, name=name)
+
+    routed_options = dict(engine_dispatch.DEFAULT_TRANSCRIPTION_OPTIONS)
+    routed_options.update({k: v for k, v in options.items() if k in engine_dispatch.TRANSCRIPTION_OPTIONS})
+    payload = engine_dispatch.transcription_payload(job_id, file_path, routed_options,
+                                                    today_queue=settings.celery_task_default_queue)
+    outcome = engine_dispatch.submit(
+        feature="transcription", job_id=job_id, user_id=user_id, is_admin=is_admin, payload=payload,
+        today=None, celery=celery_app, media_bytes=file_path.stat().st_size, session_factory=SessionLocal,
+    )
+    if outcome == "today":  # the route went away in between: transcribe here after all
+        _set_processing(job_id)
+        return False, file_path
+    logger.info(f"[MAIN JOB {job_id}] Audio handed to the transcription route ({outcome})")
+    return True, file_path
+
+
+def _set_processing(job_id: str) -> None:
+    db = SessionLocal()
+    try:
+        job = db.query(Job).filter(Job.id == job_id).first()
+        if job:
+            job.status = JobStatus.PROCESSING
+            job.started_at = datetime.utcnow()
+            db.commit()
+    except Exception as e:
+        logger.error(f"[MAIN JOB {job_id}] MySQL update error: {e}")
+    finally:
+        db.close()
+
+
+def _job_still_open(job_id: str) -> bool:
+    db = SessionLocal()
+    try:
+        job = db.query(Job).filter(Job.id == job_id).first()
+        return job is not None and job.status in (JobStatus.PENDING, JobStatus.PROCESSING)
+    finally:
+        db.close()
+
+
+def _run_routed_transcription(job_id: str, source: str, options: dict, usage_id: int):
+    """
+    A transcription placed by the dispatcher on the local engine (spec 0003, 4.7).
+
+    Claims the reservation before any work (lost claim => acknowledge and leave:
+    a redelivered or late message never runs twice), heartbeats the usage row,
+    and settles it. Never self.retry: a failure settles `failed` and the backlog
+    decides - back to the queue with backoff until max_attempts, then FAILED.
+    """
+    from shared.engines import dispatch as engine_dispatch
+    from shared.engines import ledger
+    from workers.engines.local import UsageHeartbeat
+
+    holder = ledger.holder_id()
+    outcome, _ = ledger.claim(usage_id, holder, session_factory=SessionLocal)
+    if outcome != ledger.CLAIMED:
+        logger.info(f"[MAIN JOB {job_id}] Usage {usage_id}: {outcome} - acknowledged without running")
+        if outcome != ledger.LOST:
+            engine_dispatch.kick(celery_app)
+        return {"job_id": job_id, "status": outcome}
+
+    redis_client = get_redis_client()
+    es_client = get_es_client()
+    heartbeat = UsageHeartbeat(usage_id, holder, session_factory=SessionLocal).start()
+    started = time.monotonic()
+    change = None
+    try:
+        logger.info(f"[MAIN JOB {job_id}] Routed transcription, usage {usage_id}")
+        _set_processing(job_id)
+        redis_client.set_job_status(job_id=job_id, job_type="main", status="processing", progress=10,
+                                    started_at=datetime.utcnow())
+        file_path = _resolve_uploaded_file(source, job_id)
+        redis_client.update_job_progress(job_id, 20)
+        _transcribe_audio(job_id, file_path, options, redis_client, es_client, guard=lambda: _job_still_open(job_id))
+    except _AttemptNoLongerWanted:
+        heartbeat.stop()
+        logger.warning(f"[MAIN JOB {job_id}] The job is no longer open; its transcript is discarded")
+        ledger.settle_failed(usage_id, holder, error_code="CANCELLED", detail="job no longer open",
+                             counts=False, terminal=True, outcome="cancelled", session_factory=SessionLocal)
+        return {"job_id": job_id, "status": "cancelled"}
+    except SoftTimeLimitExceeded:
+        heartbeat.stop()
+        # As on today's path, a transcription that ran out of time would again: fail for good
+        error = f"Task exceeded soft time limit ({settings.conversion_timeout_seconds - 30}s)"
+        logger.warning(f"[MAIN JOB {job_id}] {error}")
+        _, change = ledger.settle_failed(usage_id, holder, error_code="TIMEOUT", detail=error, terminal=True,
+                                         session_factory=SessionLocal)
+        return {"job_id": job_id, "status": "failed", "error": error}
+    except Exception as exc:
+        heartbeat.stop()
+        logger.error(f"[MAIN JOB {job_id}] Routed transcription failed: {exc}", exc_info=True)
+        _, change = ledger.settle_failed(usage_id, holder, error_code="INTERNAL", detail=str(exc),
+                                         session_factory=SessionLocal)
+        try:
+            shutil.rmtree(Path(settings.temp_storage_path) / job_id, ignore_errors=True)
+        except Exception:
+            pass
+        return {"job_id": job_id, "status": change.status if change else "failed"}
+    finally:
+        heartbeat.stop()
+        ledger.apply_job_change(redis_client, change)
+        if change is not None:
+            engine_dispatch.kick(celery_app)
+
+    ledger.settle_succeeded(usage_id, holder, measured_seconds=round(time.monotonic() - started, 3),
+                            session_factory=SessionLocal)
+    engine_dispatch.kick(celery_app)
+    return {"job_id": job_id, "status": "completed"}
+
+
+@celery_app.task(bind=True, max_retries=3, name="workers.tasks.process_conversion")
 def process_conversion(
     self,
     job_id: str,
@@ -87,6 +354,7 @@ def process_conversion(
     options: dict = None,
     callback_url: str = None,
     auth_token: str = None,
+    usage_id: int = None,
 ):
     """
     Main job - processa conversão de documento
@@ -97,17 +365,23 @@ def process_conversion(
         source: Fonte do documento
         options: Opções de conversão
         callback_url: Webhook opcional
-        auth_token: Token de autenticação
+        auth_token: Legacy - only messages queued before the S-01 fix carry it. The
+            provider token of gdrive/dropbox is read from Redis (job:{id}:source_token)
+        usage_id: Set only when the dispatcher (or its fallback) placed this item on
+            the local engine (spec 0003): the reservation to claim before running.
+            Without it, everything below runs exactly as it always did.
     """
     if options is None:
         options = {}
+
+    if usage_id is not None:
+        return _run_routed_transcription(job_id, source, options, usage_id)
 
     redis_client = get_redis_client()
     es_client = get_es_client()
 
     # Get preset from options
     preset = options.get('docling_preset') if options else None
-    converter = get_converter(preset=preset)
 
     logger.info(f"[MAIN JOB {job_id}] Starting conversion: {source_type} (preset={preset})")
 
@@ -144,142 +418,41 @@ def process_conversion(
         if source_type == 'file':
             file_path = _resolve_uploaded_file(source, job_id)
         else:
+            # The provider's token comes out of band (S-01); auth_token survives only
+            # for messages queued before that change
+            source_token = auth_token
+            if source_type in ('gdrive', 'dropbox') and not source_token:
+                source_token = redis_client.get_source_token(job_id)
             file_path = asyncio.run(
                 handler.download(
                     source=source,
                     temp_path=temp_dir,
-                    auth_token=auth_token
+                    auth_token=source_token
                 )
             )
+            if source_type in ('gdrive', 'dropbox'):
+                redis_client.delete_source_token(job_id)
 
         logger.info(f"[MAIN JOB {job_id}] File downloaded: {file_path}")
         redis_client.update_job_progress(job_id, 20)
 
         # 2. Check if this is an audio file for transcription
         is_audio = options.get('is_audio', False) or source_type == 'audio'
-        audio_extensions = ['.mp3', '.wav', '.m4a', '.flac', '.ogg', '.opus', '.webm', '.wma', '.aac', '.oga', '.spx']
+        audio_extensions = AUDIO_EXTENSIONS
         file_ext = file_path.suffix.lower()
 
         if is_audio or file_ext in audio_extensions:
+            # With a transcription route, audio that only revealed itself here (URL,
+            # Drive, Dropbox, or a route created after the upload) joins the backlog
+            # instead of transcribing in this worker. No route: nothing changes.
+            diverted, file_path = _divert_audio_to_backlog(job_id, file_path, options, redis_client)
+            if diverted:
+                return {"job_id": job_id, "status": "queued"}
+
             logger.info(f"[MAIN JOB {job_id}] Audio file detected - transcribing with Whisper")
 
             try:
-                from workers.audio import transcribe_with_gpu_fallback
-
-                provider_override = options.get('transcriber_provider')
-
-                # Update progress
-                redis_client.update_job_progress(job_id, 30)
-
-                # Transcribe audio
-                transcription_options = {
-                    'language': options.get('audio_language') or options.get('language'),
-                    'include_word_timestamps': options.get('include_word_timestamps', False),
-                    'temperature': options.get('temperature', 0.0),
-                    'beam_size': options.get('beam_size', 5)
-                }
-
-                # Uses the GPU when available (detected once per worker) and falls back to CPU
-                result, transcriber = transcribe_with_gpu_fallback(
-                    file_path, transcription_options, force_provider=provider_override
-                )
-
-                logger.info(
-                    f"[MAIN JOB {job_id}] Transcription complete with {transcriber.__class__.__name__} "
-                    f"on {result.get('device')}: {result['word_count']} words, "
-                    f"{result['duration']:.2f}s, language={result['language']}"
-                )
-                redis_client.update_job_progress(job_id, 70)
-
-                # Format as markdown
-                include_timestamps = options.get('include_timestamps', True)
-                markdown_content = transcriber.format_as_markdown(result, include_timestamps)
-
-                # Subtitle / text outputs, retrievable via GET /jobs/{id}/result?format=...
-                transcript_outputs = {
-                    'vtt': transcriber.format_as_vtt(result),
-                    'srt': transcriber.format_as_srt(result),
-                    'txt': transcriber.format_as_text(result),
-                    'json': json.dumps(
-                        {k: result.get(k) for k in ('language', 'duration', 'text', 'segments')},
-                        ensure_ascii=False,
-                    ),
-                }
-                _store_transcript_outputs(job_id, transcript_outputs)
-
-                # Store result in Redis
-                result_with_markdown = {
-                    'markdown': markdown_content,
-                    'metadata': {
-                        'format': file_path.suffix.lower().lstrip('.') or options.get('media_kind', 'audio'),
-                        'size_bytes': file_path.stat().st_size,
-                        'words': result['word_count'],
-                        'language': result['language'],
-                        'duration': result['duration'],
-                        'word_count': result['word_count'],
-                        'char_count': result['char_count'],
-                        'provider': result.get('provider', 'unknown'),
-                        'model': result.get('model', 'unknown'),
-                        'device': result.get('device'),
-                        'output_format': options.get('output_format', 'markdown'),
-                        'available_formats': ['markdown'] + list(transcript_outputs),
-                    },
-                    'transcript': transcript_outputs,
-                }
-                redis_client.set_job_result(job_id, result_with_markdown)
-                redis_client.update_job_progress(job_id, 80)
-
-                # Store result in Elasticsearch
-                db = SessionLocal()
-                try:
-                    job = db.query(Job).filter(Job.id == job_id).first()
-                    filename = job.filename if job else None
-                    user_id = job.user_id if job else None
-                finally:
-                    db.close()
-
-                es_success = es_client.store_job_result(
-                    job_id=job_id,
-                    markdown_content=markdown_content,
-                    user_id=user_id,
-                    filename=filename,
-                    total_pages=None,  # Audio files don't have pages
-                    metadata=result_with_markdown['metadata']
-                )
-
-                if es_success:
-                    logger.info(f"[MAIN JOB {job_id}] Result stored in Elasticsearch")
-                else:
-                    logger.warning(f"[MAIN JOB {job_id}] Failed to store result in Elasticsearch")
-
-                redis_client.update_job_progress(job_id, 90)
-
-                # Update MySQL with completion
-                db = SessionLocal()
-                try:
-                    job = db.query(Job).filter(Job.id == job_id).first()
-                    if job:
-                        job.status = JobStatus.COMPLETED
-                        job.completed_at = datetime.utcnow()
-                        job.char_count = result['char_count']
-                        job.has_elasticsearch_result = es_success
-                        db.commit()
-                        logger.info(f"[MAIN JOB {job_id}] MySQL updated with completion")
-                except Exception as e:
-                    logger.error(f"[MAIN JOB {job_id}] MySQL update error: {e}")
-                finally:
-                    db.close()
-
-                # Mark as completed
-                redis_client.set_job_status(
-                    job_id=job_id,
-                    job_type="main",
-                    status="completed",
-                    progress=100,
-                    completed_at=datetime.utcnow()
-                )
-
-                _remove_job_files(job_id)
+                _transcribe_audio(job_id, file_path, options, redis_client, es_client)
                 logger.info(f"[MAIN JOB {job_id}] ✓ Audio transcription completed successfully")
                 return
 
@@ -338,6 +511,7 @@ def process_conversion(
             # Documento não-PDF ou PDF single page - processar direto
             logger.info(f"[MAIN JOB {job_id}] Single document - converting directly")
 
+            converter = get_converter(preset=preset)
             result = converter.convert_to_markdown(file_path, options)
 
             logger.info(f"[MAIN JOB {job_id}] Conversion complete")
@@ -408,6 +582,8 @@ def process_conversion(
         logger.warning(f"[MAIN JOB {job_id}] Soft timeout exceeded - marking as failed for retry")
 
         error_msg = f"Task exceeded soft time limit ({settings.conversion_timeout_seconds - 30}s)"
+        # A transcription that ran out of time will run out of time again: fail for good
+        is_audio_job = bool(options.get('is_audio'))
 
         # Update Redis
         redis_client.set_job_status(
@@ -440,6 +616,9 @@ def process_conversion(
                 shutil.rmtree(temp_dir, ignore_errors=True)
         except Exception:
             pass
+
+        if is_audio_job:
+            return {"job_id": job_id, "status": "failed", "error": error_msg}
 
         # Retry with backoff
         raise self.retry(countdown=60 * (2 ** self.request.retries))
@@ -486,7 +665,7 @@ def process_conversion(
 # SPLIT JOB - Divide PDF em páginas
 # ============================================
 
-@celery_app.task(bind=True, max_retries=2)
+@celery_app.task(bind=True, max_retries=2, name="workers.tasks.split_pdf_task")
 def split_pdf_task(
     self,
     split_job_id: str,
@@ -543,6 +722,10 @@ def split_pdf_task(
         finally:
             db.close()
 
+        # With a document_conversion route each page joins the backlog and the
+        # dispatcher places it (spec 0003, 4.14); without one, nothing changes
+        page_route = _page_route()
+
         # Create PAGE records in MySQL and PAGE JOBS for each page
         for page_num, page_file_path, minio_path in page_files:
             page_job_id = str(uuid4())
@@ -567,6 +750,13 @@ def split_pdf_task(
                 logger.error(f"[SPLIT JOB {split_job_id}] MySQL page creation error: {e}")
             finally:
                 db.close()
+
+            # Add page job as child of main job (Redis); before a routed page can run,
+            # so the merge trigger always sees every page
+            if page_route is not None:
+                redis_client.add_child_job(parent_job_id, "page", page_job_id)
+                _submit_page(page_job_id, parent_job_id, page_num, options, page_file_path=str(page_file_path))
+                continue
 
             # Launch page conversion task
             convert_page_task.delay(
@@ -609,37 +799,142 @@ def split_pdf_task(
         raise self.retry(exc=exc, countdown=30 * (2 ** self.request.retries))
 
 
+def _page_route():
+    """The active document_conversion route, or None (no route: today's path, untouched)"""
+    from shared.engines import routing
+
+    route = routing.get_route("document_conversion", session_factory=SessionLocal)
+    return route if route is not None and route.active else None
+
+
+def _submit_page(page_job_id: str, parent_job_id: str, page_number: int, options: dict, *,
+                 page_file_path: str = None, source_pdf_path: str = None, today=None) -> str:
+    """Hand one PDF page to the document_conversion route (subject_type=page)"""
+    from shared.admin import is_effective_admin
+    from shared.engines import dispatch as engine_dispatch
+
+    db = SessionLocal()
+    try:
+        job = db.query(Job).filter(Job.id == parent_job_id).first()
+        user_id = job.user_id if job else None
+        is_admin = is_effective_admin(job.user) if job is not None and job.user is not None else False
+    finally:
+        db.close()
+    payload = engine_dispatch.page_payload(
+        page_job_id=page_job_id, parent_job_id=parent_job_id, page_number=page_number, options=options,
+        page_file_path=page_file_path, source_pdf_path=source_pdf_path,
+        today_queue=settings.celery_task_default_queue,
+    )
+    if today is None:
+        def today():
+            convert_page_task.delay(**payload["kwargs"])
+    path = Path(page_file_path or source_pdf_path)
+    return engine_dispatch.submit(
+        feature="document_conversion", job_id=parent_job_id, subject_type="page", subject_id=page_job_id,
+        user_id=user_id, is_admin=is_admin, payload=payload, today=today, celery=celery_app,
+        media_bytes=path.stat().st_size if path.exists() else None, session_factory=SessionLocal,
+    )
+
+
 # ============================================
 # PAGE JOB - Converte página individual
 # ============================================
 
-@celery_app.task(bind=True, max_retries=3)
-def convert_page_task(
-    self,
+def _recount_parent_pages(db, parent_job_id: str):
+    """Recompute pages_completed / pages_failed on the parent job.
+
+    Both counters are recomputed on every outcome: a retry that succeeds moves a
+    page out of FAILED, so pages_failed is only correct if it is recounted too.
+    """
+    from shared.engines.ledger import recount_parent_pages
+
+    recount_parent_pages(db, parent_job_id)
+    db.commit()
+
+
+def _mark_page_failed(
+    log_prefix: str,
     page_job_id: str,
     parent_job_id: str,
     page_number: int,
-    page_file_path: str,
-    options: dict = None,
+    error_msg: str,
 ):
-    """
-    Page job - converte página individual de PDF
+    """Record a page failure in Redis and MySQL."""
+    redis_client = get_redis_client()
+
+    redis_client.set_job_status(
+        job_id=page_job_id,
+        job_type="page",
+        status="failed",
+        parent_job_id=parent_job_id,
+        page_number=page_number,
+        error=error_msg,
+        completed_at=datetime.utcnow(),
+    )
+
+    db = SessionLocal()
+    try:
+        from shared.models import Page as PageModel
+        page = db.query(PageModel).filter(
+            PageModel.job_id == parent_job_id,
+            PageModel.page_number == page_number
+        ).first()
+        if page:
+            page.status = JobStatus.FAILED
+            page.error_message = error_msg
+            db.commit()
+
+        _recount_parent_pages(db, parent_job_id)
+    except Exception as e:
+        logger.error(f"{log_prefix} MySQL failure update error: {e}")
+    finally:
+        db.close()
+
+
+def _run_page_conversion(
+    task,
+    page_job_id: str,
+    parent_job_id: str,
+    page_number: int,
+    page_file_path: str = None,
+    source_pdf_path: str = None,
+    options: dict = None,
+    on_failure=None,
+):
+    """Convert a single PDF page and record the outcome.
+
+    Shared body of `convert_page_task` (fed a page file that `split_pdf_task`
+    already produced) and of the deprecated `process_page` shim (fed the whole
+    source PDF, extracting the page itself). Both paths must produce identical
+    effects; see tests/test_tasks_page_conversion.py.
 
     Args:
-        page_job_id: ID deste page job
-        parent_job_id: ID do main job
-        page_number: Número da página
-        page_file_path: Caminho do arquivo da página
-        options: Opções de conversão
+        task: The bound Celery task, used for `task.retry(...)`.
+        page_job_id: ID of this page job.
+        parent_job_id: ID of the main job.
+        page_number: 1-indexed page number.
+        page_file_path: Path to an already-split single-page PDF.
+        source_pdf_path: Path to the full PDF; the page is extracted here.
+        options: Conversion options.
+        on_failure: Routed pages only (spec 0003, slice 8): called with
+            (exception, timed_out) instead of marking the page failed and
+            retrying - the backlog decides what a failed attempt means.
     """
+    if bool(page_file_path) == bool(source_pdf_path):
+        raise ValueError(
+            "Exactly one of page_file_path / source_pdf_path must be supplied "
+            f"(page_job_id={page_job_id}, page_number={page_number})"
+        )
+
     if options is None:
         options = {}
 
     redis_client = get_redis_client()
     es_client = get_es_client()
-    converter = get_converter()
+    converter = get_converter(preset=options.get("docling_preset"))
 
-    logger.info(f"[PAGE JOB {page_job_id}] Processing page {page_number}")
+    log_prefix = f"[PAGE JOB {page_job_id}]"
+    logger.info(f"{log_prefix} Processing page {page_number} of job {parent_job_id}")
 
     # Update MySQL: Set page to processing
     db = SessionLocal()
@@ -651,11 +946,16 @@ def convert_page_task(
         ).first()
         if page:
             page.status = JobStatus.PROCESSING
+            page.page_job_id = page_job_id  # a retry runs under a new page job id
             db.commit()
     except Exception as e:
-        logger.error(f"[PAGE JOB {page_job_id}] MySQL update error: {e}")
+        logger.error(f"{log_prefix} MySQL update error: {e}")
     finally:
         db.close()
+
+    # Only a page we extracted ourselves is ours to delete; the files produced
+    # by split_pdf_task are cleaned up by merge_pages_task.
+    extracted_page_file = None
 
     try:
         # Mark page job as processing in Redis
@@ -668,8 +968,22 @@ def convert_page_task(
             started_at=datetime.utcnow(),
         )
 
+        if page_file_path:
+            page_path = Path(page_file_path)
+        else:
+            temp_dir = Path(settings.temp_storage_path) / parent_job_id / "retry_pages"
+            temp_dir.mkdir(parents=True, exist_ok=True)
+
+            splitter = PDFSplitter(temp_dir)
+            # extract_single_page returns (local_page_path, minio_path)
+            page_path, _page_minio_path = splitter.extract_single_page(
+                Path(source_pdf_path), page_number
+            )
+            extracted_page_file = page_path
+
+            logger.info(f"{log_prefix} Extracted page {page_number} to {page_path}")
+
         # Convert page
-        page_path = Path(page_file_path)
         result = converter.convert_to_markdown(page_path, options)
 
         # Store page result in Redis
@@ -687,7 +1001,6 @@ def convert_page_task(
         )
 
         # Store page markdown in MinIO
-        minio_result_path = None
         try:
             minio_client = get_minio_client()
             minio_object_name = f"results/{parent_job_id}/page_{page_number:04d}.md"
@@ -697,10 +1010,9 @@ def convert_page_task(
                 file_data=markdown_content.encode('utf-8'),
                 content_type="text/markdown",
             )
-            minio_result_path = minio_object_name
-            logger.info(f"Page {page_number} markdown uploaded to MinIO: {minio_object_name}")
+            logger.info(f"{log_prefix} Page {page_number} markdown uploaded to MinIO: {minio_object_name}")
         except Exception as e:
-            logger.error(f"Failed to upload page {page_number} markdown to MinIO: {e}")
+            logger.error(f"{log_prefix} Failed to upload page {page_number} markdown to MinIO: {e}")
 
         # Update MySQL: Mark page as completed with markdown content
         db = SessionLocal()
@@ -712,23 +1024,16 @@ def convert_page_task(
             ).first()
             if page:
                 page.status = JobStatus.COMPLETED
-                page.markdown_content = markdown_content  # NEW: Store markdown in MySQL
+                page.markdown_content = markdown_content
                 page.char_count = len(markdown_content)
                 page.has_elasticsearch_result = es_success
+                page.error_message = None
                 page.completed_at = datetime.utcnow()
                 db.commit()
 
-            # Update parent job pages_completed count
-            parent_job = db.query(Job).filter(Job.id == parent_job_id).first()
-            if parent_job:
-                completed_count = db.query(PageModel).filter(
-                    PageModel.job_id == parent_job_id,
-                    PageModel.status == JobStatus.COMPLETED
-                ).count()
-                parent_job.pages_completed = completed_count
-                db.commit()
+            _recount_parent_pages(db, parent_job_id)
         except Exception as e:
-            logger.error(f"[PAGE JOB {page_job_id}] MySQL completion error: {e}")
+            logger.error(f"{log_prefix} MySQL completion error: {e}")
         finally:
             db.close()
 
@@ -742,7 +1047,7 @@ def convert_page_task(
             completed_at=datetime.utcnow(),
         )
 
-        logger.info(f"[PAGE JOB {page_job_id}] Page {page_number} completed")
+        logger.info(f"{log_prefix} Page {page_number} completed")
 
         # Update main job progress
         total_pages = redis_client.get_job_pages_total(parent_job_id)
@@ -754,11 +1059,11 @@ def convert_page_task(
             main_progress = 20 + pages_progress
             redis_client.update_job_progress(parent_job_id, main_progress)
 
-            logger.info(f"[PAGE JOB {page_job_id}] Main job progress: {main_progress}% ({completed_pages}/{total_pages} pages)")
+            logger.info(f"{log_prefix} Main job progress: {main_progress}% ({completed_pages}/{total_pages} pages)")
 
         # Check if all pages completed - trigger merge
         if redis_client.all_page_jobs_completed(parent_job_id):
-            logger.info(f"[PAGE JOB {page_job_id}] All pages completed - creating merge job")
+            logger.info(f"{log_prefix} All pages completed - creating merge job")
 
             merge_job_id = str(uuid4())
             merge_pages_task.delay(
@@ -771,101 +1076,134 @@ def convert_page_task(
         return {"page_job_id": page_job_id, "page_number": page_number, "status": "completed"}
 
     except SoftTimeLimitExceeded:
-        # Gracefully handle soft timeout - mark as failed and retry
-        logger.warning(f"[PAGE JOB {page_job_id}] Page {page_number} soft timeout exceeded - marking as failed for retry")
-
         error_msg = f"Page conversion exceeded soft time limit ({settings.conversion_timeout_seconds - 30}s)"
+        logger.warning(f"{log_prefix} Page {page_number} soft timeout exceeded - marking as failed for retry")
 
-        # Update Redis
-        redis_client.set_job_status(
-            job_id=page_job_id,
-            job_type="page",
-            status="failed",
-            parent_job_id=parent_job_id,
-            page_number=page_number,
-            error=error_msg,
-            completed_at=datetime.utcnow(),
-        )
+        if on_failure is not None:
+            return on_failure(error_msg, True)
 
-        # Update MySQL
-        db = SessionLocal()
-        try:
-            from shared.models import Page as PageModel
-            page = db.query(PageModel).filter(
-                PageModel.job_id == parent_job_id,
-                PageModel.page_number == page_number
-            ).first()
-            if page:
-                page.status = JobStatus.FAILED
-                page.error_message = error_msg
-                db.commit()
+        _mark_page_failed(log_prefix, page_job_id, parent_job_id, page_number, error_msg)
 
-            # Update parent job pages_failed count
-            parent_job = db.query(Job).filter(Job.id == parent_job_id).first()
-            if parent_job:
-                failed_count = db.query(PageModel).filter(
-                    PageModel.job_id == parent_job_id,
-                    PageModel.status == JobStatus.FAILED
-                ).count()
-                parent_job.pages_failed = failed_count
-                db.commit()
-        except Exception as e:
-            logger.error(f"[PAGE JOB {page_job_id}] MySQL update error on timeout: {e}")
-        finally:
-            db.close()
-
-        # Retry with backoff
-        raise self.retry(exc=SoftTimeLimitExceeded(), countdown=30 * (2 ** self.request.retries))
+        raise task.retry(exc=SoftTimeLimitExceeded(), countdown=30 * (2 ** task.request.retries))
 
     except Exception as exc:
-        logger.error(f"[PAGE JOB {page_job_id}] Page {page_number} failed: {exc}", exc_info=True)
+        logger.error(f"{log_prefix} Page {page_number} failed: {exc}", exc_info=True)
 
-        # Update Redis
-        redis_client.set_job_status(
-            job_id=page_job_id,
-            job_type="page",
-            status="failed",
-            parent_job_id=parent_job_id,
-            page_number=page_number,
-            error=str(exc),
-            completed_at=datetime.utcnow(),
-        )
+        if on_failure is not None:
+            return on_failure(str(exc), False)
 
-        # Update MySQL: Mark page as failed
-        db = SessionLocal()
-        try:
-            from shared.models import Page as PageModel
-            page = db.query(PageModel).filter(
-                PageModel.job_id == parent_job_id,
-                PageModel.page_number == page_number
-            ).first()
-            if page:
-                page.status = JobStatus.FAILED
-                page.error_message = str(exc)
-                db.commit()
+        _mark_page_failed(log_prefix, page_job_id, parent_job_id, page_number, str(exc))
 
-            # Update parent job pages_failed count
-            parent_job = db.query(Job).filter(Job.id == parent_job_id).first()
-            if parent_job:
-                failed_count = db.query(PageModel).filter(
-                    PageModel.job_id == parent_job_id,
-                    PageModel.status == JobStatus.FAILED
-                ).count()
-                parent_job.pages_failed = failed_count
-                db.commit()
-        except Exception as e:
-            logger.error(f"[PAGE JOB {page_job_id}] MySQL failure error: {e}")
-        finally:
-            db.close()
+        raise task.retry(exc=exc, countdown=30 * (2 ** task.request.retries))
 
-        raise self.retry(exc=exc, countdown=30 * (2 ** self.request.retries))
+    finally:
+        if extracted_page_file is not None:
+            try:
+                Path(extracted_page_file).unlink(missing_ok=True)
+            except Exception as e:
+                logger.warning(f"{log_prefix} Could not remove extracted page file: {e}")
+
+
+def _run_routed_page(task, usage_id: int, *, page_job_id: str, parent_job_id: str, page_number: int,
+                     page_file_path: str = None, source_pdf_path: str = None, options: dict = None):
+    """
+    A PDF page placed by the dispatcher on the local engine (spec 0003, 4.14).
+
+    Claims the reservation before any work (lost claim => acknowledge and leave),
+    heartbeats the usage row and settles it. Never task.retry: a failure settles
+    `failed` and the backlog decides - back to the queue with backoff until
+    max_attempts, then the page (never the whole document) is FAILED.
+    """
+    from shared.engines import dispatch as engine_dispatch
+    from shared.engines import ledger
+    from workers.engines.local import UsageHeartbeat
+
+    log_prefix = f"[PAGE JOB {page_job_id}]"
+    holder = ledger.holder_id()
+    outcome, _ = ledger.claim(usage_id, holder, session_factory=SessionLocal)
+    if outcome != ledger.CLAIMED:
+        logger.info(f"{log_prefix} Usage {usage_id}: {outcome} - acknowledged without running")
+        if outcome != ledger.LOST:
+            engine_dispatch.kick(celery_app)
+        return {"page_job_id": page_job_id, "page_number": page_number, "status": outcome}
+
+    heartbeat = UsageHeartbeat(usage_id, holder, session_factory=SessionLocal).start()
+    started = time.monotonic()
+    failed = {}
+
+    def on_failure(error: str, timed_out: bool):
+        heartbeat.stop()
+        _, failed["change"] = ledger.settle_failed(usage_id, holder, error_code="TIMEOUT" if timed_out else "INTERNAL",
+                                                   detail=error, session_factory=SessionLocal)
+        change = failed["change"]
+        return {"page_job_id": page_job_id, "page_number": page_number,
+                "status": change.status if change else "failed"}
+
+    try:
+        logger.info(f"{log_prefix} Routed page {page_number} of job {parent_job_id}, usage {usage_id}")
+        result = _run_page_conversion(task, page_job_id=page_job_id, parent_job_id=parent_job_id,
+                                      page_number=page_number, page_file_path=page_file_path,
+                                      source_pdf_path=source_pdf_path, options=options, on_failure=on_failure)
+    finally:
+        heartbeat.stop()
+    if "change" in failed or (result or {}).get("status") != "completed":
+        change = failed.get("change")
+        ledger.apply_job_change(get_redis_client(), change)
+        engine_dispatch.kick(celery_app)
+        return result
+    ledger.settle_succeeded(usage_id, holder, measured_seconds=round(time.monotonic() - started, 3),
+                            session_factory=SessionLocal)
+    engine_dispatch.kick(celery_app)
+    return result
+
+
+@celery_app.task(bind=True, max_retries=3, name="workers.tasks.convert_page_task")
+def convert_page_task(
+    self,
+    page_job_id: str,
+    parent_job_id: str,
+    page_number: int,
+    page_file_path: str = None,
+    source_pdf_path: str = None,
+    options: dict = None,
+    usage_id: int = None,
+):
+    """
+    Page job - converte página individual de PDF
+
+    Exactly one of `page_file_path` / `source_pdf_path` must be supplied.
+
+    Args:
+        page_job_id: ID deste page job
+        parent_job_id: ID do main job
+        page_number: Número da página
+        page_file_path: Caminho de uma página já dividida (fluxo split_pdf_task)
+        source_pdf_path: Caminho do PDF completo; a página é extraída aqui
+        options: Opções de conversão
+        usage_id: Set only when the dispatcher placed this page on the local engine
+            (spec 0003, document_conversion route): the reservation to claim first.
+            Without it, everything runs exactly as it always did.
+    """
+    if usage_id is not None:
+        return _run_routed_page(self, usage_id, page_job_id=page_job_id, parent_job_id=parent_job_id,
+                                page_number=page_number, page_file_path=page_file_path,
+                                source_pdf_path=source_pdf_path, options=options)
+    return _run_page_conversion(
+        self,
+        page_job_id=page_job_id,
+        parent_job_id=parent_job_id,
+        page_number=page_number,
+        page_file_path=page_file_path,
+        source_pdf_path=source_pdf_path,
+        options=options,
+    )
 
 
 # ============================================
-# PAGE RETRY - Reprocessa página que falhou
+# PAGE RETRY - Shim depreciado
 # ============================================
 
-@celery_app.task(bind=True, max_retries=3)
+@celery_app.task(bind=True, max_retries=3, name="workers.tasks.process_page")
 def process_page(
     self,
     job_id: str,
@@ -875,223 +1213,44 @@ def process_page(
     options: dict = None,
 ):
     """
-    Retry task - reprocessa página individual de PDF que falhou
+    DEPRECATED - use `convert_page_task(source_pdf_path=...)` instead.
+
+    This task duplicated convert_page_task and mishandled the tuple returned by
+    PDFSplitter.extract_single_page. It survives only as a thin forwarder so
+    that messages already sitting on the queue under the name
+    "workers.tasks.process_page" still execute: with task_acks_late and
+    task_reject_on_worker_lost, an unregistered name would requeue forever.
+
+    Remove this task (and switch POST /jobs/{id}/pages/{n}/retry over to
+    convert_page_task) once the queue has drained.
 
     Args:
-        job_id: ID do novo page job (para retry)
+        job_id: ID do novo page job (mapeia para page_job_id)
         parent_job_id: ID do main job
-        pdf_path: Caminho do PDF completo
+        pdf_path: Caminho do PDF completo (mapeia para source_pdf_path)
         page_number: Número da página a processar
         options: Opções de conversão
     """
-    if options is None:
-        options = {}
-
-    redis_client = get_redis_client()
-    es_client = get_es_client()
-    converter = get_converter()
-
-    logger.info(f"[RETRY PAGE {job_id}] Retrying page {page_number} of job {parent_job_id}")
-
-    # Update MySQL: Set page to processing
-    db = SessionLocal()
-    try:
-        from shared.models import Page as PageModel
-        page = db.query(PageModel).filter(
-            PageModel.job_id == parent_job_id,
-            PageModel.page_number == page_number
-        ).first()
-        if page:
-            page.status = JobStatus.PROCESSING
-            page.page_job_id = job_id  # Update with new job ID
-            db.commit()
-    except Exception as e:
-        logger.error(f"[RETRY PAGE {job_id}] MySQL update error: {e}")
-    finally:
-        db.close()
-
-    try:
-        # Mark page job as processing in Redis
-        redis_client.set_job_status(
-            job_id=job_id,
-            job_type="page",
-            status="processing",
-            parent_job_id=parent_job_id,
-            page_number=page_number,
-            started_at=datetime.utcnow(),
-        )
-
-        # Extract single page from PDF
-        temp_dir = Path(settings.temp_storage_path) / parent_job_id / "retry_pages"
-        temp_dir.mkdir(parents=True, exist_ok=True)
-
-        splitter = PDFSplitter(temp_dir)
-        page_file = splitter.extract_single_page(Path(pdf_path), page_number)
-
-        logger.info(f"[RETRY PAGE {job_id}] Extracted page {page_number} to {page_file}")
-
-        # Convert page
-        result = converter.convert_to_markdown(page_file, options)
-
-        # Store page result in Redis
-        redis_client.set_job_result(job_id, result)
-
-        # Store page result in Elasticsearch
-        markdown_content = result.get("markdown", "")
-        metadata = result.get("metadata", {})
-
-        es_success = es_client.store_page_result(
-            job_id=parent_job_id,
-            page_number=page_number,
-            markdown_content=markdown_content,
-            metadata=metadata
-        )
-
-        # Store page markdown in MinIO
-        minio_result_path = None
-        try:
-            minio_client = get_minio_client()
-            minio_object_name = f"results/{parent_job_id}/page_{page_number:04d}.md"
-            minio_client.upload_file(
-                bucket_name=minio_client.bucket_results,
-                object_name=minio_object_name,
-                file_data=markdown_content.encode('utf-8'),
-                content_type="text/markdown",
-            )
-            minio_result_path = minio_object_name
-            logger.info(f"[RETRY] Page {page_number} markdown uploaded to MinIO: {minio_object_name}")
-        except Exception as e:
-            logger.error(f"[RETRY] Failed to upload page {page_number} markdown to MinIO: {e}")
-
-        # Update MySQL: Mark page as completed with markdown content
-        db = SessionLocal()
-        try:
-            from shared.models import Page as PageModel
-            page = db.query(PageModel).filter(
-                PageModel.job_id == parent_job_id,
-                PageModel.page_number == page_number
-            ).first()
-            if page:
-                page.status = JobStatus.COMPLETED
-                page.markdown_content = markdown_content  # NEW: Store markdown in MySQL
-                page.char_count = len(markdown_content)
-                page.has_elasticsearch_result = es_success
-                page.completed_at = datetime.utcnow()
-                db.commit()
-
-            # Update parent job pages_completed and pages_failed counts
-            parent_job = db.query(Job).filter(Job.id == parent_job_id).first()
-            if parent_job:
-                completed_count = db.query(PageModel).filter(
-                    PageModel.job_id == parent_job_id,
-                    PageModel.status == JobStatus.COMPLETED
-                ).count()
-                failed_count = db.query(PageModel).filter(
-                    PageModel.job_id == parent_job_id,
-                    PageModel.status == JobStatus.FAILED
-                ).count()
-                parent_job.pages_completed = completed_count
-                parent_job.pages_failed = failed_count
-                db.commit()
-        except Exception as e:
-            logger.error(f"[RETRY PAGE {job_id}] MySQL completion error: {e}")
-        finally:
-            db.close()
-
-        # Mark page job as completed in Redis
-        redis_client.set_job_status(
-            job_id=job_id,
-            job_type="page",
-            status="completed",
-            parent_job_id=parent_job_id,
-            page_number=page_number,
-            completed_at=datetime.utcnow(),
-        )
-
-        logger.info(f"[RETRY PAGE {job_id}] Page {page_number} retry completed successfully")
-
-        # Update main job progress
-        total_pages = redis_client.get_job_pages_total(parent_job_id)
-        completed_pages = redis_client.count_completed_page_jobs(parent_job_id)
-
-        if total_pages and completed_pages:
-            # Progress: 20% (download) + 70% (pages) + 10% (merge)
-            pages_progress = int((completed_pages / total_pages) * 70)
-            main_progress = 20 + pages_progress
-            redis_client.update_job_progress(parent_job_id, main_progress)
-
-            logger.info(f"[RETRY PAGE {job_id}] Main job progress: {main_progress}% ({completed_pages}/{total_pages} pages)")
-
-        # Check if all pages completed now - trigger merge if needed
-        if redis_client.all_page_jobs_completed(parent_job_id):
-            logger.info(f"[RETRY PAGE {job_id}] All pages completed - creating merge job")
-
-            merge_job_id = str(uuid4())
-            merge_pages_task.delay(
-                merge_job_id=merge_job_id,
-                parent_job_id=parent_job_id
-            )
-
-            redis_client.add_child_job(parent_job_id, "merge", merge_job_id)
-
-        # Cleanup page file
-        try:
-            if page_file.exists():
-                page_file.unlink()
-        except Exception:
-            pass
-
-        return {"job_id": job_id, "page_number": page_number, "status": "completed"}
-
-    except Exception as exc:
-        logger.error(f"[RETRY PAGE {job_id}] Page {page_number} retry failed: {exc}", exc_info=True)
-
-        # Update Redis
-        redis_client.set_job_status(
-            job_id=job_id,
-            job_type="page",
-            status="failed",
-            parent_job_id=parent_job_id,
-            page_number=page_number,
-            error=str(exc),
-            completed_at=datetime.utcnow(),
-        )
-
-        # Update MySQL: Mark page as failed again
-        db = SessionLocal()
-        try:
-            from shared.models import Page as PageModel
-            page = db.query(PageModel).filter(
-                PageModel.job_id == parent_job_id,
-                PageModel.page_number == page_number
-            ).first()
-            if page:
-                page.status = JobStatus.FAILED
-                page.error_message = str(exc)
-                db.commit()
-
-            # Update parent job pages_failed count
-            parent_job = db.query(Job).filter(Job.id == parent_job_id).first()
-            if parent_job:
-                failed_count = db.query(PageModel).filter(
-                    PageModel.job_id == parent_job_id,
-                    PageModel.status == JobStatus.FAILED
-                ).count()
-                parent_job.pages_failed = failed_count
-                db.commit()
-        except Exception as e:
-            logger.error(f"[RETRY PAGE {job_id}] MySQL failure error: {e}")
-        finally:
-            db.close()
-
-        raise self.retry(exc=exc, countdown=30 * (2 ** self.request.retries))
+    logger.warning(
+        "[DEPRECATED] workers.tasks.process_page called for page %s of job %s - "
+        "forwarding to convert_page_task",
+        page_number, parent_job_id,
+    )
+    return _run_page_conversion(
+        self,
+        page_job_id=job_id,
+        parent_job_id=parent_job_id,
+        page_number=page_number,
+        source_pdf_path=pdf_path,
+        options=options,
+    )
 
 
 # ============================================
 # MERGE JOB - Combina resultados das páginas
 # ============================================
 
-@celery_app.task(bind=True, max_retries=2)
+@celery_app.task(bind=True, max_retries=2, name="workers.tasks.merge_pages_task")
 def merge_pages_task(
     self,
     merge_job_id: str,
@@ -1280,22 +1439,3 @@ def send_callback(callback_url: str, job_id: str, status: str, result: dict = No
         raise
 
 
-def _store_transcript_outputs(job_id: str, outputs: dict) -> None:
-    """Persist transcript formats in the private audio bucket so they outlive the Redis result TTL"""
-    try:
-        minio_client = get_minio_client()
-    except Exception as e:
-        logger.warning(f"[MAIN JOB {job_id}] MinIO unavailable, transcript files kept only in Redis: {e}")
-        return
-
-    for fmt, content in outputs.items():
-        # Empty outputs are valid (e.g. SRT of a recording without speech) and stored too
-        try:
-            minio_client.upload_file(
-                bucket_name=minio_client.bucket_audio,
-                object_name=transcript_object_name(job_id, fmt),
-                file_data=content.encode('utf-8'),
-                content_type=TRANSCRIPT_CONTENT_TYPES[fmt],
-            )
-        except Exception as e:
-            logger.warning(f"[MAIN JOB {job_id}] Failed to store transcript.{fmt} in MinIO: {e}")

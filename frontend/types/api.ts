@@ -21,6 +21,8 @@ export interface UserResponse {
   username: string;
   is_active: boolean;
   created_at: string;
+  /** Effective admin (users.is_admin or ADMIN_USER_IDS). Absent in sessions saved by older builds. */
+  is_admin?: boolean;
 }
 
 export interface Token {
@@ -57,6 +59,36 @@ export interface DocumentMetadata {
   size_bytes: number;
   title?: string | null;
   author?: string | null;
+  // Audio / video transcription only
+  language?: string | null;
+  duration?: number | null;
+  device?: string | null; // "cuda", "cpu" or "remote"
+  available_formats?: TranscriptFormat[] | null;
+}
+
+/** Formats `GET /jobs/{id}/result?format=` serves for transcription jobs. */
+export type TranscriptFormat = "markdown" | "vtt" | "srt" | "txt" | "json";
+
+export interface TranscriptWord {
+  word: string;
+  start: number;
+  end: number;
+  probability: number;
+}
+
+export interface TranscriptSegment {
+  start: number;
+  end: number;
+  text: string;
+  words?: TranscriptWord[];
+}
+
+/** Body of `?format=json` on a transcription job. */
+export interface TranscriptJson {
+  language: string;
+  duration: number;
+  text: string;
+  segments: TranscriptSegment[];
 }
 
 export interface ConversionResult {
@@ -87,6 +119,7 @@ export interface JobStatusResponse {
   completed_at?: string | null;
   error?: string | null;
   name?: string | null;
+  tags?: string[];
   parent_job_id?: string | null;
   total_pages?: number | null;
   pages_completed?: number | null;
@@ -94,6 +127,29 @@ export interface JobStatusResponse {
   pages?: PageJobInfo[] | null;
   child_jobs?: ChildJobs | null;
   page_number?: number | null;
+  /** Transcriptions in progress: how much of the media is done, in seconds */
+  transcribed_seconds?: number | null;
+  media_duration?: number | null;
+  /** Only with routing (spec 0003): where the job runs. Never the engine's name or cost. */
+  engine?: { kind: "local" | "cloud" } | null;
+  /** Only with routing: why it still waits (`in_queue` = backlog, `starting` = placed, not started). */
+  queue_reason?: "in_queue" | "starting" | null;
+}
+
+/** One transcribed stretch of the media, in seconds */
+export interface TranscriptSegment {
+  start: number;
+  end: number;
+  text: string;
+}
+
+/** The text of a running transcription, from segment `since` on */
+export interface PartialTranscriptResponse {
+  job_id: string;
+  status: JobStatus;
+  segments: TranscriptSegment[];
+  /** Pass as `since` next time to get only what is new */
+  next: number;
 }
 
 export interface JobResultResponse {
@@ -108,7 +164,15 @@ export interface JobResultResponse {
 
 export interface PageJobInfo {
   page_number: number;
-  job_id: string;
+  /**
+   * `null` until the split task has created this page's job.
+   *
+   * The API publishes `total_pages` before the page rows exist, so a page can
+   * be listed with no job behind it yet. It used to fabricate an id
+   * ("pending-3") for that case; nothing addressable lives at it. Anything that
+   * fetches by page job id must handle the null.
+   */
+  job_id: string | null;
   status: JobStatus;
   url: string;
   error_message?: string | null;
@@ -121,6 +185,21 @@ export interface JobPagesResponse {
   pages_completed: number;
   pages_failed: number;
   pages: PageJobInfo[];
+}
+
+/**
+ * Short-lived, presigned URL for a page PDF.
+ *
+ * The URL points straight at object storage and is signed for a few minutes -
+ * it must be fetched as-is: appending anything (a cache-busting `?t=`, for
+ * example) invalidates the signature. Refetch once `expires_at` has passed.
+ */
+export interface PagePdfUrlResponse {
+  job_id: string;
+  page_number: number;
+  url: string;
+  expires_in: number;
+  expires_at: string;
 }
 
 export interface HealthCheckResponse {
@@ -136,19 +215,34 @@ export interface ConvertRequest {
   source?: string;
   file?: File;
   name?: string;
+  tags?: string[];
   authToken?: string; // OAuth token for gdrive/dropbox
 }
 
 export interface UploadRequest {
   file: File;
   name?: string;
+  tags?: string[];
 }
+
+/** What a job is, from the user's point of view (derived from its source). */
+export type JobKind = "document" | "transcription" | "image";
 
 export interface JobsListParams {
   limit?: number;
   offset?: number;
   status?: JobStatus;
-  job_type?: JobType;
+  job_type?: JobType | "all";
+  /** Every tag must be present (AND). */
+  tags?: string[];
+  /** Matches the job name or file name, not the content (that is /search). */
+  q?: string;
+  kind?: JobKind;
+}
+
+export interface TagCount {
+  tag: string;
+  count: number;
 }
 
 export interface SearchParams {
@@ -156,7 +250,72 @@ export interface SearchParams {
   limit?: number;
 }
 
+/**
+ * One row of `GET /jobs`.
+ *
+ * Deliberately not `JobStatusResponse`: the list handler builds these from the
+ * MySQL row (plus live Redis progress) and returns a different set of fields
+ * than the detail endpoint - no `started_at`, no `pages`, no `child_jobs`, but
+ * file and tag information the detail endpoint does not carry.
+ */
+export interface JobListItem {
+  job_id: string;
+  type: JobType;
+  status: JobStatus;
+  progress: number;
+  name?: string | null;
+  filename?: string | null;
+  kind: JobKind;
+  source_type?: string | null;
+  mime_type?: string | null;
+  file_size_bytes?: number | null;
+  tags: string[];
+  error?: string | null;
+  created_at?: string | null;
+  completed_at?: string | null;
+  total_pages?: number;
+  pages_completed?: number;
+  page_number?: number | null;
+  parent_job_id?: string | null;
+}
+
+/**
+ * `GET /jobs` answers an envelope, never a bare array.
+ *
+ * `total` is the count *after* filtering and *before* pagination, so it - not
+ * `jobs.length` - drives the pager. Treating the envelope as an array is what
+ * made "My Jobs" render empty for every user regardless of job count.
+ */
 export interface JobsListResponse {
-  jobs: JobStatusResponse[];
   total: number;
+  limit: number;
+  offset: number;
+  jobs: JobListItem[];
+  /** Jobs per status with every other filter applied - for the filter tabs. */
+  counts: Record<JobStatus | "all", number>;
+}
+
+/**
+ * One hit from `GET /search`.
+ *
+ * A search hit is not a job: it is a match inside an indexed document. It
+ * carries the evidence for the match (`preview`) and no live job state - the
+ * Elasticsearch index only holds finished conversions, and re-deriving
+ * status/progress per hit would mean a Redis round trip each and would lose
+ * every document whose Redis key has since expired.
+ */
+export interface SearchResult {
+  job_id: string;
+  filename?: string | null;
+  total_pages?: number | null;
+  char_count?: number | null;
+  created_at?: string | null;
+  preview: string;
+}
+
+export interface SearchResponse {
+  query: string;
+  total: number;
+  limit: number;
+  results: SearchResult[];
 }

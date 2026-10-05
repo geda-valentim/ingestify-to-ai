@@ -5,6 +5,7 @@ These periodic tasks run via Celery Beat to automatically detect and recover fro
 """
 
 from datetime import datetime, timedelta
+import json
 import logging
 import re
 from pathlib import Path
@@ -13,7 +14,6 @@ import shutil
 from uuid import uuid4
 
 from workers.celery_app import celery_app
-from workers.tasks import convert_page_task
 from shared.config import get_settings
 from shared.queries import (
     get_stuck_jobs,
@@ -265,29 +265,30 @@ def cleanup_old_jobs():
 
     for job in old_jobs:
         try:
-            # Delete Redis keys for this job
-            # Pattern: job:{job_id}:*
+            # Key names must match those written by RedisClient (shared/redis_client.py).
+            # Note: page status lives at job:{id}:page:{n}, NOT job:{id}:page:{n}:status.
             keys_to_delete = [
                 f"job:{job.id}:status",
                 f"job:{job.id}:result",
-                f"job:{job.id}:pages",
-                f"job:{job.id}:child_jobs",
+                f"job:{job.id}:pages:total",
+                f"job:{job.id}:owner",
             ]
 
-            for key in keys_to_delete:
-                try:
-                    redis_client.redis.delete(key)
-                except Exception as e:
-                    logger.error(f"[MONITORING] Error deleting Redis key {key}: {e}")
-
-            # Also delete page keys if this was a multi-page job
             if job.total_pages and job.total_pages > 1:
                 for page_num in range(1, job.total_pages + 1):
-                    try:
-                        redis_client.redis.delete(f"job:{job.id}:page:{page_num}:status")
-                        redis_client.redis.delete(f"job:{job.id}:page:{page_num}:result")
-                    except Exception as e:
-                        logger.error(f"[MONITORING] Error deleting page {page_num} keys: {e}")
+                    keys_to_delete.append(f"job:{job.id}:page:{page_num}")
+                    keys_to_delete.append(f"job:{job.id}:page:{page_num}:result")
+
+            try:
+                redis_client.client.delete(*keys_to_delete)
+            except Exception as e:
+                # Do not count this job as cleaned - it must be retried on the next run.
+                logger.error(f"[MONITORING] Error deleting Redis keys for job {job.id}: {e}")
+                continue
+
+            # Drop the job from the owner's index set so it does not leak entries.
+            if job.user_id:
+                redis_client.remove_job_from_user(job.user_id, job.id)
 
             logger.debug(f"[MONITORING] Cleaned up Redis keys for job {job.id} (completed {job.completed_at})")
             cleaned_count += 1
@@ -295,11 +296,55 @@ def cleanup_old_jobs():
         except Exception as e:
             logger.error(f"[MONITORING] Error cleaning up job {job.id}: {e}")
 
+    images_swept = sweep_orphaned_vision_images()
+
     logger.info(f"[MONITORING] Cleanup complete: {cleaned_count} jobs cleaned from Redis")
 
     return {
-        "jobs_cleaned": cleaned_count
+        "jobs_cleaned": cleaned_count,
+        "vision_images_swept": images_swept,
     }
+
+
+# The floor for how long an orphan must sit before it is swept. Deleting a file
+# a running inference still needs would be a far worse bug than leaving it a few
+# extra minutes, so this is deliberately far above any legitimate hold time
+# (`vision_task_timeout_seconds`, 120s by default).
+VISION_IMAGE_ORPHAN_MIN_AGE_SECONDS = 3600
+
+
+def sweep_orphaned_vision_images() -> int:
+    """
+    Delete image handoff directories that nobody is coming back for.
+
+    A BACKSTOP, not the mechanism. `/images/*` writes the image to
+    `<temp_storage_path>/images/<job_id>/` and the vision task deletes it in a
+    `finally`, so in every ordinary outcome - success, typed failure, crash,
+    soft time limit - it is already gone before this ever runs. What is left for
+    here is the case where that `finally` never executed at all: a HARD time
+    limit or an OOM killing the worker process mid-inference, or a message that
+    was dispatched and never delivered.
+
+    This is explicitly NOT a fix for an upload loop: it runs daily, and a caller
+    in a tight loop fills the disk in minutes. The bound on that is the task's
+    own cleanup.
+
+    Returns:
+        The number of directories removed.
+    """
+    from workers.vision.image_input import sweep_image_handoffs
+
+    max_age = max(
+        settings.vision_task_timeout_seconds * 4,
+        VISION_IMAGE_ORPHAN_MIN_AGE_SECONDS,
+    )
+    swept = sweep_image_handoffs(settings.temp_storage_path, max_age)
+    if swept:
+        logger.warning(
+            f"[MONITORING] Swept {swept} orphaned vision image handoff(s) older than "
+            f"{max_age}s. Each one is a vision task that died before its cleanup ran."
+        )
+    return swept
 
 
 @celery_app.task(name="workers.monitoring.cleanup_stale_files")
@@ -383,6 +428,61 @@ def remove_stale_temp_files(base: Path, max_age_seconds: int, now: float = None,
 
     logger.info(f"[MONITORING] Removed {removed} stale temp entries from {base}")
     return {"removed": removed}
+
+
+@celery_app.task(name="workers.monitoring.check_broker_unacked")
+def check_broker_unacked():
+    """
+    Flag broker messages left unacknowledged by a worker that died.
+
+    With acks_late, a message stays in the broker's `unacked` hash while its task
+    runs; if the worker dies (container recreated, OOM), it only returns to its queue
+    after the visibility timeout - hours. A message no live worker reports holding,
+    seen on two consecutive checks and older than the grace period, is orphaned:
+    logged as an error and listed for admins, who can put it back on its queue
+    (POST /admin/broker/unacked/{delivery_tag}/requeue). Never requeued here: a
+    worker that merely failed to answer the inspect would then run the task twice.
+    """
+    from shared import broker_unacked
+
+    inspect = celery_app.control.inspect(timeout=5)
+    live = broker_unacked.live_task_ids(inspect)
+    messages = broker_unacked.list_unacked(broker_unacked.broker_client())
+
+    cache = get_redis_client().client
+    previous = {}
+    try:
+        previous = json.loads(cache.get(broker_unacked.REPORT_KEY) or "{}")
+    except (ValueError, TypeError):
+        pass
+
+    if live is None:
+        logger.warning(
+            f"[MONITORING] No worker answered the inspect; skipping the check of "
+            f"{len(messages)} unacked broker messages"
+        )
+        return {"unacked": len(messages), "orphans": 0, "skipped": True}
+
+    suspects = broker_unacked.find_orphans(messages, live, settings.monitoring_unacked_grace_seconds)
+    seen_before = set(previous.get("suspect_task_ids") or [])
+    orphans = [m for m in suspects if m.task_id in seen_before]
+
+    for m in orphans:
+        logger.error(
+            f"[MONITORING] Orphaned broker message: task {m.task_name} id={m.task_id} "
+            f"job={m.job_id} queue={m.queue} unacked for {m.age_seconds:.0f}s with no live worker "
+            f"holding it; requeue with POST /admin/broker/unacked/{m.delivery_tag}/requeue"
+        )
+
+    report = {
+        "checked_at": datetime.utcnow().isoformat(),
+        "unacked_total": len(messages),
+        "visibility_timeout_seconds": settings.celery_visibility_timeout_seconds,
+        "suspect_task_ids": [m.task_id for m in suspects if m.task_id],
+        "orphans": [m.to_dict() for m in orphans],
+    }
+    cache.set(broker_unacked.REPORT_KEY, json.dumps(report), ex=3600)
+    return {"unacked": len(messages), "orphans": len(orphans), "skipped": False}
 
 
 @celery_app.task(name="workers.monitoring.health_check")

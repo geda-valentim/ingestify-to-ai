@@ -6,7 +6,7 @@ import { Providers } from "./providers";
 const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "Doc2MD - Document to Markdown Converter",
+  title: "Ingestify - Document to Markdown Converter",
   description: "Convert documents to Markdown using AI-powered processing",
 };
 

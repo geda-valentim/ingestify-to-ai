@@ -6,11 +6,14 @@ from datetime import timedelta
 from shared.database import get_db
 from shared.models import User
 from shared.schemas import UserCreate, UserLogin, UserResponse, Token
+from fastapi.security import HTTPAuthorizationCredentials
 from shared.auth import (
     hash_password,
     authenticate_user,
+    bearer_scheme,
     create_access_token,
     get_current_active_user,
+    verify_token,
 )
 from shared.config import get_settings
 from shared import rate_limit
@@ -34,7 +37,7 @@ async def register(user_data: UserCreate, request: Request, db: Session = Depend
     ```
 
     ## Returns:
-    User object with id, email, username, is_active, created_at
+    User object with id, email, username, is_active, created_at, is_admin
 
     ## Errors:
     - 400: Email or username already exists
@@ -71,7 +74,7 @@ async def register(user_data: UserCreate, request: Request, db: Session = Depend
     db.commit()
     db.refresh(new_user)
 
-    return new_user
+    return UserResponse.for_user(new_user)
 
 
 def _lockout_identity(db: Session, login: str) -> str:
@@ -156,6 +159,43 @@ async def login(
     }
 
 
+@router.post("/refresh", response_model=Token)
+async def refresh_token(
+    bearer: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+    db: Session = Depends(get_db),
+):
+    """
+    Troca um JWT ainda válido por um novo, com validade renovada.
+
+    É o "heartbeat" do frontend: enquanto a pessoa usa o app, a sessão é
+    renovada antes de expirar; parada por mais que `JWT_EXPIRATION_MINUTES`,
+    ela expira e o login é pedido de novo.
+
+    Só aceita `Authorization: Bearer <jwt>`. Uma API key não vira sessão.
+
+    ## Erros:
+    - 401: token ausente, expirado ou inválido, ou usuário inativo
+    """
+    unauthorized = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Sessão expirada ou inválida",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    user_id = verify_token(bearer.credentials) if bearer else None
+    if not user_id:
+        raise unauthorized
+
+    user = db.query(User).filter(User.id == user_id).first()
+    if user is None or not user.is_active:
+        raise unauthorized
+
+    access_token = create_access_token(
+        data={"sub": user.id},
+        expires_delta=timedelta(minutes=settings.jwt_expiration_minutes),
+    )
+    return {"access_token": access_token, "token_type": "bearer"}
+
+
 @router.get("/me", response_model=UserResponse)
 async def get_current_user_info(current_user: User = Depends(get_current_active_user)):
     """
@@ -176,4 +216,4 @@ async def get_current_user_info(current_user: User = Depends(get_current_active_
     ## Errors:
     - 401: Not authenticated or invalid token/API key
     """
-    return current_user
+    return UserResponse.for_user(current_user)

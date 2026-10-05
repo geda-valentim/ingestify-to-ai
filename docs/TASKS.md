@@ -1,5 +1,7 @@
 # Tarefas de Implementação - Doc2MD API
 
+> **Documento histórico (out/2025) — obsoleto.** Plano de implementação original; nenhuma caixa foi marcada, embora boa parte esteja implementada (com caminhos diferentes — ex.: o rate limit está em `backend/shared/rate_limit.py`, não em `api/middleware.py`). Estado atual: [README.md](README.md) e [features/](features/).
+
 Este documento organiza todas as tarefas necessárias para implementar o sistema Doc2MD em fases incrementais.
 
 ## 📋 Índice

@@ -1,4 +1,7 @@
 # Sprint 2: Infrastructure & Repositories
+
+> **Plano de sprint (crawler) — não concluído.** Estado real do crawler no código: [../features/crawler.md](../features/crawler.md).
+
 **Duração:** Semanas 3-4
 **Objetivo:** Camada de infraestrutura completa
 

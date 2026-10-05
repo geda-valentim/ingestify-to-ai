@@ -1,5 +1,7 @@
 # Status do Projeto Doc2MD
 
+> **Documento histórico (out/2025) — obsoleto.** Lista só 4 endpoints (hoje são mais de 30), mostra chamadas anônimas a `/convert` e `/jobs` (hoje dão `401`) e marca como pendentes rate limiting, limpeza agendada e testes, que já existem. Estado atual: [README.md](README.md) e [features/](features/).
+
 ## ✅ Implementado (MVP Funcional)
 
 ### Documentação

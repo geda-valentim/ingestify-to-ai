@@ -74,8 +74,8 @@ services:
     volumes:
       - minio_data:/data
     environment:
-      - MINIO_ROOT_USER=${MINIO_ROOT_USER:-minioadmin}
-      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD:-minioadmin}
+      - MINIO_ROOT_USER=${MINIO_ROOT_USER:?MINIO_ROOT_USER is required - set it in .env (see .env.example)}
+      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD is required - set it in .env (see .env.example)}
     command: server /data --console-address ":9001"
     networks:
       - ingestify-network
@@ -121,20 +121,44 @@ services:
       - ELASTICSEARCH_HOST=${ELASTICSEARCH_HOST:-elasticsearch}
       - MINIO_ENDPOINT=${MINIO_HOST:-minio}:9000
       - MINIO_HOST=${MINIO_HOST:-minio}
-      - MINIO_ACCESS_KEY=${MINIO_ROOT_USER:-minioadmin}
-      - MINIO_SECRET_KEY=${MINIO_ROOT_PASSWORD:-minioadmin}
+      # Endereço do MinIO visto pelo NAVEGADOR. Presigned URLs são assinadas
+      # sobre o Host, então isto precisa ser o host:port que o browser usa.
+      # Vazio (default) = derivado do host da requisição + porta 9000.
+      - MINIO_PUBLIC_ENDPOINT=${MINIO_PUBLIC_ENDPOINT:-}
+      - MINIO_ACCESS_KEY=${MINIO_ROOT_USER:?MINIO_ROOT_USER is required - set it in .env (see .env.example)}
+      - MINIO_SECRET_KEY=${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD is required - set it in .env (see .env.example)}
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:?JWT_SECRET_KEY is required - generate one with 'openssl rand -hex 32' and set it in .env}
+      - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
       - MINIO_SECURE=false
       - MINIO_BUCKET_UPLOADS=ingestify-uploads
       - MINIO_BUCKET_PAGES=ingestify-pages
       - MINIO_BUCKET_AUDIO=ingestify-audio
       - MINIO_BUCKET_RESULTS=ingestify-results
+      # Single device knob for the whole stack. auto|cpu|cuda|cuda:N.
+      # The API loads no model; this only keeps its logs honest.
+      - DEVICE=${DEVICE:-auto}
+      # Vision (Florence-2) - API-side knobs only. The model itself lives in
+      # worker-vision; see the worker-vision service and docs/GPU.md.
+      - ENABLE_IMAGE_DESCRIPTION=${ENABLE_IMAGE_DESCRIPTION:-true}
+      - VISION_QUEUE=${VISION_QUEUE:-ingestify-vision}
+      - VISION_REQUEST_TIMEOUT_SECONDS=${VISION_REQUEST_TIMEOUT_SECONDS:-60}
+      - VISION_MAX_IMAGE_SIZE_MB=${VISION_MAX_IMAGE_SIZE_MB:-10}
+      - VISION_MAX_IMAGE_PIXELS=${VISION_MAX_IMAGE_PIXELS:-50000000}
+      - VISION_CAPTION_TASK=${VISION_CAPTION_TASK:-<MORE_DETAILED_CAPTION>}
       - ADMIN_USER_IDS=${ADMIN_USER_IDS:-}
+      # Seals remote engine credentials (spec 0003); the private key never comes here
+      - ENGINE_SECRETS_PUBLIC_KEY=${ENGINE_SECRETS_PUBLIC_KEY:-}
+      # Optional: engine alerts are also POSTed here as generic JSON (spec 0003, 4.8)
+      - ENGINE_ALERT_WEBHOOK_URL=${ENGINE_ALERT_WEBHOOK_URL:-}
     networks:
       - ingestify-network
     volumes:
       - ./tmp:/tmp/ingestify
       - ./backend/api:/app/api:ro
       - ./backend/shared:/app/shared:ro
+      # The admin API computes the fingerprint a Modal deploy would record from
+      # these sources (spec 0003): the same files worker-dispatch and worker-remote see
+      - ./backend/workers:/app/workers:ro
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true
@@ -165,21 +189,234 @@ services:
       - ELASTICSEARCH_HOST=${ELASTICSEARCH_HOST:-elasticsearch}
       - MINIO_ENDPOINT=${MINIO_HOST:-minio}:9000
       - MINIO_HOST=${MINIO_HOST:-minio}
-      - MINIO_ACCESS_KEY=${MINIO_ROOT_USER:-minioadmin}
-      - MINIO_SECRET_KEY=${MINIO_ROOT_PASSWORD:-minioadmin}
+      - MINIO_ACCESS_KEY=${MINIO_ROOT_USER:?MINIO_ROOT_USER is required - set it in .env (see .env.example)}
+      - MINIO_SECRET_KEY=${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD is required - set it in .env (see .env.example)}
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:?JWT_SECRET_KEY is required - generate one with 'openssl rand -hex 32' and set it in .env}
       - MINIO_SECURE=false
       - MINIO_BUCKET_UPLOADS=ingestify-uploads
       - MINIO_BUCKET_PAGES=ingestify-pages
       - MINIO_BUCKET_AUDIO=ingestify-audio
       - MINIO_BUCKET_RESULTS=ingestify-results
+      # Single device knob for the whole stack. auto|cpu|cuda|cuda:N.
+      # NOTE: `auto` on a GPU host puts docling on the GPU in EVERY one of these
+      # replicas x concurrency processes, each with its own CUDA context and
+      # layout/table weights - a near-certain VRAM OOM. docker-compose.gpu.yml
+      # therefore cuts this service to ONE process before setting DEVICE=cuda.
+      # See docs/GPU.md.
+      - DEVICE=${DEVICE:-auto}
+      # Caps docling's intra-op threads so replicas x concurrency stop
+      # oversubscribing the host CPU.
+      - DOCLING_NUM_THREADS=${DOCLING_NUM_THREADS:-4}
+      # Shared HuggingFace cache, so a re-route of a vision task to this queue
+      # never re-downloads the weights.
+      - HF_HOME=/models/huggingface
+      - VISION_MODEL_CACHE_DIR=${VISION_MODEL_CACHE_DIR:-/models/huggingface}
     networks:
       - ingestify-network
     volumes:
       - ./tmp:/tmp/ingestify
       - ./backend/workers:/app/workers:ro
       - ./backend/shared:/app/shared:ro
+      - hf_cache:/models/huggingface
     deploy:
       replicas: 5
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  # Dedicated worker for /transcribe (queue ingestify-audio).
+  #
+  # Long recordings (lectures up to ~3h) would otherwise hold `worker` slots for
+  # many minutes and blow its CONVERSION_TIMEOUT_SECONDS, which is sized for
+  # documents. Here the per-task limit is TRANSCRIPTION_TIMEOUT_SECONDS. Each
+  # process keeps its own Whisper model resident, hence --concurrency=1: scale
+  # with replicas (AUDIO_WORKER_REPLICAS). docker-compose.gpu.yml puts it on CUDA.
+  worker-audio:
+    extends:
+      service: worker
+    command: celery -A workers.celery_app worker --loglevel=info --concurrency=1 -Q ingestify-audio -n ingestify-audio@%h
+    environment:
+      - CELERY_WORKER_NAME=ingestify-audio
+      - CONVERSION_TIMEOUT_SECONDS=${TRANSCRIPTION_TIMEOUT_SECONDS:-10800}
+      # Whisper's CPU stages (decode, spectrogram) would otherwise size their
+      # OpenMP/BLAS pools for every host core in every replica.
+      - OMP_NUM_THREADS=${AUDIO_WORKER_CPU_THREADS:-2}
+      - OPENBLAS_NUM_THREADS=${AUDIO_WORKER_CPU_THREADS:-2}
+      - MKL_NUM_THREADS=${AUDIO_WORKER_CPU_THREADS:-2}
+    # Per-replica cap: a long (45min+) audio drove each replica past 4 GB and,
+    # uncapped, the host OOM killer took down whatever it picked. With the cap,
+    # only the offending container is killed. Equal memswap_limit = no swap.
+    mem_limit: ${AUDIO_WORKER_MEM_LIMIT:-6g}
+    memswap_limit: ${AUDIO_WORKER_MEM_LIMIT:-6g}
+    deploy:
+      replicas: ${AUDIO_WORKER_REPLICAS:-1}
+
+  # Dedicated worker for the synchronous vision endpoints (/images/*).
+  #
+  # Its own queue is not an optimisation: on the shared `ingestify` queue a 60s
+  # request would sit behind multi-minute PDF page jobs (worker_prefetch_multiplier=1,
+  # 10 occupiable slots) and 504 for reasons unrelated to vision.
+  # --concurrency=1 keeps exactly ONE resident Florence-2 model per box, which
+  # matters more, not less, once a GPU is involved. Scale with
+  # `docker compose up -d --scale worker-vision=N`; do NOT raise concurrency.
+  worker-vision:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.worker
+    command: celery -A workers.celery_app worker --loglevel=info --concurrency=1 -Q ingestify-vision -n ingestify-vision@%h
+    environment:
+      - REDIS_HOST=${REDIS_HOST:-redis}
+      - REDIS_PORT=${REDIS_PORT:-6379}
+      - CELERY_BROKER_URL=${CELERY_BROKER_URL:-redis://${REDIS_HOST:-redis}:6379/0}
+      - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND:-redis://${REDIS_HOST:-redis}:6379/1}
+      - CELERY_TASK_DEFAULT_QUEUE=ingestify
+      - CELERY_WORKER_NAME=ingestify-vision
+      - ENVIRONMENT=development
+      - LOG_LEVEL=INFO
+      - MAX_FILE_SIZE_MB=50
+      - CONVERSION_TIMEOUT_SECONDS=600
+      - TEMP_STORAGE_PATH=/tmp/ingestify
+      - RESULT_TTL_SECONDS=14400
+      - DATABASE_URL=${DATABASE_URL:-mysql+pymysql://root:root@host.docker.internal:3306/ingestify}
+      - ELASTICSEARCH_URL=${ELASTICSEARCH_URL:-http://${ELASTICSEARCH_HOST:-elasticsearch}:9200}
+      - ELASTICSEARCH_HOST=${ELASTICSEARCH_HOST:-elasticsearch}
+      - MINIO_ENDPOINT=${MINIO_HOST:-minio}:9000
+      - MINIO_HOST=${MINIO_HOST:-minio}
+      - MINIO_ACCESS_KEY=${MINIO_ROOT_USER:?MINIO_ROOT_USER is required - set it in .env (see .env.example)}
+      - MINIO_SECRET_KEY=${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD is required - set it in .env (see .env.example)}
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:?JWT_SECRET_KEY is required - generate one with 'openssl rand -hex 32' and set it in .env}
+      - MINIO_SECURE=false
+      - MINIO_BUCKET_UPLOADS=ingestify-uploads
+      - MINIO_BUCKET_PAGES=ingestify-pages
+      - MINIO_BUCKET_AUDIO=ingestify-audio
+      - MINIO_BUCKET_RESULTS=ingestify-results
+      # Device: auto = CUDA when torch reports a usable device, else CPU.
+      # docker-compose.gpu.yml pins this to cuda explicitly.
+      - DEVICE=${DEVICE:-auto}
+      # Vision (Florence-2)
+      - ENABLE_IMAGE_DESCRIPTION=${ENABLE_IMAGE_DESCRIPTION:-true}
+      - VISION_PROVIDER=${VISION_PROVIDER:-florence2}
+      - VISION_MODEL_ID=${VISION_MODEL_ID:-florence-community/Florence-2-base-ft}
+      - VISION_MODEL_REVISION=${VISION_MODEL_REVISION:-0b03b6f15a4a211370fb204aee4e7dd48887ea37}
+      - VISION_TRUST_REMOTE_CODE=${VISION_TRUST_REMOTE_CODE:-false}
+      - VISION_MODEL_CACHE_DIR=${VISION_MODEL_CACHE_DIR:-/models/huggingface}
+      - VISION_ALLOW_MODEL_DOWNLOAD=${VISION_ALLOW_MODEL_DOWNLOAD:-true}
+      # Load the weights at worker-process start so the first request does not
+      # pay a 5-15s load inside its 60s budget.
+      - VISION_PRELOAD_MODEL=${VISION_PRELOAD_MODEL:-true}
+      - VISION_QUEUE=${VISION_QUEUE:-ingestify-vision}
+      - VISION_TASK_TIMEOUT_SECONDS=${VISION_TASK_TIMEOUT_SECONDS:-120}
+      - VISION_MAX_IMAGE_SIZE_MB=${VISION_MAX_IMAGE_SIZE_MB:-10}
+      - VISION_MAX_IMAGE_PIXELS=${VISION_MAX_IMAGE_PIXELS:-50000000}
+      - VISION_MAX_NEW_TOKENS=${VISION_MAX_NEW_TOKENS:-1024}
+      - VISION_NUM_BEAMS=${VISION_NUM_BEAMS:-3}
+      - VISION_TORCH_DTYPE=${VISION_TORCH_DTYPE:-auto}
+      - VISION_CAPTION_TASK=${VISION_CAPTION_TASK:-<MORE_DETAILED_CAPTION>}
+      # Any incidental huggingface_hub call lands in the same cache volume.
+      - HF_HOME=/models/huggingface
+    networks:
+      - ingestify-network
+    volumes:
+      # The API writes the decoded image here and this worker reads it back -
+      # this mount is what makes the handoff work. Keep it in every overlay.
+      - ./tmp:/tmp/ingestify
+      - ./backend/workers:/app/workers
+      - ./backend/shared:/app/shared
+      - hf_cache:/models/huggingface
+    deploy:
+      replicas: 1
+    restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  # The dispatcher of execution engines (spec 0003), OPTIONAL: only needed once a
+  # feature has a route (scripts/engines.py routes set ...). Without routes nothing
+  # is ever published to its queue and installs run exactly as before.
+  #   docker compose --profile engines up -d worker-dispatch
+  # It probes media, places backlog items on engines by the route, and sweeps
+  # dead attempts. Its embedded beat (-B, ENGINES_DISPATCH_BEAT) ticks every 5 s and
+  # sweeps every 30 s; MONITORING_ENABLED=false keeps the shared beat's jobs out
+  # of it. If it is down, the API's watchdog places local work instead.
+  worker-dispatch:
+    extends:
+      service: worker
+    profiles: ["engines"]
+    command: celery -A workers.celery_app worker --loglevel=info --concurrency=2 -Q ingestify-dispatch -n ingestify-dispatch@%h -B --schedule /tmp/celerybeat-dispatch
+    environment:
+      - CELERY_WORKER_NAME=ingestify-dispatch
+      - ENGINES_DISPATCH_BEAT=true
+      - MONITORING_ENABLED=false
+      - DEVICE=cpu
+      - PROBE_MAX_BYTES=${PROBE_MAX_BYTES:-8388608}
+      - ENGINE_ALERT_WEBHOOK_URL=${ENGINE_ALERT_WEBHOOK_URL:-}
+    mem_limit: ${DISPATCH_WORKER_MEM_LIMIT:-1g}
+    deploy:
+      replicas: 1
+
+  # Remote engines (spec 0003, slice 4a), OPTIONAL: runs items the dispatcher placed
+  # on a Modal account, and their control tasks (test, cancel, spend report). The
+  # only service that holds the private key that opens engine credentials:
+  #   ./secrets/engine_secrets_private  (one key per line; from `engines.py keygen`)
+  #   docker compose --profile engines up -d --build worker-remote
+  # Slim image (docker/Dockerfile.remote): no model, no GPU; it waits on remote calls
+  # in a thread pool. The media goes in the call (MinIO is not reachable from Modal),
+  # read from the shared temp volume. The engines CLI that needs the key runs here:
+  #   docker compose --profile engines run --rm worker-remote python scripts/engines.py test --engine modal_1
+  worker-remote:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.remote
+    profiles: ["engines"]
+    command: celery -A workers.celery_app worker --loglevel=info --pool=threads --concurrency=${REMOTE_WORKER_CONCURRENCY:-16} -Q ingestify-remote,ingestify-remote-ctl -n ingestify-remote@%h -B --schedule /tmp/celerybeat-remote
+    environment:
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      - REDIS_HOST=${REDIS_HOST:-redis}
+      - REDIS_PORT=${REDIS_PORT:-6379}
+      - CELERY_BROKER_URL=${CELERY_BROKER_URL:-redis://${REDIS_HOST:-redis}:6379/0}
+      - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND:-redis://${REDIS_HOST:-redis}:6379/1}
+      - CELERY_TASK_DEFAULT_QUEUE=ingestify
+      - CELERY_WORKER_NAME=ingestify-remote
+      - ENVIRONMENT=development
+      - LOG_LEVEL=INFO
+      - TEMP_STORAGE_PATH=/tmp/ingestify
+      - RESULT_TTL_SECONDS=14400
+      - DATABASE_URL=${DATABASE_URL:-mysql+pymysql://root:root@host.docker.internal:3306/ingestify}
+      - ELASTICSEARCH_URL=${ELASTICSEARCH_URL:-http://${ELASTICSEARCH_HOST:-elasticsearch}:9200}
+      - ELASTICSEARCH_HOST=${ELASTICSEARCH_HOST:-elasticsearch}
+      - MINIO_ENDPOINT=${MINIO_HOST:-minio}:9000
+      - MINIO_HOST=${MINIO_HOST:-minio}
+      - MINIO_ACCESS_KEY=${MINIO_ROOT_USER:?MINIO_ROOT_USER is required - set it in .env (see .env.example)}
+      - MINIO_SECRET_KEY=${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD is required - set it in .env (see .env.example)}
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:?JWT_SECRET_KEY is required - generate one with 'openssl rand -hex 32' and set it in .env}
+      - MINIO_SECURE=false
+      - MINIO_BUCKET_UPLOADS=ingestify-uploads
+      - MINIO_BUCKET_AUDIO=ingestify-audio
+      - MONITORING_ENABLED=false
+      - ENGINES_REMOTE_BEAT=true
+      - REMOTE_WORKER_CONCURRENCY=${REMOTE_WORKER_CONCURRENCY:-16}
+      - REMOTE_MAX_CONCURRENT_UPLOADS=${REMOTE_MAX_CONCURRENT_UPLOADS:-4}
+      - ENGINE_SECRETS_PUBLIC_KEY=${ENGINE_SECRETS_PUBLIC_KEY:-}
+      - ENGINE_ALERT_WEBHOOK_URL=${ENGINE_ALERT_WEBHOOK_URL:-}
+      # The entrypoint copies it to the tmpfs below, readable by the app user only
+      - ENGINE_SECRETS_PRIVATE_KEYS_FILE=/run/secrets/engine_secrets_private
+    networks:
+      - ingestify-network
+    volumes:
+      - ./tmp:/tmp/ingestify
+      - ./backend/workers:/app/workers:ro
+      - ./backend/shared:/app/shared:ro
+      - ./scripts/engines.py:/app/scripts/engines.py:ro
+      - ./secrets/engine_secrets_private:/run/secrets/engine_secrets_private:ro
+    tmpfs:
+      - /run/ingestify-keys:mode=0700
+    # An attempt in flight holds its thread while it waits on the call; give it time
+    # to record what it has (the next worker resumes the recorded call)
+    stop_grace_period: 60s
+    mem_limit: ${REMOTE_WORKER_MEM_LIMIT:-3g}
+    deploy:
+      replicas: 1
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true
@@ -208,8 +445,9 @@ services:
       - ELASTICSEARCH_HOST=${ELASTICSEARCH_HOST:-elasticsearch}
       - MINIO_ENDPOINT=${MINIO_HOST:-minio}:9000
       - MINIO_HOST=${MINIO_HOST:-minio}
-      - MINIO_ACCESS_KEY=${MINIO_ROOT_USER:-minioadmin}
-      - MINIO_SECRET_KEY=${MINIO_ROOT_PASSWORD:-minioadmin}
+      - MINIO_ACCESS_KEY=${MINIO_ROOT_USER:?MINIO_ROOT_USER is required - set it in .env (see .env.example)}
+      - MINIO_SECRET_KEY=${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD is required - set it in .env (see .env.example)}
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:?JWT_SECRET_KEY is required - generate one with 'openssl rand -hex 32' and set it in .env}
       - MINIO_SECURE=false
       # Monitoring settings
       - MONITORING_ENABLED=true
@@ -234,6 +472,10 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.frontend
+      args:
+        # Set in .env to serve the app to other machines, e.g.
+        # NEXT_PUBLIC_API_URL=http://192.168.1.5:8000 (baked in at build time)
+        - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-}
     container_name: ingestify-frontend
     ports:
       - "3000:3000"
@@ -253,6 +495,11 @@ volumes:
     name: ingestify-redis-data
   minio_data:
     name: ingestify-minio-data
+  # HuggingFace / Florence-2 weights (~0.5GB). Shared by worker and
+  # worker-vision so weights survive restarts and are never re-downloaded,
+  # and never baked into an image. Prefetch with `make vision-download`.
+  hf_cache:
+    name: ingestify-hf-cache
 
 networks:
   ingestify-network:

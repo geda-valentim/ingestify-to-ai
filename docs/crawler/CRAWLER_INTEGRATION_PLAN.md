@@ -1,4 +1,7 @@
 # Plano de Integração: Web Crawler Agendado
+
+> **Planejado, não implementado.** Só partes das sprints 1–2 viraram código, e esse código está dormente (não é importado pela API nem pelos workers e não entra nas imagens Docker). Estado real: [../features/crawler.md](../features/crawler.md).
+
 **Sistema Ingestify - Módulo Crawler**
 
 **Versão:** 1.3 (Atualizado)

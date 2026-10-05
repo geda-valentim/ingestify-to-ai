@@ -2,24 +2,41 @@ FROM python:3.13-slim
 
 WORKDIR /app
 
+# Which dependency set to install, and which index to take torch from.
+# Defaults are CPU-only on purpose: a plain `docker compose build` on a laptop
+# with no GPU must not download ~2.5GB of CUDA wheels.
+# GPU builds override both via build args - see docker-compose.gpu.yml and
+# docs/GPU.md. The API does not run any model itself; it only needs torch
+# because docling imports it.
+ARG REQUIREMENTS_FILE=requirements-cpu.txt
+ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cpu
+
 # Install system dependencies
+# libgl1 + libglib2.0-0: opencv-python is installed here transitively via
+# docling and `import cv2` fails at runtime without libGL.so.1.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     qpdf \
+    libgl1 \
+    libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements
-COPY backend/requirements.txt .
+# Copy every requirements file so the `-r` chain inside them resolves
+COPY backend/requirements*.txt ./
 
-# Install Python dependencies with cache mount
-# Isso vai cachear downloads de packages grandes (PyTorch ~888MB)
+# Install Python dependencies with cache mount (requires BuildKit)
 RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install -r requirements.txt
+    pip install --index-url ${TORCH_INDEX_URL} --extra-index-url https://pypi.org/simple \
+                -r ${REQUIREMENTS_FILE}
 
 # Copy application code
 COPY backend/api/ ./api/
 COPY backend/shared/ ./shared/
 COPY backend/workers/ ./workers/
+COPY backend/tests/ ./tests/
+COPY backend/pytest.ini .
+# Ops tooling that must be runnable via `docker compose exec api`
+COPY scripts/make_admin.py scripts/engines.py ./scripts/
 
 # Create temp directory
 RUN mkdir -p /tmp/doc2md/uploads
@@ -36,7 +53,7 @@ EXPOSE 8000
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-    CMD python -c "import requests; requests.get('http://localhost:8080/health', timeout=5)"
+    CMD python -c "import requests; requests.get('http://localhost:8000/health', timeout=5)"
 
 # Run application
 CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]

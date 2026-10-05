@@ -1,29 +1,113 @@
-# Optional GPU override for Whisper transcription (NVIDIA only)
+# Docker Compose - NVIDIA GPU overlay (OPT-IN)
 #
-# Requirements on the host: NVIDIA driver + NVIDIA Container Toolkit
-#   https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html
+#   docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build
+#   make gpu
 #
-# Usage:
-#   docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build worker
+# Host prerequisites (see docs/GPU.md):
+#   - NVIDIA driver installed on the host
+#   - nvidia-container-toolkit installed
+#   - sudo nvidia-ctk runtime configure --runtime=docker && sudo systemctl restart docker
 #
-# The worker detects the GPU once per process (WHISPER_DEVICE=auto) and falls back
-# to CPU automatically if CUDA is not usable, so this file is safe to try.
+# ---------------------------------------------------------------------------
+# Why the GPU declaration lives ONLY here and never in docker-compose.yml
+# ---------------------------------------------------------------------------
+# (a) On a host without nvidia-container-toolkit, Compose HARD-FAILS at
+#     container create with:
+#         could not select device driver "nvidia" with capabilities: [[gpu]]
+#     That is a start failure, not a graceful degrade. A plain
+#     `docker compose up` must work on a laptop with no GPU.
+#
+# (b) Compose merges `deploy.resources.reservations.devices` by REPLACING the
+#     list. A GPU block in the base file could not be switched off by omission
+#     in an overlay - there would be no way back to CPU.
+# ---------------------------------------------------------------------------
 
 services:
+  worker-vision:
+    build:
+      args:
+        # Swaps the CPU torch index for the CUDA one at build time.
+        # cu129 (not cu130) keeps torch on the nvidia-*-cu12 wheels that
+        # ctranslate2 / faster-whisper links against, while still covering
+        # Blackwell. See backend/requirements-cuda.txt.
+        REQUIREMENTS_FILE: requirements-vision-cuda.txt
+        TORCH_INDEX_URL: https://download.pytorch.org/whl/cu129
+    environment:
+      # Explicit, not `auto`: a GPU that cannot be satisfied must be a hard
+      # error here, never a silent downgrade to CPU.
+      - DEVICE=cuda
+    deploy:
+      replicas: 1
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
   worker:
     build:
       args:
-        INSTALL_CUDA_LIBS: "true"
+        # Same CUDA dependency set as worker-vision (shared image layers). The
+        # cu129 torch brings the cu12 cuBLAS/cuDNN 9 wheels CTranslate2 needs,
+        # and shared.device decides `auto` via torch.cuda - so INSTALL_CUDA_LIBS
+        # is deliberately NOT set: its unpinned cuDNN could shadow torch's.
+        REQUIREMENTS_FILE: requirements-vision-cuda.txt
+        TORCH_INDEX_URL: https://download.pytorch.org/whl/cu129
     environment:
+      # Docling on the GPU. Safe only because this overlay runs exactly ONE
+      # process here (replicas: 1, --concurrency=1): each extra process would
+      # add its own CUDA context plus layout/table weights on a card already
+      # holding the Whisper and vision models. Scale documents with care: every
+      # replica costs ~1-2 GB of VRAM (check `nvidia-smi`). Explicit cuda, not
+      # auto: a lost GPU fails the job loudly instead of crawling on CPU.
+      # See docs/GPU.md.
+      - DEVICE=cuda
+      # Whisper alone goes to the GPU: a non-empty WHISPER_DEVICE overrides
+      # DEVICE for audio. `auto` falls back to CPU if CUDA is not usable
+      # (detected once per worker process, and again if the model fails on GPU).
       - WHISPER_DEVICE=${WHISPER_DEVICE:-auto}
-      - WHISPER_COMPUTE_TYPE=${WHISPER_COMPUTE_TYPE:-auto}
-      - NVIDIA_VISIBLE_DEVICES=all
-      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
-    # Each worker process loads its own Whisper model into GPU memory:
-    # keep replicas x concurrency low to avoid running out of VRAM.
+      - WHISPER_COMPUTE_TYPE=${WHISPER_COMPUTE_TYPE:-}
+    # Transcriptions no longer run here: /transcribe enqueues on ingestify-audio,
+    # served by worker-audio below. --concurrency=1 is what keeps docling to a
+    # single CUDA context: do NOT raise it, add replicas instead.
     command: celery -A workers.celery_app worker --loglevel=info --concurrency=1 -Q ingestify -n ingestify-worker@%h
     deploy:
       replicas: 1
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  # Transcription workers: N replicas, one resident Whisper model each, all on
+  # the same GPU and all pulling from the ingestify-audio queue (prefetch 1, so
+  # a free replica always takes the next job). A float16 turbo model plus its
+  # CUDA context is ~2-3 GB of VRAM per replica; size AUDIO_WORKER_REPLICAS
+  # against `nvidia-smi` (the vision worker also lives on this card).
+  worker-audio:
+    build:
+      args:
+        REQUIREMENTS_FILE: requirements-vision-cuda.txt
+        TORCH_INDEX_URL: https://download.pytorch.org/whl/cu129
+    environment:
+      # Docling never runs here (process_conversion builds its converter only on
+      # the document branch); only Whisper, and only on the GPU. Explicit
+      # cuda: a container that lost the GPU fails its jobs loudly instead of
+      # crawling on CPU until the time limit.
+      - DEVICE=cpu
+      - WHISPER_DEVICE=cuda
+      - WHISPER_COMPUTE_TYPE=${WHISPER_COMPUTE_TYPE:-float16}
+      # The model runs on the GPU, but CTranslate2 still applies the timestamp
+      # rules on the host between decode steps; with the default (active) policy
+      # the OpenMP pool busy-spins on its barrier in between, ~15% of a core per
+      # replica doing nothing.
+      - OMP_WAIT_POLICY=PASSIVE
+    deploy:
+      # More replicas than the card can feed adds no throughput: once the GPU is
+      # saturated each extra replica only burns ~1 host core polling for it.
+      replicas: ${AUDIO_WORKER_REPLICAS:-2}
       resources:
         reservations:
           devices:

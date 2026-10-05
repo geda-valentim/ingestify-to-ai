@@ -31,6 +31,13 @@ echo -e "${BLUE}  Ingestify - Smart Startup${NC}"
 echo -e "${BLUE}======================================${NC}"
 echo ""
 
+# Read a key's current value from .env, if the file already has one.
+# start.sh regenerates .env on every run; secrets must survive that.
+env_value() {
+    [ -f .env ] || return 0
+    grep -E "^$1=" .env | tail -n1 | cut -d= -f2-
+}
+
 # Function to check if a container is running
 is_container_running() {
     docker ps --format '{{.Names}}' | grep -q "^$1$"
@@ -106,12 +113,20 @@ if is_container_running "$SHARED_REDIS" && \
     # Ensure shared network exists and connect to it
     ensure_shared_network
 
-    # Write shared infra settings to .env (other settings are kept)
+    # Write shared infra settings to .env (other settings, e.g. JWT_SECRET_KEY
+    # and ADMIN_USER_IDS, are kept). Existing MinIO credentials are preserved.
+    MINIO_ROOT_USER="$(env_value MINIO_ROOT_USER)"
+    MINIO_ROOT_PASSWORD="$(env_value MINIO_ROOT_PASSWORD)"
+    : "${MINIO_ROOT_USER:=minioadmin}"
+    : "${MINIO_ROOT_PASSWORD:=minioadmin}"
+
     set_env_var REDIS_HOST "$REDIS_HOST"
     set_env_var MINIO_HOST "$MINIO_HOST"
     set_env_var ELASTICSEARCH_HOST "$ELASTICSEARCH_HOST"
-    set_env_var MINIO_ROOT_USER minioadmin
-    set_env_var MINIO_ROOT_PASSWORD minioadmin
+    set_env_var MINIO_ROOT_USER "$MINIO_ROOT_USER"
+    set_env_var MINIO_ROOT_PASSWORD "$MINIO_ROOT_PASSWORD"
+    set_env_var MINIO_ACCESS_KEY "$MINIO_ROOT_USER"
+    set_env_var MINIO_SECRET_KEY "$MINIO_ROOT_PASSWORD"
 
     # Connect ingestify network to shared network if not already connected
     if network_exists "ingestify-network" && network_exists "$SHARED_NETWORK"; then
@@ -121,7 +136,7 @@ if is_container_running "$SHARED_REDIS" && \
 
     echo ""
     echo -e "${CYAN}📦 Starting application services only...${NC}"
-    docker compose up -d --build api worker beat frontend
+    docker compose up -d --build api worker worker-audio worker-vision beat frontend
 else
     echo -e "${YELLOW}⚠️  Shared infrastructure not found${NC}"
     echo -e "${CYAN}📦 Starting with local infrastructure...${NC}"
@@ -162,12 +177,19 @@ elif is_container_running "ingestify-minio"; then
 fi
 
 if [ -n "$MINIO_CONTAINER" ]; then
+    # Resolve credentials here too: the .env block above only runs on the
+    # shared-infrastructure path, so these may still be unset.
+    MINIO_ROOT_USER="${MINIO_ROOT_USER:-$(env_value MINIO_ROOT_USER)}"
+    MINIO_ROOT_PASSWORD="${MINIO_ROOT_PASSWORD:-$(env_value MINIO_ROOT_PASSWORD)}"
+    : "${MINIO_ROOT_USER:=minioadmin}"
+    : "${MINIO_ROOT_PASSWORD:=minioadmin}"
+
     # Wait for MinIO to be ready
     sleep 2
 
     # Create buckets
     docker exec $MINIO_CONTAINER sh -c "
-        mc alias set local http://localhost:9000 minioadmin minioadmin 2>/dev/null || true
+        mc alias set local http://localhost:9000 '"$MINIO_ROOT_USER"' '"$MINIO_ROOT_PASSWORD"' 2>/dev/null || true
         mc mb local/ingestify-uploads 2>/dev/null || true
         mc mb local/ingestify-pages 2>/dev/null || true
         mc mb local/ingestify-audio 2>/dev/null || true

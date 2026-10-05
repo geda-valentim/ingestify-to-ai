@@ -1,10 +1,9 @@
 "use client";
 
-import { use, useEffect, useMemo, useState } from "react";
+import { use, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
-  ArrowLeft,
   CheckCircle2,
   XCircle,
   Clock,
@@ -18,13 +17,22 @@ import {
   Calendar,
   Layers,
   AlertTriangle,
-  Eye,
   Copy,
+  Mic,
+  Timer,
+  Languages,
+  Cpu,
+  HardDrive,
+  ArrowLeft,
+  Cloud,
+  Server,
 } from "lucide-react";
 import { jobsApi } from "@/lib/api";
 import { useAuthStore } from "@/lib/store/auth";
-import { formatApiError } from "@/lib/utils";
+import { loginUrl } from "@/lib/session";
+import { formatApiError, formatBytes, formatDuration, parseApiDate } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { AppHeader } from "@/components/app-header";
 import {
   Card,
   CardContent,
@@ -61,6 +69,10 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { formatDistanceToNow } from "date-fns";
 import { useToast } from "@/hooks/use-toast";
 import dynamic from "next/dynamic";
+import { DocumentView, TranscriptView } from "@/components/job/result-views";
+import { JobTagsCard } from "@/components/job/job-tags-card";
+import { LiveTranscriptView, useLiveTranscript } from "@/components/job/live-transcript";
+import type { JobResultResponse, JobStatusResponse } from "@/types/api";
 
 // Dynamically import PDF viewer to avoid canvas module issues
 const PdfViewer = dynamic(
@@ -68,17 +80,49 @@ const PdfViewer = dynamic(
   { ssr: false, loading: () => <div className="flex items-center justify-center p-8">Loading PDF viewer...</div> }
 );
 
+// A presigned PDF URL is only good for a few minutes. Stop trusting it slightly
+// before the server's expiry so a load never starts against a dying URL.
+const PDF_URL_EXPIRY_MARGIN_MS = 10_000;
+
 interface PageProps {
   params: Promise<{ id: string }>;
 }
 
 interface PageInfo {
   page_number: number;
-  job_id: string;
+  // Null until the split task has created this page's job - see PageJobInfo.
+  job_id: string | null;
   status: string;
   url: string;
   error_message?: string | null;
   retry_count: number;
+}
+
+/** "12:30 of 57:27 transcribed" while a transcription runs, else null. */
+function transcriptionProgress(status?: JobStatusResponse | null): string | null {
+  if (!status || status.status !== "processing" || !status.media_duration) return null;
+  const done = Math.min(status.transcribed_seconds ?? 0, status.media_duration);
+  return `${formatDuration(done)} of ${formatDuration(status.media_duration)} transcribed`;
+}
+
+/** Where a routed job runs (spec 0003): the class only, never the engine's name or cost. */
+function engineKindLabel(status?: JobStatusResponse | null): string | null {
+  if (!status?.engine) return null;
+  return status.engine.kind === "cloud" ? "Cloud GPU" : "Local server";
+}
+
+/** Why a routed job still waits; null for jobs without routing. */
+function queueReasonText(status?: JobStatusResponse | null): string | null {
+  if (!status?.queue_reason || status.status === "completed" || status.status === "failed" || status.status === "cancelled") {
+    return null;
+  }
+  if (status.queue_reason === "in_queue") {
+    return "Waiting for a free engine. It starts automatically as soon as one has room.";
+  }
+  const where = engineKindLabel(status);
+  return where === "Cloud GPU"
+    ? "Starting on a cloud GPU… this can take a little while the first time."
+    : `Starting${where ? ` on the ${where.toLowerCase()}` : ""}…`;
 }
 
 export default function JobStatusPage({ params }: PageProps) {
@@ -93,19 +137,6 @@ export default function JobStatusPage({ params }: PageProps) {
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [selectedPage, setSelectedPage] = useState<PageInfo | null>(null);
 
-  // The page PDF endpoint requires authentication, so the viewer sends the token.
-  // Memoized so the viewer only reloads when the page (or token) changes.
-  const selectedPageNumber = selectedPage?.page_number;
-  const pdfUrl = useMemo(
-    () =>
-      selectedPageNumber && token
-        ? {
-            url: `${jobsApi.getPagePdf(resolvedParams.id, selectedPageNumber)}?t=${Date.now()}`,
-            httpHeaders: { Authorization: `Bearer ${token}` },
-          }
-        : null,
-    [resolvedParams.id, selectedPageNumber, token]
-  );
   const [activeTab, setActiveTab] = useState<"pdf" | "markdown">("pdf");
   const [numPdfPages, setNumPdfPages] = useState<number>(0);
   const [pdfError, setPdfError] = useState<string | null>(null);
@@ -113,12 +144,12 @@ export default function JobStatusPage({ params }: PageProps) {
 
   useEffect(() => {
     if (hasHydrated && !isAuthenticated) {
-      router.push("/login");
+      router.replace(loginUrl());
     }
   }, [isAuthenticated, hasHydrated, router]);
 
   // Poll for job status
-  const { data: status, isLoading } = useQuery({
+  const { data: status, isLoading, isError: isStatusError } = useQuery({
     queryKey: ["job-status", resolvedParams.id, token],
     queryFn: () => jobsApi.getStatus(resolvedParams.id),
     enabled: !!token,
@@ -153,14 +184,50 @@ export default function JobStatusPage({ params }: PageProps) {
   // Fetch specific page result
   const { data: pageResult, isLoading: isLoadingPage } = useQuery({
     queryKey: ["page-result", selectedPage?.job_id, token],
-    queryFn: () => jobsApi.getResult(selectedPage!.job_id),
-    enabled: !!selectedPage && !!token && selectedPage.status === "completed",
+    queryFn: () => jobsApi.getResult(selectedPage!.job_id!),
+    // A page with no job id has nothing to fetch (it is not "completed" either,
+    // but the id is what the request needs, so gate on it explicitly).
+    enabled:
+      !!selectedPage &&
+      !!selectedPage.job_id &&
+      !!token &&
+      selectedPage.status === "completed",
   });
 
+  // Fetch the short-lived presigned URL for the selected page's PDF.
+  // The endpoint is authenticated, so this can no longer be a URL built inline:
+  // it is a request whose answer expires. gcTime is 0 so a URL is never served
+  // from cache after the viewer stops using it - paging back to a page always
+  // asks for a fresh one instead of handing the viewer a dead URL.
+  const {
+    data: pdfUrlData,
+    isFetching: isFetchingPdfUrl,
+    isError: isPdfUrlError,
+    refetch: refetchPdfUrl,
+  } = useQuery({
+    queryKey: ["page-pdf-url", resolvedParams.id, selectedPage?.page_number, token],
+    queryFn: () => jobsApi.getPagePdf(resolvedParams.id, selectedPage!.page_number),
+    enabled: !!selectedPage && !!token && selectedPage.status === "completed",
+    staleTime: 0,
+    gcTime: 0,
+    retry: 1,
+    // A new URL means a new `file` prop, which makes the viewer re-download the
+    // PDF. Refresh only when it is actually needed (page change, tab change,
+    // load failure), never just because the window regained focus.
+    refetchOnWindowFocus: false,
+  });
+
+  // Treat a URL that is about to expire as already gone: it would only fail
+  // halfway through loading. Margin absorbs clock skew and slow requests.
+  const pdfUrlExpiresAt = pdfUrlData ? Date.parse(pdfUrlData.expires_at) : 0;
+  const isPdfUrlUsable = () => pdfUrlExpiresAt - Date.now() > PDF_URL_EXPIRY_MARGIN_MS;
+
   // Retry mutation with real API
+  // Retry is addressed by page number on the main job, not by the failed page's
+  // own job id: `POST /jobs/{pageJobId}/retry` is not a route and always 404'd.
   const retryPageMutation = useMutation({
-    mutationFn: ({ pageJobId }: { pageJobId: string }) =>
-      jobsApi.retryPage(pageJobId),
+    mutationFn: ({ pageNumber }: { pageNumber: number }) =>
+      jobsApi.retryPage(resolvedParams.id, pageNumber),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["job-status", resolvedParams.id] });
       queryClient.invalidateQueries({ queryKey: ["job-pages", resolvedParams.id] });
@@ -180,10 +247,10 @@ export default function JobStatusPage({ params }: PageProps) {
 
   // Bulk retry mutation
   const bulkRetryMutation = useMutation({
-    mutationFn: async (pageJobIds: string[]) => {
+    mutationFn: async (pageNumbers: number[]) => {
       const results = await Promise.allSettled(
-        pageJobIds.map(pageJobId =>
-          jobsApi.retryPage(pageJobId)
+        pageNumbers.map(pageNumber =>
+          jobsApi.retryPage(resolvedParams.id, pageNumber)
         )
       );
       return results;
@@ -212,7 +279,9 @@ export default function JobStatusPage({ params }: PageProps) {
   });
 
   const deleteMutation = useMutation({
-    mutationFn: () => Promise.resolve(),
+    // Same stub as the jobs list had: it resolved, toasted "deleted", and left
+    // the job in place. `DELETE /jobs/{job_id}` is live and does the work.
+    mutationFn: () => jobsApi.delete(resolvedParams.id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["jobs"] });
       toast({
@@ -276,7 +345,7 @@ export default function JobStatusPage({ params }: PageProps) {
   const handleRetryPage = (page: PageInfo, e: React.MouseEvent) => {
     e.stopPropagation();
     retryPageMutation.mutate({
-      pageJobId: page.job_id
+      pageNumber: page.page_number
     });
   };
 
@@ -305,23 +374,10 @@ export default function JobStatusPage({ params }: PageProps) {
 
   const handleBulkRetry = () => {
     if (selectedPages.size === 0) return;
-    const pageJobIds = pages
+    const pageNumbers = pages
       .filter((p: PageInfo) => selectedPages.has(p.page_number))
-      .map((p: PageInfo) => p.job_id);
-    bulkRetryMutation.mutate(pageJobIds);
-  };
-
-  const downloadMarkdown = () => {
-    if (!result) return;
-    const blob = new Blob([result.result.markdown], { type: "text/markdown" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${status?.name || resolvedParams.id}.md`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+      .map((p: PageInfo) => p.page_number);
+    bulkRetryMutation.mutate(pageNumbers);
   };
 
   const onDocumentLoadSuccess = ({ numPages }: { numPages: number }) => {
@@ -331,7 +387,23 @@ export default function JobStatusPage({ params }: PageProps) {
 
   const onDocumentLoadError = (error: Error) => {
     console.error("PDF load error:", error);
+    // A presigned URL that died while the viewer was open fails here (storage
+    // answers 403, not 404). Get a fresh one instead of showing an error.
+    if (pdfUrlData && !isPdfUrlUsable()) {
+      refetchPdfUrl();
+      return;
+    }
     setPdfError("Failed to load PDF. The file may still be processing.");
+  };
+
+  const handleTabChange = (value: string) => {
+    setActiveTab(value as "pdf" | "markdown");
+    // Coming back to the PDF tab after sitting on Markdown past the TTL: the
+    // cached URL is dead, so ask for another one before rendering the viewer.
+    if (value === "pdf" && !isPdfUrlUsable() && !isFetchingPdfUrl) {
+      setPdfError(null);
+      refetchPdfUrl();
+    }
   };
 
   if (isLoading) {
@@ -342,28 +414,42 @@ export default function JobStatusPage({ params }: PageProps) {
     );
   }
 
+  if (isStatusError || !status) {
+    return (
+      <div className="min-h-screen bg-background">
+        <AppHeader />
+        <div className="flex flex-col items-center justify-center p-12 text-center">
+          <AlertCircle className="h-12 w-12 text-muted-foreground mb-4" />
+          <h1 className="text-lg font-semibold">Job not found</h1>
+          <p className="text-sm text-muted-foreground mt-1">It may have been deleted, or it belongs to another account.</p>
+          <Button variant="outline" className="mt-6" onClick={() => router.push("/jobs")}>
+            Back to My Jobs
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
+  const metadata = result?.result.metadata;
+  // Only /transcribe jobs produce subtitle formats.
+  const isTranscript = !!metadata?.available_formats?.includes("vtt");
+  const hasPages = pages.length > 0;
+  const fileName = status.name || resolvedParams.id;
+
+  // No cache-buster: the query string is part of the presigned signature, and
+  // appending to it turns every request into a 403.
+  const pdfUrl = selectedPage && pdfUrlData && isPdfUrlUsable() ? pdfUrlData.url : null;
 
   return (
     <TooltipProvider>
-      <div className="min-h-screen bg-background">
+      <div className="min-h-screen lg:h-screen flex flex-col bg-background">
         {/* Header */}
-        <header className="border-b bg-background/95 backdrop-blur sticky top-0 z-10">
-          <div className="container mx-auto px-4 py-3">
-            <Button
-              variant="ghost"
-              onClick={() => router.push("/dashboard")}
-              size="sm"
-            >
-              <ArrowLeft className="h-4 w-4 mr-2" />
-              Back to Dashboard
-            </Button>
-          </div>
-        </header>
+        <AppHeader className="sticky top-0 z-10" />
 
-        {/* Split Layout */}
-        <div className="flex h-[calc(100vh-57px)]">
-          {/* Left Sidebar - 30% */}
-          <aside className="w-[30%] border-r overflow-y-auto p-4 space-y-4">
+        {/* Split layout: stacked on small screens, sidebar + content from lg up */}
+        <div className="flex-1 min-h-0 flex flex-col lg:flex-row">
+          {/* Sidebar */}
+          <aside className="lg:w-[30%] lg:max-w-md border-b lg:border-b-0 lg:border-r lg:overflow-y-auto p-4 space-y-4">
             {/* Job Header */}
             <div>
               <div className="flex items-center gap-3 mb-2">
@@ -377,15 +463,23 @@ export default function JobStatusPage({ params }: PageProps) {
                   </p>
                 </div>
               </div>
-              <Badge
-                variant="outline"
-                className={getStatusColor(status?.status)}
-              >
-                {status?.status}
-              </Badge>
+              <div className="flex flex-wrap gap-2">
+                <Badge
+                  variant="outline"
+                  className={getStatusColor(status?.status)}
+                >
+                  {status?.status}
+                </Badge>
+                {metadata && (
+                  <Badge variant="secondary">
+                    {isTranscript ? "Transcription" : "Document"}
+                  </Badge>
+                )}
+              </div>
             </div>
 
-            {/* Progress Section */}
+            {/* Progress Section: hidden once a job without pages is done */}
+            {(status.status !== "completed" || hasPages) && (
             <Card>
               <CardHeader className="pb-3">
                 <CardTitle className="text-base">Progress</CardTitle>
@@ -402,6 +496,12 @@ export default function JobStatusPage({ params }: PageProps) {
                       style={{ width: `${status?.progress || 0}%` }}
                     />
                   </div>
+                  {transcriptionProgress(status) && (
+                    <p className="text-xs text-muted-foreground mt-2">{transcriptionProgress(status)}</p>
+                  )}
+                  {queueReasonText(status) && (
+                    <p className="text-xs text-muted-foreground mt-2" role="status">{queueReasonText(status)}</p>
+                  )}
                 </div>
 
                 {status?.total_pages && status.total_pages > 0 && (
@@ -434,6 +534,7 @@ export default function JobStatusPage({ params }: PageProps) {
                 )}
               </CardContent>
             </Card>
+            )}
 
             {/* Job Details */}
             <Card>
@@ -441,13 +542,39 @@ export default function JobStatusPage({ params }: PageProps) {
                 <CardTitle className="text-base">Details</CardTitle>
               </CardHeader>
               <CardContent className="space-y-3 text-sm">
-                <div className="flex items-start gap-2">
-                  <File className="h-4 w-4 text-muted-foreground mt-0.5" />
-                  <div className="flex-1 min-w-0">
-                    <p className="text-muted-foreground">Type</p>
-                    <p className="font-medium capitalize">{status?.type || "Unknown"}</p>
+                {metadata && (
+                  <div className="grid grid-cols-2 gap-3 pb-3 border-b">
+                    <DetailItem icon={isTranscript ? Mic : File} label="Format" value={metadata.format.toUpperCase()} />
+                    <DetailItem icon={HardDrive} label="Size" value={formatBytes(metadata.size_bytes)} />
+                    {metadata.duration != null && (
+                      <DetailItem icon={Timer} label="Duration" value={formatDuration(metadata.duration)} />
+                    )}
+                    {metadata.language && (
+                      <DetailItem icon={Languages} label="Language" value={metadata.language.toUpperCase()} />
+                    )}
+                    {metadata.pages != null && (
+                      <DetailItem icon={Layers} label="Pages" value={String(metadata.pages)} />
+                    )}
+                    {metadata.words != null && (
+                      <DetailItem icon={FileText} label="Words" value={metadata.words.toLocaleString()} />
+                    )}
+                    {metadata.device && (
+                      <DetailItem
+                        icon={Cpu}
+                        label="Ran on"
+                        value={metadata.device === "cuda" ? "GPU" : metadata.device === "cpu" ? "CPU" : metadata.device}
+                      />
+                    )}
                   </div>
-                </div>
+                )}
+
+                {engineKindLabel(status) && (
+                  <DetailItem
+                    icon={status.engine?.kind === "cloud" ? Cloud : Server}
+                    label={status.status === "completed" ? "Ran on" : "Runs on"}
+                    value={engineKindLabel(status)!}
+                  />
+                )}
 
                 <div className="flex items-start gap-2">
                   <Calendar className="h-4 w-4 text-muted-foreground mt-0.5" />
@@ -455,7 +582,7 @@ export default function JobStatusPage({ params }: PageProps) {
                     <p className="text-muted-foreground">Created</p>
                     <p className="font-medium">
                       {status?.created_at
-                        ? formatDistanceToNow(new Date(status.created_at), {
+                        ? formatDistanceToNow(parseApiDate(status.created_at), {
                             addSuffix: true,
                           })
                         : "-"}
@@ -469,7 +596,7 @@ export default function JobStatusPage({ params }: PageProps) {
                     <div className="flex-1 min-w-0">
                       <p className="text-muted-foreground">Started</p>
                       <p className="font-medium">
-                        {formatDistanceToNow(new Date(status.started_at), {
+                        {formatDistanceToNow(parseApiDate(status.started_at), {
                           addSuffix: true,
                         })}
                       </p>
@@ -483,7 +610,7 @@ export default function JobStatusPage({ params }: PageProps) {
                     <div className="flex-1 min-w-0">
                       <p className="text-muted-foreground">Completed</p>
                       <p className="font-medium">
-                        {formatDistanceToNow(new Date(status.completed_at), {
+                        {formatDistanceToNow(parseApiDate(status.completed_at), {
                           addSuffix: true,
                         })}
                       </p>
@@ -514,6 +641,8 @@ export default function JobStatusPage({ params }: PageProps) {
               </CardContent>
             </Card>
 
+            <JobTagsCard jobId={resolvedParams.id} tags={status.tags ?? []} />
+
             {/* Error Section */}
             {status?.error && (
               <Card className="border-destructive/50">
@@ -531,14 +660,6 @@ export default function JobStatusPage({ params }: PageProps) {
 
             {/* Actions */}
             <div className="space-y-2">
-              {status?.status === "completed" && (
-                <>
-                  <Button onClick={downloadMarkdown} className="w-full" size="sm">
-                    <Download className="h-4 w-4 mr-2" />
-                    Download Markdown
-                  </Button>
-                </>
-              )}
               <Button
                 variant="destructive"
                 className="w-full"
@@ -711,8 +832,8 @@ export default function JobStatusPage({ params }: PageProps) {
             )}
           </aside>
 
-          {/* Right Panel - 70% - Content Display */}
-          <main className="w-[70%] overflow-hidden flex flex-col">
+          {/* Content */}
+          <main className="flex-1 min-w-0 min-h-[70vh] lg:min-h-0 overflow-hidden flex flex-col">
             {selectedPage ? (
               selectedPage.status === "failed" ? (
                 // Failed page error display
@@ -776,11 +897,17 @@ export default function JobStatusPage({ params }: PageProps) {
                 // Completed page content display
                 <div className="flex-1 flex flex-col overflow-hidden p-6">
                   <div className="mb-4 flex items-center justify-between">
-                    <div>
-                      <h2 className="text-xl font-semibold">Page {selectedPage.page_number}</h2>
-                      <p className="text-sm text-muted-foreground">
-                        View content in PDF or Markdown format
-                      </p>
+                    <div className="flex items-center gap-3">
+                      <Button variant="ghost" size="sm" onClick={() => setSelectedPage(null)}>
+                        <ArrowLeft className="h-4 w-4 mr-2" />
+                        Full document
+                      </Button>
+                      <div>
+                        <h2 className="text-xl font-semibold">Page {selectedPage.page_number}</h2>
+                        <p className="text-sm text-muted-foreground">
+                          View content in PDF or Markdown format
+                        </p>
+                      </div>
                     </div>
                     {selectedPage.retry_count > 0 && (
                       <Badge variant="secondary">
@@ -789,7 +916,7 @@ export default function JobStatusPage({ params }: PageProps) {
                     )}
                   </div>
 
-                  <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as "pdf" | "markdown")} className="flex-1 flex flex-col overflow-hidden">
+                  <Tabs value={activeTab} onValueChange={handleTabChange} className="flex-1 flex flex-col overflow-hidden">
                     <TabsList className="grid w-full max-w-md grid-cols-2">
                       <TabsTrigger value="pdf">PDF Preview</TabsTrigger>
                       <TabsTrigger value="markdown">Markdown</TabsTrigger>
@@ -797,25 +924,29 @@ export default function JobStatusPage({ params }: PageProps) {
 
                     <TabsContent value="pdf" className="flex-1 overflow-hidden mt-4">
                       <div className="h-full overflow-y-auto border rounded-lg bg-muted/30 p-4">
-                        {pdfUrl ? (
+                        {pdfError || isPdfUrlError ? (
+                          <div className="text-center py-12">
+                            <AlertCircle className="h-12 w-12 text-destructive mx-auto mb-4" />
+                            <p className="text-sm text-muted-foreground">
+                              {pdfError || "Failed to load PDF. Please try again."}
+                            </p>
+                          </div>
+                        ) : !pdfUrl && (isFetchingPdfUrl || !pdfUrlData) ? (
+                          <div className="py-12 flex items-center justify-center">
+                            <Loader2 className="h-8 w-8 animate-spin text-primary" />
+                          </div>
+                        ) : pdfUrl ? (
                           <div className="flex flex-col items-center">
-                            {pdfError ? (
-                              <div className="text-center py-12">
-                                <AlertCircle className="h-12 w-12 text-destructive mx-auto mb-4" />
-                                <p className="text-sm text-muted-foreground">{pdfError}</p>
-                              </div>
-                            ) : (
-                              <PdfViewer
-                                file={pdfUrl}
-                                onLoadSuccess={onDocumentLoadSuccess}
-                                onLoadError={onDocumentLoadError}
-                                pageNumber={1}
-                                renderTextLayer={true}
-                                renderAnnotationLayer={true}
-                                className="mx-auto"
-                                width={typeof window !== 'undefined' ? Math.min(900, window.innerWidth * 0.6) : 900}
-                              />
-                            )}
+                            <PdfViewer
+                              file={pdfUrl}
+                              onLoadSuccess={onDocumentLoadSuccess}
+                              onLoadError={onDocumentLoadError}
+                              pageNumber={1}
+                              renderTextLayer={true}
+                              renderAnnotationLayer={true}
+                              className="mx-auto"
+                              width={typeof window !== 'undefined' ? Math.min(900, window.innerWidth * 0.6) : 900}
+                            />
                           </div>
                         ) : (
                           <div className="text-center py-12">
@@ -867,16 +998,15 @@ export default function JobStatusPage({ params }: PageProps) {
                 </div>
               )
             ) : (
-              // No page selected - show placeholder
-              <div className="flex-1 flex flex-col items-center justify-center p-8 text-center">
-                <FileText className="h-16 w-16 text-muted-foreground mb-4" />
-                <h3 className="text-lg font-semibold mb-2">No Page Selected</h3>
-                <p className="text-sm text-muted-foreground max-w-md">
-                  {pages.length > 0
-                    ? "Select a page from the sidebar to view its content"
-                    : "No pages available for this job yet"}
-                </p>
-              </div>
+              // No page selected: the job's own result
+              <JobResultPanel
+                status={status}
+                result={result}
+                isTranscript={isTranscript}
+                hasPages={hasPages}
+                fileName={fileName}
+                token={token}
+              />
             )}
           </main>
         </div>
@@ -918,5 +1048,118 @@ export default function JobStatusPage({ params }: PageProps) {
         </AlertDialog>
       </div>
     </TooltipProvider>
+  );
+}
+
+function DetailItem({
+  icon: Icon,
+  label,
+  value,
+}: {
+  icon: React.ComponentType<{ className?: string }>;
+  label: string;
+  value: string;
+}) {
+  return (
+    <div className="flex items-start gap-2 min-w-0">
+      <Icon className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
+      <div className="min-w-0">
+        <p className="text-muted-foreground text-xs">{label}</p>
+        <p className="font-medium truncate">{value}</p>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * What the main panel shows when no PDF page is selected: progress while the
+ * job runs, the error if it failed, otherwise the result in the view that fits
+ * it - a transcript for audio/video, rendered Markdown for documents.
+ */
+function JobResultPanel({
+  status,
+  result,
+  isTranscript,
+  hasPages,
+  fileName,
+  token,
+}: {
+  status: JobStatusResponse;
+  result?: JobResultResponse;
+  isTranscript: boolean;
+  hasPages: boolean;
+  fileName: string;
+  token: string | null;
+}) {
+  const { segments: liveSegments, preloaded: livePreloaded } = useLiveTranscript(
+    status.job_id,
+    status.status === "processing"
+  );
+  if (status.status === "failed") {
+    return (
+      <div className="flex-1 flex flex-col items-center justify-center p-8 text-center">
+        <XCircle className="h-16 w-16 text-destructive mb-4" />
+        <h3 className="text-lg font-semibold mb-2">Processing failed</h3>
+        <p className="text-sm text-muted-foreground max-w-md break-words">
+          {status.error || "An unknown error occurred"}
+        </p>
+      </div>
+    );
+  }
+
+  // faster-whisper reports media time and streams its text: show the captions as they come
+  if (status.status === "processing" && (status.media_duration || liveSegments.length > 0)) {
+    return <LiveTranscriptView status={status} segments={liveSegments} preloaded={livePreloaded} />;
+  }
+
+  if (status.status !== "completed") {
+    return (
+      <div className="flex-1 flex flex-col items-center justify-center p-8 text-center">
+        <Loader2 className="h-12 w-12 text-primary animate-spin mb-4" />
+        <h3 className="text-lg font-semibold mb-1">
+          {status.status === "processing" ? "Processing…" : "Waiting in the queue…"}
+        </h3>
+        <p className="text-sm text-muted-foreground">
+          {status.progress}% — the result shows up here as soon as it is ready.
+        </p>
+        {transcriptionProgress(status) && (
+          <p className="text-sm text-muted-foreground mt-1">{transcriptionProgress(status)}</p>
+        )}
+        {queueReasonText(status) && (
+          <p className="text-sm text-muted-foreground mt-1">{queueReasonText(status)}</p>
+        )}
+      </div>
+    );
+  }
+
+  if (!result) {
+    return (
+      <div className="flex-1 flex items-center justify-center">
+        <Loader2 className="h-8 w-8 animate-spin text-primary" />
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex-1 overflow-y-auto p-4 md:p-6 space-y-4">
+      <div>
+        <h2 className="text-xl font-semibold">{isTranscript ? "Transcription" : "Converted document"}</h2>
+        {hasPages && (
+          <p className="text-sm text-muted-foreground">
+            All pages merged. Select a page in the sidebar to see its PDF next to its text.
+          </p>
+        )}
+      </div>
+      {isTranscript ? (
+        <TranscriptView
+          jobId={status.job_id}
+          markdown={result.result.markdown}
+          fileName={fileName}
+          token={token}
+        />
+      ) : (
+        <DocumentView markdown={result.result.markdown} fileName={fileName} />
+      )}
+    </div>
   );
 }

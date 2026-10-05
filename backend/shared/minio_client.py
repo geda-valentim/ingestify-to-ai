@@ -1,12 +1,20 @@
 import io
 import logging
-from typing import Optional, BinaryIO
+from typing import Dict, Optional, BinaryIO, Tuple
 from datetime import timedelta
 from minio import Minio
 from minio.error import S3Error
 from shared.config import get_settings
 
 logger = logging.getLogger(__name__)
+
+# Porta em que o MinIO publica a API S3. Usada apenas quando o endpoint público
+# não está configurado e precisamos derivá-lo do host da requisição.
+MINIO_API_PORT = 9000
+
+# Região assumida quando o servidor não informa nenhuma. É o default do MinIO e
+# entra no cálculo da assinatura das URLs pré-assinadas.
+DEFAULT_REGION = "us-east-1"
 
 
 class MinIOClient:
@@ -37,6 +45,10 @@ class MinIOClient:
         self.bucket_audio = settings.minio_bucket_audio
         self.bucket_results = settings.minio_bucket_results
         self.bucket_crawled = settings.minio_bucket_crawled
+
+        # Clientes usados apenas para assinar URLs para o navegador, indexados
+        # por (endpoint, região). Ver `get_presigned_url`.
+        self._signing_clients: Dict[Tuple[str, str], Minio] = {}
 
         # Initialize buckets on startup
         self._ensure_buckets_exist()
@@ -277,30 +289,129 @@ class MinIOClient:
         except S3Error:
             return False
 
+    def browser_endpoint(self, request_host: Optional[str] = None) -> str:
+        """
+        Endereço do MinIO **do ponto de vista do navegador**.
+
+        Isto não é um detalhe cosmético: a assinatura SigV4 de uma URL
+        pré-assinada cobre o header `Host`. Se a URL for assinada para o
+        endpoint interno (`minio:9000`) e o navegador buscá-la em outro host, a
+        assinatura não confere e o MinIO responde 403 em todo PDF.
+
+        Precedência:
+        1. `MINIO_PUBLIC_ENDPOINT`, quando definido explicitamente no ambiente.
+           É o único valor correto atrás de proxy reverso, com TLS ou em porta
+           diferente da 9000, e por isso ganha de tudo.
+        2. O host da requisição com a porta da API S3 (mesmo comportamento
+           dinâmico do antigo `get_public_url`): serve o acesso por IP de LAN
+           (`http://192.168.1.10:3000` -> `192.168.1.10:9000`) sem configuração.
+        3. O default do settings (`127.0.0.1:9000`), que cobre tanto o
+           docker-compose (a porta 9000 é publicada no host) quanto o
+           `run_api.sh` local.
+        """
+        settings = get_settings()
+
+        configured = (settings.minio_public_endpoint or "").strip()
+        # `model_fields_set` distingue "veio do ambiente" de "é o default do
+        # settings"; o `configured` extra tolera a variável presente e vazia
+        # (docker-compose repassa `MINIO_PUBLIC_ENDPOINT=${...:-}`).
+        if configured and "minio_public_endpoint" in settings.model_fields_set:
+            return configured
+
+        if request_host:
+            host_without_port = request_host.split(":")[0]
+            if host_without_port:
+                return f"{host_without_port}:{MINIO_API_PORT}"
+
+        return settings.minio_public_endpoint
+
+    def _bucket_region(self, bucket_name: str) -> str:
+        """
+        Região usada para assinar. Vem do servidor (via o cliente interno, que é
+        o único garantidamente acessível a partir da API) e é cacheada pelo
+        próprio SDK. Em caso de dúvida, o default do MinIO.
+        """
+        try:
+            return self.client._get_region(bucket_name) or DEFAULT_REGION
+        except Exception as e:  # pragma: no cover - depende de MinIO ao vivo
+            logger.warning(
+                f"Could not determine region for bucket {bucket_name}, "
+                f"falling back to {DEFAULT_REGION}: {e}"
+            )
+            return DEFAULT_REGION
+
+    def _client_for_signing(self, endpoint: str, bucket_name: str) -> Minio:
+        """
+        Cliente cujo endpoint é o que o navegador vai usar.
+
+        `region` é passada explicitamente de propósito: sem ela o SDK faria um
+        `GetBucketLocation` contra este endpoint, que pode não ser alcançável a
+        partir do servidor (ex.: `127.0.0.1:9000` dentro do container da API).
+        """
+        settings = get_settings()
+
+        # Endpoint interno == endpoint do navegador (caso do run_api.sh local e
+        # dos testes): reaproveita o cliente principal, sem cliente extra.
+        if endpoint == settings.minio_endpoint:
+            return self.client
+
+        region = self._bucket_region(bucket_name)
+        cache_key = (endpoint, region)
+        client = self._signing_clients.get(cache_key)
+        if client is None:
+            client = Minio(
+                endpoint=endpoint,
+                access_key=settings.minio_access_key,
+                secret_key=settings.minio_secret_key,
+                secure=settings.minio_secure,
+                region=region,
+            )
+            self._signing_clients[cache_key] = client
+            logger.info(f"Created MinIO signing client for endpoint {endpoint} (region {region})")
+
+        return client
+
     def get_presigned_url(
         self,
         bucket_name: str,
         object_name: str,
         expires: timedelta = timedelta(hours=1),
+        request_host: Optional[str] = None,
     ) -> str:
         """
         Generate a presigned URL for temporary access to a file
+
+        A URL é assinada para o endpoint que o **navegador** vai usar (ver
+        `browser_endpoint`), e não para o endpoint interno do MinIO.
 
         Args:
             bucket_name: Name of the bucket
             object_name: Object name in MinIO
             expires: Expiration time (default: 1 hour)
+            request_host: Host da requisição HTTP (header `Host`), usado para
+                derivar o endpoint público quando `MINIO_PUBLIC_ENDPOINT` não
+                está configurado.
 
         Returns:
             str: Presigned URL
+
+        Notas para quem consome:
+            - A query string faz parte da assinatura. Acrescentar qualquer
+              parâmetro (um cache-buster `?t=...`, por exemplo) invalida a URL.
         """
+        endpoint = self.browser_endpoint(request_host)
+
         try:
-            url = self.client.presigned_get_object(
+            client = self._client_for_signing(endpoint, bucket_name)
+            url = client.presigned_get_object(
                 bucket_name=bucket_name,
                 object_name=object_name,
                 expires=expires,
             )
-            logger.info(f"Generated presigned URL: {bucket_name}/{object_name}")
+            logger.info(
+                f"Generated presigned URL for {bucket_name}/{object_name} "
+                f"(endpoint {endpoint}, expires in {int(expires.total_seconds())}s)"
+            )
             return url
         except S3Error as e:
             logger.error(f"Failed to generate presigned URL: {e}")

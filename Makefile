@@ -1,4 +1,4 @@
-.PHONY: help ensure-jwt-secret start stop restart logs status clean infra-start infra-stop infra-status ps build rebuild dev prod scale test check-services check-redis check-mysql check-elasticsearch check-minio smart-start validate
+.PHONY: help ensure-jwt-secret start stop restart logs status clean infra-start infra-stop infra-status ps build rebuild dev prod scale test check-services check-redis check-mysql check-elasticsearch check-minio smart-start validate gpu gpu-build gpu-check vision-download logs-vision shell-vision
 
 # Default target
 .DEFAULT_GOAL := help
@@ -48,6 +48,12 @@ help: ## Show this help message
 	@echo "  make infra-start    # Start shared infrastructure"
 	@echo "  make logs           # View all logs"
 	@echo "  make scale n=10     # Scale workers to 10 replicas"
+	@echo ""
+	@echo "$(YELLOW)GPU (opt-in - the default build is CPU-only):$(NC)"
+	@echo "  make gpu-check      # Check driver + nvidia-container-toolkit"
+	@echo "  make gpu            # Start with CUDA for the vision worker"
+	@echo "  make vision-download# Pre-fetch the Florence-2 weights"
+	@echo "  See docs/GPU.md"
 	@echo ""
 
 # ======================================
@@ -190,12 +196,60 @@ ps: ## Show running containers
 	@docker compose ps
 	@echo ""
 
-build: ## Build all services without starting
-	@echo "$(YELLOW)🔨 Building services...$(NC)"
-	@docker compose build
+build: ## Build all services without starting (CPU-only, no CUDA wheels)
+	@echo "$(YELLOW)🔨 Building services (CPU)...$(NC)"
+	@DOCKER_BUILDKIT=1 docker compose build
 
 rebuild: ## Rebuild and restart all services
 	@./rebuild.sh
+
+# ======================================
+# GPU COMMANDS (opt-in - see docs/GPU.md)
+# ======================================
+GPU_COMPOSE := -f docker-compose.yml -f docker-compose.gpu.yml $(if $(wildcard docker-compose.override.yml),-f docker-compose.override.yml)
+
+gpu-check: ## Check the host is ready to run the GPU stack
+	@echo ""
+	@echo "$(CYAN)=== NVIDIA GPU Readiness ===$(NC)"
+	@printf "$(CYAN)NVIDIA driver (nvidia-smi)...$(NC) "
+	@if nvidia-smi -L >/dev/null 2>&1; then \
+		echo "$(GREEN)✓$(NC)"; nvidia-smi -L | sed 's/^/    /'; \
+	else \
+		echo "$(RED)✗ not found - install the NVIDIA driver$(NC)"; \
+	fi
+	@printf "$(CYAN)Container toolkit (nvidia-ctk)...$(NC) "
+	@if command -v nvidia-ctk >/dev/null 2>&1; then \
+		echo "$(GREEN)✓$(NC)"; \
+	else \
+		echo "$(RED)✗ install nvidia-container-toolkit$(NC)"; \
+	fi
+	@printf "$(CYAN)Docker nvidia runtime...$(NC) "
+	@if docker info 2>/dev/null | grep -q nvidia; then \
+		echo "$(GREEN)✓$(NC)"; \
+	else \
+		echo "$(RED)✗ run: sudo nvidia-ctk runtime configure --runtime=docker && sudo systemctl restart docker$(NC)"; \
+	fi
+	@echo ""
+
+gpu-build: gpu-check ## Build the GPU images (pulls ~2.5GB of CUDA wheels)
+	@echo "$(YELLOW)🔨 Building GPU images (CUDA)...$(NC)"
+	@DOCKER_BUILDKIT=1 docker compose $(GPU_COMPOSE) build
+
+gpu: gpu-check ## Start the stack with GPU acceleration (docling, whisper and vision on CUDA)
+	@echo "$(CYAN)🚀 Starting with GPU (docling, whisper and vision on CUDA)...$(NC)"
+	@DOCKER_BUILDKIT=1 docker compose $(GPU_COMPOSE) up -d --build
+	@echo "$(GREEN)✅ GPU stack started. Verify with: make logs-vision$(NC)"
+
+vision-download: ## Pre-download the Florence-2 weights into the shared cache
+	@echo "$(CYAN)⬇️  Pre-downloading vision model weights...$(NC)"
+	@if docker compose ps --status running --services 2>/dev/null | grep -qx worker-vision; then \
+		echo "$(CYAN)   (inside the worker-vision container)$(NC)"; \
+		docker compose exec -T worker-vision python -m workers.vision.download; \
+	else \
+		echo "$(CYAN)   (locally - worker-vision container is not running)$(NC)"; \
+		cd backend && python -m workers.vision.download; \
+	fi
+	@echo "$(GREEN)✅ Weights cached$(NC)"
 
 # ======================================
 # INFRASTRUCTURE COMMANDS
@@ -207,7 +261,7 @@ infra-start: ## Start shared infrastructure (Redis, MinIO, Elasticsearch)
 	@echo "$(GREEN)✅ Shared infrastructure started!$(NC)"
 	@echo "   Redis:         localhost:6379"
 	@echo "   MinIO:         http://localhost:9000"
-	@echo "   MinIO UI:      http://localhost:9001 (minioadmin/minioadmin)"
+	@echo "   MinIO UI:      http://localhost:9001 (credentials: MINIO_ROOT_USER / MINIO_ROOT_PASSWORD in .env)"
 	@echo "   Elasticsearch: http://localhost:9200"
 	@echo ""
 
@@ -249,9 +303,19 @@ scale: ensure-jwt-secret ## Scale workers (usage: make scale n=10)
 # ======================================
 # TESTING COMMANDS
 # ======================================
-test: ## Run backend tests
+test: ## Run backend unit tests (in the api container if running, else locally)
 	@echo "$(CYAN)🧪 Running tests...$(NC)"
-	@docker compose exec api pytest tests/ -v
+	@if docker compose ps --status running --services 2>/dev/null | grep -qx api; then \
+		echo "$(CYAN)   (inside the api container)$(NC)"; \
+		docker compose exec -T api pytest tests/ -v; \
+	else \
+		echo "$(CYAN)   (locally - api container is not running)$(NC)"; \
+		cd backend && python -m pytest tests/ -v; \
+	fi
+
+test-local: ## Run backend unit tests on the host (no Docker)
+	@echo "$(CYAN)🧪 Running tests locally...$(NC)"
+	@cd backend && python -m pytest tests/ -v
 
 test-api: ## Test API health
 	@echo "$(CYAN)🔍 Testing API...$(NC)"
@@ -286,6 +350,9 @@ logs-api: ## View API logs
 logs-worker: ## View worker logs
 	@docker compose logs -f worker
 
+logs-vision: ## View vision worker logs (shows the resolved device on startup)
+	@docker compose logs -f worker-vision
+
 logs-beat: ## View beat logs
 	@docker compose logs -f beat
 
@@ -311,6 +378,9 @@ shell-api: ## Open shell in API container
 
 shell-worker: ## Open shell in worker container
 	@docker compose exec worker bash
+
+shell-vision: ## Open shell in the vision worker container
+	@docker compose exec worker-vision bash
 
 # ======================================
 # NETWORK & DIAGNOSTICS
