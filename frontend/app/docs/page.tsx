@@ -354,11 +354,14 @@ const COPY = {
   pt: {
     copy: "Copiar código",
     sidebarTitle: "Documentação da API",
-    comingSoon: "Conversão de documentos, páginas e busca: em breve.",
+    comingSoon: "Consulte o Swagger para a referência completa, incluindo busca.",
     sections: {
       intro: "Introdução",
       auth: "Autenticação",
       projects: "Projetos e pastas",
+      documents: "PDF e documentos",
+      pages: "Páginas de PDF",
+      images: "Imagens: descrição e OCR",
       transcribe: "Transcrição de áudio e vídeo",
       status: "Acompanhar o job",
       live: "Legendas ao vivo",
@@ -368,7 +371,8 @@ const COPY = {
     intro: (
       <P>
         A API do Ingestify é REST e assíncrona: você envia um arquivo, recebe um <C>job_id</C> na hora,
-        acompanha o processamento e depois baixa o resultado.
+        acompanha o processamento e depois baixa o resultado. As rotas de imagem esperam a inferência e
+        devolvem descrição ou OCR na mesma requisição, com um prazo de espera.
       </P>
     ),
     introRows: [
@@ -619,11 +623,14 @@ const COPY = {
   en: {
     copy: "Copy code",
     sidebarTitle: "API documentation",
-    comingSoon: "Document conversion, pages and search: coming soon.",
+    comingSoon: "See Swagger for the full reference, including search.",
     sections: {
       intro: "Introduction",
       auth: "Authentication",
       projects: "Projects and folders",
+      documents: "PDF and documents",
+      pages: "PDF pages",
+      images: "Images: description and OCR",
       transcribe: "Audio and video transcription",
       status: "Track the job",
       live: "Live transcript",
@@ -633,7 +640,8 @@ const COPY = {
     intro: (
       <P>
         The Ingestify API is REST and asynchronous: you upload a file, get a <C>job_id</C> right away, track
-        the processing and then download the result.
+        the processing and then download the result. Image routes wait for inference and return a
+        description or OCR in the same request, within a time budget.
       </P>
     ),
     introRows: [
@@ -886,6 +894,172 @@ const FORMAT_TYPES: [keyof typeof COPY.pt.formatsDesc, string][] = [
   ["json", "application/json"],
 ];
 
+const MEDIA_COPY = {
+  pt: {
+    docsIntro: "Converte PDFs e documentos em Markdown com Docling. /upload recebe um arquivo e devolve job_id imediatamente. /convert também recebe fontes externas; ambos usam multipart/form-data.",
+    fields: ["Campo", "Uso"],
+    docsRows: [
+      ["file", "Obrigatório no /upload; no /convert quando source_type=file. Até 50 MB por padrão (MAX_FILE_SIZE_MB)."],
+      ["project / project_id", "Projeto obrigatório, salvo API key vinculada. folder / folder_id são opcionais; veja Projetos e pastas."],
+      ["name / tags", "Nome opcional e tags separadas por vírgula. O padrão de name é o nome do arquivo."],
+      ["docling_preset", "Apenas /upload: fast (padrão), balanced ou quality. /convert usa as opções DOCLING_* do servidor."],
+      ["source_type / source", "No /convert: file + file; url + URL pública HTTP(S); gdrive + ID; dropbox + caminho."],
+      ["X-Source-Token", "Header obrigatório para gdrive e dropbox: token do provedor, separado da autenticação do Ingestify."],
+    ],
+    presetsTitle: "Escolher velocidade e OCR",
+    presetsHead: ["Preset", "OCR", "Imagens", "Tabelas", "Uso"],
+    presets: [["fast", "não", "não", "sim", "PDF digital"], ["balanced", "não", "sim", "sim", "PDF com figuras"], ["quality", "sim", "sim", "sim", "PDF escaneado; mais lento"]],
+    formats: "PDF, DOCX, HTML, PPTX e XLSX dependem do suporte da versão instalada do Docling. A API aceita o upload antes de validar a conversão: um arquivo incompatível termina com status failed. DOC/PPT/XLS legados, RTF e ODT não têm sucesso garantido.",
+    docsDuplicate: "O mesmo arquivo no mesmo projeto reaproveita um job que não esteja failed e adiciona as tags. A pasta do job existente é preservada; trocar o preset no reenvio não força outra conversão. Um arquivo em outro projeto é processado novamente.",
+    docsResult: "Consulte /jobs/{job_id} a cada poucos segundos e leia result.markdown de /jobs/{job_id}/result quando completed. Documentos não geram VTT/SRT. /result retorna 400 enquanto o job processa, 500 se falhou e 404 se o status/resultado expirou.",
+    example: "Exemplos de requisição",
+    resultExample: "Exemplo ilustrativo de resultado",
+    pagesIntro: "PDFs com duas ou mais páginas são divididos e convertidos em paralelo; o Markdown final reúne as páginas em ordem. Use o ID principal e números de página começando em 1. Um PDF de uma página é convertido inteiro e não tem jobs de página.",
+    pagesHead: ["Endpoint", "Uso"],
+    pagesRows: [
+      ["GET /jobs/{id}/pages", "Lista total_pages, pages_completed, pages_failed e pages[] com page_number, job_id, status, url, error_message e retry_count."],
+      ["GET /jobs/{id}/pages/{n}/status", "Status de uma página pelo número."],
+      ["GET /jobs/{id}/pages/{n}/result", "JSON com result.markdown de uma página concluída; não precisa aguardar o merge."],
+      ["GET /jobs/{id}/pages/{n}/pdf", "JSON com url assinada do PDF, expires_in=900 e expires_at; não devolve os bytes do PDF."],
+      ["POST /jobs/{id}/pages/{n}/retry", "Reprocessa uma página failed, até 3 tentativas manuais; guarde o novo page_job_id retornado."],
+    ],
+    pagesNote: "Antes do split, /pages pode responder 404; durante a criação, pages[] pode estar incompleto e job_id pode ser null. Consulte novamente. Páginas failed bloqueiam o merge até serem recuperadas. Todos os endpoints exigem autenticação e verificam o dono.",
+    pdfNote: "Abra a url assinada diretamente, sem Authorization ou X-API-Key. Ela vale por 15 minutos; peça outra quando expirar e preserve toda a query string. Não acrescente parâmetros à URL.",
+    engineNote: "O servidor pode rotear páginas por motores de execução quando configurado. Você continua usando os mesmos endpoints; presets e filas não são escolhidos por um parâmetro engine no upload.",
+    imagesIntro: "Florence-2 descreve imagens ou extrai texto com regiões (OCR). As quatro rotas de inferência criam um job e esperam o resultado na mesma requisição. O prazo padrão é 60 segundos; a task pode continuar até o seu limite de 120 segundos, configuráveis no servidor.",
+    imagesHead: ["Endpoint", "Entrada / saída"],
+    imagesRows: [
+      ["POST /images/describe/upload", "multipart: file, task opcional, tags, project/project_id e folder/folder_id. Retorna description e task."],
+      ["POST /images/describe", "JSON: image_base64, filename opcional, task, tags como lista e localização. Mesma resposta de descrição."],
+      ["POST /images/ocr/upload", "multipart: file, tags e localização. Retorna text e lines[]."],
+      ["POST /images/ocr", "JSON: image_base64, filename opcional, tags como lista e localização. Mesmo OCR; não recebe task."],
+      ["GET /images/capabilities", "Estado do worker: dependencies_installed, model_downloaded, model_loaded, device_resolved e reason. Exige autenticação; não inicia inferência."],
+    ],
+    imageOptions: "PNG, JPEG, WEBP, BMP, GIF e TIFF, detectados pelos bytes. Limite padrão: 10 MB de imagem decodificada e 50 milhões de pixels (VISION_MAX_IMAGE_SIZE_MB / VISION_MAX_IMAGE_PIXELS). Base64 aceita prefixo data:image/...;base64, e quebras de linha. O projeto é obrigatório pelas mesmas regras dos documentos; imagem repetida cria outro job.",
+    imageTasks: "task aceita apenas <CAPTION>, <DETAILED_CAPTION> e <MORE_DETAILED_CAPTION> (padrão, configurável por VISION_CAPTION_TASK). Não aceita um prompt livre. Em curl, use --form-string para esses valores: -F interpreta o caractere < como leitura de arquivo.",
+    imageResponse: "Sucesso (200): job_id, status=completed, project, folder, image_base64 (eco dos bytes originais), image_mime_type, image_bytes, image_sha256, width, height, model (model_id, revision, device, dtype) e duration_ms, além da descrição ou do OCR. duration_ms mede o processamento reportado pelo worker; não é o tempo total da requisição.",
+    ocrNote: "Cada linha tem text, quad_box=[x1,y1,x2,y2,x3,y3,x4,y4] e bbox=[x_min,y_min,x_max,y_max], em pixels da imagem original. Imagem sem texto retorna 200, text vazio e lines=[]. O exemplo abaixo mostra apenas os campos de OCR.",
+    timeoutTitle: "Timeout e limites atuais",
+    timeout: "Um 504 VISION_TIMEOUT traz detail.job_id, poll_url e result_url; a task continua. Consulte poll_url para o status e evite reenviar automaticamente. Limitação atual: /jobs/{id}/result exige Markdown, mas o resultado de visão não tem esse campo; após completar, essa recuperação pode falhar com 500. Salve a resposta de sucesso da própria chamada de imagem.",
+    retention: "O resultado de visão fica no Redis por RESULT_TTL_SECONDS (1 hora por padrão), sem persistência em Elasticsearch/MinIO. A imagem temporária é apagada pelo worker. O status de sucesso não é atualizado no MySQL; após expirar o cache, a listagem pode voltar a queued.",
+    imageErrors: "Erros de visão geralmente usam detail={error_code,message,job_id}; erros de autenticação e validação podem ter outro formato. 413: tamanho; 422: base64, formato, task, pixels ou localização inválidos; 503: visão desabilitada, worker/modelo indisponível ou motor sem vaga (VISION_ENGINE_UNAVAILABLE, com Retry-After). /capabilities também responde 503 se a visão estiver desabilitada.",
+  },
+  en: {
+    docsIntro: "Converts PDFs and documents to Markdown with Docling. /upload accepts a file and immediately returns job_id. /convert also accepts external sources; both use multipart/form-data.",
+    fields: ["Field", "Usage"],
+    docsRows: [
+      ["file", "Required on /upload; on /convert when source_type=file. Default limit: 50 MB (MAX_FILE_SIZE_MB)."],
+      ["project / project_id", "Required unless the API key is bound to a project. folder / folder_id are optional; see Projects and folders."],
+      ["name / tags", "Optional display name and comma-separated tags. name defaults to the file name."],
+      ["docling_preset", "/upload only: fast (default), balanced or quality. /convert uses the server's DOCLING_* settings."],
+      ["source_type / source", "On /convert: file + file; url + public HTTP(S) URL; gdrive + ID; dropbox + path."],
+      ["X-Source-Token", "Required header for gdrive and dropbox: the provider token, separate from Ingestify authentication."],
+    ],
+    presetsTitle: "Choosing speed and OCR",
+    presetsHead: ["Preset", "OCR", "Images", "Tables", "Usage"],
+    presets: [["fast", "no", "no", "yes", "Digital PDF"], ["balanced", "no", "yes", "yes", "PDF with figures"], ["quality", "yes", "yes", "yes", "Scanned PDF; slower"]],
+    formats: "PDF, DOCX, HTML, PPTX and XLSX depend on the installed Docling version. The API accepts the upload before validating conversion: an incompatible file ends with status failed. Legacy DOC/PPT/XLS, RTF and ODT are not guaranteed to convert.",
+    docsDuplicate: "The same file in the same project reuses a job that is not failed and adds the supplied tags. The existing job's folder is preserved; changing the preset on re-upload does not force conversion. Uploading to another project processes the file again.",
+    docsResult: "Poll /jobs/{job_id} every few seconds and read result.markdown from /jobs/{job_id}/result once completed. Documents do not produce VTT/SRT. /result returns 400 while processing, 500 on failure and 404 if the status/result has expired.",
+    example: "Request examples",
+    resultExample: "Illustrative result example",
+    pagesIntro: "PDFs with two or more pages are split and converted in parallel; the final Markdown joins them in order. Use the main job ID and page numbers starting at 1. A single-page PDF is converted as a whole and has no page jobs.",
+    pagesHead: ["Endpoint", "Usage"],
+    pagesRows: [
+      ["GET /jobs/{id}/pages", "Lists total_pages, pages_completed, pages_failed and pages[] with page_number, job_id, status, url, error_message and retry_count."],
+      ["GET /jobs/{id}/pages/{n}/status", "Page status by number."],
+      ["GET /jobs/{id}/pages/{n}/result", "JSON with result.markdown for a completed page; available before the merge."],
+      ["GET /jobs/{id}/pages/{n}/pdf", "JSON with a signed PDF url, expires_in=900 and expires_at; does not return PDF bytes."],
+      ["POST /jobs/{id}/pages/{n}/retry", "Retries a failed page, up to 3 manual attempts; save the new page_job_id returned."],
+    ],
+    pagesNote: "Before splitting, /pages may return 404; during creation, pages[] may be incomplete and job_id may be null. Poll again. Failed pages block the merge until recovered. Every endpoint requires authentication and checks ownership.",
+    pdfNote: "Open the signed url directly, without Authorization or X-API-Key. It lasts 15 minutes; request another after it expires and preserve its entire query string. Do not add URL parameters.",
+    engineNote: "The server may route pages through execution engines when configured. Use the same endpoints; an engine upload parameter does not select presets or queues.",
+    imagesIntro: "Florence-2 describes images or extracts text with regions (OCR). All four inference routes create a job and wait for its result in the same request. The default request budget is 60 seconds; the task may continue up to its 120-second limit, both configurable on the server.",
+    imagesHead: ["Endpoint", "Input / output"],
+    imagesRows: [
+      ["POST /images/describe/upload", "multipart: file, optional task, tags, project/project_id and folder/folder_id. Returns description and task."],
+      ["POST /images/describe", "JSON: image_base64, optional filename, task, tags as an array and location. Same description response."],
+      ["POST /images/ocr/upload", "multipart: file, tags and location. Returns text and lines[]."],
+      ["POST /images/ocr", "JSON: image_base64, optional filename, tags as an array and location. Same OCR; no task parameter."],
+      ["GET /images/capabilities", "Worker state: dependencies_installed, model_downloaded, model_loaded, device_resolved and reason. Authenticated; does not start inference."],
+    ],
+    imageOptions: "PNG, JPEG, WEBP, BMP, GIF and TIFF, detected from their bytes. Default limits: 10 MB of decoded image data and 50 million pixels (VISION_MAX_IMAGE_SIZE_MB / VISION_MAX_IMAGE_PIXELS). Base64 accepts a data:image/...;base64, prefix and line breaks. Projects follow the same requirements as documents; repeated images create new jobs.",
+    imageTasks: "task only accepts <CAPTION>, <DETAILED_CAPTION> and <MORE_DETAILED_CAPTION> (default, configurable via VISION_CAPTION_TASK). Arbitrary prompts are not accepted. In curl, use --form-string for these values: -F interprets < as reading a file.",
+    imageResponse: "Success (200): job_id, status=completed, project, folder, image_base64 (echo of the original bytes), image_mime_type, image_bytes, image_sha256, width, height, model (model_id, revision, device, dtype) and duration_ms, plus the description or OCR. duration_ms is processing time reported by the worker, not total request time.",
+    ocrNote: "Every line has text, quad_box=[x1,y1,x2,y2,x3,y3,x4,y4] and bbox=[x_min,y_min,x_max,y_max], in original image pixels. Images without text return 200 with empty text and lines=[]. The example below shows only OCR fields.",
+    timeoutTitle: "Timeout and current limitations",
+    timeout: "A 504 VISION_TIMEOUT includes detail.job_id, poll_url and result_url; the task continues. Poll poll_url for status and avoid automatically uploading again. Current limitation: /jobs/{id}/result requires Markdown, but the vision payload has no such field; recovery after completion may fail with 500. Save the successful response from the image request itself.",
+    retention: "Vision results live in Redis for RESULT_TTL_SECONDS (1 hour by default), without Elasticsearch/MinIO persistence. The worker deletes the temporary image. Success status is not updated in MySQL; once the cache expires, the job list may revert to queued.",
+    imageErrors: "Vision errors generally use detail={error_code,message,job_id}; authentication and validation errors may differ. 413: size; 422: invalid base64, format, task, pixels or location; 503: vision disabled, unavailable worker/model or no engine capacity (VISION_ENGINE_UNAVAILABLE, with Retry-After). /capabilities also returns 503 when vision is disabled.",
+  },
+};
+
+function MediaSections({ lang }: { lang: Lang }) {
+  const t = MEDIA_COPY[lang];
+  const pt = lang === "pt";
+  const block = (code: string) => <CodeBlock code={code} copyLabel={COPY[lang].copy} />;
+  const key = pt ? "SUA_CHAVE" : "YOUR_KEY";
+  const project = pt ? "Documentos" : "Documents";
+  const curl = (path: string, fields: string[], method = "POST") =>
+    [`curl -X ${method} "${API_URL}${path}"`, `  -H "X-API-Key: ${key}"`, ...fields]
+      .join(" \\\n");
+
+  return (
+    <>
+      <Section id="documentos" title={COPY[lang].sections.documents}>
+        <Endpoint method="POST" path="/upload" />
+        <Endpoint method="POST" path="/convert" />
+        <P>{t.docsIntro}</P>
+        <Table head={t.fields} rows={t.docsRows} />
+        <H3>{t.presetsTitle}</H3>
+        <Table head={t.presetsHead} rows={t.presets} />
+        <P small>{t.formats}</P>
+        <H3>{t.example}</H3>
+        {block(curl("/upload", [`  -F "file=@${pt ? "relatorio" : "report"}.pdf"`, `  -F "project=${project}"`, `  -F "folder=${pt ? "Contratos" : "Contracts"}"`, '  -F "docling_preset=quality"', '  -F "tags=pdf,ocr"']))}
+        {block(curl("/convert", ['  -F "source_type=url"', '  -F "source=https://example.com/document.pdf"', `  -F "project=${project}"`]))}
+        <P small>{t.docsDuplicate}</P>
+        <P>{t.docsResult}</P>
+        {block(curl(`/jobs/${EXAMPLE_JOB_ID}/result`, [], "GET"))}
+        <H3>{t.resultExample}</H3>
+        {block(JSON.stringify({ job_id: EXAMPLE_JOB_ID, type: "main", status: "completed", result: { markdown: "# Document\n\nContent...", metadata: { pages: 2, words: 120, format: "pdf", size_bytes: 0 } }, completed_at: "2026-10-05T12:00:00" }, null, 2))}
+      </Section>
+
+      <Section id="paginas-pdf" title={COPY[lang].sections.pages}>
+        <P>{t.pagesIntro}</P>
+        <Table head={t.pagesHead} rows={t.pagesRows} />
+        <P small>{t.pagesNote}</P>
+        {block(curl(`/jobs/${EXAMPLE_JOB_ID}/pages`, [], "GET"))}
+        {block(curl(`/jobs/${EXAMPLE_JOB_ID}/pages/1/result`, [], "GET"))}
+        {block(curl(`/jobs/${EXAMPLE_JOB_ID}/pages/1/pdf`, [], "GET"))}
+        <P small>{t.pdfNote}</P>
+        {block(curl(`/jobs/${EXAMPLE_JOB_ID}/pages/1/retry`, []))}
+        <P small>{t.engineNote}</P>
+      </Section>
+
+      <Section id="imagens" title={COPY[lang].sections.images}>
+        <P>{t.imagesIntro}</P>
+        <Table head={t.imagesHead} rows={t.imagesRows} />
+        <P small>{t.imageOptions}</P>
+        <P small>{t.imageTasks}</P>
+        <H3>{t.example}</H3>
+        {block(curl("/images/describe/upload", ['  -F "file=@photo.jpg"', `  -F "project=${project}"`, '  --form-string "task=<CAPTION>"']))}
+        {block(curl("/images/ocr/upload", ['  -F "file=@receipt.png"', `  -F "project=${project}"`, '  -F "tags=ocr"']))}
+        {block(`import base64\nimport requests\n\nwith open("receipt.png", "rb") as f:\n    image = base64.b64encode(f.read()).decode("ascii")\n\nr = requests.post(\n    "${API_URL}/images/ocr",\n    headers={"X-API-Key": "${key}"},\n    json={"image_base64": image, "filename": "receipt.png",\n          "project": "${project}", "tags": ["ocr"]},\n    timeout=75,\n)\nr.raise_for_status()\nprint(r.json()["text"])`)}
+        <P>{t.imageResponse}</P>
+        <P small>{t.ocrNote}</P>
+        {block(JSON.stringify({ text: "TOTAL 42.00", lines: [{ text: "TOTAL 42.00", quad_box: [12, 20, 180, 20, 180, 40, 12, 40], bbox: [12, 20, 180, 40] }] }, null, 2))}
+        <H3>{t.timeoutTitle}</H3>
+        <P>{t.timeout}</P>
+        {block(JSON.stringify({ detail: { error_code: "VISION_TIMEOUT", message: "O job continua processando.", job_id: EXAMPLE_JOB_ID, poll_url: `/jobs/${EXAMPLE_JOB_ID}`, result_url: `/jobs/${EXAMPLE_JOB_ID}/result` } }, null, 2))}
+        <P small>{t.retention}</P>
+        <P small>{t.imageErrors}</P>
+        {block(curl("/images/capabilities", [], "GET"))}
+      </Section>
+    </>
+  );
+}
+
 export default function DocsPage() {
   const [lang, setLang] = useState<Lang>("pt");
 
@@ -917,6 +1091,9 @@ export default function DocsPage() {
     { id: "introducao", label: t.sections.intro },
     { id: "autenticacao", label: t.sections.auth },
     { id: "projetos", label: t.sections.projects },
+    { id: "documentos", label: t.sections.documents },
+    { id: "paginas-pdf", label: t.sections.pages },
+    { id: "imagens", label: t.sections.images },
     { id: "transcribe", label: t.sections.transcribe },
     { id: "transcribe-status", label: t.sections.status },
     { id: "transcribe-live", label: t.sections.live },
@@ -987,6 +1164,8 @@ export default function DocsPage() {
               <H3>{t.projectsExampleTitle}</H3>
               {block(code.curlProject)}
             </Section>
+
+            <MediaSections lang={lang} />
 
             <Section id="transcribe" title={t.sections.transcribe}>
               <Endpoint method="POST" path="/transcribe" />
