@@ -162,6 +162,12 @@ function samples(lang: Lang) {
     curlStatus: `curl ${API_URL}/jobs/${EXAMPLE_JOB_ID} \\
   -H "X-API-Key: ${key}"`,
 
+    curlLive: `# ${pt ? "Primeira chamada: tudo o que já foi transcrito" : "First call: everything transcribed so far"}
+curl "${API_URL}/jobs/${EXAMPLE_JOB_ID}/transcript/partial" -H "X-API-Key: ${key}"
+
+# ${pt ? "Depois, só o que é novo: passe o next da resposta anterior" : "Then only what is new: pass the previous response's next"}
+curl "${API_URL}/jobs/${EXAMPLE_JOB_ID}/transcript/partial?since=2" -H "X-API-Key: ${key}"`,
+
     curlResult: `# ${pt ? "JSON com markdown + metadados" : "JSON with markdown + metadata"}
 curl "${API_URL}/jobs/${EXAMPLE_JOB_ID}/result" -H "X-API-Key: ${key}"
 
@@ -242,13 +248,24 @@ const RESPONSES = {
   status: `{
   "job_id": "${EXAMPLE_JOB_ID}",
   "type": "main",
-  "status": "completed",
-  "progress": 100,
+  "status": "processing",
+  "progress": 51,
+  "transcribed_seconds": 960.4,
+  "media_duration": 1821.0,
   "created_at": "2026-09-25T18:32:29",
   "started_at": "2026-09-25T18:32:38",
-  "completed_at": "2026-09-25T18:33:28",
+  "completed_at": null,
   "error": null,
   ...
+}`,
+  live: `{
+  "job_id": "${EXAMPLE_JOB_ID}",
+  "status": "processing",
+  "segments": [
+    { "start": 0.0, "end": 4.2, "text": "Olá, este é um teste da API de transcrição." },
+    { "start": 4.2, "end": 9.8, "text": "O áudio é enviado, entra na fila e o worker transcreve." }
+  ],
+  "next": 2
 }`,
   markdown: `{
   "job_id": "${EXAMPLE_JOB_ID}",
@@ -313,6 +330,7 @@ const COPY = {
       auth: "Autenticação",
       transcribe: "Transcrição de áudio e vídeo",
       status: "Acompanhar o job",
+      live: "Legendas ao vivo",
       result: "Baixar o resultado",
       errors: "Erros",
     },
@@ -438,6 +456,23 @@ const COPY = {
         de 0 a 100 e, se falhar, <C>error</C> explica o motivo.
       </P>
     ),
+    statusFields: (
+      <P small>
+        Durante a transcrição, <C>transcribed_seconds</C> de <C>media_duration</C> mostra até onde o áudio já foi
+        transcrito, em segundos. Quando o servidor distribui o trabalho entre motores (a GPU local e contas na
+        nuvem), o status também traz <C>engine.kind</C> (<C>local</C> ou <C>cloud</C>) e, enquanto espera,{" "}
+        <C>queue_reason</C> (<C>in_queue</C>: aguardando vaga; <C>starting</C>: a GPU na nuvem está ligando). Sem
+        esse roteamento configurado, os dois campos vêm <C>null</C>.
+      </P>
+    ),
+    liveIntro: (
+      <P>
+        Enquanto um job está em <C>processing</C>, o texto já transcrito pode ser lido por trechos, sem esperar o
+        fim. A resposta traz os segmentos a partir de <C>since</C> e, em <C>next</C>, o valor a passar na próxima
+        consulta, para receber só o que é novo. Quando o job termina a lista fica vazia: o texto completo está em{" "}
+        {JOB}.
+      </P>
+    ),
     statusNote: (
       <P small>
         Referência medida na GPU: um áudio de 10 segundos levou cerca de 1 minuto na primeira transcrição (o
@@ -462,8 +497,8 @@ const COPY = {
     },
     deviceNote: (
       <>
-        <C>metadata.device</C> diz onde a transcrição rodou: <C>cuda</C> (GPU), <C>cpu</C> ou <C>remote</C>{" "}
-        (provedor externo).
+        <C>metadata.device</C> diz onde a transcrição rodou: <C>cuda</C> (GPU deste servidor), <C>cpu</C>,{" "}
+        <C>modal:L4</C> (GPU na nuvem, com o tipo da placa) ou <C>remote</C> (API externa).
       </>
     ),
     wordsNote: (
@@ -498,6 +533,7 @@ const COPY = {
       auth: "Authentication",
       transcribe: "Audio and video transcription",
       status: "Track the job",
+      live: "Live transcript",
       result: "Download the result",
       errors: "Errors",
     },
@@ -622,6 +658,22 @@ const COPY = {
         and, on failure, <C>error</C> explains why.
       </P>
     ),
+    statusFields: (
+      <P small>
+        While transcribing, <C>transcribed_seconds</C> of <C>media_duration</C> shows how far into the audio the
+        transcription is, in seconds. When the server spreads work across engines (this server&apos;s GPU and cloud
+        accounts), the status also carries <C>engine.kind</C> (<C>local</C> or <C>cloud</C>) and, while it waits,{" "}
+        <C>queue_reason</C> (<C>in_queue</C>: waiting for a slot; <C>starting</C>: the cloud GPU is starting up).
+        Without that routing configured, both fields are <C>null</C>.
+      </P>
+    ),
+    liveIntro: (
+      <P>
+        While a job is <C>processing</C>, the text transcribed so far can be read in pieces, without waiting for the
+        end. The response carries the segments from <C>since</C> on and, in <C>next</C>, the value to pass on the
+        next call so you only get what is new. Once the job finishes the list is empty: the full text is at {JOB}.
+      </P>
+    ),
     statusNote: (
       <P small>
         Measured on the GPU: a 10-second clip took about 1 minute on the first transcription (the worker loads
@@ -645,8 +697,8 @@ const COPY = {
     },
     deviceNote: (
       <>
-        <C>metadata.device</C> tells where the transcription ran: <C>cuda</C> (GPU), <C>cpu</C> or{" "}
-        <C>remote</C> (external provider).
+        <C>metadata.device</C> tells where the transcription ran: <C>cuda</C> (this server&apos;s GPU),{" "}
+        <C>cpu</C>, <C>modal:L4</C> (a cloud GPU, with the card type) or <C>remote</C> (an external API).
       </>
     ),
     wordsNote: (
@@ -713,6 +765,7 @@ export default function DocsPage() {
     { id: "autenticacao", label: t.sections.auth },
     { id: "transcribe", label: t.sections.transcribe },
     { id: "transcribe-status", label: t.sections.status },
+    { id: "transcribe-live", label: t.sections.live },
     { id: "transcribe-result", label: t.sections.result },
     { id: "transcribe-erros", label: t.sections.errors },
   ];
@@ -808,7 +861,15 @@ export default function DocsPage() {
               {t.statusIntro}
               {block(code.curlStatus)}
               {block(RESPONSES.status)}
+              {t.statusFields}
               {t.statusNote}
+            </Section>
+
+            <Section id="transcribe-live" title={t.sections.live}>
+              <Endpoint method="GET" path="/jobs/{job_id}/transcript/partial?since=N" />
+              {t.liveIntro}
+              {block(code.curlLive)}
+              {block(RESPONSES.live)}
             </Section>
 
             <Section id="transcribe-result" title={t.sections.result}>
