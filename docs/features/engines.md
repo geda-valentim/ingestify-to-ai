@@ -67,9 +67,11 @@ contratados ou garantia de latência.
   uso; não há uma cópia global compartilhada entre réplicas. Mais workers podem consumir mais
   VRAM sem aumentar a vazão. O binding não escala os serviços nem aquece modelos.
 
-Nenhuma destas configurações implementa captura contínua de microfone. As legendas parciais
-abaixo pertencem a uma transcrição de **arquivo já enviado**. A captura em streaming está na
-[spec 0005](../specs/0005-transcricao-ao-vivo.md), ainda em revisão nesta verificação.
+As legendas parciais abaixo pertencem a uma transcrição de **arquivo já enviado**.
+A captura contínua de microfone foi implementada como piloto opt-in no
+[PR #22](https://github.com/geda-valentim/ingestify-to-ai/pull/22), com worker GPU e
+ativação separados. Ela permanece desabilitada por padrão; os critérios de produção da
+[spec 0005](../specs/0005-transcricao-ao-vivo.md) continuam pendentes.
 
 ## Diagnóstico rápido
 
