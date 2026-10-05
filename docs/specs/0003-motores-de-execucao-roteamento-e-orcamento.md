@@ -919,6 +919,15 @@ Cada item cabe num PR, na ordem. Fora das mudanças deliberadas de 0a/0b, zero-c
       sem rota continua em `process_page` (o shim), com rota vai a `convert_page_task` com
       `source_pdf_path`; (7) nenhuma coluna ou tabela nova.)
 
+**Teste de fila distribuída (2026-10-05, produção).** Rota temporária `transcription`: passo 1
+`local`, passo 2 `[modal_1..modal_4]` em `priority`, `remote_allowed_for=all` com teto de US$ 1
+por usuário. Seis trechos distintos de 4 min enviados ao mesmo tempo (seis cópias idênticas viram
+um job só: o upload é deduplicado por checksum). O despachante colocou 2 no `local` (as 2
+réplicas) e 1 em cada conta Modal; os 6 terminaram com sucesso, os remotos gravados como os locais
+(5 formatos, `device=modal:L4`). Remotos: 24,9–48,9 s ponta a ponta, execução 11,2–15,9 s, cold
+start 2,4–3,1 s, US$ 0,0059–0,0122 cada, US$ 0,034 no total; cada conta num container próprio. A
+rota foi removida em seguida; as 4 contas ficaram implantadas (protocolo 3) e ativas, sem rota.
+
 ## 9. Questões em aberto
 
 **Decisões do dono (2026-10-04), fechadas:** Q1 contas compartilhadas descartadas, o limite é
