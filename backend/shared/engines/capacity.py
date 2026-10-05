@@ -179,15 +179,22 @@ def _validate_modal(config: dict, by_feature: Dict[str, Binding], vision_model_i
     return uses
 
 
-def deploy_state(adapter_type: str, deployments: dict, feature: str, binding: Binding) -> str:
+def deploy_state(adapter_type: str, deployments: dict, feature: str, binding: Binding,
+                 expected_fingerprint: Optional[str] = None) -> str:
     """
     local: always runs what is configured. modal: the deployed app must match the
-    binding (GPU, workers, executions live in the function's decorator), so any
-    change waits for a deploy and the binding takes no new items meanwhile.
+    binding (GPU, workers, executions live in the function's decorator) and, when
+    the caller knows it, the fingerprint of the code and image a deploy would ship
+    now - so any change waits for a deploy and the binding takes no new items
+    meanwhile.
     """
     if adapter_type == "local":
         return "local"
     deployed = (deployments or {}).get(feature)
     if not deployed:
         return "not_deployed"
-    return "deployed" if deployed.get("binding") == binding.model_dump(exclude_none=True) else "needs_redeploy"
+    if deployed.get("binding") != binding.model_dump(exclude_none=True):
+        return "needs_redeploy"
+    if expected_fingerprint is not None and deployed.get("fingerprint") != expected_fingerprint:
+        return "needs_redeploy"
+    return "deployed"

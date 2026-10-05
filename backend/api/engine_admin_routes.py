@@ -1,6 +1,15 @@
 """
-Admin API for execution engines (spec 0003): read engines, GPUs and adapters;
-change capacity bindings and declared GPUs.
+Admin API for execution engines (spec 0003, Appendix B): read engines, GPUs and
+adapters; change capacity bindings and declared GPUs; and, from slice 4a, the
+lifecycle of a remote engine:
+
+    PUT    /admin/engines/{id}/credentials   seal new credentials (current_password; 409 without a public key)
+    DELETE /admin/engines/{id}/credentials   forget them (current_password); an active engine is paused
+    POST   /admin/engines/{id}/test          worker-remote checks them against the provider (<= 30 s, no GPU)
+    PUT    /admin/engines/{id}/budget        limit_usd, min_remaining_usd, soft_pct, period_tz, period_anchor_day
+    POST   /admin/engines/{id}/activate      needs a passing test, a budget, a verified deploy and E=1
+    POST   /admin/engines/{id}/pause         nothing new is placed; work in flight finishes
+    POST   /admin/engines/{id}/reset-health
 
 Reads need an admin; changes need an admin's login session (a JWT) - an API key
 is refused - and are audited. Nothing here ever returns a secret.
@@ -9,8 +18,11 @@ is refused - and are audited. Nothing here ever returns a secret.
 import logging
 from typing import Any, Dict, List, Optional
 
+from decimal import Decimal
+
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel
+from fastapi.concurrency import run_in_threadpool
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from api.admin_routes import require_admin
@@ -23,9 +35,12 @@ from shared.engines.capacity import (
 from shared.engines.features import FEATURES, default_vram_gb
 from shared.engines.gpus import DEFAULT_ACCOUNT_MAX_GPUS, DEFAULT_VRAM_RESERVE_GB, MODAL_GPUS, PRICES_AS_OF, PRICES_VERIFIED
 from shared.engines.liveness import alive
+from shared.auth import verify_password
+from shared.engines import store
 from shared.engines.store import VersionConflict, engine_view, set_binding, set_local_gpus
 from shared.models import Engine
 from shared.redis_client import get_redis_client
+from workers.engines.remote import expected_fingerprint as fingerprint_of
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -54,6 +69,15 @@ def _engine_or_404(db: Session, engine_id: str) -> Engine:
     if engine is None:
         raise HTTPException(status_code=404, detail="Engine not found")
     return engine
+
+
+def _view(db: Session, engine: Engine) -> Dict[str, Any]:
+    return engine_view(db, engine, alive_by_feature=_alive_by_feature(), vision_model_id=settings.vision_model_id,
+                       fingerprint_of=fingerprint_of)
+
+
+def _ip(request: Request) -> Optional[str]:
+    return request.client.host if request.client else None
 
 
 def _capacity_error(e: CapacityError) -> HTTPException:
@@ -97,13 +121,13 @@ async def list_engine_adapters(admin_user=Depends(require_admin)) -> List[Dict[s
 async def list_engines(admin_user=Depends(require_admin), db: Session = Depends(get_db)) -> List[Dict[str, Any]]:
     live = _alive_by_feature()
     engines = db.query(Engine).order_by(Engine.is_system.desc(), Engine.slug).all()
-    return [engine_view(db, e, alive_by_feature=live, vision_model_id=settings.vision_model_id) for e in engines]
+    return [engine_view(db, e, alive_by_feature=live, vision_model_id=settings.vision_model_id,
+                        fingerprint_of=fingerprint_of) for e in engines]
 
 
 @router.get("/engines/{engine_id}", summary="One engine")
 async def get_engine(engine_id: str, admin_user=Depends(require_admin), db: Session = Depends(get_db)) -> Dict[str, Any]:
-    return engine_view(db, _engine_or_404(db, engine_id), alive_by_feature=_alive_by_feature(),
-                       vision_model_id=settings.vision_model_id)
+    return _view(db, _engine_or_404(db, engine_id))
 
 
 @router.get("/gpus", summary="Physical GPUs: declared vs detected, VRAM budgeted and used")
@@ -161,12 +185,15 @@ async def put_engine_feature(engine_id: str, feature: str, body: BindingUpdate, 
                     vision_model_id=settings.vision_model_id)
     except VersionConflict as e:
         raise HTTPException(status_code=409, detail=str(e))
+    except store.RemoteCapacityError as e:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=str(e))
     except CapacityError as e:
         raise _capacity_error(e)
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
     logger.warning(f"[ADMIN] {admin_user.id} set {feature} capacity on engine {engine.slug}")
-    return engine_view(db, engine, alive_by_feature=_alive_by_feature(), vision_model_id=settings.vision_model_id)
+    return _view(db, engine)
 
 
 @router.delete("/engines/{engine_id}/features/{feature}", summary="Stop running a feature on an engine")
@@ -181,7 +208,7 @@ async def delete_engine_feature(engine_id: str, feature: str, request: Request, 
         raise HTTPException(status_code=409, detail=str(e))
     except (CapacityError, ValueError) as e:
         raise HTTPException(status_code=422, detail=str(e))
-    return engine_view(db, engine, alive_by_feature=_alive_by_feature(), vision_model_id=settings.vision_model_id)
+    return _view(db, engine)
 
 
 @router.put("/engines/{engine_id}/gpus", summary="Declare the local engine's physical GPUs")
@@ -196,4 +223,171 @@ async def put_engine_gpus(engine_id: str, body: GpusUpdate, request: Request,
         raise HTTPException(status_code=409, detail=str(e))
     except CapacityError as e:
         raise _capacity_error(e)
-    return engine_view(db, engine, alive_by_feature=_alive_by_feature(), vision_model_id=settings.vision_model_id)
+    return _view(db, engine)
+
+
+# --- lifecycle, budget and credentials (slice 4a) ---------------------------------------------
+
+
+class VersionBody(BaseModel):
+    version: Optional[int] = None
+
+
+class BudgetUpdate(BaseModel):
+    limit_usd: Optional[Decimal] = Field(None, gt=0, max_digits=12, decimal_places=6)
+    min_remaining_usd: Optional[Decimal] = Field(None, ge=0, max_digits=12, decimal_places=6)
+    soft_pct: Optional[int] = Field(None, ge=1, le=100)
+    period_tz: Optional[str] = Field(None, max_length=64)
+    period_anchor_day: Optional[int] = Field(None, ge=1, le=28)
+    version: Optional[int] = None
+
+
+class CredentialsUpdate(BaseModel):
+    fields: Dict[str, str]
+    current_password: str
+    version: Optional[int] = None
+
+
+class CredentialsDelete(BaseModel):
+    current_password: str
+    version: Optional[int] = None
+
+
+def _state_error(e: "store.EngineStateError") -> HTTPException:
+    detail = {"message": str(e), "problems": e.problems} if e.problems else str(e)
+    return HTTPException(status_code=e.status, detail=detail)
+
+
+def _require_password(admin_user, password: str) -> None:
+    if not password or not verify_password(password, admin_user.hashed_password):
+        raise HTTPException(status_code=403, detail="Changing engine credentials needs current_password")
+
+
+def _remote_worker_alive() -> bool:
+    try:
+        from shared.engines.liveness import remote_worker
+        return bool(remote_worker(get_redis_client().client))
+    except Exception:
+        return False
+
+
+def _send_test(engine_id: str, timeout: float = 30.0) -> Dict[str, Any]:
+    """Ask worker-remote (the only holder of the private keys) to test an engine, and wait for it"""
+    from workers.celery_app import celery_app
+
+    result = celery_app.send_task("workers.engines.remote_tasks.test_engine", args=[engine_id],
+                                  queue=settings.remote_ctl_queue, expires=timeout)
+    try:
+        return result.get(timeout=timeout, propagate=True)
+    finally:
+        result.forget()
+
+
+@router.post("/engines/{engine_id}/test", summary="Test an engine's credentials and deployment (no GPU)")
+async def test_engine(engine_id: str, request: Request, admin_user=Depends(require_admin_session),
+                      db: Session = Depends(get_db)) -> Dict[str, Any]:
+    engine = _engine_or_404(db, engine_id)
+    if engine.adapter_type == "local":
+        return {"ok": True, "code": None, "detail": "the local engine needs no connection test"}
+    if not engine.credentials_sealed:
+        raise HTTPException(status_code=409, detail="The engine has no credentials")
+    if not _remote_worker_alive():
+        raise HTTPException(status_code=409, detail="worker-remote is not running (docker compose --profile engines "
+                                                    "up -d worker-remote); only it can open credentials")
+    store.audit(db, actor_user_id=str(admin_user.id), auth_method="jwt", ip=_ip(request), action="engine.test",
+                engine=engine, before=None, after=None)
+    db.commit()
+    try:
+        report = await run_in_threadpool(_send_test, engine.id)
+    except Exception as e:
+        logger.warning(f"[ADMIN] Test of engine {engine.slug} did not answer: {type(e).__name__}")
+        raise HTTPException(status_code=504, detail="worker-remote did not answer within 30 s")
+    db.expire_all()
+    return {**report, "engine": _view(db, _engine_or_404(db, engine.id))}
+
+
+@router.post("/engines/{engine_id}/activate", summary="Let the dispatcher place work on an engine")
+async def activate_engine(engine_id: str, request: Request, body: Optional[VersionBody] = None,
+                          admin_user=Depends(require_admin_session), db: Session = Depends(get_db)) -> Dict[str, Any]:
+    engine = _engine_or_404(db, engine_id)
+    try:
+        store.set_status(db, engine, "active", version=body.version if body else None,
+                         actor_user_id=str(admin_user.id), auth_method="jwt", ip=_ip(request),
+                         fingerprint_of=fingerprint_of, vision_model_id=settings.vision_model_id)
+    except VersionConflict as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except store.EngineStateError as e:
+        raise _state_error(e)
+    logger.warning(f"[ADMIN] {admin_user.id} activated engine {engine.slug}")
+    return _view(db, engine)
+
+
+@router.post("/engines/{engine_id}/pause", summary="Stop placing new work on an engine (work in flight finishes)")
+async def pause_engine(engine_id: str, request: Request, body: Optional[VersionBody] = None,
+                       admin_user=Depends(require_admin_session), db: Session = Depends(get_db)) -> Dict[str, Any]:
+    engine = _engine_or_404(db, engine_id)
+    try:
+        store.set_status(db, engine, "paused", version=body.version if body else None,
+                         actor_user_id=str(admin_user.id), auth_method="jwt", ip=_ip(request))
+    except VersionConflict as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    logger.warning(f"[ADMIN] {admin_user.id} paused engine {engine.slug}")
+    return _view(db, engine)
+
+
+@router.post("/engines/{engine_id}/reset-health", summary="Forget an engine's recorded failures")
+async def reset_engine_health(engine_id: str, request: Request, admin_user=Depends(require_admin_session),
+                              db: Session = Depends(get_db)) -> Dict[str, Any]:
+    engine = _engine_or_404(db, engine_id)
+    store.reset_health(db, engine, actor_user_id=str(admin_user.id), auth_method="jwt", ip=_ip(request))
+    return _view(db, engine)
+
+
+@router.put("/engines/{engine_id}/budget", summary="Set an engine's spending ceiling per period")
+async def put_engine_budget(engine_id: str, body: BudgetUpdate, request: Request,
+                            admin_user=Depends(require_admin_session), db: Session = Depends(get_db)) -> Dict[str, Any]:
+    engine = _engine_or_404(db, engine_id)
+    try:
+        store.set_budget(db, engine, limit_usd=body.limit_usd, min_remaining_usd=body.min_remaining_usd,
+                         soft_pct=body.soft_pct, period_tz=body.period_tz, period_anchor_day=body.period_anchor_day,
+                         version=body.version, actor_user_id=str(admin_user.id), auth_method="jwt", ip=_ip(request))
+    except VersionConflict as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except store.EngineStateError as e:
+        raise _state_error(e)
+    logger.warning(f"[ADMIN] {admin_user.id} set the budget of engine {engine.slug}")
+    return _view(db, engine)
+
+
+@router.put("/engines/{engine_id}/credentials", summary="Replace an engine's credentials (sealed, write-only)")
+async def put_engine_credentials(engine_id: str, body: CredentialsUpdate, request: Request,
+                                 admin_user=Depends(require_admin_session), db: Session = Depends(get_db)) -> Dict[str, Any]:
+    engine = _engine_or_404(db, engine_id)
+    if not settings.engine_secrets_public_key:
+        raise HTTPException(status_code=409, detail="ENGINE_SECRETS_PUBLIC_KEY is not set: credentials cannot be stored")
+    _require_password(admin_user, body.current_password)
+    try:
+        store.set_credentials(db, engine, body.fields, public_key=settings.engine_secrets_public_key,
+                              version=body.version, actor_user_id=str(admin_user.id), auth_method="jwt",
+                              ip=_ip(request))
+    except VersionConflict as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except store.EngineStateError as e:
+        raise _state_error(e)
+    logger.warning(f"[ADMIN] {admin_user.id} replaced the credentials of engine {engine.slug}")
+    return _view(db, engine)
+
+
+@router.delete("/engines/{engine_id}/credentials", summary="Forget an engine's credentials")
+async def delete_engine_credentials(engine_id: str, body: CredentialsDelete, request: Request,
+                                    admin_user=Depends(require_admin_session),
+                                    db: Session = Depends(get_db)) -> Dict[str, Any]:
+    engine = _engine_or_404(db, engine_id)
+    _require_password(admin_user, body.current_password)
+    try:
+        store.clear_credentials(db, engine, version=body.version, actor_user_id=str(admin_user.id),
+                                auth_method="jwt", ip=_ip(request))
+    except VersionConflict as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    logger.warning(f"[ADMIN] {admin_user.id} removed the credentials of engine {engine.slug}")
+    return _view(db, engine)

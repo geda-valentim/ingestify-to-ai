@@ -49,6 +49,9 @@ SKIP_LIMIT = 10
 DRAIN_BATCH = 100
 BAD_HEALTH = ("unhealthy", "exhausted", "degraded")
 LOCAL_UNHEALTHY_AFTER_SECONDS = 180
+# The media of a remote item travels in the call (MinIO is not reachable from the
+# provider): larger files stay on local steps. Overridable per engine (max_input_bytes)
+DEFAULT_MAX_INPUT_BYTES = 512 * 1024 * 1024
 
 # Refusals that only mean "not now": they never make an item unplaceable
 TRANSIENT_REFUSALS = {"full", "conditions", "blocked", "conflict"}
@@ -245,16 +248,21 @@ def _ineligible(tick: _Tick, engine: Engine, cand: JobDispatch, feature: str, bl
     binding = bindings(engine.config or {}).get(feature)
     if binding is None or binding.capacity <= 0:
         return "no_binding"
-    if deploy_state(engine.adapter_type, engine.deployments, feature, binding) in ("needs_redeploy", "not_deployed"):
+    executor = executors.get(engine.adapter_type)
+    if executor is None:
+        return "no_executor"
+    state = (executor.deploy_state(engine, feature, binding) if hasattr(executor, "deploy_state")
+             else deploy_state(engine.adapter_type, engine.deployments, feature, binding))
+    if state in ("needs_redeploy", "not_deployed"):
         return "not_deployed"
     if tick.local_unhealthy.get((engine.id, feature)):
         return "unhealthy"
     if _excluded(cand, engine.id, tick.now):
         return "excluded"
-    executor = executors.get(engine.adapter_type)
-    if executor is None:
-        return "no_executor"
     if executor.remote:
+        max_bytes = (engine.config or {}).get("max_input_bytes") or DEFAULT_MAX_INPUT_BYTES
+        if cand.media_bytes and int(cand.media_bytes) > int(max_bytes):
+            return "too_large"
         if tick.local_only:
             return "local_only"
         if not cand.remote_allowed:
@@ -344,13 +352,16 @@ def _place(tick: _Tick, db: Session, route, cand: JobDispatch, engine: Engine, i
                 > Decimal(str(route.user_period_limit_usd))):
             db.rollback()
             return "user_cap"
-        usage = EngineUsage(
+        values = dict(
             kind="job", engine_id=locked.id, feature=feature, subject_type=cand.subject_type,
             subject_id=cand.subject_id, attempt=cand.placements + 1, job_id=cand.job_id, user_id=cand.user_id,
             period_start=period, status="reserved", placed_by=tick.placed_by, dispatch_epoch=tick.epoch,
             gpu_type=binding.gpu_type or binding.gpu_ref, executions_per_worker=binding.executions_per_worker,
             estimated_usd=estimate, reserved_usd=estimate, rate_usd_per_s=0, heartbeat_at=now, created_at=now,
         )
+        if hasattr(executor, "reservation_values"):  # remote: rate, price snapshot, fingerprint
+            values.update(executor.reservation_values(locked, binding, feature))
+        usage = EngineUsage(**values)
         db.add(usage)
         db.flush()
         usage_id = usage.id

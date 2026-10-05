@@ -154,6 +154,9 @@ services:
       - ./tmp:/tmp/ingestify
       - ./backend/api:/app/api:ro
       - ./backend/shared:/app/shared:ro
+      # The admin API computes the fingerprint a Modal deploy would record from
+      # these sources (spec 0003): the same files worker-dispatch and worker-remote see
+      - ./backend/workers:/app/workers:ro
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true
@@ -348,6 +351,73 @@ services:
     mem_limit: ${DISPATCH_WORKER_MEM_LIMIT:-1g}
     deploy:
       replicas: 1
+
+  # Remote engines (spec 0003, slice 4a), OPTIONAL: runs items the dispatcher placed
+  # on a Modal account, and their control tasks (test, cancel, spend report). The
+  # only service that holds the private key that opens engine credentials:
+  #   ./secrets/engine_secrets_private  (one key per line; from `engines.py keygen`)
+  #   docker compose --profile engines up -d --build worker-remote
+  # Slim image (docker/Dockerfile.remote): no model, no GPU; it waits on remote calls
+  # in a thread pool. The media goes in the call (MinIO is not reachable from Modal),
+  # read from the shared temp volume. The engines CLI that needs the key runs here:
+  #   docker compose --profile engines run --rm worker-remote python scripts/engines.py test --engine modal_1
+  worker-remote:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.remote
+    profiles: ["engines"]
+    command: celery -A workers.celery_app worker --loglevel=info --pool=threads --concurrency=${REMOTE_WORKER_CONCURRENCY:-16} -Q ingestify-remote,ingestify-remote-ctl -n ingestify-remote@%h -B --schedule /tmp/celerybeat-remote
+    environment:
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      - REDIS_HOST=${REDIS_HOST:-redis}
+      - REDIS_PORT=${REDIS_PORT:-6379}
+      - CELERY_BROKER_URL=${CELERY_BROKER_URL:-redis://${REDIS_HOST:-redis}:6379/0}
+      - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND:-redis://${REDIS_HOST:-redis}:6379/1}
+      - CELERY_TASK_DEFAULT_QUEUE=ingestify
+      - CELERY_WORKER_NAME=ingestify-remote
+      - ENVIRONMENT=development
+      - LOG_LEVEL=INFO
+      - TEMP_STORAGE_PATH=/tmp/ingestify
+      - RESULT_TTL_SECONDS=14400
+      - DATABASE_URL=${DATABASE_URL:-mysql+pymysql://root:root@host.docker.internal:3306/ingestify}
+      - ELASTICSEARCH_URL=${ELASTICSEARCH_URL:-http://${ELASTICSEARCH_HOST:-elasticsearch}:9200}
+      - ELASTICSEARCH_HOST=${ELASTICSEARCH_HOST:-elasticsearch}
+      - MINIO_ENDPOINT=${MINIO_HOST:-minio}:9000
+      - MINIO_HOST=${MINIO_HOST:-minio}
+      - MINIO_ACCESS_KEY=${MINIO_ROOT_USER:?MINIO_ROOT_USER is required - set it in .env (see .env.example)}
+      - MINIO_SECRET_KEY=${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD is required - set it in .env (see .env.example)}
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:?JWT_SECRET_KEY is required - generate one with 'openssl rand -hex 32' and set it in .env}
+      - MINIO_SECURE=false
+      - MINIO_BUCKET_UPLOADS=ingestify-uploads
+      - MINIO_BUCKET_AUDIO=ingestify-audio
+      - MONITORING_ENABLED=false
+      - ENGINES_REMOTE_BEAT=true
+      - REMOTE_WORKER_CONCURRENCY=${REMOTE_WORKER_CONCURRENCY:-16}
+      - REMOTE_MAX_CONCURRENT_UPLOADS=${REMOTE_MAX_CONCURRENT_UPLOADS:-4}
+      - ENGINE_SECRETS_PUBLIC_KEY=${ENGINE_SECRETS_PUBLIC_KEY:-}
+      # The entrypoint copies it to the tmpfs below, readable by the app user only
+      - ENGINE_SECRETS_PRIVATE_KEYS_FILE=/run/secrets/engine_secrets_private
+    networks:
+      - ingestify-network
+    volumes:
+      - ./tmp:/tmp/ingestify
+      - ./backend/workers:/app/workers:ro
+      - ./backend/shared:/app/shared:ro
+      - ./scripts/engines.py:/app/scripts/engines.py:ro
+      - ./secrets/engine_secrets_private:/run/secrets/engine_secrets_private:ro
+    tmpfs:
+      - /run/ingestify-keys:mode=0700
+    # An attempt in flight holds its thread while it waits on the call; give it time
+    # to record what it has (the next worker resumes the recorded call)
+    stop_grace_period: 60s
+    mem_limit: ${REMOTE_WORKER_MEM_LIMIT:-3g}
+    deploy:
+      replicas: 1
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
 
   beat:
     build:

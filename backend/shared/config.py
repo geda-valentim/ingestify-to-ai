@@ -288,6 +288,19 @@ class Settings(BaseSettings):
     probe_max_bytes: int = 8 * 1024 * 1024
     probe_timeout_seconds: int = 10
 
+    # Remote engines (spec 0003, slice 4a): the optional worker-remote service
+    # (compose profile `engines`, thread pool) consumes both queues; it alone holds
+    # the private keys. Nothing is published to them without a remote route.
+    remote_queue: str = "ingestify-remote"
+    remote_ctl_queue: str = "ingestify-remote-ctl"
+    # Threads of worker-remote: each in-flight remote item holds one while it waits.
+    # Sum of remote capacity in routes must stay <= this - 2 (control tasks)
+    remote_worker_concurrency: int = 16
+    # Media sent at once (bytes go in the call: MinIO is not reachable from Modal)
+    remote_max_concurrent_uploads: int = 4
+    # True only in worker-remote: its embedded beat reconciles provider spend
+    engines_remote_beat: bool = False
+
     def engine_private_keys(self) -> List[str]:
         """Private keys from ENGINE_SECRETS_PRIVATE_KEYS (comma-separated) and/or the _FILE"""
         keys = [k.strip() for k in self.engine_secrets_private_keys.split(",") if k.strip()]
