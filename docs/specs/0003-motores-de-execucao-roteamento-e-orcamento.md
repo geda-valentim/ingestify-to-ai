@@ -727,7 +727,11 @@ Cada item cabe num PR, na ordem. Fora das mudanças deliberadas de 0a/0b, zero-c
       `shared/admin.py`; `is_admin` em `/auth/me` e `/auth/register`).
 - [x] **1a — Extrair `finish_transcription`** (feita em 2026-10-04: `workers/engines/pipeline.py`;
       formatadores como funções de módulo; saída idêntica byte a byte ao código anterior).
-- [ ] **1b — `whisper_core.py`** no local, com paridade.
+- [x] **1b — `whisper_core.py`** no local, com paridade (feita em 2026-10-04: laço e carga do modelo
+      em `workers/engines/whisper_core.py`, importável sem `shared`; flag de cancelamento entre
+      segmentos; clipe de 4 min idêntico byte a byte ao transcritor anterior em GPU float16 e CPU
+      int8, inclusive as chamadas de progresso. GPU float16 e CPU int8 diferem entre si (85 × 114
+      segmentos), então a paridade local × Modal compara mesma precisão).
 - [ ] **2 — Dados + selagem + redação + CLI de importação** (dry-run). Remotos **não ativáveis**.
 - [ ] **3a — Capacidade**: pegadas, bindings, guarda de VRAM, GPUs declaradas, heartbeats NVML,
       "configurado vs vivos", `GET /admin/gpus`, `set-capacity`. Sem rota ainda.

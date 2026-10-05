@@ -41,7 +41,7 @@ class FasterWhisperTranscriber(AudioTranscriber):
             download_root: Directory to store downloaded models
         """
         try:
-            from faster_whisper import WhisperModel
+            import faster_whisper  # noqa: F401  (fail here with a clear message if missing)
         except ImportError as e:
             logger.error(
                 "faster-whisper is not installed. "
@@ -60,17 +60,9 @@ class FasterWhisperTranscriber(AudioTranscriber):
             f"compute_type={compute_type})"
         )
 
-        # Initialize model
-        self.model = WhisperModel(
-            model_size,
-            device=device,
-            compute_type=compute_type,
-            download_root=download_root
-        )
-
-        # Bounded-memory spectrogram; the stock one grows with the audio length
-        from workers.audio.feature_extractor import install
-        install(self.model)
+        # Initialize model (with the bounded-memory spectrogram)
+        from workers.engines import whisper_core
+        self.model = whisper_core.load_model(model_size, device, compute_type, download_root)
 
         logger.info(f"FasterWhisper model '{model_size}' loaded successfully")
 
@@ -89,83 +81,14 @@ class FasterWhisperTranscriber(AudioTranscriber):
 
         logger.info(f"Transcribing audio file: {audio_path}")
 
-        # Extract options
-        language = options.get('language')  # None = auto-detect
-        include_word_timestamps = options.get('include_word_timestamps', False)
-        temperature = options.get('temperature', 0.0)
-        beam_size = options.get('beam_size', 5)
-
         try:
-            # Transcribe audio
-            segments, info = self.model.transcribe(
-                str(audio_path),
-                language=language,
-                word_timestamps=include_word_timestamps,
-                temperature=temperature,
-                beam_size=beam_size,
-                vad_filter=True,  # Voice activity detection filter
-                vad_parameters=dict(min_silence_duration_ms=500)
+            from workers.engines import whisper_core
+            result = whisper_core.transcribe(
+                self.model, audio_path, options, model_name=self.model_size, on_progress=on_progress,
             )
-
-            # Segments are decoded lazily as the generator is consumed; each one's
-            # end time (in the original audio, even with VAD) measures progress
-            if on_progress:
-                on_progress(0.0, info.duration)
-            segments_list = []
-            for segment in segments:
-                segments_list.append(segment)
-                if on_progress:
-                    on_progress(
-                        segment.end,
-                        info.duration,
-                        segment={"start": segment.start, "end": segment.end, "text": segment.text.strip()},
-                    )
-
-            # Build result
-            full_text = ' '.join([segment.text.strip() for segment in segments_list])
-
-            # Format segments
-            formatted_segments = []
-            for segment in segments_list:
-                segment_dict = {
-                    'start': segment.start,
-                    'end': segment.end,
-                    'text': segment.text.strip()
-                }
-
-                # Add word-level timestamps if requested
-                if include_word_timestamps and hasattr(segment, 'words') and segment.words:
-                    segment_dict['words'] = [
-                        {
-                            'word': word.word,
-                            'start': word.start,
-                            'end': word.end,
-                            'probability': word.probability
-                        }
-                        for word in segment.words
-                    ]
-
-                formatted_segments.append(segment_dict)
-
-            # Calculate statistics
-            word_count = len(full_text.split())
-            char_count = len(full_text)
-
-            result = {
-                'text': full_text,
-                'segments': formatted_segments,
-                'language': info.language,
-                'language_probability': info.language_probability,
-                'duration': info.duration,
-                'word_count': word_count,
-                'char_count': char_count,
-                'model': self.model_size,
-                'provider': 'faster-whisper'
-            }
-
             logger.info(
-                f"Transcription complete: {word_count} words, "
-                f"{info.duration:.2f}s duration, language={info.language}"
+                f"Transcription complete: {result['word_count']} words, "
+                f"{result['duration']:.2f}s duration, language={result['language']}"
             )
 
             return result
