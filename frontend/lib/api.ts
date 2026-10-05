@@ -610,3 +610,27 @@ export const computeApi = {
   routing: () => adminGet<FeatureRoute[]>("/admin/routing"),
   status: () => adminGet<EnginesStatus>("/admin/engines/status"),
 };
+
+export const liveApi = {
+  async getStatus(jobId: string): Promise<{ job_id: string; state: string; duration_seconds: number; error_code: string | null }> {
+    const response = await apiFetch(`${API_URL}/transcribe/live/sessions/${jobId}`, { headers: getHeaders(true) });
+    if (!response.ok) await throwApiError(response, "Não foi possível consultar a sessão");
+    return response.json();
+  },
+  async create(body: UploadLocation & { name: string; language: "pt" }): Promise<{
+    job_id: string; ws_url: string; ticket: string; max_duration_seconds: number;
+  }> {
+    const response = await apiFetch(`${API_URL}/transcribe/live/sessions`, {
+      method: "POST", headers: { ...getHeaders(true), "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!response.ok) await throwApiError(response, "Serviço de transcrição ao vivo indisponível");
+    return response.json();
+  },
+  async cancel(jobId: string): Promise<void> {
+    const response = await apiFetch(`${API_URL}/transcribe/live/sessions/${jobId}`, {
+      method: "DELETE", headers: getHeaders(true),
+    });
+    if (!response.ok) await throwApiError(response, "Não foi possível cancelar a sessão");
+  },
+};
