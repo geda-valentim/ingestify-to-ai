@@ -13,7 +13,8 @@
 > [scripts/engines.py](../../scripts/engines.py).
 > Desenho completo e motivos: [specs/0003](../specs/0003-motores-de-execucao-roteamento-e-orcamento.md).
 
-**Índice**: [Sem rota, nada muda](#sem-rota-nada-muda) · [Conceitos](#conceitos) ·
+**Índice**: [Compute: o que configura](#compute-o-que-configura) · [Diagnóstico rápido](#diagnóstico-rápido) ·
+[Sem rota, nada muda](#sem-rota-nada-muda) · [Conceitos](#conceitos) ·
 [Do zero até rotear](#do-zero-até-rotear) · [Capacidade](#capacidade-e-vram) ·
 [Rotas](#rotas) · [O caminho de um item](#o-caminho-de-um-item-com-rota) ·
 [Documentos por página](#documentos-por-página-fatia-8) · [Visão](#visão-síncrona-fatia-8) ·
@@ -22,6 +23,105 @@
 [Orçamento e alertas](#orçamento-e-alertas) · [Velocidade e benchmark](#velocidade-aprendida-e-benchmark) ·
 [Custos](#custos) · [API admin](#api-admin) · [Solução de problemas](#solução-de-problemas) ·
 [Pendências com as contas reais](#a-rodar-com-as-contas-reais)
+
+## Compute: o que configura
+
+Compute é o conjunto de telas admin e comandos para decidir **onde os trabalhos rodam**, quantos
+podem rodar ao mesmo tempo e quanto uma conta remota pode gastar. Existem dois níveis distintos:
+
+| Configuração | Responsabilidade | Onde consultar |
+|---|---|---|
+| Dispositivo e bibliotecas do worker | CPU/CUDA efetivamente usado por Docling, Whisper e Florence-2 | [GPU.md](../GPU.md), [`shared/device.py`](../../backend/shared/device.py), Compose e logs |
+| Motor, binding e rota | Colocação de jobs/páginas, capacidade declarada, tentativas e orçamento Modal | Este guia, `/admin/engines`, `/admin/gpus`, `/admin/routing`, `/admin/status` |
+
+Um **provider de áudio** não é um motor: `AUDIO_TRANSCRIBER_PROVIDER` escolhe
+`faster-whisper`, `openai-whisper` ou `openai-api` no worker local
+([factory.py](../../backend/workers/audio/factory.py)). Os dois primeiros carregam o modelo no
+processo; o terceiro envia áudio à API da OpenAI com `OPENAI_API_KEY`. Estas variáveis precisam
+chegar ao environment do worker (ou à configuração do processo); o Compose base não repassa
+`AUDIO_TRANSCRIBER_PROVIDER`/`OPENAI_API_KEY` automaticamente só por estarem no `.env`. O motor
+`modal`, por sua vez, executa o app Whisper deployado na conta Modal. Trocar o provider local não cria uma conta
+Modal, um binding nem uma rota.
+
+O orçamento Compute cobre **motores Modal**, não cobranças de `openai-api`, eletricidade do
+servidor ou outros provedores. `engine.kind=local` identifica o executor: não prova que os dados
+ficaram no servidor quando o provider do worker é `openai-api`. Para processar áudio no servidor,
+use um provider local. Os custos estimados neste guia são referências históricas, não preços
+contratados ou garantia de latência.
+
+### Dispositivo e declaração precisam concordar
+
+- `DEVICE=auto|cpu|cuda|cuda:N` resolve o dispositivo geral. `WHISPER_DEVICE` não vazio prevalece
+  para áudio; `WHISPER_COMPUTE_TYPE` vazio deriva `float16` em CUDA e `int8` em CPU. Confira o
+  **environment final do serviço**: o overlay GPU configura `worker-audio` com `DEVICE=cpu` e
+  `WHISPER_DEVICE=cuda`, enquanto `worker` e `worker-vision` usam `DEVICE=cuda`. Whisper pode
+  voltar a CPU após falha CUDA pela factory; a declaração de capacidade não é recalculada.
+- Um `gpu_ref` só associa o binding à placa **declarada para validar VRAM**. Não altera `DEVICE`,
+  não muda a reserva NVIDIA do container nem seleciona uma GPU para a task. Em várias placas,
+  o operador deve alinhar o dispositivo/reserva Docker de cada serviço com os bindings.
+- O heartbeat usa `nvidia-smi` e reporta a **primeira placa visível**, com memória usada da placa
+  inteira. Não mede VRAM exclusiva do modelo nem confirma qual dispositivo a inferência usou.
+  Declare o UUID para casar a placa declarada com a detectada; sem UUID, `used_gb` pode ser nulo
+  mesmo com GPU visível. Veja [heartbeat.py](../../backend/workers/engines/heartbeat.py).
+- A factory mantém o transcriber configurado em cache **por processo**, carregado no primeiro
+  uso; não há uma cópia global compartilhada entre réplicas. Mais workers podem consumir mais
+  VRAM sem aumentar a vazão. O binding não escala os serviços nem aquece modelos.
+
+Nenhuma destas configurações implementa captura contínua de microfone. As legendas parciais
+abaixo pertencem a uma transcrição de **arquivo já enviado**. A captura em streaming está na
+[spec 0005](../specs/0005-transcricao-ao-vivo.md), ainda em revisão nesta verificação.
+
+## Diagnóstico rápido
+
+A UI Compute é somente leitura: mostra estado e comandos para o operador executar. Leituras
+exigem usuário admin (JWT ou API key de admin); alterações HTTP exigem sessão JWT de admin.
+O header Compute só aparece para admins; o backend também verifica a permissão.
+
+| Tela | O que interpretar |
+|---|---|
+| `/admin/engines` e `/admin/engines/{id}` | Status/saúde, bindings, em voo, orçamento, teste e deploy; `paused` barra novas colocações |
+| `/admin/gpus` | VRAM orçada × usada e GPUs detectadas sem declaração; valor desconhecido não é zero |
+| `/admin/routing` | Ordem dos motores e backlog de cada feature; sem rota vale a fila local habitual |
+| `/admin/status` | Lease do despachante, disponibilidade do worker remoto e workers configurados × vivos |
+
+```bash
+# Leituras: substitua a URL e forneça um token JWT de admin, sem o salvar no repositório
+COMPUTE_API_URL=http://localhost:8000
+read -rsp 'Token JWT admin: ' COMPUTE_ADMIN_TOKEN
+printf '\n'
+printf 'Authorization: Bearer %s\n' "$COMPUTE_ADMIN_TOKEN" | \
+  curl --fail --silent --show-error --header @- "$COMPUTE_API_URL/admin/engines/status"
+printf 'Authorization: Bearer %s\n' "$COMPUTE_ADMIN_TOKEN" | \
+  curl --fail --silent --show-error --header @- "$COMPUTE_API_URL/admin/gpus"
+unset COMPUTE_ADMIN_TOKEN
+
+# CLI local: não ativa motores nem muda rotas
+docker compose exec api python scripts/engines.py list --json
+docker compose exec api python scripts/engines.py routes show --json
+# Infra e workers do deploy em uso
+docker compose ps
+docker compose logs --tail 50 worker-audio worker worker-vision
+```
+
+Use os mesmos arquivos `-f` do deploy GPU/produção ao operar o Compose; comandos neste guia
+usam o base por brevidade. O `/health` geral não substitui o status Compute ou a confirmação de
+worker na fila certa. Backlog com capacidade ocupada é espera esperada; em voo acima de workers
+vivos sugere réplicas declaradas sem correspondência. Ajuste o binding **e** os serviços, e
+acompanhe claim/heartbeat antes de aumentar concorrência.
+
+Para um benchmark de áudio existente, comece pelo plano (não executa inferência remota):
+
+```bash
+docker compose --profile engines run --rm worker-remote python scripts/engines.py \
+  benchmark --engine modal_1 --sample /tmp/ingestify/bench/a.mp3:240 \
+  --gpus L4 --concurrency 1 --max-usd 0.30 --plan
+```
+
+Isso pressupõe conta/binding e amostra montada no caminho informado. O plano remoto estima o
+custo; não mede desempenho. A execução real é descrita em [benchmark](#velocidade-aprendida-e-benchmark).
+Benchmark local disputa GPU com os workers; `--pause-local` impede novas colocações roteadas,
+e espera até 30 min pelo em-voo da feature registrado no ledger; não encerra esses trabalhos nem
+bloqueia o caminho local **sem rota**. Confirme a atividade real da placa antes de medir.
 
 ## Sem rota, nada muda
 
@@ -354,8 +454,9 @@ docker compose exec api python scripts/engines.py speed [--engine modal_1]
 
 ## Custos
 
-- **Zero** sem motor remoto em rota. Rotas só locais, backlog, despachante e visão roteada não
-  custam nada fora do servidor.
+- **Sem cobrança Modal** sem motor remoto em rota. Rotas só locais, backlog, despachante e visão
+  roteada não criam uso Modal; o provider `openai-api`, se escolhido, tem cobrança própria fora
+  deste orçamento.
 - Teste, probes e relatório de gasto: grátis, sem container.
 - Deploy: build da imagem (CPU; o primeiro baixa ~1,6 GB de pesos; depois só as camadas de código
   e env mudam) e alguns segundos de um container de 0,25 CPU para `meta()`: ~US$ 0,01–0,02.
