@@ -34,17 +34,21 @@ export function AppHeader({ className }: { className?: string }) {
   const token = useAuthStore((state) => state.token);
   const setAuth = useAuthStore((state) => state.setAuth);
 
-  // Sessions saved by builds before `is_admin` lack it: ask once, so admins see Compute.
-  const needsProfile = !!token && !!user && user.is_admin === undefined;
+  // The saved session can be stale - a user promoted to admin (or demoted) after
+  // logging in, or a session saved before `is_admin` existed: re-read the profile
+  // (cached 5 min, again on window focus) and keep the store in step with it.
   const { data: profile } = useQuery({
     queryKey: ["auth-me", token],
     queryFn: () => authApi.me(),
-    enabled: needsProfile,
+    enabled: !!token && !!user,
     staleTime: 5 * 60 * 1000,
   });
   useEffect(() => {
-    if (needsProfile && profile && token) setAuth(profile, token);
-  }, [needsProfile, profile, token, setAuth]);
+    if (!profile || !token || !user) return;
+    if (profile.is_admin !== user.is_admin || profile.username !== user.username || profile.email !== user.email) {
+      setAuth(profile, token);
+    }
+  }, [profile, token, user, setAuth]);
 
   const handleLogout = () => {
     clearAuth();
