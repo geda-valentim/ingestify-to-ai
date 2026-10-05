@@ -13,6 +13,7 @@ from api.apikey_routes import router as apikey_router
 from api.admin_routes import router as admin_router
 from api.image_routes import router as image_router
 from api.tag_routes import router as tag_router
+from api.engine_admin_routes import router as engine_admin_router
 
 # Configure logging
 logging.basicConfig(
@@ -252,6 +253,7 @@ app.include_router(apikey_router, prefix="/api-keys", tags=["API Keys"])
 app.include_router(admin_router)  # Admin routes (already has /admin prefix)
 app.include_router(image_router)  # Vision routes (already has /images prefix)
 app.include_router(tag_router)  # GET /tags, PUT /jobs/{job_id}/tags
+app.include_router(engine_admin_router)  # /admin/engines, /admin/gpus (spec 0003)
 app.include_router(router)
 
 
