@@ -5,6 +5,12 @@ Skipped unless ENGINES_TEST_DATABASE_URL points at a scratch MySQL - every table
 there is dropped. Threads race on the same rows; the conditional updates and the
 epoch-fenced lease must still allow one winner, never over capacity, never a
 double placement.
+
+The server's default collation must be utf8mb4_general_ci, as on production's
+MariaDB: the projects/folders tables (spec 0004) declare it explicitly and their
+foreign keys to users.id need the same collation. A stock MySQL 8 defaults to
+utf8mb4_0900_ai_ci, so start it with
+`--character-set-server=utf8mb4 --collation-server=utf8mb4_general_ci`.
 """
 
 import os

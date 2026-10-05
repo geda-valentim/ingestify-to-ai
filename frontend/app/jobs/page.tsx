@@ -8,6 +8,7 @@ import {
   ChevronLeft,
   ChevronRight,
   FileText,
+  Folder as FolderIcon,
   Image as ImageIcon,
   Loader2,
   Mic,
@@ -36,6 +37,15 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { useProjects } from "@/components/projects/use-projects";
+import {
+  ProjectSelects,
+  ProjectSidebar,
+  ROOT_FOLDER,
+  filterProject,
+  filterTitle,
+  type LocationFilter,
+} from "@/components/projects/project-sidebar";
 import type { JobKind, JobListItem, JobStatus } from "@/types/api";
 
 const PAGE_SIZE = 20;
@@ -106,6 +116,9 @@ function JobsList() {
   const q = searchParams.get("q") ?? "";
   const contentMode = searchParams.get("in") === "content";
   const page = Math.max(0, Number(searchParams.get("page") ?? 1) - 1);
+  const projectId = searchParams.get("project_id");
+  const folderId = searchParams.get("folder_id");
+  const location: LocationFilter = { projectId, folderId };
 
   const [searchDraft, setSearchDraft] = useState(q);
   const [jobToDelete, setJobToDelete] = useState<JobListItem | null>(null);
@@ -139,7 +152,7 @@ function JobsList() {
   useEffect(() => setSearchDraft(q), [q]);
 
   const jobsQuery = useQuery({
-    queryKey: ["jobs", { status, kind, tags, q, page }, token],
+    queryKey: ["jobs", { status, kind, tags, q, page, projectId, folderId }, token],
     queryFn: () =>
       jobsApi.list({
         limit: PAGE_SIZE,
@@ -148,6 +161,8 @@ function JobsList() {
         kind: kind === "all" ? undefined : kind,
         tags,
         q: q || undefined,
+        project_id: projectId ?? undefined,
+        folder_id: folderId ?? undefined,
         job_type: "main",
       }),
     enabled: !!token && !contentMode,
@@ -162,6 +177,21 @@ function JobsList() {
     queryFn: () => jobsApi.search({ query: q, limit: 100 }),
     enabled: !!token && contentMode && q.length > 0,
   });
+
+  // Counts move as jobs arrive; refresh them at the slow list cadence.
+  const projectsQuery = useProjects({ refetchInterval: 30_000 });
+  const projects = projectsQuery.data?.projects ?? [];
+  const title = filterTitle(projects, location);
+  const currentProjectId = projectId ?? filterProject(projects, location)?.id ?? null;
+  const selectLocation = (next: LocationFilter) =>
+    setParams({ project_id: next.projectId, folder_id: next.folderId });
+  // "New upload" from inside a project starts there (an explicit choice, so allowed).
+  const uploadHref = (() => {
+    const params = new URLSearchParams();
+    if (currentProjectId) params.set("project_id", currentProjectId);
+    if (currentProjectId && folderId && folderId !== ROOT_FOLDER) params.set("folder_id", folderId);
+    return `/dashboard${params.toString() ? `?${params}` : ""}`;
+  })();
 
   const { data: knownTags = [] } = useQuery({
     queryKey: ["tags", token],
@@ -187,7 +217,8 @@ function JobsList() {
   const jobs = data?.jobs ?? [];
   const total = data?.total ?? 0;
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
-  const hasFilters = status !== "all" || kind !== "all" || tags.length > 0 || q.length > 0;
+  const hasFilters =
+    status !== "all" || kind !== "all" || tags.length > 0 || q.length > 0 || !!projectId || !!folderId;
   const toggleTag = (tag: string) =>
     setParams({ tag: tags.includes(tag) ? tags.filter((t) => t !== tag) : [...tags, tag] });
   const suggestedTags = knownTags.filter((t) => !tags.includes(t.tag)).slice(0, 12);
@@ -200,267 +231,326 @@ function JobsList() {
         <div className="max-w-6xl mx-auto space-y-6">
           {/* Title */}
           <div className="flex flex-wrap items-end justify-between gap-4">
-            <div>
-              <h1 className="text-3xl font-bold">My Jobs</h1>
+            <div className="min-w-0">
+              {projectId || folderId ? (
+                <h1 className="flex flex-wrap items-center gap-x-2 text-3xl font-bold">
+                  <button
+                    type="button"
+                    onClick={() => selectLocation({ projectId: null, folderId: null })}
+                    className="text-muted-foreground hover:text-foreground"
+                  >
+                    My Jobs
+                  </button>
+                  <ChevronRight className="h-6 w-6 shrink-0 text-muted-foreground" aria-hidden />
+                  {title?.folder ? (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => selectLocation({ projectId: currentProjectId, folderId: null })}
+                        className="min-w-0 truncate text-muted-foreground hover:text-foreground"
+                      >
+                        {title.project}
+                      </button>
+                      <ChevronRight className="h-6 w-6 shrink-0 text-muted-foreground" aria-hidden />
+                      <span className={cn("min-w-0 truncate", folderId === ROOT_FOLDER && "italic")}>{title.folder}</span>
+                    </>
+                  ) : (
+                    <span className="min-w-0 truncate">{title?.project ?? "…"}</span>
+                  )}
+                </h1>
+              ) : (
+                <h1 className="text-3xl font-bold">My Jobs</h1>
+              )}
               <p className="text-muted-foreground mt-1">
                 {data ? `${data.counts.all} job${data.counts.all === 1 ? "" : "s"}` : "Your conversions and transcriptions"}
               </p>
             </div>
             <Button asChild>
-              <Link href="/dashboard">
+              <Link href={uploadHref}>
                 <Plus className="h-4 w-4 mr-2" />
                 New upload
               </Link>
             </Button>
           </div>
 
-          {/* Filters */}
-          <div className="rounded-xl border bg-background p-4 space-y-4">
-            <div className="flex flex-col md:flex-row gap-3">
-              <div className="relative flex-1">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                <Input
-                  value={searchDraft}
-                  onChange={(e) => setSearchDraft(e.target.value)}
-                  placeholder={contentMode ? "Search inside converted content…" : "Search by name…"}
-                  className="pl-9 pr-9"
+          <div className="md:grid md:grid-cols-[13rem_minmax(0,1fr)] md:gap-6 lg:grid-cols-[15rem_minmax(0,1fr)]">
+            {/* Projects: a column from md up */}
+            <aside className="hidden md:block">
+              <div className="sticky top-20 max-h-[calc(100vh-6rem)] overflow-y-auto rounded-xl border bg-background p-2">
+                <ProjectSidebar
+                  projects={projects}
+                  isLoading={projectsQuery.isLoading}
+                  error={projectsQuery.isError ? formatApiError(projectsQuery.error) : null}
+                  filter={location}
+                  onSelect={selectLocation}
                 />
-                {searchDraft && (
-                  <button
-                    type="button"
-                    onClick={() => setSearchDraft("")}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-                    aria-label="Clear search"
-                  >
-                    <X className="h-4 w-4" />
-                  </button>
-                )}
               </div>
-              <div className="flex rounded-md border p-0.5 w-fit" role="group" aria-label="Search in">
-                {[
-                  { value: false, label: "Names" },
-                  { value: true, label: "Content" },
-                ].map((opt) => (
-                  <button
-                    key={opt.label}
-                    type="button"
-                    onClick={() => setParams({ in: opt.value ? "content" : null })}
-                    aria-pressed={contentMode === opt.value}
-                    className={cn(
-                      "px-3 py-1.5 text-sm rounded-sm transition-colors",
-                      contentMode === opt.value ? "bg-secondary font-medium" : "text-muted-foreground hover:text-foreground"
-                    )}
-                  >
-                    {opt.label}
-                  </button>
-                ))}
-              </div>
-            </div>
+            </aside>
 
-            {!contentMode && (
-              <>
-                {/* Status tabs */}
-                <div className="flex items-center gap-x-1 overflow-x-auto whitespace-nowrap border-b -mx-4 px-4">
-                  {STATUS_TABS.map((tab) => {
-                    const active = status === tab.value;
-                    const count = data?.counts?.[tab.value];
-                    return (
-                      <button
-                        key={tab.value}
-                        type="button"
-                        onClick={() => setParams({ status: tab.value === "all" ? null : tab.value })}
-                        className={cn(
-                          "-mb-px border-b-2 px-3 pb-2 text-sm transition-colors",
-                          active
-                            ? "border-primary font-medium text-foreground"
-                            : "border-transparent text-muted-foreground hover:text-foreground"
-                        )}
-                      >
-                        {tab.label}
-                        {count !== undefined && (
-                          <span
-                            className={cn(
-                              "ml-1.5 rounded-full px-1.5 py-0.5 text-xs tabular-nums",
-                              active ? "bg-primary text-primary-foreground" : "bg-muted"
-                            )}
-                          >
-                            {count}
-                          </span>
-                        )}
-                      </button>
-                    );
-                  })}
+            <div className="min-w-0 space-y-6">
+              {/* Projects: two selects below md */}
+              {projects.length > 0 && (
+                <div className="md:hidden">
+                  <ProjectSelects projects={projects} filter={location} onSelect={selectLocation} />
                 </div>
+              )}
 
-                {/* Kind + tags */}
-                <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-                  <div className="flex flex-wrap gap-1.5">
-                    {KINDS.map((k) => (
-                      <Button
-                        key={k.value}
-                        size="sm"
-                        variant={kind === k.value ? "secondary" : "ghost"}
-                        className="h-8"
-                        onClick={() => setParams({ kind: k.value === "all" ? null : k.value })}
+              {/* Filters */}
+              <div className="rounded-xl border bg-background p-4 space-y-4">
+                <div className="flex flex-col md:flex-row gap-3">
+                  <div className="relative flex-1">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                    <Input
+                      value={searchDraft}
+                      onChange={(e) => setSearchDraft(e.target.value)}
+                      placeholder={contentMode ? "Search inside converted content…" : "Search by name…"}
+                      className="pl-9 pr-9"
+                    />
+                    {searchDraft && (
+                      <button
+                        type="button"
+                        onClick={() => setSearchDraft("")}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                        aria-label="Clear search"
                       >
-                        {k.label}
-                      </Button>
+                        <X className="h-4 w-4" />
+                      </button>
+                    )}
+                  </div>
+                  <div className="flex rounded-md border p-0.5 w-fit" role="group" aria-label="Search in">
+                    {[
+                      { value: false, label: "Names" },
+                      { value: true, label: "Content" },
+                    ].map((opt) => (
+                      <button
+                        key={opt.label}
+                        type="button"
+                        onClick={() => setParams({ in: opt.value ? "content" : null })}
+                        aria-pressed={contentMode === opt.value}
+                        className={cn(
+                          "px-3 py-1.5 text-sm rounded-sm transition-colors",
+                          contentMode === opt.value ? "bg-secondary font-medium" : "text-muted-foreground hover:text-foreground"
+                        )}
+                      >
+                        {opt.label}
+                      </button>
                     ))}
                   </div>
+                </div>
 
-                  {(tags.length > 0 || suggestedTags.length > 0) && (
-                    <div className="flex flex-wrap items-center gap-1.5 lg:justify-end lg:max-w-[60%]">
-                      <span className="text-xs text-muted-foreground mr-1">Tags:</span>
-                      {tags.map((tag) => (
-                        <TagChip key={tag} tag={tag} active onRemove={() => toggleTag(tag)} />
-                      ))}
-                      {suggestedTags.map((t) => (
-                        <TagChip
-                          key={t.tag}
-                          tag={`${t.tag} · ${t.count}`}
-                          onClick={() => toggleTag(t.tag)}
-                          className="cursor-pointer"
-                        />
-                      ))}
+                {!contentMode && (
+                  <>
+                    {/* Status tabs */}
+                    <div className="flex items-center gap-x-1 overflow-x-auto whitespace-nowrap border-b -mx-4 px-4">
+                      {STATUS_TABS.map((tab) => {
+                        const active = status === tab.value;
+                        const count = data?.counts?.[tab.value];
+                        return (
+                          <button
+                            key={tab.value}
+                            type="button"
+                            onClick={() => setParams({ status: tab.value === "all" ? null : tab.value })}
+                            className={cn(
+                              "-mb-px border-b-2 px-3 pb-2 text-sm transition-colors",
+                              active
+                                ? "border-primary font-medium text-foreground"
+                                : "border-transparent text-muted-foreground hover:text-foreground"
+                            )}
+                          >
+                            {tab.label}
+                            {count !== undefined && (
+                              <span
+                                className={cn(
+                                  "ml-1.5 rounded-full px-1.5 py-0.5 text-xs tabular-nums",
+                                  active ? "bg-primary text-primary-foreground" : "bg-muted"
+                                )}
+                              >
+                                {count}
+                              </span>
+                            )}
+                          </button>
+                        );
+                      })}
                     </div>
+
+                    {/* Kind + tags */}
+                    <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                      <div className="flex flex-wrap gap-1.5">
+                        {KINDS.map((k) => (
+                          <Button
+                            key={k.value}
+                            size="sm"
+                            variant={kind === k.value ? "secondary" : "ghost"}
+                            className="h-8"
+                            onClick={() => setParams({ kind: k.value === "all" ? null : k.value })}
+                          >
+                            {k.label}
+                          </Button>
+                        ))}
+                      </div>
+
+                      {(tags.length > 0 || suggestedTags.length > 0) && (
+                        <div className="flex flex-wrap items-center gap-1.5 lg:justify-end lg:max-w-[60%]">
+                          <span className="text-xs text-muted-foreground mr-1">Tags:</span>
+                          {tags.map((tag) => (
+                            <TagChip key={tag} tag={tag} active onRemove={() => toggleTag(tag)} />
+                          ))}
+                          {suggestedTags.map((t) => (
+                            <TagChip
+                              key={t.tag}
+                              tag={`${t.tag} · ${t.count}`}
+                              onClick={() => toggleTag(t.tag)}
+                              className="cursor-pointer"
+                            />
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    {hasFilters && (
+                      <div className="flex items-center justify-between text-sm">
+                        <span className="text-muted-foreground">
+                          {total} matching job{total === 1 ? "" : "s"}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSearchDraft("");
+                            router.push("/jobs");
+                          }}
+                          className="text-primary hover:underline underline-offset-4"
+                        >
+                          Clear all filters
+                        </button>
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+
+              {contentMode && (projectId || folderId) && (
+                <p className="text-xs text-muted-foreground">Content search covers all your projects.</p>
+              )}
+
+              {/* Results */}
+              {contentMode ? (
+                <ContentResults
+                  q={q}
+                  isLoading={contentSearch.isLoading}
+                  error={contentSearch.error}
+                  results={contentSearch.data?.results ?? []}
+                />
+              ) : jobsQuery.error ? (
+                <div className="rounded-xl border border-destructive/50 p-8 text-center text-destructive">
+                  <p className="font-semibold">Could not load your jobs</p>
+                  <p className="text-sm mt-1">{formatApiError(jobsQuery.error)}</p>
+                </div>
+              ) : jobsQuery.isLoading ? (
+                <div className="rounded-xl border bg-background divide-y">
+                  {Array.from({ length: 6 }).map((_, i) => (
+                    <div key={i} className="flex items-center gap-4 p-4">
+                      <div className="h-10 w-10 rounded-lg bg-muted animate-pulse" />
+                      <div className="flex-1 space-y-2">
+                        <div className="h-4 w-1/3 rounded bg-muted animate-pulse" />
+                        <div className="h-3 w-1/2 rounded bg-muted animate-pulse" />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : jobs.length === 0 ? (
+                <div className="rounded-xl border bg-background py-16 px-6 text-center">
+                  <FileText className="h-12 w-12 mx-auto mb-4 text-muted-foreground/50" />
+                  {hasFilters ? (
+                    <>
+                      <p className="font-medium">No jobs match these filters</p>
+                      <Button variant="link" onClick={() => router.push("/jobs")}>
+                        Clear all filters
+                      </Button>
+                    </>
+                  ) : (
+                    <>
+                      <p className="font-medium">No jobs yet</p>
+                      <p className="text-sm text-muted-foreground mt-1">Upload a document, audio or video to get started.</p>
+                      <Button asChild className="mt-4">
+                        <Link href="/dashboard">
+                          <Plus className="h-4 w-4 mr-2" />
+                          New upload
+                        </Link>
+                      </Button>
+                    </>
                   )}
                 </div>
-
-                {hasFilters && (
-                  <div className="flex items-center justify-between text-sm">
-                    <span className="text-muted-foreground">
-                      {total} matching job{total === 1 ? "" : "s"}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setSearchDraft("");
-                        router.push("/jobs");
-                      }}
-                      className="text-primary hover:underline underline-offset-4"
-                    >
-                      Clear all filters
-                    </button>
-                  </div>
-                )}
-              </>
-            )}
-          </div>
-
-          {/* Results */}
-          {contentMode ? (
-            <ContentResults
-              q={q}
-              isLoading={contentSearch.isLoading}
-              error={contentSearch.error}
-              results={contentSearch.data?.results ?? []}
-            />
-          ) : jobsQuery.error ? (
-            <div className="rounded-xl border border-destructive/50 p-8 text-center text-destructive">
-              <p className="font-semibold">Could not load your jobs</p>
-              <p className="text-sm mt-1">{formatApiError(jobsQuery.error)}</p>
-            </div>
-          ) : jobsQuery.isLoading ? (
-            <div className="rounded-xl border bg-background divide-y">
-              {Array.from({ length: 6 }).map((_, i) => (
-                <div key={i} className="flex items-center gap-4 p-4">
-                  <div className="h-10 w-10 rounded-lg bg-muted animate-pulse" />
-                  <div className="flex-1 space-y-2">
-                    <div className="h-4 w-1/3 rounded bg-muted animate-pulse" />
-                    <div className="h-3 w-1/2 rounded bg-muted animate-pulse" />
-                  </div>
-                </div>
-              ))}
-            </div>
-          ) : jobs.length === 0 ? (
-            <div className="rounded-xl border bg-background py-16 px-6 text-center">
-              <FileText className="h-12 w-12 mx-auto mb-4 text-muted-foreground/50" />
-              {hasFilters ? (
-                <>
-                  <p className="font-medium">No jobs match these filters</p>
-                  <Button variant="link" onClick={() => router.push("/jobs")}>
-                    Clear all filters
-                  </Button>
-                </>
               ) : (
                 <>
-                  <p className="font-medium">No jobs yet</p>
-                  <p className="text-sm text-muted-foreground mt-1">Upload a document, audio or video to get started.</p>
-                  <Button asChild className="mt-4">
-                    <Link href="/dashboard">
-                      <Plus className="h-4 w-4 mr-2" />
-                      New upload
-                    </Link>
-                  </Button>
+                  <ul
+                    className={cn(
+                      "rounded-xl border bg-background divide-y overflow-hidden transition-opacity",
+                      jobsQuery.isPlaceholderData && "opacity-60"
+                    )}
+                  >
+                    {jobs.map((job) => (
+                      <JobRow
+                        key={job.job_id}
+                        job={job}
+                        activeTags={tags}
+                        onTag={toggleTag}
+                        onDelete={() => setJobToDelete(job)}
+                        showProject={!projectId && !folderId}
+                        showFolder={!folderId}
+                        onLocation={selectLocation}
+                      />
+                    ))}
+                  </ul>
+
+                  {/* Pagination */}
+                  <div className="flex flex-wrap items-center justify-between gap-3 text-sm">
+                    <span className="text-muted-foreground">
+                      {page * PAGE_SIZE + 1}–{page * PAGE_SIZE + jobs.length} of {total}
+                    </span>
+                    {totalPages > 1 && (
+                      <div className="flex items-center gap-1">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          disabled={page === 0}
+                          onClick={() => setParams({ page: page > 1 ? String(page) : null })}
+                        >
+                          <ChevronLeft className="h-4 w-4" />
+                          <span className="sr-only">Previous page</span>
+                        </Button>
+                        {pageNumbers(page, totalPages).map((n, i) =>
+                          n === null ? (
+                            <span key={`gap-${i}`} className="px-2 text-muted-foreground">
+                              …
+                            </span>
+                          ) : (
+                            <Button
+                              key={n}
+                              variant={n === page ? "secondary" : "ghost"}
+                              size="sm"
+                              className="min-w-9"
+                              onClick={() => setParams({ page: n > 0 ? String(n + 1) : null })}
+                            >
+                              {n + 1}
+                            </Button>
+                          )
+                        )}
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          disabled={page >= totalPages - 1}
+                          onClick={() => setParams({ page: String(page + 2) })}
+                        >
+                          <ChevronRight className="h-4 w-4" />
+                          <span className="sr-only">Next page</span>
+                        </Button>
+                      </div>
+                    )}
+                  </div>
                 </>
               )}
             </div>
-          ) : (
-            <>
-              <ul
-                className={cn(
-                  "rounded-xl border bg-background divide-y overflow-hidden transition-opacity",
-                  jobsQuery.isPlaceholderData && "opacity-60"
-                )}
-              >
-                {jobs.map((job) => (
-                  <JobRow
-                    key={job.job_id}
-                    job={job}
-                    activeTags={tags}
-                    onTag={toggleTag}
-                    onDelete={() => setJobToDelete(job)}
-                  />
-                ))}
-              </ul>
-
-              {/* Pagination */}
-              <div className="flex flex-wrap items-center justify-between gap-3 text-sm">
-                <span className="text-muted-foreground">
-                  {page * PAGE_SIZE + 1}–{page * PAGE_SIZE + jobs.length} of {total}
-                </span>
-                {totalPages > 1 && (
-                  <div className="flex items-center gap-1">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      disabled={page === 0}
-                      onClick={() => setParams({ page: page > 1 ? String(page) : null })}
-                    >
-                      <ChevronLeft className="h-4 w-4" />
-                      <span className="sr-only">Previous page</span>
-                    </Button>
-                    {pageNumbers(page, totalPages).map((n, i) =>
-                      n === null ? (
-                        <span key={`gap-${i}`} className="px-2 text-muted-foreground">
-                          …
-                        </span>
-                      ) : (
-                        <Button
-                          key={n}
-                          variant={n === page ? "secondary" : "ghost"}
-                          size="sm"
-                          className="min-w-9"
-                          onClick={() => setParams({ page: n > 0 ? String(n + 1) : null })}
-                        >
-                          {n + 1}
-                        </Button>
-                      )
-                    )}
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      disabled={page >= totalPages - 1}
-                      onClick={() => setParams({ page: String(page + 2) })}
-                    >
-                      <ChevronRight className="h-4 w-4" />
-                      <span className="sr-only">Next page</span>
-                    </Button>
-                  </div>
-                )}
-              </div>
-            </>
-          )}
+          </div>
         </div>
       </main>
 
@@ -512,11 +602,18 @@ function JobRow({
   activeTags,
   onTag,
   onDelete,
+  showProject,
+  showFolder,
+  onLocation,
 }: {
   job: JobListItem;
   activeTags: string[];
   onTag: (tag: string) => void;
   onDelete: () => void;
+  /** Off once the list is filtered to one project (every row would say the same). */
+  showProject: boolean;
+  showFolder: boolean;
+  onLocation: (filter: LocationFilter) => void;
 }) {
   const router = useRouter();
   const Icon = KIND_ICONS[job.kind] ?? FileText;
@@ -561,8 +658,11 @@ function JobRow({
               </span>
             )}
           </div>
-          {job.tags.length > 0 && (
+          {(job.tags.length > 0 || (job.project && (showProject || (showFolder && job.folder)))) && (
             <div className="flex flex-wrap gap-1 pt-1">
+              {job.project && (showProject || (showFolder && job.folder)) && (
+                <LocationChip job={job} showProject={showProject} showFolder={showFolder} onLocation={onLocation} />
+              )}
               {job.tags.map((tag) => (
                 <TagChip
                   key={tag}
@@ -611,6 +711,48 @@ function JobRow({
         </Button>
       </div>
     </li>
+  );
+}
+
+/** "Project › Folder" on a row; each part filters the list to it. */
+function LocationChip({
+  job,
+  showProject,
+  showFolder,
+  onLocation,
+}: {
+  job: JobListItem;
+  showProject: boolean;
+  showFolder: boolean;
+  onLocation: (filter: LocationFilter) => void;
+}) {
+  const project = job.project!;
+  const folder = showFolder ? job.folder : null;
+  return (
+    <span className="inline-flex max-w-[20rem] items-center gap-1 rounded-md border border-primary/20 bg-primary/5 px-2 py-0.5 text-xs font-medium text-foreground">
+      <FolderIcon className="h-3 w-3 shrink-0 text-primary opacity-80" />
+      {showProject && (
+        <button
+          type="button"
+          onClick={() => onLocation({ projectId: project.id, folderId: null })}
+          className="min-w-0 truncate hover:underline underline-offset-2"
+          title={`All jobs in ${project.name}`}
+        >
+          {project.name}
+        </button>
+      )}
+      {showProject && folder && <span className="text-muted-foreground">›</span>}
+      {folder && (
+        <button
+          type="button"
+          onClick={() => onLocation({ projectId: project.id, folderId: folder.id })}
+          className="min-w-0 truncate hover:underline underline-offset-2"
+          title={`All jobs in ${project.name} › ${folder.name}`}
+        >
+          {folder.name}
+        </button>
+      )}
+    </span>
   );
 }
 

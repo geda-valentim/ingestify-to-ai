@@ -8,6 +8,10 @@ import type {
   APIKeyCreate,
   APIKeyResponse,
   APIKeyInfo,
+  APIKeyUpdate,
+  ProjectsListResponse,
+  NameResolveResponse,
+  UploadLocation,
   JobCreatedResponse,
   JobStatusResponse,
   JobResultResponse,
@@ -44,6 +48,38 @@ async function apiFetch(input: string, init?: RequestInit): Promise<Response> {
     expireSession();
   }
   return response;
+}
+
+/**
+ * An HTTP error that keeps the server's body, so `formatApiError` can show
+ * FastAPI's `detail` (e.g. the 422 "project required" message with its curl
+ * example) instead of a bare status text.
+ */
+export class ApiError extends Error {
+  status: number;
+  response: { status: number; data: unknown };
+
+  constructor(status: number, data: unknown, message: string) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+    this.response = { status, data };
+  }
+}
+
+async function throwApiError(response: Response, fallback: string): Promise<never> {
+  const data = await response.json().catch(() => null);
+  const detail = (data as { detail?: unknown } | null)?.detail;
+  const message = typeof detail === "string" && detail ? detail : `${fallback}: ${response.statusText}`;
+  throw new ApiError(response.status, data, message);
+}
+
+/** Add the project/folder fields of an upload, skipping the empty ones. */
+function appendLocation(formData: FormData, location: UploadLocation) {
+  if (location.project_id) formData.append("project_id", location.project_id);
+  else if (location.project?.trim()) formData.append("project", location.project.trim());
+  if (location.folder_id) formData.append("folder_id", location.folder_id);
+  else if (location.folder?.trim()) formData.append("folder", location.folder.trim());
 }
 
 function getHeaders(includeAuth = false): HeadersInit {
@@ -152,6 +188,8 @@ export const jobsApi = {
       formData.append("auth_token", request.authToken);
     }
 
+    appendLocation(formData, request);
+
     const response = await apiFetch(`${API_URL}/convert`, {
       method: "POST",
       headers: getHeaders(true),
@@ -159,7 +197,7 @@ export const jobsApi = {
     });
 
     if (!response.ok) {
-      throw new Error(`Conversion failed: ${response.statusText}`);
+      await throwApiError(response, "Conversion failed");
     }
 
     return response.json();
@@ -177,6 +215,8 @@ export const jobsApi = {
       formData.append("tags", request.tags.join(","));
     }
 
+    appendLocation(formData, request);
+
     const response = await apiFetch(`${API_URL}/upload`, {
       method: "POST",
       headers: getHeaders(true),
@@ -184,7 +224,7 @@ export const jobsApi = {
     });
 
     if (!response.ok) {
-      throw new Error(`Upload failed: ${response.statusText}`);
+      await throwApiError(response, "Upload failed");
     }
 
     return response.json();
@@ -272,6 +312,8 @@ export const jobsApi = {
     if (params?.q) searchParams.set("q", params.q);
     if (params?.kind) searchParams.set("kind", params.kind);
     params?.tags?.forEach((tag) => searchParams.append("tag", tag));
+    if (params?.project_id) searchParams.set("project_id", params.project_id);
+    if (params?.folder_id) searchParams.set("folder_id", params.folder_id);
 
     const url = `${API_URL}/jobs${searchParams.toString() ? `?${searchParams}` : ""}`;
     const response = await apiFetch(url, {
@@ -279,7 +321,7 @@ export const jobsApi = {
     });
 
     if (!response.ok) {
-      throw new Error(`Failed to fetch jobs: ${response.statusText}`);
+      await throwApiError(response, "Failed to fetch jobs");
     }
 
     return response.json();
@@ -428,6 +470,52 @@ export const tagsApi = {
   },
 };
 
+// Projects API (spec 0004, phase 1: read-only; projects and folders are
+// created by get-or-add on upload)
+export const projectsApi = {
+  /** The user's projects with job counts, most recently used first. */
+  async list(includeFolders = true): Promise<ProjectsListResponse> {
+    const query = includeFolders ? "?include=folders" : "";
+    const response = await apiFetch(`${API_URL}/projects${query}`, {
+      headers: getHeaders(true),
+    });
+
+    if (!response.ok) {
+      await throwApiError(response, "Failed to fetch projects");
+    }
+
+    return response.json();
+  },
+
+  /** Whether `name` matches an existing project (by the backend's rule), without creating one. */
+  async resolve(name: string): Promise<NameResolveResponse> {
+    const response = await apiFetch(
+      `${API_URL}/projects/resolve?name=${encodeURIComponent(name)}`,
+      { headers: getHeaders(true) }
+    );
+
+    if (!response.ok) {
+      await throwApiError(response, "Failed to check the project name");
+    }
+
+    return response.json();
+  },
+
+  /** Same as `resolve`, for a folder inside `projectId`. */
+  async resolveFolder(projectId: string, name: string): Promise<NameResolveResponse> {
+    const response = await apiFetch(
+      `${API_URL}/projects/${encodeURIComponent(projectId)}/folders/resolve?name=${encodeURIComponent(name)}`,
+      { headers: getHeaders(true) }
+    );
+
+    if (!response.ok) {
+      await throwApiError(response, "Failed to check the folder name");
+    }
+
+    return response.json();
+  },
+};
+
 // API Keys API
 export const apiKeysApi = {
   async list(): Promise<APIKeyInfo[]> {
@@ -455,10 +543,28 @@ export const apiKeysApi = {
     });
 
     if (!response.ok) {
-      throw new Error(`Failed to create API key: ${response.statusText}`);
+      await throwApiError(response, "Failed to create API key");
     }
 
     return response.json();
+  },
+
+  /** Rebind the key to another project, or unbind it with `null`. */
+  async setProject(keyId: string, projectId: string | null): Promise<void> {
+    const body: APIKeyUpdate = { project_id: projectId };
+    const response = await apiFetch(`${API_URL}/api-keys/${keyId}`, {
+      method: "PATCH",
+      headers: {
+        ...getHeaders(true),
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (!response.ok) {
+      await throwApiError(response, "Failed to update API key");
+    }
+    // The body is not relied on (the spec does not pin it down); callers refetch the list.
   },
 
   /**
@@ -480,20 +586,13 @@ export const apiKeysApi = {
   },
 };
 
-/** A non-2xx answer that keeps its HTTP status (the admin pages tell 403 and 404 apart). */
-export class ApiError extends Error {
-  constructor(message: string, readonly status: number) {
-    super(message);
-    this.name = "ApiError";
-  }
-}
-
 async function adminGet<T>(path: string): Promise<T> {
   const response = await apiFetch(`${API_URL}${path}`, { headers: getHeaders(true) });
   if (!response.ok) {
     const body = await response.json().catch(() => null);
     const detail = typeof body?.detail === "string" ? body.detail : response.statusText;
-    throw new ApiError(detail || `Request failed (${response.status})`, response.status);
+    // ApiError keeps the HTTP status: the admin pages tell 403 and 404 apart
+    throw new ApiError(response.status, body, detail || `Request failed (${response.status})`);
   }
   return response.json();
 }

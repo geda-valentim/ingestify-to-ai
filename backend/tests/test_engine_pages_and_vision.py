@@ -18,6 +18,7 @@ import pytest
 from fastapi import HTTPException
 
 from api import image_routes, routes
+from api.projects_api import LocationFields
 from shared.engines import dispatch, ledger
 from shared.models import Engine, EngineUsage, FeatureRoute, Job, JobDispatch, JobStatus, Page
 from tests._engines_world import ALICE, World
@@ -424,7 +425,7 @@ def convert(world, monkeypatch, tmp_path):
             return asyncio.run(routes.convert_document(
                 source_type=source_type, source=source, file=None, name=None, tags=None,
                 authorization=headers.get("authorization"), source_token=headers.get("source_token"),
-                current_user=alice, db=db))
+                location=LocationFields(project="Engines"), current_user=alice, db=db))
         finally:
             db.close()
 

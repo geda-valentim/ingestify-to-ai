@@ -332,7 +332,15 @@ def _request(app, method, path, user=None, body=b"", content_type=None, host=DEF
     return Response(start["status"], start["headers"], payload)
 
 
+# Every job belongs to a project (spec 0004). These tests are about vision, so
+# each request names one unless it already says where it goes; project
+# resolution itself is covered by test_upload_projects.py.
+DEFAULT_PROJECT = "Imagens"
+
+
 def _post_json(app, path, payload, user=None):
+    if not {"project", "project_id"} & set(payload):
+        payload = {**payload, "project": DEFAULT_PROJECT}
     return _request(
         app,
         "POST",
@@ -368,12 +376,15 @@ def _multipart(fields, file_field=None):
 
 
 def _post_multipart(app, path, fields=None, file_field=None, user=None):
+    fields = dict(fields or {})
+    if not {"project", "project_id"} & set(fields):
+        fields["project"] = DEFAULT_PROJECT
     return _request(
         app,
         "POST",
         path,
         user=user,
-        body=_multipart(fields or {}, file_field),
+        body=_multipart(fields, file_field),
         content_type=f"multipart/form-data; boundary={MULTIPART_BOUNDARY}",
     )
 
