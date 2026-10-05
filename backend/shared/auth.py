@@ -2,7 +2,7 @@ from datetime import datetime, timedelta
 from typing import Optional
 from jose import JWTError, jwt
 import bcrypt
-from fastapi import Depends, HTTPException, Header
+from fastapi import Depends, HTTPException, Header, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials, APIKeyHeader
 from sqlalchemy.orm import Session
 import secrets
@@ -188,16 +188,16 @@ def authenticate_user(db: Session, username: str, password: str) -> Optional[Use
     return user
 
 
-def get_user_by_api_key(db: Session, api_key: str) -> Optional[User]:
+def get_api_key_record(db: Session, api_key: str) -> Optional[APIKey]:
     """
-    Get user by API key
+    The active, unexpired APIKey row for a plain key (and touch last_used_at).
 
     Args:
         db: Database session
         api_key: Plain API key
 
     Returns:
-        User object if key is valid, None otherwise
+        APIKey row if the key is valid, None otherwise
     """
     key_hash = hash_api_key(api_key)
 
@@ -218,7 +218,22 @@ def get_user_by_api_key(db: Session, api_key: str) -> Optional[User]:
     api_key_obj.last_used_at = datetime.utcnow()
     db.commit()
 
-    return api_key_obj.user
+    return api_key_obj
+
+
+def get_user_by_api_key(db: Session, api_key: str) -> Optional[User]:
+    """
+    Get user by API key
+
+    Args:
+        db: Database session
+        api_key: Plain API key
+
+    Returns:
+        User object if key is valid, None otherwise
+    """
+    api_key_obj = get_api_key_record(db, api_key)
+    return api_key_obj.user if api_key_obj else None
 
 
 # ============================================
@@ -226,6 +241,7 @@ def get_user_by_api_key(db: Session, api_key: str) -> Optional[User]:
 # ============================================
 
 async def get_current_user(
+    request: Request,
     bearer_token: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
     api_key: Optional[str] = Depends(api_key_scheme),
     db: Session = Depends(get_db)
@@ -236,6 +252,10 @@ async def get_current_user(
     This dependency tries authentication in this order:
     1. Authorization header with Bearer token (JWT)
     2. X-API-Key header with API key
+
+    `request.state.api_key` is the APIKey row on the API-key path and None on
+    the JWT path. A request with both headers is a JWT request: the key's
+    bound project (spec 0004) is NOT applied to it.
 
     Args:
         bearer_token: Bearer token from Authorization header
@@ -254,6 +274,8 @@ async def get_current_user(
         headers={"WWW-Authenticate": "Bearer"},
     )
 
+    request.state.api_key = None
+
     # Try JWT first
     if bearer_token:
         token = bearer_token.credentials
@@ -271,11 +293,13 @@ async def get_current_user(
 
     # Try API Key
     if api_key:
-        user = get_user_by_api_key(db, api_key)
+        api_key_obj = get_api_key_record(db, api_key)
+        user = api_key_obj.user if api_key_obj else None
 
         if user is None:
             raise credentials_exception
 
+        request.state.api_key = api_key_obj
         return user
 
     # No auth provided
@@ -304,6 +328,7 @@ async def get_current_active_user(
 
 
 async def get_optional_user(
+    request: Request,
     bearer_token: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
     api_key: Optional[str] = Depends(api_key_scheme),
     db: Session = Depends(get_db)
@@ -321,6 +346,6 @@ async def get_optional_user(
         User object or None
     """
     try:
-        return await get_current_user(bearer_token, api_key, db)
+        return await get_current_user(request, bearer_token, api_key, db)
     except HTTPException:
         return None

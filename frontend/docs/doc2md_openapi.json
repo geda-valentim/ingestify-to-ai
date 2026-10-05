@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Ingestify API",
-    "description": "\nAPI assíncrona para conversão de documentos para Markdown usando Docling\n\n## Autenticação\n\nEsta API suporta dois métodos de autenticação:\n\n### 1. Bearer Token (JWT)\n1. Registre um usuário em `/auth/register`\n2. Faça login em `/auth/login` para obter o token\n3. Clique no botão **\"Authorize\"** (cadeado 🔒) no topo desta página\n4. Cole o token no campo \"bearerAuth\" (sem prefixo \"Bearer\")\n5. Clique em \"Authorize\"\n\n### 2. API Key\n1. Faça login para obter um token JWT\n2. Crie uma API Key em `/api-keys/`\n3. Clique no botão **\"Authorize\"** (cadeado 🔒)\n4. Cole a API Key no campo \"apiKeyAuth\"\n5. Clique em \"Authorize\"\n\nApós autorizar, todos os endpoints protegidos usarão automaticamente suas credenciais.\n",
+    "description": "\nAPI assíncrona para conversão de documentos para Markdown usando Docling\n\n## Autenticação\n\nEsta API suporta dois métodos de autenticação:\n\n### 1. Bearer Token (JWT)\n1. Registre um usuário em `/auth/register`\n2. Faça login em `/auth/login` para obter o token\n3. Clique no botão **\"Authorize\"** (cadeado 🔒) no topo desta página\n4. Cole o token no campo \"bearerAuth\" (sem prefixo \"Bearer\")\n5. Clique em \"Authorize\"\n\n### 2. API Key\n1. Faça login para obter um token JWT\n2. Crie uma API Key em `/api-keys/`\n3. Clique no botão **\"Authorize\"** (cadeado 🔒)\n4. Cole a API Key no campo \"apiKeyAuth\"\n5. Clique em \"Authorize\"\n\nApós autorizar, todos os endpoints protegidos usarão automaticamente suas credenciais.\n\nSe um request trouxer **os dois** (Bearer e `X-API-Key`), vale o JWT.\n\n## Projetos e pastas\n\nTodo job pertence a um **projeto** (obrigatório) e, opcionalmente, a uma **pasta** do\nprojeto (um nível). Os endpoints que criam jobs (`/upload`, `/convert`, `/transcribe`,\n`/images/*`) aceitam:\n\n- `project`: nome do projeto. É criado se não existir (*get-or-add*). Caixa, espaços e\n  acentos sobre letras latinas não contam: `Reunião` e ` reuniao ` são o mesmo projeto;\n- `project_id`: ID de um projeto existente (nunca cria);\n- `folder` / `folder_id`: a pasta dentro do projeto (o nome não pode ter `/`).\n\nSem `project`/`project_id`, o job vai para o projeto **vinculado à API key** (veja\n`PATCH /api-keys/{key_id}`). Isso só vale para requests autenticados apenas pela key: com\nJWT, o vínculo é ignorado. Sem projeto no request e sem vínculo, a resposta é **422**.\nUm arquivo repetido só é reaproveitado dentro do mesmo projeto.\n\n```bash\ncurl -H \"X-API-Key: ...\" -F \"file=@aula.mp3\" -F \"project=Aulas\" -F \"folder=Setembro\" .../transcribe\n```\n",
     "version": "1.0.0"
   },
   "paths": {
@@ -185,7 +185,7 @@
           "API Keys"
         ],
         "summary": "Create Api Key",
-        "description": "Create a new API key for the authenticated user\n\n## Request Body:\n```json\n{\n  \"name\": \"Production Server\",\n  \"expires_in_days\": 30  // optional, null = never expires\n}\n```\n\n## Returns:\n```json\n{\n  \"id\": \"uuid\",\n  \"name\": \"Production Server\",\n  \"api_key\": \"doc2md_sk_...\",  // ONLY SHOWN ONCE!\n  \"expires_at\": \"2025-11-01T00:00:00\",\n  \"created_at\": \"2025-10-02T00:00:00\"\n}\n```\n\n## Important:\n- The `api_key` is shown ONLY ONCE during creation\n- Save it immediately - you won't be able to see it again\n- Use it in requests with header: `X-API-Key: doc2md_sk_...`\n\n## Errors:\n- 401: Not authenticated",
+        "description": "Create a new API key for the authenticated user\n\n## Request Body:\n```json\n{\n  \"name\": \"Production Server\",\n  \"expires_in_days\": 30,  // optional, null = never expires\n  \"project\": \"Transcrições automáticas\"  // optional: name (get-or-add) or \"project_id\"\n}\n```\n\nUploads made with a key bound to a project, that do not name a project,\ngo to that project. A request that also sends a JWT is a JWT request and\ndoes not use the binding.\n\n## Returns:\n```json\n{\n  \"id\": \"uuid\",\n  \"name\": \"Production Server\",\n  \"api_key\": \"doc2md_sk_...\",  // ONLY SHOWN ONCE!\n  \"expires_at\": \"2025-11-01T00:00:00\",\n  \"created_at\": \"2025-10-02T00:00:00\"\n}\n```\n\n## Important:\n- The `api_key` is shown ONLY ONCE during creation\n- Save it immediately - you won't be able to see it again\n- Use it in requests with header: `X-API-Key: doc2md_sk_...`\n\n## Errors:\n- 401: Not authenticated",
         "operationId": "create_api_key_api_keys__post",
         "requestBody": {
           "content": {
@@ -230,6 +230,66 @@
       }
     },
     "/api-keys/{key_id}": {
+      "patch": {
+        "tags": [
+          "API Keys"
+        ],
+        "summary": "Update Api Key Project",
+        "description": "Bind the key to a project, or unbind it (`{\"project_id\": null}`)\n\nUploads made with this key that name no project go to the bound project.\nA key without a project must send `project` on every upload (422 otherwise).\nRe-binding changes where new uploads go; a file already processed in another\nproject is processed again in the new one.\n\n## Errors:\n- 404: API key or project not found (or not yours)",
+        "operationId": "update_api_key_project_api_keys__key_id__patch",
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "key_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Key Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/APIKeyProjectUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIKeyInfo"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
       "delete": {
         "tags": [
           "API Keys"
@@ -651,7 +711,7 @@
           "Vision"
         ],
         "summary": "Descrever imagem (JSON base64)",
-        "description": "Descreve uma imagem enviada em base64 e devolve a mesma imagem de volta.\n\n## Corpo\n- `image_base64`: bytes da imagem em base64 (o prefixo `data:image/...;base64,`\n  é aceito e removido)\n- `filename`: nome opcional, usado no job e no storage\n- `task`: `<MORE_DETAILED_CAPTION>` (padrão), `<DETAILED_CAPTION>` ou `<CAPTION>`\n\n## Retorno\nA descrição, os metadados da imagem e o eco de `image_base64` — os bytes\nexatos que você enviou, re-codificados, nunca uma re-compressão.\n\n## Timeout\nSe a inferência passar de `VISION_REQUEST_TIMEOUT_SECONDS`, a resposta é\n504 com `job_id`/`poll_url`: a task continua e o resultado sai em\n`/jobs/{job_id}/result`.",
+        "description": "Descreve uma imagem enviada em base64 e devolve a mesma imagem de volta.\n\n## Corpo\n- `image_base64`: bytes da imagem em base64 (o prefixo `data:image/...;base64,`\n  é aceito e removido)\n- `filename`: nome opcional, usado no job e no storage\n- `task`: `<MORE_DETAILED_CAPTION>` (padrão), `<DETAILED_CAPTION>` ou `<CAPTION>`\n- `project` / `project_id` (obrigatório, salvo API key vinculada a um projeto),\n  `folder` / `folder_id` (opcional): onde o job fica\n\n## Retorno\nA descrição, os metadados da imagem e o eco de `image_base64` — os bytes\nexatos que você enviou, re-codificados, nunca uma re-compressão.\n\n## Timeout\nSe a inferência passar de `VISION_REQUEST_TIMEOUT_SECONDS`, a resposta é\n504 com `job_id`/`poll_url`: a task continua e o resultado sai em\n`/jobs/{job_id}/result`.",
         "operationId": "describe_image_images_describe_post",
         "requestBody": {
           "content": {
@@ -1502,13 +1562,769 @@
         }
       }
     },
+    "/admin/engines/{engine_id}/test": {
+      "post": {
+        "tags": [
+          "Admin - Engines"
+        ],
+        "summary": "Test an engine's credentials and deployment (no GPU)",
+        "operationId": "test_engine_admin_engines__engine_id__test_post",
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "engine_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Engine Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Test Engine Admin Engines  Engine Id  Test Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/engines/{engine_id}/activate": {
+      "post": {
+        "tags": [
+          "Admin - Engines"
+        ],
+        "summary": "Let the dispatcher place work on an engine",
+        "operationId": "activate_engine_admin_engines__engine_id__activate_post",
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "engine_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Engine Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/VersionBody"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Activate Engine Admin Engines  Engine Id  Activate Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/engines/{engine_id}/pause": {
+      "post": {
+        "tags": [
+          "Admin - Engines"
+        ],
+        "summary": "Stop placing new work on an engine (work in flight finishes)",
+        "operationId": "pause_engine_admin_engines__engine_id__pause_post",
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "engine_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Engine Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/VersionBody"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Pause Engine Admin Engines  Engine Id  Pause Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/engines/{engine_id}/reset-health": {
+      "post": {
+        "tags": [
+          "Admin - Engines"
+        ],
+        "summary": "Forget an engine's recorded failures",
+        "operationId": "reset_engine_health_admin_engines__engine_id__reset_health_post",
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "engine_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Engine Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Reset Engine Health Admin Engines  Engine Id  Reset Health Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/engines/{engine_id}/budget": {
+      "put": {
+        "tags": [
+          "Admin - Engines"
+        ],
+        "summary": "Set an engine's spending ceiling per period",
+        "operationId": "put_engine_budget_admin_engines__engine_id__budget_put",
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "engine_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Engine Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BudgetUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Put Engine Budget Admin Engines  Engine Id  Budget Put"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/engines/{engine_id}/credentials": {
+      "put": {
+        "tags": [
+          "Admin - Engines"
+        ],
+        "summary": "Replace an engine's credentials (sealed, write-only)",
+        "operationId": "put_engine_credentials_admin_engines__engine_id__credentials_put",
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "engine_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Engine Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CredentialsUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Put Engine Credentials Admin Engines  Engine Id  Credentials Put"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Admin - Engines"
+        ],
+        "summary": "Forget an engine's credentials",
+        "operationId": "delete_engine_credentials_admin_engines__engine_id__credentials_delete",
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "engine_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Engine Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CredentialsDelete"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Delete Engine Credentials Admin Engines  Engine Id  Credentials Delete"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/engines/{engine_id}/benchmarks": {
+      "get": {
+        "tags": [
+          "Admin - Engines"
+        ],
+        "summary": "Benchmark results (gpu x E) and the learned speed per key",
+        "operationId": "engine_benchmarks_admin_engines__engine_id__benchmarks_get",
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "engine_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Engine Id"
+            }
+          },
+          {
+            "name": "feature",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "transcription",
+              "title": "Feature"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 50,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Engine Benchmarks Admin Engines  Engine Id  Benchmarks Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/engines/{engine_id}/reconcile": {
+      "post": {
+        "tags": [
+          "Admin - Engines"
+        ],
+        "summary": "Read the provider's spend report for one engine now",
+        "operationId": "reconcile_engine_admin_engines__engine_id__reconcile_post",
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "engine_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Engine Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Reconcile Engine Admin Engines  Engine Id  Reconcile Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/engines/test-all": {
+      "post": {
+        "tags": [
+          "Admin - Engines"
+        ],
+        "summary": "Test every remote engine's credentials and deployment, in turn (no GPU)",
+        "operationId": "test_all_engines_admin_engines_test_all_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Test All Engines Admin Engines Test All Post"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
+          }
+        ]
+      }
+    },
+    "/projects": {
+      "get": {
+        "tags": [
+          "Projects"
+        ],
+        "summary": "Listar projetos com contagens",
+        "description": "Os projetos do usuário, com contagens de jobs MAIN, os mais recentes primeiro\n(`last_job_at` desc, depois nome). `?include=folders` traz as pastas de cada\nprojeto, com contagem.\n\nAs contagens vêm de um único `GROUP BY project_id, folder_id, status`.",
+        "operationId": "list_projects_projects_get",
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "include",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "`folders` inclui as pastas de cada projeto",
+              "title": "Include"
+            },
+            "description": "`folders` inclui as pastas de cada projeto"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectListResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/resolve": {
+      "get": {
+        "tags": [
+          "Projects"
+        ],
+        "summary": "Um nome de projeto casa com um projeto existente?",
+        "description": "Diz, sem criar nada, se `name` é um projeto existente (pela regra de\nnormalização do backend: `reuniao` casa com \"Reunião\") ou se seria criado.\n\n`{\"valid\": true, \"match\": {\"id\", \"name\"}}`, `{\"valid\": true, \"match\": null}`\nou `{\"valid\": false, \"error\": \"...\"}`. Sempre 200.",
+        "operationId": "resolve_project_name_projects_resolve_get",
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "name",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "O texto digitado",
+              "title": "Name"
+            },
+            "description": "O texto digitado"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NameResolveResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{project_id}/folders/resolve": {
+      "get": {
+        "tags": [
+          "Projects"
+        ],
+        "summary": "Um nome de pasta casa com uma pasta existente do projeto?",
+        "description": "Igual a `GET /projects/resolve`, para uma pasta do projeto. Projeto alheio: 404.",
+        "operationId": "resolve_folder_name_projects__project_id__folders_resolve_get",
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "name",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "O texto digitado",
+              "title": "Name"
+            },
+            "description": "O texto digitado"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NameResolveResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/upload": {
       "post": {
         "tags": [
           "Conversion"
         ],
         "summary": "Upload e converter arquivo",
-        "description": "Upload direto de arquivo para conversão\n\nEste endpoint é dedicado exclusivamente para upload de arquivos.\nUse os outros endpoints para converter de URL, Google Drive ou Dropbox.\n\n## Parâmetros:\n- `file`: Arquivo para upload\n- `name`: Nome de identificação opcional (se não fornecido, usa o nome do arquivo)\n- `docling_preset`: Quality/speed preset (apenas para PDFs):\n  - **fast** (padrão): Conversão rápida, apenas texto (~35s/MB)\n    - OCR: Desligado | Images: Desligadas | Tables: Ligadas\n  - **balanced**: Velocidade moderada, extrai imagens (~70-105s/MB)\n    - OCR: Desligado | Images: Ligadas | Tables: Ligadas\n  - **quality**: Máxima qualidade, inclui OCR para documentos escaneados (~350s/MB)\n    - OCR: Ligado | Images: Ligadas | Tables: Ligadas\n\n## Formatos suportados\nPDF, DOCX, DOC, HTML, PPTX, XLSX, RTF, ODT\n\n## Retorno\nRetorna imediatamente um `job_id` para consultar o progresso via `/jobs/{job_id}`\n\n## Exemplos:\n```bash\n# Fast mode (default)\ncurl -X POST http://localhost:8000/upload       -H \"X-API-Key: your-api-key\"       -F \"file=@documento.pdf\"\n\n# Quality mode with OCR\ncurl -X POST http://localhost:8000/upload       -H \"X-API-Key: your-api-key\"       -F \"file=@documento_escaneado.pdf\"       -F \"docling_preset=quality\"\n```",
+        "description": "Upload direto de arquivo para conversão\n\nEste endpoint é dedicado exclusivamente para upload de arquivos.\nUse os outros endpoints para converter de URL, Google Drive ou Dropbox.\n\n## Parâmetros:\n- `file`: Arquivo para upload\n- `name`: Nome de identificação opcional (se não fornecido, usa o nome do arquivo)\n- `docling_preset`: Quality/speed preset (apenas para PDFs):\n  - **fast** (padrão): Conversão rápida, apenas texto (~35s/MB)\n    - OCR: Desligado | Images: Desligadas | Tables: Ligadas\n  - **balanced**: Velocidade moderada, extrai imagens (~70-105s/MB)\n    - OCR: Desligado | Images: Ligadas | Tables: Ligadas\n  - **quality**: Máxima qualidade, inclui OCR para documentos escaneados (~350s/MB)\n    - OCR: Ligado | Images: Ligadas | Tables: Ligadas\n\n## Formatos suportados\nPDF, DOCX, DOC, HTML, PPTX, XLSX, RTF, ODT\n\n## Retorno\nRetorna imediatamente um `job_id` para consultar o progresso via `/jobs/{job_id}`,\ne onde o job ficou (`project`, `folder`)\n\n## Exemplos:\n```bash\n# Fast mode (default)\ncurl -X POST http://localhost:8000/upload       -H \"X-API-Key: your-api-key\"       -F \"file=@documento.pdf\"       -F \"project=Cliente X\"\n\n# Quality mode with OCR\ncurl -X POST http://localhost:8000/upload       -H \"X-API-Key: your-api-key\"       -F \"file=@documento_escaneado.pdf\"       -F \"docling_preset=quality\"\n```",
         "operationId": "upload_and_convert_upload_post",
         "requestBody": {
           "content": {
@@ -1558,7 +2374,7 @@
           "Conversion"
         ],
         "summary": "Transcrever áudio ou vídeo (STT, legendas VTT/SRT)",
-        "description": "Transcrever áudio ou vídeo para texto usando Whisper (STT)\n\nAceita áudio ou vídeo (só a faixa de áudio do vídeo é transcrita).\nO job entra na fila própria de transcrição (`ingestify-audio`), consumida por\nworkers dedicados, e não disputa vaga com a conversão de documentos.\n\n## Autenticação\nObrigatória: header `X-API-Key: <chave>` ou `Authorization: Bearer <token JWT>`.\nSem ele a resposta é 401.\n\nTodos os formatos são gerados: Markdown, legendas WebVTT e SRT, texto puro e\nJSON com segmentos. Escolha o formato em `GET /jobs/{job_id}/result?format=vtt`\n(ou defina o padrão com `output_format`).\n\n## Parâmetros:\n- `file`: Arquivo de áudio ou vídeo para transcrição\n- `name`: Nome de identificação opcional\n- `tags`: Tags do job, separadas por vírgula (ex: `focus,aula`)\n- `language`: Código de idioma ISO 639-1 (ex: 'en', 'pt', 'es'). Auto-detecta se não fornecido\n- `include_timestamps`: Adicionar marcadores de tempo [MM:SS] na transcrição\n- `include_word_timestamps`: Adicionar timestamps em cada palavra (mais detalhado)\n- `output_format`: Formato padrão do resultado (`markdown`, `vtt`, `srt`, `txt`, `json`)\n- `purge_source`: Se `true`, apaga o arquivo enviado (disco e MinIO) quando o job\n  termina com sucesso; ficam só as transcrições. `DELETE /jobs/{job_id}` também\n  apaga o arquivo de origem e as transcrições\n\n## Arquivo repetido\nReenviar um arquivo idêntico (mesmo SHA-256) que já tem job **não falho** devolve\nesse job em vez de criar outro: as tags novas são somadas às dele e o\n`output_format` enviado passa a ser o padrão do resultado. Se o job anterior\nfalhou, o reenvio cria um job novo; é assim que se tenta de novo.\n\n## Formatos suportados\n- Áudio: MP3, WAV, M4A, FLAC, OGG, OPUS, WEBM, WMA, AAC\n- Vídeo: MP4, M4V, MKV, MOV, AVI, WEBM, WMV, FLV, MPEG, TS, 3GP\n\n## Limite de tamanho\n- Áudio: até 50MB (MAX_AUDIO_FILE_SIZE_MB)\n- Vídeo: até 500MB (MAX_VIDEO_FILE_SIZE_MB)\n\n## Tempo limite\nDefinido pelo worker de transcrição (`TRANSCRIPTION_TIMEOUT_SECONDS`, padrão 3h),\nindependente do `CONVERSION_TIMEOUT_SECONDS` dos documentos. Um job que estoura o\ntempo falha sem novas tentativas automáticas.\n\n## Retorno\nRetorna imediatamente um `job_id` para consultar o progresso via `/jobs/{job_id}`\n\n## Erros\n- 401: sem autenticação\n- 413: arquivo acima do limite\n- 422: formato não suportado, `output_format` inválido ou `tags` inválidas\n- 503: transcrição desabilitada ou workers indisponíveis\n\n## Exemplos:\n```bash\ncurl -X POST http://localhost:8080/transcribe \\\n  -H \"X-API-Key: $INGESTIFY_API_KEY\" \\\n  -F \"file=@meeting.mp3\" \\\n  -F \"language=pt\" \\\n  -F \"include_timestamps=true\"\n```\n\nVídeo com legenda SRT como padrão, tags e descarte do arquivo ao terminar:\n```bash\ncurl -X POST http://localhost:8080/transcribe \\\n  -H \"Authorization: Bearer $TOKEN\" \\\n  -F \"file=@aula.mp4\" \\\n  -F \"language=pt\" \\\n  -F \"output_format=srt\" \\\n  -F \"tags=focus,aula\" \\\n  -F \"purge_source=true\"\n```\n\n## Resultado\nConsulte o status em `/jobs/{job_id}` até `completed` e busque o resultado:\n- `GET /jobs/{job_id}/result`: JSON com markdown e metadados (idioma, duração, device)\n- `GET /jobs/{job_id}/result?format=vtt`: legenda WebVTT (`text/vtt`)\n- `?format=srt`, `?format=txt`, `?format=json`: SRT, texto puro, segmentos",
+        "description": "Transcrever áudio ou vídeo para texto usando Whisper (STT)\n\nAceita áudio ou vídeo (só a faixa de áudio do vídeo é transcrita).\nO job entra na fila própria de transcrição (`ingestify-audio`), consumida por\nworkers dedicados, e não disputa vaga com a conversão de documentos.\n\n## Autenticação\nObrigatória: header `X-API-Key: <chave>` ou `Authorization: Bearer <token JWT>`.\nSem ele a resposta é 401.\n\nTodos os formatos são gerados: Markdown, legendas WebVTT e SRT, texto puro e\nJSON com segmentos. Escolha o formato em `GET /jobs/{job_id}/result?format=vtt`\n(ou defina o padrão com `output_format`).\n\n## Parâmetros:\n- `file`: Arquivo de áudio ou vídeo para transcrição\n- `name`: Nome de identificação opcional\n- `tags`: Tags do job, separadas por vírgula (ex: `focus,aula`)\n- `language`: Código de idioma ISO 639-1 (ex: 'en', 'pt', 'es'). Auto-detecta se não fornecido\n- `include_timestamps`: Adicionar marcadores de tempo [MM:SS] na transcrição\n- `include_word_timestamps`: Adicionar timestamps em cada palavra (mais detalhado)\n- `output_format`: Formato padrão do resultado (`markdown`, `vtt`, `srt`, `txt`, `json`)\n- `purge_source`: Se `true`, apaga o arquivo enviado (disco e MinIO) quando o job\n  termina com sucesso; ficam só as transcrições. `DELETE /jobs/{job_id}` também\n  apaga o arquivo de origem e as transcrições\n\n## Projeto\nTodo job pertence a um projeto: envie `project` (nome; criado se não existir) ou\n`project_id`, e opcionalmente `folder`/`folder_id`. Uma API key vinculada a um\nprojeto dispensa o campo. Sem projeto: 422.\n\n## Arquivo repetido\nReenviar um arquivo idêntico (mesmo SHA-256) que já tem job **não falho** no mesmo\nprojeto devolve esse job em vez de criar outro: as tags novas são somadas às dele e o\n`output_format` enviado passa a ser o padrão do resultado. Se o job anterior\nfalhou, o reenvio cria um job novo; é assim que se tenta de novo.\n\n## Formatos suportados\n- Áudio: MP3, WAV, M4A, FLAC, OGG, OPUS, WEBM, WMA, AAC\n- Vídeo: MP4, M4V, MKV, MOV, AVI, WEBM, WMV, FLV, MPEG, TS, 3GP\n\n## Limite de tamanho\n- Áudio: até 50MB (MAX_AUDIO_FILE_SIZE_MB)\n- Vídeo: até 500MB (MAX_VIDEO_FILE_SIZE_MB)\n\n## Tempo limite\nDefinido pelo worker de transcrição (`TRANSCRIPTION_TIMEOUT_SECONDS`, padrão 3h),\nindependente do `CONVERSION_TIMEOUT_SECONDS` dos documentos. Um job que estoura o\ntempo falha sem novas tentativas automáticas.\n\n## Retorno\nRetorna imediatamente um `job_id` para consultar o progresso via `/jobs/{job_id}`\n\n## Erros\n- 401: sem autenticação\n- 413: arquivo acima do limite\n- 422: formato não suportado, `output_format` inválido ou `tags` inválidas\n- 503: transcrição desabilitada ou workers indisponíveis\n\n## Exemplos:\n```bash\ncurl -X POST http://localhost:8080/transcribe \\\n  -H \"X-API-Key: $INGESTIFY_API_KEY\" \\\n  -F \"file=@meeting.mp3\" \\\n  -F \"project=Reuniões\" \\\n  -F \"language=pt\" \\\n  -F \"include_timestamps=true\"\n```\n\nVídeo com legenda SRT como padrão, tags e descarte do arquivo ao terminar:\n```bash\ncurl -X POST http://localhost:8080/transcribe \\\n  -H \"Authorization: Bearer $TOKEN\" \\\n  -F \"file=@aula.mp4\" \\\n  -F \"language=pt\" \\\n  -F \"output_format=srt\" \\\n  -F \"tags=focus,aula\" \\\n  -F \"purge_source=true\"\n```\n\n## Resultado\nConsulte o status em `/jobs/{job_id}` até `completed` e busque o resultado:\n- `GET /jobs/{job_id}/result`: JSON com markdown e metadados (idioma, duração, device)\n- `GET /jobs/{job_id}/result?format=vtt`: legenda WebVTT (`text/vtt`)\n- `?format=srt`, `?format=txt`, `?format=json`: SRT, texto puro, segmentos",
         "operationId": "transcribe_audio_transcribe_post",
         "requestBody": {
           "content": {
@@ -1608,7 +2424,7 @@
           "Conversion"
         ],
         "summary": "Convert Document",
-        "description": "Conversão de documentos para Markdown\n\n## Opções de uso:\n\n### 1. Upload de arquivo (multipart/form-data)\n- `source_type`: \"file\"\n- `file`: Selecione o arquivo para upload\n- `source`: Deixe vazio\n\n### 2. URL pública\n- `source_type`: \"url\"\n- `source`: \"https://example.com/document.pdf\"\n- `file`: Deixe vazio\n\n### 3. Google Drive\n- `source_type`: \"gdrive\"\n- `source`: \"1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms\" (file ID)\n- `authorization`: \"Bearer ya29.a0AfH6SMB...\" (OAuth2 token)\n- `file`: Deixe vazio\n\n### 4. Dropbox\n- `source_type`: \"dropbox\"\n- `source`: \"/documents/report.pdf\" (path do arquivo)\n- `authorization`: \"Bearer sl.B1a2c3...\" (access token)\n- `file`: Deixe vazio\n\n## Formatos suportados\nPDF, DOCX, DOC, HTML, PPTX, XLSX, RTF, ODT\n\n## Retorno\nRetorna imediatamente um `job_id` para consultar o progresso via `/jobs/{job_id}`",
+        "description": "Conversão de documentos para Markdown\n\n## Opções de uso:\n\n### 1. Upload de arquivo (multipart/form-data)\n- `source_type`: \"file\"\n- `file`: Selecione o arquivo para upload\n- `source`: Deixe vazio\n\n### 2. URL pública\n- `source_type`: \"url\"\n- `source`: \"https://example.com/document.pdf\"\n- `file`: Deixe vazio\n\n### 3. Google Drive\n- `source_type`: \"gdrive\"\n- `source`: \"1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms\" (file ID)\n- header `X-Source-Token`: \"ya29.a0AfH6SMB...\" (OAuth2 token do Google)\n- `file`: Deixe vazio\n\n### 4. Dropbox\n- `source_type`: \"dropbox\"\n- `source`: \"/documents/report.pdf\" (path do arquivo)\n- header `X-Source-Token`: \"sl.B1a2c3...\" (access token do Dropbox)\n\nO header `Authorization` autentica no Ingestify e nunca é repassado ao\nprovedor nem colocado na mensagem do Celery (S-01).\n- `file`: Deixe vazio\n\n## Projeto (obrigatório) e pasta\n`project` (nome; criado se não existir) ou `project_id`, e opcionalmente\n`folder`/`folder_id`. Uma API key vinculada a um projeto dispensa o campo\n(só sem JWT). Sem projeto: 422. Um arquivo repetido só é reaproveitado\ndentro do mesmo projeto.\n\n## Formatos suportados\nPDF, DOCX, DOC, HTML, PPTX, XLSX, RTF, ODT\n\n## Retorno\nRetorna imediatamente um `job_id` para consultar o progresso via `/jobs/{job_id}`",
         "operationId": "convert_document_convert_post",
         "security": [
           {
@@ -1632,10 +2448,28 @@
                   "type": "null"
                 }
               ],
-              "description": "Token de autenticação no formato 'Bearer {token}' (obrigatório para gdrive e dropbox)",
+              "description": "Autenticação do Ingestify ('Bearer {jwt}'). Nunca é repassada a provedores externos.",
               "title": "Authorization"
             },
-            "description": "Token de autenticação no formato 'Bearer {token}' (obrigatório para gdrive e dropbox)"
+            "description": "Autenticação do Ingestify ('Bearer {jwt}'). Nunca é repassada a provedores externos."
+          },
+          {
+            "name": "X-Source-Token",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Token OAuth/acesso do provedor (obrigatório para gdrive e dropbox). Não vai na mensagem do Celery: o worker o lê de uma chave Redis com TTL e a apaga após o download.",
+              "title": "X-Source-Token"
+            },
+            "description": "Token OAuth/acesso do provedor (obrigatório para gdrive e dropbox). Não vai na mensagem do Celery: o worker o lê de uma chave Redis com TTL e a apaga após o download."
           }
         ],
         "requestBody": {
@@ -2102,7 +2936,7 @@
           "Conversion"
         ],
         "summary": "Listar jobs do usuário",
-        "description": "Lista os jobs do usuário autenticado, do mais recente para o mais antigo.\n\nA lista vem do MySQL (fonte da verdade); o Redis só complementa o status e\no progresso ao vivo dos jobs em andamento.\n\n## Parâmetros:\n- `limit`: Máximo de jobs (padrão: 50, máximo: 100)\n- `offset`: Quantos pular (paginação)\n- `status`: queued, processing, completed, failed ou cancelled\n- `tag`: Filtra por tag; `?tag=a&tag=b` exige as duas\n- `q`: Texto no nome do job ou do arquivo\n- `kind`: `document`, `transcription` ou `image`\n- `job_type`: `main` (padrão) ou `all`\n\n## Retorno:\n`{total, limit, offset, jobs, counts}`. `total` é o total filtrado antes da\npaginação; `counts` traz quantos jobs há em cada status com os demais\nfiltros aplicados (para montar os filtros da interface).",
+        "description": "Lista os jobs do usuário autenticado, do mais recente para o mais antigo.\n\nA lista vem do MySQL (fonte da verdade); o Redis só complementa o status e\no progresso ao vivo dos jobs em andamento.\n\n## Parâmetros:\n- `limit`: Máximo de jobs (padrão: 50, máximo: 100)\n- `offset`: Quantos pular (paginação)\n- `status`: queued, processing, completed, failed ou cancelled\n- `tag`: Filtra por tag; `?tag=a&tag=b` exige as duas\n- `q`: Texto no nome do job ou do arquivo\n- `kind`: `document`, `transcription` ou `image`\n- `project_id`: só jobs do projeto (projeto alheio: 404)\n- `folder_id`: só jobs da pasta (pasta alheia: 404), ou `root` com `project_id`\n  para os jobs sem pasta. Sem `project_id`, o projeto é o da pasta.\n- `job_type`: `main` (padrão) ou `all`\n\n## Retorno:\n`{total, limit, offset, jobs, counts}`. `total` é o total filtrado antes da\npaginação; `counts` traz quantos jobs há em cada status com os demais\nfiltros aplicados (para montar os filtros da interface). Cada job traz\n`project: {id, name}` e `folder: {id, name} | null`.",
         "operationId": "list_jobs_jobs_get",
         "security": [
           {
@@ -2215,6 +3049,42 @@
               "title": "Kind"
             },
             "description": "document, transcription ou image"
+          },
+          {
+            "name": "project_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Só jobs deste projeto.",
+              "title": "Project Id"
+            },
+            "description": "Só jobs deste projeto."
+          },
+          {
+            "name": "folder_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Só jobs desta pasta, ou `root` para os jobs do projeto que não estão em pasta nenhuma (`root` exige `project_id`).",
+              "title": "Folder Id"
+            },
+            "description": "Só jobs desta pasta, ou `root` para os jobs do projeto que não estão em pasta nenhuma (`root` exige `project_id`)."
           }
         ],
         "responses": {
@@ -2478,6 +3348,30 @@
             ],
             "title": "Expires In Days",
             "example": 30
+          },
+          "project": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project",
+            "description": "Projeto vinculado, por nome (criado se não existir). Exclusivo com project_id."
+          },
+          "project_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project Id",
+            "description": "Projeto vinculado, por ID. Exclusivo com project."
           }
         },
         "type": "object",
@@ -2530,6 +3424,16 @@
             "type": "string",
             "format": "date-time",
             "title": "Created At"
+          },
+          "project": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProjectRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "type": "object",
@@ -2541,6 +3445,28 @@
         ],
         "title": "APIKeyInfo",
         "description": "Schema for listing API keys (without the actual key)"
+      },
+      "APIKeyProjectUpdate": {
+        "properties": {
+          "project_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project Id",
+            "description": "Projeto para onde vão os uploads desta key que não dizem o projeto; null desvincula."
+          }
+        },
+        "type": "object",
+        "required": [
+          "project_id"
+        ],
+        "title": "APIKeyProjectUpdate",
+        "description": "PATCH /api-keys/{key_id}: bind the key to a project, or unbind it with null."
       },
       "APIKeyResponse": {
         "properties": {
@@ -2573,6 +3499,16 @@
             "type": "string",
             "format": "date-time",
             "title": "Created At"
+          },
+          "project": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProjectRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "type": "object",
@@ -2721,6 +3657,54 @@
             ],
             "title": "Tags",
             "description": "Tags separadas por vírgula (ex.: 'cliente-x, reunião'). Viram minúsculas; até 20 tags de até 50 caracteres. Enviar um arquivo repetido adiciona as tags ao job existente."
+          },
+          "project": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project",
+            "description": "Nome do projeto (obrigatório, a menos que a API key esteja vinculada a um projeto). É criado se não existir; grafias equivalentes ('Reunião', ' reuniao ') são o mesmo projeto."
+          },
+          "project_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project Id",
+            "description": "ID de um projeto existente (alternativa a 'project'; nunca cria)."
+          },
+          "folder": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Folder",
+            "description": "Nome da pasta dentro do projeto (opcional; criada se não existir; sem '/')."
+          },
+          "folder_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Folder Id",
+            "description": "ID de uma pasta existente do projeto (alternativa a 'folder')."
           }
         },
         "type": "object",
@@ -2754,6 +3738,54 @@
             ],
             "title": "Tags",
             "description": "Tags separadas por vírgula (ex.: 'cliente-x, reunião'). Viram minúsculas; até 20 tags de até 50 caracteres. Enviar um arquivo repetido adiciona as tags ao job existente."
+          },
+          "project": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project",
+            "description": "Nome do projeto (obrigatório, a menos que a API key esteja vinculada a um projeto). É criado se não existir; grafias equivalentes ('Reunião', ' reuniao ') são o mesmo projeto."
+          },
+          "project_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project Id",
+            "description": "ID de um projeto existente (alternativa a 'project'; nunca cria)."
+          },
+          "folder": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Folder",
+            "description": "Nome da pasta dentro do projeto (opcional; criada se não existir; sem '/')."
+          },
+          "folder_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Folder Id",
+            "description": "ID de uma pasta existente do projeto (alternativa a 'folder')."
           }
         },
         "type": "object",
@@ -2799,6 +3831,54 @@
             ],
             "title": "Tags",
             "description": "Tags separadas por vírgula (ex.: 'cliente-x, reunião'). Viram minúsculas; até 20 tags de até 50 caracteres. Enviar um arquivo repetido adiciona as tags ao job existente."
+          },
+          "project": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project",
+            "description": "Nome do projeto (obrigatório, a menos que a API key esteja vinculada a um projeto). É criado se não existir; grafias equivalentes ('Reunião', ' reuniao ') são o mesmo projeto."
+          },
+          "project_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project Id",
+            "description": "ID de um projeto existente (alternativa a 'project'; nunca cria)."
+          },
+          "folder": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Folder",
+            "description": "Nome da pasta dentro do projeto (opcional; criada se não existir; sem '/')."
+          },
+          "folder_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Folder Id",
+            "description": "ID de uma pasta existente do projeto (alternativa a 'folder')."
           }
         },
         "type": "object",
@@ -2874,6 +3954,54 @@
             "title": "Purge Source",
             "description": "Apagar o áudio/vídeo enviado assim que a transcrição terminar (guarda só o texto)",
             "default": false
+          },
+          "project": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project",
+            "description": "Nome do projeto (obrigatório, a menos que a API key esteja vinculada a um projeto). É criado se não existir; grafias equivalentes ('Reunião', ' reuniao ') são o mesmo projeto."
+          },
+          "project_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project Id",
+            "description": "ID de um projeto existente (alternativa a 'project'; nunca cria)."
+          },
+          "folder": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Folder",
+            "description": "Nome da pasta dentro do projeto (opcional; criada se não existir; sem '/')."
+          },
+          "folder_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Folder Id",
+            "description": "ID de uma pasta existente do projeto (alternativa a 'folder')."
           }
         },
         "type": "object",
@@ -2926,6 +4054,54 @@
             "title": "Docling Preset",
             "description": "Quality/speed preset for PDF conversion: 'fast' (~35s/MB, text-only), 'balanced' (~70-105s/MB, with images), 'quality' (~350s/MB, with OCR)",
             "default": "fast"
+          },
+          "project": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project",
+            "description": "Nome do projeto (obrigatório, a menos que a API key esteja vinculada a um projeto). É criado se não existir; grafias equivalentes ('Reunião', ' reuniao ') são o mesmo projeto."
+          },
+          "project_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project Id",
+            "description": "ID de um projeto existente (alternativa a 'project'; nunca cria)."
+          },
+          "folder": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Folder",
+            "description": "Nome da pasta dentro do projeto (opcional; criada se não existir; sem '/')."
+          },
+          "folder_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Folder Id",
+            "description": "ID de uma pasta existente do projeto (alternativa a 'folder')."
           }
         },
         "type": "object",
@@ -2933,6 +4109,93 @@
           "file"
         ],
         "title": "Body_upload_and_convert_upload_post"
+      },
+      "BudgetUpdate": {
+        "properties": {
+          "limit_usd": {
+            "anyOf": [
+              {
+                "type": "number",
+                "exclusiveMinimum": 0.0
+              },
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*(?:\\d{0,6}|(?=[\\d.]{1,13}0*$)\\d{0,6}\\.\\d{0,6}0*$)"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Limit Usd"
+          },
+          "min_remaining_usd": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0.0
+              },
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*(?:\\d{0,6}|(?=[\\d.]{1,13}0*$)\\d{0,6}\\.\\d{0,6}0*$)"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min Remaining Usd"
+          },
+          "soft_pct": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 100.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Soft Pct"
+          },
+          "period_tz": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Period Tz"
+          },
+          "period_anchor_day": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 28.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Period Anchor Day"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          }
+        },
+        "type": "object",
+        "title": "BudgetUpdate"
       },
       "ChildJobs": {
         "properties": {
@@ -2996,6 +4259,62 @@
           "metadata"
         ],
         "title": "ConversionResult"
+      },
+      "CredentialsDelete": {
+        "properties": {
+          "current_password": {
+            "type": "string",
+            "title": "Current Password"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          }
+        },
+        "type": "object",
+        "required": [
+          "current_password"
+        ],
+        "title": "CredentialsDelete"
+      },
+      "CredentialsUpdate": {
+        "properties": {
+          "fields": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Fields"
+          },
+          "current_password": {
+            "type": "string",
+            "title": "Current Password"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          }
+        },
+        "type": "object",
+        "required": [
+          "fields",
+          "current_password"
+        ],
+        "title": "CredentialsUpdate"
       },
       "DocumentMetadata": {
         "properties": {
@@ -3105,6 +4424,24 @@
           "size_bytes"
         ],
         "title": "DocumentMetadata"
+      },
+      "FolderRef": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name"
+        ],
+        "title": "FolderRef"
       },
       "GpusUpdate": {
         "properties": {
@@ -3220,6 +4557,54 @@
             "title": "Filename",
             "description": "Nome de identificação opcional (usado no job e no storage)."
           },
+          "project": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project",
+            "description": "Nome do projeto (get-or-add). Obrigatório, a menos que a API key esteja vinculada a um projeto."
+          },
+          "project_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project Id",
+            "description": "ID de um projeto existente (alternativa a `project`)."
+          },
+          "folder": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Folder",
+            "description": "Nome da pasta no projeto (opcional, get-or-add, sem '/')."
+          },
+          "folder_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Folder Id",
+            "description": "ID de uma pasta existente do projeto."
+          },
           "task": {
             "type": "string",
             "enum": [
@@ -3281,6 +4666,26 @@
             "type": "integer",
             "title": "Duration Ms"
           },
+          "project": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/UploadProjectInfo"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "folder": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/UploadFolderInfo"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "description": {
             "type": "string",
             "title": "Description"
@@ -3341,6 +4746,54 @@
             ],
             "title": "Filename",
             "description": "Nome de identificação opcional."
+          },
+          "project": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project",
+            "description": "Nome do projeto (get-or-add). Obrigatório, a menos que a API key esteja vinculada a um projeto."
+          },
+          "project_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project Id",
+            "description": "ID de um projeto existente (alternativa a `project`)."
+          },
+          "folder": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Folder",
+            "description": "Nome da pasta no projeto (opcional, get-or-add, sem '/')."
+          },
+          "folder_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Folder Id",
+            "description": "ID de uma pasta existente do projeto."
           }
         },
         "type": "object",
@@ -3392,6 +4845,26 @@
             "type": "integer",
             "title": "Duration Ms"
           },
+          "project": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/UploadProjectInfo"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "folder": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/UploadFolderInfo"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "text": {
             "type": "string",
             "title": "Text"
@@ -3442,6 +4915,26 @@
           "message": {
             "type": "string",
             "title": "Message"
+          },
+          "project": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/UploadProjectInfo"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "folder": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/UploadFolderInfo"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "type": "object",
@@ -3654,6 +5147,26 @@
             "type": "array",
             "title": "Tags",
             "default": []
+          },
+          "project": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProjectRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "folder": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FolderRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "parent_job_id": {
             "anyOf": [
@@ -3887,6 +5400,42 @@
         ],
         "title": "LocalGpu"
       },
+      "NameResolveResponse": {
+        "properties": {
+          "valid": {
+            "type": "boolean",
+            "title": "Valid"
+          },
+          "match": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProjectRef"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The existing project/folder, or null if it would be created"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error",
+            "description": "Why the name is not acceptable (valid=false)"
+          }
+        },
+        "type": "object",
+        "required": [
+          "valid"
+        ],
+        "title": "NameResolveResponse"
+      },
       "OcrLine": {
         "properties": {
           "text": {
@@ -4000,6 +5549,178 @@
         ],
         "title": "PartialTranscriptResponse",
         "description": "Texto de uma transcrição em andamento, a partir do segmento `since`"
+      },
+      "ProjectFolderSummary": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "job_count": {
+            "type": "integer",
+            "title": "Job Count"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "job_count"
+        ],
+        "title": "ProjectFolderSummary"
+      },
+      "ProjectLimits": {
+        "properties": {
+          "max_projects": {
+            "type": "integer",
+            "title": "Max Projects"
+          },
+          "max_folders_per_project": {
+            "type": "integer",
+            "title": "Max Folders Per Project"
+          }
+        },
+        "type": "object",
+        "required": [
+          "max_projects",
+          "max_folders_per_project"
+        ],
+        "title": "ProjectLimits"
+      },
+      "ProjectListResponse": {
+        "properties": {
+          "projects": {
+            "items": {
+              "$ref": "#/components/schemas/ProjectSummary"
+            },
+            "type": "array",
+            "title": "Projects"
+          },
+          "limits": {
+            "$ref": "#/components/schemas/ProjectLimits"
+          }
+        },
+        "type": "object",
+        "required": [
+          "projects",
+          "limits"
+        ],
+        "title": "ProjectListResponse"
+      },
+      "ProjectRef": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name"
+        ],
+        "title": "ProjectRef",
+        "description": "A project as other resources point at it."
+      },
+      "ProjectSummary": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "archived": {
+            "type": "boolean",
+            "title": "Archived"
+          },
+          "job_count": {
+            "type": "integer",
+            "title": "Job Count"
+          },
+          "root_job_count": {
+            "type": "integer",
+            "title": "Root Job Count",
+            "description": "Jobs of the project that are in no folder"
+          },
+          "failed_count": {
+            "type": "integer",
+            "title": "Failed Count"
+          },
+          "active_count": {
+            "type": "integer",
+            "title": "Active Count",
+            "description": "Jobs queued or processing"
+          },
+          "last_job_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Job At"
+          },
+          "api_keys": {
+            "items": {
+              "$ref": "#/components/schemas/ProjectRef"
+            },
+            "type": "array",
+            "title": "Api Keys",
+            "description": "API keys bound to this project"
+          },
+          "folders": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/ProjectFolderSummary"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Folders",
+            "description": "Only with ?include=folders"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "archived",
+          "job_count",
+          "root_job_count",
+          "failed_count",
+          "active_count",
+          "api_keys"
+        ],
+        "title": "ProjectSummary"
       },
       "RouteStep": {
         "properties": {
@@ -4302,6 +6023,65 @@
         "title": "TranscriptSegment",
         "description": "Trecho transcrito, com início e fim em segundos da mídia"
       },
+      "UploadFolderInfo": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "created": {
+            "type": "boolean",
+            "title": "Created"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "created"
+        ],
+        "title": "UploadFolderInfo"
+      },
+      "UploadProjectInfo": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "created": {
+            "type": "boolean",
+            "title": "Created",
+            "description": "true when this upload created the project (get-or-add)"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "request",
+              "api_key",
+              "fallback"
+            ],
+            "title": "Source",
+            "description": "request: named in the request; api_key: the key's bound project; fallback: UPLOAD_FALLBACK_PROJECT (emergency valve)"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "created",
+          "source"
+        ],
+        "title": "UploadProjectInfo",
+        "description": "Where an upload went (spec 0004): the project and how it was chosen."
+      },
       "UserCreate": {
         "properties": {
           "email": {
@@ -4406,6 +6186,23 @@
           "type"
         ],
         "title": "ValidationError"
+      },
+      "VersionBody": {
+        "properties": {
+          "version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          }
+        },
+        "type": "object",
+        "title": "VersionBody"
       },
       "VisionCapabilitiesResponse": {
         "properties": {
