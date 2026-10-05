@@ -41,9 +41,13 @@ REMOTE_ADAPTERS = frozenset({"modal"})
 BAD_HEALTH = ("unhealthy", "exhausted", "degraded")
 # Threads of worker-remote kept for control tasks (test, cancel, reconcile)
 REMOTE_CONTROL_THREADS = 2
-# Only transcription has a routed entry point (submit) so far; Docling pages and
-# vision are slice 8. A route for them would show as active and route nothing.
-ROUTABLE_FEATURES = frozenset({"transcription"})
+# Every feature has a routed entry point (spec 0003, slice 8): transcription jobs and
+# document pages through the backlog (dispatch.submit), vision requests inline in the
+# API (dispatch.place_now). Remote engines only run what their adapter supports
+# (capacity.ADAPTER_FEATURES: Modal runs transcription), so Docling and vision routes
+# are local-only for now.
+ROUTABLE_FEATURES = frozenset({"transcription", "document_conversion", "vision"})
+REMOTE_ROUTABLE_FEATURES = frozenset({"transcription"})
 
 
 class When(BaseModel):
@@ -286,6 +290,9 @@ def validate(db: Session, feature: str, spec: RouteSpec, *, fingerprint_of=None,
             if engine.adapter_type == "local":
                 has_local = True
             else:
+                if feature not in REMOTE_ROUTABLE_FEATURES:
+                    raise RouteError(f"Engine {engine.slug} is remote; {feature} runs on local engines only "
+                                     f"(no remote adapter for it yet)")
                 has_remote = True
                 remote_engines.append(engine)
             ids.append(engine.id)

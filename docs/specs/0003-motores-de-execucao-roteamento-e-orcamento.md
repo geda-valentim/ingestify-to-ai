@@ -5,7 +5,7 @@
 | **Status** | Em revisão |
 | **Autor** | Geda Valentim (com agentes de backend, MLOps, frontend, decisor) |
 | **Criada em** | 2026-10-04 |
-| **Atualizada em** | 2026-10-04 (rodada 4: revisão adversarial de fila e concorrência; ver "Histórico de revisão") |
+| **Atualizada em** | 2026-10-05 (fatias 6, 7 e 8 marcadas em §8; rodada 4 de revisão em 2026-10-04) |
 | **Relacionadas** | 0002 |
 | **Substituída por** | — |
 
@@ -869,8 +869,55 @@ Cada item cabe num PR, na ordem. Fora das mudanças deliberadas de 0a/0b, zero-c
       a muda; `/jobs/{id}` mostra `engine.kind` e `queue_reason`; CSP só em `/admin/:path*` no
       `next.config.ts`. Faltam no backend: gasto do período por motor (estimado × reportado),
       `GET /admin/usage`, `/admin/engines/{id}/ledger`, `/admin/audit`, `/admin/jobs/{id}/engine`.)
-- [ ] **6 — Doc** `docs/engines/`.
-- [ ] **7 — Legendas ao vivo remotas.** **8 — Docling por página e visão** (pré-requisito: S-01).
+- [x] **6 — Doc** `docs/engines/`. (Feita em 2026-10-05: guia do operador completo em
+      `docs/features/engines.md` — setup, chaves, importação, capacidade/VRAM, deploy, teste,
+      ativação, rotas das três features, orçamentos, alertas, benchmark, legendas ao vivo, custos,
+      API admin e solução de problemas —, links no `README.md` e em `docs/README.md`, bloco
+      "Execution engines" completo no `.env.example`, notas de rota em `features/vision.md` e
+      `features/conversion.md`. Desvio: um único guia em `docs/features/` (convenção do repositório)
+      no lugar de `docs/engines/MODAL.md` + `ADAPTERS.md`; o contrato do adapter continua
+      documentado em `workers/engines/base.py`, provisório como em §4.10.)
+- [x] **7 — Legendas ao vivo remotas.** (Código feito em 2026-10-05, testado contra um `modal`
+      falso; **nada rodado contra o Modal**. Protocolo do app 2 → 3: o pedido leva `live`; o
+      container (`runner.LiveCaptions`) empurra os segmentos em lotes a cada 2 s para a
+      `modal.Queue` `ingestify-whisper-live` da conta, partição = `attempt_key`, com `put` não
+      bloqueante, no máximo 2.000 lotes por tentativa e 500 segmentos por lote, TTL de 1 h; fila
+      cheia ou com erro só para o envio. O `ModalAdapter` espera em fatias de 3 s quando há legenda
+      (o heartbeat segue a cada 15 s), drena até 100 lotes por fatia, valida cada um
+      (`protocol.parse_live_batch`) e o `worker-remote` acrescenta à lista
+      `job:{id}:transcript:partial` pelo `RedisClient` de sempre; nada muda no local nem no
+      frontend. Spawn novo limpa a lista; quem assume uma chamada (resume) mantém o texto e drena só
+      o resto; a partição é apagada no fim da tentativa, nunca quando a thread só morre. Desvios:
+      (1) o protocolo subiu para 3 e o código do app mudou: **a `modal_1` fica `needs_redeploy`
+      até `modal-deploy`** (passo com a conta real em `features/engines.md`); (2) sem gate ao vivo
+      ainda (uma transcrição roteada de 3–5 min mostrando o texto chegar).)
+- [x] **8 — Docling por página e visão** (pré-requisito: S-01). (Feita em 2026-10-05, **só o
+      motor `local`**. S-01 primeiro: `/convert` não copia mais `Authorization` para a task; o
+      token do provedor vem no header `X-Source-Token` (400 se faltar em Drive/Dropbox; liberado no
+      CORS), fica em `job:{id}:source_token` (Redis, 6 h) e o worker o lê no download e o apaga
+      depois de um download bem-sucedido; `process_conversion` mantém `auth_token` só para
+      mensagens antigas na fila. `ROUTABLE_FEATURES` passou a ter as três features.
+      **`document_conversion`**: `split_pdf_task` e o retry de página entregam cada página a
+      `dispatch.submit(subject_type=page)` (payload com allowlist, só `docling_preset`); o
+      despachante publica `convert_page_task(..., usage_id)` na fila `ingestify`; claim,
+      heartbeat e settle como na transcrição, nunca `task.retry`; o ledger ficou ciente do sujeito:
+      requeue/falha de página mexem na linha `Page` e no page job do Redis, nunca no job pai, e a
+      falha terminal deixa só a página `FAILED` (pai `PROCESSING`, `pages_failed` recontado), como
+      as tentativas esgotadas de hoje. **`vision`**: `dispatch.place_now` na requisição, sem
+      backlog, sob o lock do motor; vaga local ⇒ reserva entregue ao worker de visão (claim,
+      heartbeat, settle); nada cabe com passo local ⇒ fila de hoje; sem passo local ⇒ 503 com
+      `Retry-After: 30`. Desvios: (1) nenhum adapter remoto de Docling ou visão (§4.14 é esboço;
+      fora de escopo v1): passo remoto nessas rotas ⇒ 422, e "remoto só quente" fica sem
+      implementação; T6 não rodou; (2) páginas não passam pela sonda (entram em `waiting`) e a
+      estimativa local é 0 (`sec_per_page_p90` só faria sentido com remoto); (3) `finish_page` não
+      foi extraída: `_run_page_conversion` ganhou um gancho `on_failure` e o caminho roteado é
+      `_run_routed_page`; (4) a reserva de visão grava `placed_by` nulo (o ENUM não tem "api"; sem
+      migração); uma visão cujo claim falha (reserva liberada ou reentrega) **roda mesmo assim**,
+      fora da contabilidade, porque não há backlog para onde devolver quem está esperando; o
+      sweeper libera em 60 s uma reserva de visão nunca publicada; (5) o detector de travados
+      ignora jobs com itens abertos no backlog e páginas com tentativa viva; (6) o retry de página
+      sem rota continua em `process_page` (o shim), com rota vai a `convert_page_task` com
+      `source_pdf_path`; (7) nenhuma coluna ou tabela nova.)
 
 ## 9. Questões em aberto
 

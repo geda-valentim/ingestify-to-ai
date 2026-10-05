@@ -31,7 +31,7 @@ from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 from shared.engines.redact import redact
-from shared.models import FeatureRoute, Job, JobDispatch, JobStatus, EngineUsage
+from shared.models import FeatureRoute, Job, JobDispatch, JobStatus, EngineUsage, Page
 
 logger = logging.getLogger(__name__)
 
@@ -49,11 +49,14 @@ CANCELLED = "cancelled"  # the job is gone, cancelled or failed for good
 
 @dataclass
 class JobChange:
-    """What the job became, for the Redis mirror (written after the commit)"""
+    """What the job (or the page job) became, for the Redis mirror (written after the commit)"""
     job_id: str
     status: str  # queued | failed
     error: Optional[str] = None
     name: Optional[str] = None
+    job_type: str = "main"  # "page" for a routed PDF page (subject_type=page)
+    parent_job_id: Optional[str] = None
+    page_number: Optional[int] = None
 
 
 def holder_id() -> str:
@@ -119,24 +122,97 @@ def max_attempts_for(db: Session, feature: str) -> int:
     return (route.max_attempts if route else None) or DEFAULT_MAX_ATTEMPTS
 
 
-def _job_pending(db: Session, job_id: Optional[str]) -> Optional[JobChange]:
+# --- subjects: a whole job, one page of a split PDF, or a synchronous vision request ---------
+
+
+def page_number_of(d: Optional[JobDispatch]) -> Optional[int]:
+    try:
+        return int(((d.payload or {}).get("kwargs") or {}).get("page_number")) if d is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _page(db: Session, parent_job_id: Optional[str], subject_id: str, page_number: Optional[int]) -> Optional[Page]:
+    """The Page row of a routed page: by number (a retry runs under a new page job id), else by page job id"""
+    if parent_job_id and page_number is not None:
+        page = db.query(Page).filter(Page.job_id == parent_job_id, Page.page_number == page_number).first()
+        if page is not None:
+            return page
+    return db.query(Page).filter(Page.page_job_id == subject_id).first()
+
+
+def subject_state(db: Session, subject_type: Optional[str], subject_id: Optional[str], job_id: Optional[str],
+                  page_number: Optional[int] = None) -> Tuple[str, Optional[datetime]]:
+    """
+    ("completed", when) | ("closed", None) | ("open", None) for the thing an attempt
+    works on. A job is closed when deleted, cancelled or failed; a page when its
+    parent job is. A vision request is always open (it has no backlog to return to).
+    """
+    if subject_type == "vision_request":
+        return "open", None
     job = db.get(Job, job_id) if job_id else None
+    if job is None or job.status in (JobStatus.CANCELLED, JobStatus.FAILED):
+        return "closed", None
+    if subject_type == "page":
+        page = _page(db, job_id, subject_id, page_number)
+        if page is None:
+            return "closed", None
+        if page.status == JobStatus.COMPLETED:
+            return "completed", page.completed_at
+        return "open", None
+    if job.status == JobStatus.COMPLETED:
+        return "completed", job.completed_at
+    return "open", None
+
+
+def recount_parent_pages(db: Session, parent_job_id: str) -> None:
+    """pages_completed / pages_failed of a split job, recounted from its Page rows (no commit)"""
+    parent = db.get(Job, parent_job_id)
+    if parent is None:
+        return
+    parent.pages_completed = db.query(Page).filter(Page.job_id == parent_job_id,
+                                                   Page.status == JobStatus.COMPLETED).count()
+    parent.pages_failed = db.query(Page).filter(Page.job_id == parent_job_id,
+                                                Page.status == JobStatus.FAILED).count()
+
+
+def _page_change(d: JobDispatch, status: str, error: Optional[str] = None) -> JobChange:
+    return JobChange(d.subject_id, status, error=error, job_type="page", parent_job_id=d.job_id,
+                     page_number=page_number_of(d))
+
+
+def _job_pending(db: Session, d: JobDispatch) -> Optional[JobChange]:
+    if d.subject_type == "page":
+        page = _page(db, d.job_id, d.subject_id, page_number_of(d))
+        if page is not None:
+            page.status = JobStatus.PENDING
+        return _page_change(d, "queued")
+    job = db.get(Job, d.job_id) if d.job_id else None
     if job is None:
         return None
     job.status = JobStatus.PENDING
     job.started_at = None
     job.completed_at = None
-    return JobChange(job_id, "queued", name=job.name)
+    return JobChange(d.job_id, "queued", name=job.name)
 
 
-def _job_failed(db: Session, job_id: Optional[str], message: str, now: datetime) -> Optional[JobChange]:
-    job = db.get(Job, job_id) if job_id else None
+def _job_failed(db: Session, d: JobDispatch, message: str, now: datetime) -> Optional[JobChange]:
+    if d.subject_type == "page":
+        # One page failing for good fails that page, never the whole document (as today)
+        page = _page(db, d.job_id, d.subject_id, page_number_of(d))
+        if page is not None:
+            page.status = JobStatus.FAILED
+            page.error_message = message
+            db.flush()
+            recount_parent_pages(db, d.job_id)
+        return _page_change(d, "failed", error=message)
+    job = db.get(Job, d.job_id) if d.job_id else None
     if job is None:
         return None
     job.status = JobStatus.FAILED
     job.error_message = message
     job.completed_at = now
-    return JobChange(job_id, "failed", error=message, name=job.name)
+    return JobChange(d.job_id, "failed", error=message, name=job.name)
 
 
 def fail_dispatch(db: Session, d: JobDispatch, error_code: str, message: str, now: datetime,
@@ -144,7 +220,7 @@ def fail_dispatch(db: Session, d: JobDispatch, error_code: str, message: str, no
     """Terminal failure of a backlog item (no_engine, budget_exhausted, engine_error...)"""
     if not cas_dispatch(db, d, from_states, now, state="failed", error_code=error_code):
         return None
-    return _job_failed(db, d.job_id, message, now) or JobChange(d.job_id or d.subject_id, "failed", error=message)
+    return _job_failed(db, d, message, now) or JobChange(d.job_id or d.subject_id, "failed", error=message)
 
 
 def excluding(d: JobDispatch, engine_id: str, now: datetime, minutes: int) -> list:
@@ -161,7 +237,7 @@ def requeue(db: Session, d: JobDispatch, from_states: Iterable[str], now: dateti
     if not cas_dispatch(db, d, from_states, now, state="waiting", priority=0, job_failures=job_failures,
                         not_before=not_before, usage_id=None, engine_id=None, assigned_at=None, **extra):
         return None
-    return _job_pending(db, d.job_id) or JobChange(d.job_id or d.subject_id, "queued")
+    return _job_pending(db, d) or JobChange(d.job_id or d.subject_id, "queued")
 
 
 def after_failed_attempt(db: Session, d: JobDispatch, *, counts: bool, terminal: bool, error_code: str,
@@ -177,7 +253,7 @@ def after_failed_attempt(db: Session, d: JobDispatch, *, counts: bool, terminal:
         code = error_code if terminal else "engine_error"
         if not cas_dispatch(db, d, from_states, now, state="failed", error_code=code, job_failures=failures):
             return None
-        return _job_failed(db, d.job_id, message, now) or JobChange(d.job_id or d.subject_id, "failed", error=message)
+        return _job_failed(db, d, message, now) or JobChange(d.job_id or d.subject_id, "failed", error=message)
     not_before = now + timedelta(seconds=BACKOFF_BASE_SECONDS * 2 ** (failures - 1)) if counts else None
     return requeue(db, d, from_states, now, job_failures=failures, not_before=not_before,
                    exclude_engines=exclude_engines)
@@ -205,18 +281,20 @@ def claim(usage_id: int, holder: str, *, to_status: str = "running", session_fac
         if n == 0:
             return LOST, None
         usage = db.get(EngineUsage, usage_id)
+        if usage.subject_type == "vision_request":
+            return CLAIMED, None  # synchronous: placed inline by the API, no backlog row (spec 0003, 4.14)
         d = dispatch_of(db, usage)
         if d is None or d.usage_id != usage.id or not cas_dispatch(db, d, ("assigned", "bypassed"), now, state="running"):
             db.rollback()
             return LOST, None
         d = dispatch_of(db, usage)
-        job = db.get(Job, usage.job_id) if usage.job_id else None
-        if job is not None and job.status == JobStatus.COMPLETED:
+        state, completed_at = subject_state(db, usage.subject_type, usage.subject_id, usage.job_id, page_number_of(d))
+        if state == "completed":
             # An earlier attempt, given up as lost, finished after all: its output stands
-            _settle(db, usage, "succeeded", now, output_persisted_at=job.completed_at or now)
+            _settle(db, usage, "succeeded", now, output_persisted_at=completed_at or now)
             cas_dispatch(db, d, ("running",), now, state="done")
             return ALREADY_DONE, None
-        if job is None or job.status in (JobStatus.CANCELLED, JobStatus.FAILED):
+        if state == "closed":
             _settle(db, usage, "cancelled", now, counts=False)
             cas_dispatch(db, d, ("running",), now, state="failed", error_code="cancelled")
             return CANCELLED, None
@@ -350,13 +428,14 @@ def mark_lost(usage_id: int, *, stale_before: datetime, session_factory=None,
         conditions = [EngineUsage.id == usage_id, EngineUsage.status == "running"]
         conditions.append(EngineUsage.heartbeat_at == heartbeat_read if heartbeat_read is not None
                           else EngineUsage.heartbeat_at.is_(None))
-        job = db.get(Job, usage.job_id) if usage.job_id else None
-        completed = job is not None and job.status == JobStatus.COMPLETED
+        state, completed_at = subject_state(db, usage.subject_type, usage.subject_id, usage.job_id,
+                                            page_number_of(dispatch_of(db, usage)))
+        completed = state == "completed"
         values = dict(status="settled", outcome="succeeded" if completed else "lost", counts_toward_attempts=not completed,
                       finished_at=now, actual_usd=0, cost_basis="measured",
                       error_code=None if completed else "LOST")
         if completed:
-            values["output_persisted_at"] = job.completed_at or now
+            values["output_persisted_at"] = completed_at or now
         n = db.execute(update(EngineUsage).where(*conditions).values(**values)
                        .execution_options(synchronize_session=False)).rowcount
         if n == 0:
@@ -411,14 +490,14 @@ def claim_remote(usage_id: int, holder: str, attempt_key: str, check: Callable[[
         if d is None or d.usage_id != usage.id:
             db.rollback()
             return LOST, None, None
-        job = db.get(Job, usage.job_id) if usage.job_id else None
-        if job is not None and job.status == JobStatus.COMPLETED:
+        state, completed_at = subject_state(db, usage.subject_type, usage.subject_id, usage.job_id, page_number_of(d))
+        if state == "completed":
             cas_dispatch(db, d, ("assigned",), now, state="running")
             d = dispatch_of(db, usage)
-            _settle(db, usage, "succeeded", now, output_persisted_at=job.completed_at or now)
+            _settle(db, usage, "succeeded", now, output_persisted_at=completed_at or now)
             cas_dispatch(db, d, ("running",), now, state="done")
             return ALREADY_DONE, None, None
-        if job is None or job.status in (JobStatus.CANCELLED, JobStatus.FAILED):
+        if state == "closed":
             cas_dispatch(db, d, ("assigned",), now, state="running")
             d = dispatch_of(db, usage)
             _settle(db, usage, "cancelled", now, counts=False)
@@ -483,13 +562,14 @@ def settle_remote_lost(usage_id: int, *, session_factory=None, now: Optional[dat
         usage = db.get(EngineUsage, usage_id)
         if usage is None or usage.status not in ("spawning", "running"):
             return None, None
-        job = db.get(Job, usage.job_id) if usage.job_id else None
-        completed = job is not None and job.status == JobStatus.COMPLETED
+        state, completed_at = subject_state(db, usage.subject_type, usage.subject_id, usage.job_id,
+                                            page_number_of(dispatch_of(db, usage)))
+        completed = state == "completed"
         values = dict(status="settled", outcome="succeeded" if completed else "lost", counts_toward_attempts=False,
                       finished_at=now, actual_usd=usage.reserved_usd, cost_basis="reserved",
                       error_code=None if completed else error_code[:32])
         if completed:
-            values["output_persisted_at"] = job.completed_at or now
+            values["output_persisted_at"] = completed_at or now
         n = db.execute(update(EngineUsage).where(EngineUsage.id == usage_id,
                                                  EngineUsage.status.in_(("spawning", "running")),
                                                  EngineUsage.heartbeat_at == usage.heartbeat_at)
@@ -511,12 +591,17 @@ def apply_job_change(redis_client, change: Optional[JobChange]) -> None:
     """Mirror a job's backlog state into its Redis status (best effort, like every Redis write)"""
     if change is None or redis_client is None:
         return
+    extra = {}
+    if change.job_type == "page":
+        extra = {"parent_job_id": change.parent_job_id, "page_number": change.page_number}
+    else:
+        extra = {"name": change.name}
     try:
         if change.status == "failed":
-            redis_client.set_job_status(job_id=change.job_id, job_type="main", status="failed", progress=0,
-                                        error=change.error, completed_at=datetime.utcnow(), name=change.name)
+            redis_client.set_job_status(job_id=change.job_id, job_type=change.job_type, status="failed", progress=0,
+                                        error=change.error, completed_at=datetime.utcnow(), **extra)
         else:
-            redis_client.set_job_status(job_id=change.job_id, job_type="main", status="queued", progress=0,
-                                        name=change.name)
+            redis_client.set_job_status(job_id=change.job_id, job_type=change.job_type, status="queued", progress=0,
+                                        **extra)
     except Exception as e:
         logger.warning(f"[ENGINES] Could not mirror job {change.job_id} state to Redis: {e}")

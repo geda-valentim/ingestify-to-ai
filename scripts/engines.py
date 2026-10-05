@@ -27,12 +27,16 @@ Manage execution engines (spec 0003) from the server shell.
     python scripts/engines.py routes show [--json]
     python scripts/engines.py routes set transcription --step local [--step "modal_1,modal_2 fill_first min_wait=600"]
         [--max-attempts 3] [--fallback local_direct|hold] [--on-no-engine hold|fail --fail-after 3600]
+    python scripts/engines.py routes set document_conversion --step local
+    python scripts/engines.py routes set vision --step local
     python scripts/engines.py routes delete transcription
         Feature routes (spec 0003): with a route, the feature's items queue in the
         backlog and the dispatcher (worker-dispatch, compose profile `engines`)
-        places them step by step. Deleting a route drains its backlog back to the
-        default path. A remote step needs its engines active and deployed, and a
-        running worker-remote.
+        places them step by step - transcription per job, document_conversion per
+        PDF page; vision is placed inline by the API (no backlog). Deleting a route
+        drains its backlog back to the default path. A remote step needs its engines
+        active and deployed, and a running worker-remote; document_conversion and
+        vision take local steps only.
 
     python scripts/engines.py budget modal_1 --limit-usd 30 [--min-remaining-usd 0.5] [--tz UTC] [--anchor-day 1]
     python scripts/engines.py activate modal_1 | pause modal_1

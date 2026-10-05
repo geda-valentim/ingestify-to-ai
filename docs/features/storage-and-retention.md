@@ -59,6 +59,7 @@ Ver também a seção "Redis Key Structure" do [CLAUDE.md](../../CLAUDE.md).
 | `job:{id}:owner` | `user_id` — fallback de autorização quando o MySQL não conhece o job | 24 h |
 | `user:{user_id}:jobs` | SET com os job ids do usuário | 30 dias |
 | `job:{id}:output_format`, `job:{id}:transcript:partial` | Transcrição | ver doc de transcrição |
+| `job:{id}:source_token` | Token do provedor (Drive/Dropbox) entregue ao worker fora da mensagem do Celery (S-01); apagado após o download | 6 h |
 | `vision:worker:heartbeat` | Capacidades do worker de visão | 45 s |
 | `ratelimit:<bucket>:<identidade>` | Contadores de login/registro | janela da regra |
 

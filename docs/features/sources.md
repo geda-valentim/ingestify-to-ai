@@ -52,24 +52,28 @@ O `URLHandler`:
 
 O frontend expõe essa fonte na aba "URL" do dashboard.
 
-### Google Drive / Dropbox (como o código espera)
+### Google Drive / Dropbox
 
 ```bash
 curl -X POST http://localhost:8000/convert \
-  -H "Authorization: Bearer <token-do-provedor>" \
+  -H "Authorization: Bearer <jwt-do-ingestify>" \
+  -H "X-Source-Token: <token-do-provedor>" \
   -F "source_type=gdrive" -F "source=<file-id>"
 ```
 
-A API exige o header `Authorization` para essas fontes (`401` se ausente) e repassa o
-valor após `Bearer ` ao worker como `auth_token`. O handler do Drive usa
-`googleapiclient` (`files().get_media`); o do Dropbox usa o SDK `dropbox`
-(`files_download`).
+`Authorization` (ou `X-API-Key`) autentica no Ingestify e **nunca** é repassado ao provedor nem
+colocado na mensagem do Celery (correção do S-01, [SECURITY_REVIEW.md](../SECURITY_REVIEW.md)). O
+token do provedor vai no header próprio `X-Source-Token` (`400` se ausente nessas fontes); a API o
+guarda numa chave Redis de vida curta (`job:{id}:source_token`, 6 h), o worker o lê na hora do
+download e a apaga assim que o download dá certo (uma falha de download a mantém para o retry).
+Ele não aparece nos argumentos da task, no result backend nem em reentregas. O handler do Drive
+usa `googleapiclient` (`files().get_media`); o do Dropbox usa o SDK `dropbox` (`files_download`).
 
 ## O que acontece por dentro
 
 1. A API valida `source_type` (`400` se inválido) e a presença de `source`/`file`.
-2. Cria o job (MySQL + Redis) e enfileira `process_conversion` com
-   `source_type`, `source` e, se houver, `auth_token`.
+2. Cria o job (MySQL + Redis), guarda o `X-Source-Token` (Drive/Dropbox) no Redis e enfileira
+   `process_conversion` com `source_type` e `source` — nenhuma credencial na mensagem.
 3. No worker, `get_source_handler(source_type).download(...)` produz o arquivo local; a
    partir daí o fluxo é o mesmo da conversão.
 
@@ -86,12 +90,6 @@ baixados de URL/Drive/Dropbox ficam apenas no diretório temporário do job.
 
 ## Limites e lacunas conhecidas
 
-- **Google Drive e Dropbox não funcionam pela API atual.** O token do provedor precisa ir
-  em `Authorization: Bearer …`, mas esse mesmo header é o primeiro que
-  `get_current_user` ([shared/auth.py](../../backend/shared/auth.py)) tenta validar como
-  JWT do Ingestify — um token do Google/Dropbox não é um JWT válido, e a requisição
-  recebe `401 Could not validate credentials` antes de chegar ao endpoint (mesmo enviando
-  também `X-API-Key`). Corrigir exige mover o token do provedor para outro campo/header.
 - Downloads do Drive e do Dropbox não respeitam `MAX_FILE_SIZE_MB` (o arquivo inteiro é
   lido em memória).
 - O arquivo do Drive é salvo como `gdrive_<file-id>`, sem extensão; o Docling depende da

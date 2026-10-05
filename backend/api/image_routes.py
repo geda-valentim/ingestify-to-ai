@@ -50,9 +50,11 @@ from uuid import uuid4
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy.orm import Session
 
+from shared.admin import is_effective_admin
 from shared.auth import get_current_active_user
 from shared.config import get_settings
-from shared.database import get_db
+from shared.database import SessionLocal, get_db
+from shared.engines import dispatch as engine_dispatch
 from shared.models import Job, JobStatus as DBJobStatus, User
 from shared.redis_client import VISION_HEARTBEAT_TTL_SECONDS, get_redis_client
 from shared.schemas import (
@@ -221,6 +223,22 @@ def _dispatch_vision_task(kind: str, **kwargs: Any):
 
     task = {"describe": describe_image_task, "ocr": ocr_image_task}[kind]
     return task.delay(**kwargs)
+
+
+def _place_vision(job_id: str, current_user: User) -> "engine_dispatch.Placement":
+    """
+    A vision route's placement for this request (spec 0003, 4.14). Any failure to
+    read or place reads as "today's path": routing never fails a request that
+    would have run without it.
+    """
+    try:
+        return engine_dispatch.place_now(
+            feature="vision", subject_id=job_id, job_id=job_id, user_id=current_user.id,
+            is_admin=is_effective_admin(current_user), session_factory=SessionLocal,
+        )
+    except Exception as e:
+        logger.warning(f"Vision placement for job {job_id} failed, using the vision queue: {type(e).__name__}: {e}")
+        return engine_dispatch.Placement("today")
 
 
 def _read_capabilities_heartbeat() -> Optional[Dict[str, Any]]:
@@ -533,8 +551,33 @@ async def _run_vision(
     if kind == "describe":
         kwargs["task"] = task or DEFAULT_VISION_CAPTION_TASK
 
+    # Com uma rota de visão (spec 0003, fatia 8) a requisição é colocada aqui mesmo,
+    # sem backlog: uma vaga livre vira uma reserva que o worker reivindica; sem vaga
+    # e com passo local, segue a fila de visão como hoje; sem nada que a aceite
+    # agora, 503 com Retry-After. Sem rota, nada disto é consultado.
+    placement = _place_vision(job_id, current_user)
+    if placement.outcome == "unavailable":
+        _discard_image(job_id)
+        _mark_job_failed(job_id, db, db_job, "No vision engine can take this request now")
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error_code": "VISION_ENGINE_UNAVAILABLE",
+                "message": "Nenhum motor de visão pode atender agora. Tente de novo em instantes.",
+                "job_id": job_id,
+                "retry_after": placement.retry_after,
+            },
+            headers={"Retry-After": str(placement.retry_after)},
+        )
+    if placement.outcome == "placed":
+        kwargs["usage_id"] = placement.usage_id
+
     try:
-        async_result = _dispatch_vision_task(kind, **kwargs)
+        if placement.outcome == "placed":
+            async_result = engine_dispatch.publish_sync(
+                SessionLocal, placement.usage_id, lambda: _dispatch_vision_task(kind, **kwargs))
+        else:
+            async_result = _dispatch_vision_task(kind, **kwargs)
     except ImportError as e:
         logger.error(f"Vision tasks not available: {e}")
         # Nenhuma task foi enfileirada, então ninguém mais vai apagar isto.

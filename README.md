@@ -275,6 +275,21 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml down
 - ✅ **API**: Edite arquivos em `backend/api/` e veja mudanças instantaneamente
 - ✅ **Workers**: Edite arquivos em `backend/workers/` e workers reiniciam automaticamente
 
+### Motores de execução (opcional)
+
+Por padrão cada feature pesada roda na sua fila local (transcrição no `worker-audio`, Docling no
+`worker`, visão no `worker-vision`) e nada abaixo é necessário. Para rotear trabalho com backlog
+durável, capacidade declarada, várias GPUs/contas e orçamento (inclusive contas Modal como válvula
+de rajada para transcrição), veja o guia do operador
+**[docs/features/engines.md](docs/features/engines.md)** (setup, chaves, capacidade, deploy,
+rotas, orçamentos, alertas, benchmark, custos e solução de problemas):
+
+```bash
+docker compose --profile engines up -d worker-dispatch          # despachante (qualquer rota)
+docker compose --profile engines up -d --build worker-remote    # só com motores remotos
+docker compose exec api python scripts/engines.py routes show
+```
+
 ## 🔗 Infraestrutura Compartilhada (Novo!)
 
 O Ingestify agora suporta **auto-detecção de infraestrutura compartilhada**! Isso significa:
@@ -449,6 +464,10 @@ DROPBOX_APP_SECRET=your_app_secret
 
 # Storage
 RESULT_TTL_SECONDS=3600
+
+# Motores de execução (opcionais; ver docs/features/engines.md e o bloco no .env.example)
+# ENGINE_SECRETS_PUBLIC_KEY=
+# ENGINE_ALERT_WEBHOOK_URL=
 ```
 
 ## 🔒 Autenticação

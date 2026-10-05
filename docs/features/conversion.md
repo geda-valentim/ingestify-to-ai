@@ -181,3 +181,11 @@ Variáveis lidas por [backend/shared/config.py](../../backend/shared/config.py):
   o expõe.
 - `GET /jobs/{id}/result` de um job em `processing`/`queued` devolve `400`; de um job
   `failed`, `500` com a mensagem de erro.
+
+## Com rota de `document_conversion` (spec 0003, fatia 8)
+
+Opcional. Com `engines.py routes set document_conversion --step local`, cada página de um PDF
+dividido (e cada retry de página) entra no backlog durável e o despachante a coloca no `worker`
+até a capacidade declarada; uma página que falha volta ao backlog com backoff e, esgotadas as
+tentativas, só ela fica `FAILED`. Sem rota, nada muda. Detalhes em
+[engines.md](engines.md#documentos-por-página-fatia-8).

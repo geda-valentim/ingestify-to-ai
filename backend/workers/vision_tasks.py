@@ -79,9 +79,9 @@ HEARTBEAT_INTERVAL_SECONDS = max(HEARTBEAT_TTL_SECONDS // 3, 1)
     time_limit=_TASK_TIME_LIMIT,
     soft_time_limit=_TASK_SOFT_TIME_LIMIT,
 )
-def describe_image_task(self, job_id: str, image_path: str, task: str) -> dict:
+def describe_image_task(self, job_id: str, image_path: str, task: str, usage_id: Optional[int] = None) -> dict:
     """Caption one image. See module docstring for the failure contract."""
-    return _run("describe", job_id, image_path, {"task": task} if task else None)
+    return _run("describe", job_id, image_path, {"task": task} if task else None, usage_id=usage_id)
 
 
 @celery_app.task(
@@ -91,9 +91,9 @@ def describe_image_task(self, job_id: str, image_path: str, task: str) -> dict:
     time_limit=_TASK_TIME_LIMIT,
     soft_time_limit=_TASK_SOFT_TIME_LIMIT,
 )
-def ocr_image_task(self, job_id: str, image_path: str) -> dict:
+def ocr_image_task(self, job_id: str, image_path: str, usage_id: Optional[int] = None) -> dict:
     """Read text out of one image, with per-line regions."""
-    return _run("ocr", job_id, image_path, None)
+    return _run("ocr", job_id, image_path, None, usage_id=usage_id)
 
 
 @celery_app.task(
@@ -181,10 +181,13 @@ def _run(
     job_id: str,
     image_path: str,
     options: Optional[Dict[str, Any]],
+    usage_id: Optional[int] = None,
 ) -> dict:
     """Shared body for both vision tasks: run it, record it, report it, bin it."""
     _set_status(job_id, "processing", progress=10, started_at=datetime.utcnow())
     try:
+        if usage_id is not None:
+            return _run_accounted(operation, job_id, image_path, options, usage_id)
         return _run_inner(operation, job_id, image_path, options)
     finally:
         # EVERY exit: success, typed failure, crash, SoftTimeLimitExceeded.
@@ -192,6 +195,61 @@ def _run(
         # `workers/monitoring.cleanup_old_jobs` is a periodic backstop for the
         # hard-kill case, and periodic cannot bound a tight upload loop.
         discard_image_handoff(settings.temp_storage_path, job_id)
+
+
+def _run_accounted(
+    operation: str,
+    job_id: str,
+    image_path: str,
+    options: Optional[Dict[str, Any]],
+    usage_id: int,
+) -> dict:
+    """
+    A request the API placed on the local engine of a vision route (spec 0003,
+    4.14): claim the reservation, heartbeat it while the model runs, settle it.
+
+    Unlike a backlog item there is nothing to send the request back to - a caller
+    is waiting - so a lost claim (the reservation lapsed: the sweeper released it,
+    or this is a redelivery) still runs the request, just outside the accounting,
+    exactly as it would without a route.
+    """
+    from shared.engines import ledger
+    from workers.engines.local import UsageHeartbeat
+
+    holder = ledger.holder_id()
+    try:
+        outcome, _ = ledger.claim(usage_id, holder)
+    except Exception as exc:  # accounting must never cost the caller the answer
+        logger.warning("vision: could not claim usage %s for job %s: %s", usage_id, job_id, exc)
+        outcome = ledger.LOST
+    if outcome != ledger.CLAIMED:
+        logger.info("vision: usage %s of job %s is %s; running outside the accounting", usage_id, job_id, outcome)
+        return _run_inner(operation, job_id, image_path, options)
+
+    def settle(succeeded: bool, code: str = "INTERNAL", detail: str = "") -> None:
+        try:
+            if succeeded:
+                ledger.settle_succeeded(usage_id, holder, measured_seconds=round(time.monotonic() - started, 3))
+            else:
+                ledger.settle_failed(usage_id, holder, error_code=code[:32], detail=detail, counts=False,
+                                     terminal=True)
+        except Exception as exc:  # the sweeper settles a silent row; the caller still gets the answer
+            logger.warning("vision: could not settle usage %s: %s", usage_id, exc)
+
+    heartbeat = UsageHeartbeat(usage_id, holder).start()
+    started = time.monotonic()
+    try:
+        payload = _run_inner(operation, job_id, image_path, options)
+    except BaseException as exc:
+        heartbeat.stop()
+        settle(False, detail=f"{type(exc).__name__}: {exc}")
+        raise
+    heartbeat.stop()
+    if payload.get("ok") is False:
+        settle(False, str(payload.get("error_code") or "INTERNAL"), str(payload.get("detail") or ""))
+    else:
+        settle(True)
+    return payload
 
 
 def _run_inner(

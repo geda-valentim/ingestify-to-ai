@@ -14,14 +14,14 @@ referência · **planejado** = não implementado.
 |---|---|
 | [features/conversion.md](features/conversion.md) | Conversão Docling: `/upload`, `/convert`, presets, split → páginas → merge, GPU. |
 | [features/jobs-api.md](features/jobs-api.md) | Ciclo de vida e consulta de jobs: `/jobs`, status, resultado, páginas, PDF por página, retry, exclusão. |
-| [features/sources.md](features/sources.md) | Fontes: arquivo, URL (proteção SSRF), Google Drive e Dropbox (hoje inutilizáveis). |
+| [features/sources.md](features/sources.md) | Fontes: arquivo, URL (proteção SSRF), Google Drive e Dropbox (token do provedor em `X-Source-Token`). |
 | [features/auth-and-api-keys.md](features/auth-and-api-keys.md) | JWT, refresh, API keys, rate limit de login/registro, autorização por dono, admins. |
 | [features/tags.md](features/tags.md) | Tags de jobs: criação, `GET /tags`, `PUT /jobs/{id}/tags`, filtro. |
 | [features/search.md](features/search.md) | Busca no conteúdo via Elasticsearch (`GET /search`). |
 | [features/vision.md](features/vision.md) | Florence-2: `/images/describe`, `/images/ocr`, `/images/capabilities`. |
 | [features/storage-and-retention.md](features/storage-and-retention.md) | MySQL, Elasticsearch, MinIO, chaves Redis, disco temporário, tarefas agendadas e retenção. |
 | [features/monitoring-and-admin.md](features/monitoring-and-admin.md) | `/health`, rotas `/admin/*`, detecção de jobs travados e retry automático. |
-| [features/engines.md](features/engines.md) | Motores de execução: rotas por feature, backlog, despachante, watchdog, `/admin/routing`. |
+| [features/engines.md](features/engines.md) | **Guia do operador** dos motores de execução: setup, chaves, capacidade/VRAM, deploy Modal, teste, ativação, rotas (transcrição, páginas de PDF, visão), orçamentos, alertas, benchmark, legendas ao vivo remotas, custos, solução de problemas. |
 | [features/crawler.md](features/crawler.md) | **Planejado / não implementado**: o que existe de código dormente e onde está o plano. |
 | Transcrição de áudio/vídeo (`POST /transcribe`) | Documentada à parte. Dispositivo e GPU do Whisper: [GPU.md](GPU.md) e [spec 0002](specs/0002-dispositivo-unico-e-migracao-do-whisper.md). |
 
@@ -33,6 +33,7 @@ referência · **planejado** = não implementado.
 | [ARCHITECTURE_JOBS.md](ARCHITECTURE_JOBS.md) | parcial | Hierarquia de jobs MAIN/SPLIT/PAGE/MERGE. Fórmula de progresso, estados e filas corrigidos em 2026-10-04. |
 | [specs/0001-remover-clean-architecture-morta.md](specs/0001-remover-clean-architecture-morta.md) | atual (com ressalva) | Decisão de remover as camadas Clean Architecture. Ressalva: o merge `f1b5917` recolocou arquivos do crawler nessas pastas. |
 | [specs/0002-dispositivo-unico-e-migracao-do-whisper.md](specs/0002-dispositivo-unico-e-migracao-do-whisper.md) | atual | `DEVICE` único para Docling, Whisper e Florence-2. |
+| [specs/0003-motores-de-execucao-roteamento-e-orcamento.md](specs/0003-motores-de-execucao-roteamento-e-orcamento.md) | em implementação | Motores de execução, rotas por feature com orçamento (local + Modal). Fatias 0a–8 feitas, 4d pendente; operação em [features/engines.md](features/engines.md). |
 
 ## Operação e deploy
 

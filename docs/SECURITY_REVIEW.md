@@ -6,7 +6,7 @@ Data: 2026-09-28. Base: estado atual do worktree, commit `ec8989c` mais alteraç
 
 | ID | Severidade | Achado | Estado |
 | --- | --- | --- | --- |
-| S-01 | Alta | JWT do Ingestify é enviado como credencial a Google Drive/Dropbox | Confirmado no fluxo de código |
+| S-01 | Alta | JWT do Ingestify é enviado como credencial a Google Drive/Dropbox | **Corrigido em 2026-10-05** (header `X-Source-Token`, token fora da mensagem do Celery) |
 | S-02 | Média | Criação de jobs de conversão sem limite por usuário ou concorrência | Confirmado no código; impacto depende da capacidade implantada |
 | S-03 | Média | Limite de login/cadastro usa IP do proxy e falha aberto se Redis cair | Confirmado no código; impacto depende de proxy/Redis |
 | S-04 | Média | Elasticsearch/Redis sem autenticação obrigatória e conexões internas sem TLS | Confirmado na configuração; exposição depende da rede implantada |
@@ -18,6 +18,13 @@ Data: 2026-09-28. Base: estado atual do worktree, commit `ec8989c` mais alteraç
 **Impacto.** Qualquer requisição a `/convert` com JWT Bearer coloca o JWT no argumento da task/broker, mesmo quando a fonte não precisa dele. Com `source_type=gdrive` ou `dropbox`, o worker ainda o apresenta ao SDK do provedor externo. O provedor deve rejeitar o token, portanto a função tende a falhar; ainda assim, a credencial da aplicação sai do seu domínio. Um token OAuth do provedor colocado no mesmo header não autentica no Ingestify, então o contrato documentado pelo endpoint não funciona. Não há evidência de que o token seja persistido no MySQL; a exposição confirmada é no argumento da task e na chamada ao SDK.
 
 **Correção.** Separar rigorosamente as credenciais: `Authorization` deve servir somente ao Ingestify; aceitar a credencial do provedor em campo próprio, com política explícita de armazenamento e expiração. Evitar colocar tokens em argumentos duráveis do Celery; usar referência a segredo com acesso restrito e descarte após o job. Até a correção, desabilitar essas duas fontes em ambientes que não aceitam essa exposição. Adicionar teste que prove que o JWT da aplicação nunca chega ao handler do provedor.
+
+**Estado (2026-10-05): corrigido** (pré-requisito da fatia 8 da spec 0003). `/convert` não copia
+mais `Authorization` para a task; o token do provedor vem no header `X-Source-Token`, fica numa
+chave Redis com TTL (`job:{id}:source_token`, 6 h) e o worker a lê no download e a apaga depois de
+um download bem-sucedido. Nenhuma credencial vai para argumentos do Celery, result backend ou
+payloads do backlog (`job_dispatches.payload` tem allowlist por feature). Testes em
+`backend/tests/test_engine_pages_and_vision.py` (seção S-01).
 
 ### S-02 — Jobs sem orçamento por usuário
 
