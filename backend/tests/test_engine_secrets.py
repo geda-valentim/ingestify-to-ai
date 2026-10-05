@@ -115,6 +115,27 @@ def test_ordinary_text_is_left_alone():
     assert redact.redact(text) == text
 
 
+def test_formatters_that_unpack_args_still_work():
+    # uvicorn's access log does `client, method, path, version, status = record.args`
+    redact.install_log_redaction()
+    record = logging.getLogger("tests.access").makeRecord(
+        "tests.access", logging.INFO, __file__, 1, '%s - "%s %s HTTP/%s" %d',
+        ("127.0.0.1:5000", "GET", f"/x?key={TOKEN_SECRET}", "1.1", 200), None,
+    )
+    client, method, path, version, status = record.args
+    assert (client, method, version, status) == ("127.0.0.1:5000", "GET", "1.1", 200)
+    assert TOKEN_SECRET not in path
+    assert record.getMessage().endswith('HTTP/1.1" 200')
+
+
+def test_an_exception_passed_as_an_argument_is_redacted():
+    redact.install_log_redaction()
+    record = logging.getLogger("tests.args").makeRecord(
+        "tests.args", logging.ERROR, __file__, 1, "deploy failed: %s", (RuntimeError(f"bad {TOKEN_ID}"),), None,
+    )
+    assert TOKEN_ID not in record.getMessage()
+
+
 def test_log_records_and_tracebacks_are_redacted(caplog):
     redact.install_log_redaction()
     logger = logging.getLogger("tests.redaction")
