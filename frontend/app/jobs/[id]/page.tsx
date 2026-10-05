@@ -24,6 +24,8 @@ import {
   Cpu,
   HardDrive,
   ArrowLeft,
+  Cloud,
+  Server,
 } from "lucide-react";
 import { jobsApi } from "@/lib/api";
 import { useAuthStore } from "@/lib/store/auth";
@@ -101,6 +103,26 @@ function transcriptionProgress(status?: JobStatusResponse | null): string | null
   if (!status || status.status !== "processing" || !status.media_duration) return null;
   const done = Math.min(status.transcribed_seconds ?? 0, status.media_duration);
   return `${formatDuration(done)} of ${formatDuration(status.media_duration)} transcribed`;
+}
+
+/** Where a routed job runs (spec 0003): the class only, never the engine's name or cost. */
+function engineKindLabel(status?: JobStatusResponse | null): string | null {
+  if (!status?.engine) return null;
+  return status.engine.kind === "cloud" ? "Cloud GPU" : "Local server";
+}
+
+/** Why a routed job still waits; null for jobs without routing. */
+function queueReasonText(status?: JobStatusResponse | null): string | null {
+  if (!status?.queue_reason || status.status === "completed" || status.status === "failed" || status.status === "cancelled") {
+    return null;
+  }
+  if (status.queue_reason === "in_queue") {
+    return "Waiting for a free engine. It starts automatically as soon as one has room.";
+  }
+  const where = engineKindLabel(status);
+  return where === "Cloud GPU"
+    ? "Starting on a cloud GPU… this can take a little while the first time."
+    : `Starting${where ? ` on the ${where.toLowerCase()}` : ""}…`;
 }
 
 export default function JobStatusPage({ params }: PageProps) {
@@ -477,6 +499,9 @@ export default function JobStatusPage({ params }: PageProps) {
                   {transcriptionProgress(status) && (
                     <p className="text-xs text-muted-foreground mt-2">{transcriptionProgress(status)}</p>
                   )}
+                  {queueReasonText(status) && (
+                    <p className="text-xs text-muted-foreground mt-2" role="status">{queueReasonText(status)}</p>
+                  )}
                 </div>
 
                 {status?.total_pages && status.total_pages > 0 && (
@@ -541,6 +566,14 @@ export default function JobStatusPage({ params }: PageProps) {
                       />
                     )}
                   </div>
+                )}
+
+                {engineKindLabel(status) && (
+                  <DetailItem
+                    icon={status.engine?.kind === "cloud" ? Cloud : Server}
+                    label={status.status === "completed" ? "Ran on" : "Runs on"}
+                    value={engineKindLabel(status)!}
+                  />
                 )}
 
                 <div className="flex items-start gap-2">
@@ -1091,6 +1124,9 @@ function JobResultPanel({
         </p>
         {transcriptionProgress(status) && (
           <p className="text-sm text-muted-foreground mt-1">{transcriptionProgress(status)}</p>
+        )}
+        {queueReasonText(status) && (
+          <p className="text-sm text-muted-foreground mt-1">{queueReasonText(status)}</p>
         )}
       </div>
     );
