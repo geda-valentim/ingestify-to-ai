@@ -1060,6 +1060,79 @@ function MediaSections({ lang }: { lang: Lang }) {
   );
 }
 
+const COMPUTE_COPY = {
+  pt: {
+    title: "Compute: execução e capacidade",
+    intro: "Compute reúne os motores que executam os jobs, sua capacidade e as rotas por funcionalidade. A instalação padrão usa os workers locais; contas Modal são opcionais e atendem transcrição de arquivos.",
+    admin: "As telas abaixo exigem usuário admin e são somente leitura. Elas mostram o estado e os comandos para o operador alterar a configuração. A API verifica a permissão de admin em cada operação.",
+    head: ["Tela", "O que mostra"],
+    engines: "Motores local/Modal, saúde, status, capacidade, teste, deploy e orçamento.",
+    gpus: "GPUs declaradas e detectadas, VRAM orçada e uso atual. Valor desconhecido não significa zero.",
+    routing: "Prioridade dos motores e backlog por funcionalidade. Sem rota, o job usa a fila local habitual.",
+    status: "Despachante, worker remoto, tentativas em voo e workers configurados × vivos.",
+    capacity: "Capacidade = workers × execuções por worker. A declaração não cria réplicas nem escolhe a placa CUDA do container. GPU local e Modal aceitam uma execução por worker; aumentar réplicas exige memória suficiente para todos os modelos na mesma placa.",
+    health: "Um worker vivo pode estar ocupado ou com modelo ainda frio. A tela compara workers configurados e vivos; a confirmação de dispositivo e aquecimento vem dos logs e resultados. /health verifica a aplicação, enquanto o status Compute detalha a execução.",
+    privacy: "Provider e motor são configurações distintas: faster-whisper/openai-whisper processam no worker; openai-api envia o áudio à OpenAI. O rótulo local informa qual executor atendeu. O orçamento Compute cobre contas Modal; cobranças de openai-api ficam fora dele. PDF e imagem têm rotas somente locais no adapter atual.",
+    security: "Leituras HTTP aceitam JWT ou API key de admin; alterações exigem sessão JWT de admin. Credenciais Modal são somente escrita, seladas na API e abertas pelo worker remoto. Pausar um motor impede novas colocações; os trabalhos em voo terminam.",
+    guide: "Setup, chaves, limites, deploy e benchmark no guia do operador",
+    samples: "Leituras de diagnóstico (substitua o token JWT de admin)",
+    fileCaptions: "Legendas parciais de arquivos acompanham um upload já enviado. A captura contínua de microfone foi implementada como piloto opt-in, com worker GPU próprio e ativação separada. Ela permanece desabilitada por padrão, com critérios de produção pendentes.",
+  },
+  en: {
+    title: "Compute: execution and capacity",
+    intro: "Compute brings together job execution engines, their capacity and per-feature routes. The default installation uses local workers; optional Modal accounts handle file transcription.",
+    admin: "The screens below require an admin user and are read-only. They show state and commands operators can run to change configuration. The API checks admin permission for each operation.",
+    head: ["Screen", "What it shows"],
+    engines: "Local/Modal engines, health, status, capacity, tests, deployment and budget.",
+    gpus: "Declared and detected GPUs, budgeted VRAM and current usage. An unknown value does not mean zero.",
+    routing: "Engine priority and backlog per feature. Without a route, a job uses the usual local queue.",
+    status: "Dispatcher, remote worker, in-flight attempts and configured versus live workers.",
+    capacity: "Capacity = workers × executions per worker. Declaring capacity does not create replicas or select the container's CUDA device. Local GPU and Modal bindings accept one execution per worker; adding replicas requires enough memory for all models sharing the card.",
+    health: "A live worker may be busy or have a cold model. The screen compares configured and live workers; logs and results confirm the device and model warmup. /health checks the application, while Compute status details execution.",
+    privacy: "Providers and engines are separate settings: faster-whisper/openai-whisper process on the worker; openai-api sends audio to OpenAI. The local label identifies the executor. Compute budgets cover Modal accounts; openai-api charges are outside those budgets. The current adapter supports only local routes for PDFs and images.",
+    security: "HTTP reads accept an admin JWT or API key; changes require an admin JWT session. Modal credentials are write-only, sealed by the API and opened by the remote worker. Pausing an engine blocks new placements; in-flight work finishes.",
+    guide: "Setup, keys, limits, deployment and benchmarks in the operator guide",
+    samples: "Diagnostic reads (replace the admin JWT token)",
+    fileCaptions: "File captions follow an upload that has already been sent. Continuous microphone capture is implemented as an opt-in pilot with a separate GPU worker and activation. It remains disabled by default, with production criteria pending.",
+  },
+};
+
+function ComputeDocs({ lang, copyLabel }: { lang: Lang; copyLabel: string }) {
+  const t = COMPUTE_COPY[lang];
+  const token = lang === "pt" ? "SEU_TOKEN_JWT_ADMIN" : "YOUR_ADMIN_JWT_TOKEN";
+  const diagnostic = `curl --fail "${API_URL}/admin/engines/status" \\
+  -H "Authorization: Bearer ${token}"
+
+curl --fail "${API_URL}/admin/gpus" \\
+  -H "Authorization: Bearer ${token}"`;
+
+  return (
+    <Section id="compute" title={t.title}>
+      <P>{t.intro}</P>
+      <P>{t.admin}</P>
+      <Table
+        head={t.head}
+        rows={[
+          [<A key="engines" href="/admin/engines">/admin/engines</A>, t.engines],
+          [<A key="gpus" href="/admin/gpus">/admin/gpus</A>, t.gpus],
+          [<A key="routing" href="/admin/routing">/admin/routing</A>, t.routing],
+          [<A key="status" href="/admin/status">/admin/status</A>, t.status],
+        ]}
+      />
+      <P>{t.capacity}</P>
+      <P>{t.health}</P>
+      <P>{t.privacy}</P>
+      <P>{t.security}</P>
+      <H3>{t.samples}</H3>
+      <Endpoint method="GET" path="/admin/engines/status" />
+      <Endpoint method="GET" path="/admin/gpus" />
+      <CodeBlock code={diagnostic} copyLabel={copyLabel} />
+      <P small>{t.fileCaptions}</P>
+      <P><A href="https://github.com/geda-valentim/ingestify-to-ai/blob/main/docs/features/engines.md">{t.guide}</A></P>
+    </Section>
+  );
+}
+
 export default function DocsPage() {
   const [lang, setLang] = useState<Lang>("pt");
 
@@ -1094,6 +1167,7 @@ export default function DocsPage() {
     { id: "documentos", label: t.sections.documents },
     { id: "paginas-pdf", label: t.sections.pages },
     { id: "imagens", label: t.sections.images },
+    { id: "compute", label: COMPUTE_COPY[lang].title },
     { id: "transcribe", label: t.sections.transcribe },
     { id: "transcribe-status", label: t.sections.status },
     { id: "transcribe-live", label: t.sections.live },
@@ -1166,6 +1240,8 @@ export default function DocsPage() {
             </Section>
 
             <MediaSections lang={lang} />
+
+            <ComputeDocs lang={lang} copyLabel={t.copy} />
 
             <Section id="transcribe" title={t.sections.transcribe}>
               <Endpoint method="POST" path="/transcribe" />
