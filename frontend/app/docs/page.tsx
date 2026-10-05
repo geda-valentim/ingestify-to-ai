@@ -1076,7 +1076,7 @@ const COMPUTE_COPY = {
     security: "Leituras HTTP aceitam JWT ou API key de admin; alterações exigem sessão JWT de admin. Credenciais Modal são somente escrita, seladas na API e abertas pelo worker remoto. Pausar um motor impede novas colocações; os trabalhos em voo terminam.",
     guide: "Setup, chaves, limites, deploy e benchmark no guia do operador",
     samples: "Leituras de diagnóstico (substitua o token JWT de admin)",
-    fileCaptions: "As legendas parciais disponíveis hoje acompanham um arquivo já enviado. Captura contínua de microfone e seu protocolo estão sendo definidos na spec live; Compute não habilita essa captura.",
+    fileCaptions: "Legendas parciais de arquivos acompanham um upload já enviado. A captura contínua de microfone foi implementada como piloto opt-in, com worker GPU próprio e ativação separada. Ela permanece desabilitada por padrão, com critérios de produção pendentes.",
   },
   en: {
     title: "Compute: execution and capacity",
@@ -1093,7 +1093,7 @@ const COMPUTE_COPY = {
     security: "HTTP reads accept an admin JWT or API key; changes require an admin JWT session. Modal credentials are write-only, sealed by the API and opened by the remote worker. Pausing an engine blocks new placements; in-flight work finishes.",
     guide: "Setup, keys, limits, deployment and benchmarks in the operator guide",
     samples: "Diagnostic reads (replace the admin JWT token)",
-    fileCaptions: "Partial captions currently follow a file that has already been uploaded. Continuous microphone capture and its protocol are being defined in the live spec; Compute does not enable that capture.",
+    fileCaptions: "File captions follow an upload that has already been sent. Continuous microphone capture is implemented as an opt-in pilot with a separate GPU worker and activation. It remains disabled by default, with production criteria pending.",
   },
 };
 
