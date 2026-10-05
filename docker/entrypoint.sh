@@ -23,6 +23,18 @@ if [ "$(id -u)" = "0" ]; then
         fi
     done
 
+    # worker-remote: the engine private key arrives as a read-only bind mount, usually
+    # owned by the host user with mode 600. Hand app a copy on the tmpfs at
+    # /run/ingestify-keys (compose), readable by app only, and point the setting at it.
+    KEY_FILE="${ENGINE_SECRETS_PRIVATE_KEYS_FILE:-}"
+    if [ -n "$KEY_FILE" ] && [ -f "$KEY_FILE" ] && ! setpriv --reuid=app --regid=app --init-groups -- test -r "$KEY_FILE"; then
+        mkdir -p /run/ingestify-keys
+        chown app:app /run/ingestify-keys
+        chmod 700 /run/ingestify-keys
+        install -m 400 -o app -g app "$KEY_FILE" /run/ingestify-keys/engine_secrets_private
+        export ENGINE_SECRETS_PRIVATE_KEYS_FILE=/run/ingestify-keys/engine_secrets_private
+    fi
+
     # setpriv keeps the environment: point HOME at app's home (model caches, e.g. Whisper)
     export HOME=/home/app USER=app LOGNAME=app
     exec setpriv --reuid=app --regid=app --init-groups -- "$@"

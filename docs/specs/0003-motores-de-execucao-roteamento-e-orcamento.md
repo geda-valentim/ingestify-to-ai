@@ -771,9 +771,37 @@ Cada item cabe num PR, na ordem. Fora das mudanças deliberadas de 0a/0b, zero-c
       re-sondados (só passos remotos precisam); (8) `get_stuck_jobs` exclui jobs com linha de uso
       em voo e heartbeat nos últimos 600 s; (9) linhas terminais de `job_dispatches` ficam sem
       retenção por enquanto.)
-- [ ] **4a — Uma conta Modal, `E=1`**: app Whisper, imagem com hashes, deploy por CLI com
+- [x] **4a — Uma conta Modal, `E=1`**: app Whisper, imagem com hashes, deploy por CLI com
       fingerprint, `ModalAdapter`, `container_id` no protocolo, `worker-remote`, rotas admin de
       mutação, correção do `force_provider`. Gates T1–T5, T8. **Primeiro PR que ativa remoto.**
+      (Código feito em 2026-10-05, testado contra um `modal` falso; **gates ainda por rodar numa
+      conta real**, abaixo. `workers/engines/{base,remote,remote_tasks,modal_deploy}.py`,
+      `adapters/modal.py`, `modal_apps/{protocol,runner,files,fingerprint,image,whisper_app}.py`,
+      `shared/engines/pricing.py`, `docker/Dockerfile.remote` + `requirements-remote.txt`
+      (`modal==1.5.2`), serviço `worker-remote`, `POST …/test|activate|pause|reset-health`,
+      `PUT …/budget`, `PUT|DELETE …/credentials`, CLI `test|modal-deploy|modal-lock|budget|activate|pause`.
+      Desvios: (1) Python 3.13 na imagem Modal (paridade com o `worker-audio`), não 3.12; sem
+      `nvidia-ml-py` (VRAM medida é da 4b/T8); (2) o lock com hashes é gerado por
+      `engines.py modal-lock` (`uv pip compile --generate-hashes`, precisa do PyPI) e o deploy recusa
+      lock sem hash salvo `--allow-unhashed` (gravado no motor); não ficam presos por hash a base
+      `debian_slim` do Modal, os pacotes apt dela e o pip/uv do builder; os pesos ficam presos pela
+      revisão HF `0a363e91…`; (3) imagem própria e enxuta para o `worker-remote` em vez de
+      `requirements-remote.txt` sobre a imagem do worker; (4) a estimativa é só o pior caso (os
+      quantis por chave ficam para a 4b) e `TIMEOUT` volta sem reserva ×1,5; (5) `reconcile_spend`
+      (10 min, beat do `worker-remote`) já entra na 4a, por segurança com contas compartilhadas,
+      com `max` monotônico e `degraded` em relatório ilegível; alerta de divergência medido ×
+      reportado é só log; (6) `CAPACITY` exclui o motor por 5 min em vez de `capacity_penalty`;
+      3 falhas contadas seguidas (não "3 em 5 min") deixam `unhealthy` 10 min; (7) `max_input_bytes`
+      (512 MB) por motor, checado na colocação; (8) o endpoint de teste grava `config.last_test` e a
+      ativação exige um teste ok mais novo que as credenciais; (9) a API passa a montar
+      `backend/workers` para calcular o mesmo fingerprint que o deploy.
+      **Gates a rodar contra `modal_1`** (no container do `worker-remote`):
+      T5/T3 `engines.py test --engine modal_1 --spend` (tokens, auth por `client=`, sem
+      `~/.modal.toml`, relatório de gasto); T1 `engines.py modal-deploy --engine modal_1` (deploy,
+      `meta()`, `Dict.put(skip_if_exists)`, limite de entrada) e uma transcrição roteada de um clipe
+      de 3–5 min (`container_id` gravado, settle medido × reportado); T4 (`E=1`) um item com
+      `limit`/reserva pequenos para forçar `deadline_at` e medir a latência do cancel no relatório de
+      gasto; T8 (`E=1`) o mesmo clipe local × Modal em float16 comparando o texto.)
 - [ ] **4b — Benchmark** remoto (estimativa pessimista, reserva, prazo por combinação, app
       efêmero) e local (container avulso, guarda de VRAM); `--apply`; quantis por chave.
 - [ ] **4c — Várias contas**: `fill_first` com `full_since`, `reconcile_spend`, `exhausted`,

@@ -31,7 +31,30 @@ Manage execution engines (spec 0003) from the server shell.
         Feature routes (spec 0003): with a route, the feature's items queue in the
         backlog and the dispatcher (worker-dispatch, compose profile `engines`)
         places them step by step. Deleting a route drains its backlog back to the
-        default path. Until slice 4a a route may only use the local engine.
+        default path. A remote step needs its engines active and deployed, and a
+        running worker-remote.
+
+    python scripts/engines.py budget modal_1 --limit-usd 30 [--min-remaining-usd 0.5] [--tz UTC] [--anchor-day 1]
+    python scripts/engines.py activate modal_1 | pause modal_1
+        A remote engine's ceiling per period, and its lifecycle. Activation needs a
+        passing `test`, a budget, a verified deploy and executions_per_worker=1.
+
+  Remote engines (spec 0003, slice 4a) - run these in worker-remote, the only
+  service holding the private keys:
+    docker compose --profile engines run --rm worker-remote python scripts/engines.py ...
+
+    python scripts/engines.py modal-lock
+        Regenerate backend/workers/engines/modal_apps/requirements-whisper-modal.lock
+        (every pin with sha256 hashes) with `uv pip compile`. Talks to PyPI only.
+
+    python scripts/engines.py test --engine modal_1 [--spend]
+        Open the engine's credentials and check them against Modal: auth,
+        workspace, is the app deployed. Starts no container. --spend also reads the
+        account's billing report for the current period (free).
+
+    python scripts/engines.py modal-deploy --engine modal_1 [--feature transcription] [--dry-run] [--allow-unhashed]
+        Build and deploy the Whisper app with the engine's binding, verify it with
+        the CPU-only meta() function, and record the fingerprint on the engine.
 
 Inside Docker (the API container has the database and the public key):
     docker compose exec -T api python scripts/engines.py import-env < /path/to/.env
@@ -216,6 +239,93 @@ def _routes(args) -> int:
         db.close()
 
 
+def _lifecycle(args) -> int:
+    from shared.database import SessionLocal
+    from shared.engines import store
+    from shared.models import Engine
+
+    db = SessionLocal()
+    try:
+        engine = db.query(Engine).filter(Engine.slug == args.engine).first()
+        if engine is None:
+            print(f"❌ No engine {args.engine!r}")
+            return 1
+        if args.command == "budget":
+            store.set_budget(db, engine, limit_usd=args.limit_usd, min_remaining_usd=args.min_remaining_usd,
+                             soft_pct=args.soft_pct, period_tz=args.tz, period_anchor_day=args.anchor_day,
+                             version=None, actor_user_id=None, auth_method="cli")
+            print(f"✅ {engine.slug}: limit US$ {engine.limit_usd} per period "
+                  f"(min remaining {engine.min_remaining_usd}, {engine.period_tz}, day {engine.period_anchor_day})")
+            return 0
+        fingerprint_of = None
+        if engine.adapter_type != "local":
+            from workers.engines.remote import expected_fingerprint as fingerprint_of
+        store.set_status(db, engine, "active" if args.command == "activate" else "paused", version=None,
+                         actor_user_id=None, auth_method="cli", fingerprint_of=fingerprint_of)
+        print(f"✅ {engine.slug} is {engine.status}.")
+        return 0
+    except store.EngineStateError as e:
+        db.rollback()
+        print(f"❌ {e}")
+        for problem in e.problems:
+            print(f"   - {problem}")
+        return 1
+    finally:
+        db.close()
+
+
+def _remote(args) -> int:
+    if args.command == "modal-lock":
+        import subprocess
+
+        from workers.engines.modal_apps.files import LOCK_FILE, REQUIREMENTS_IN
+        command = ["uv", "pip", "compile", str(REQUIREMENTS_IN), "--generate-hashes", "--python-version", "3.13",
+                   "--python-platform", "x86_64-manylinux_2_28", "--no-header", "-o", str(LOCK_FILE)]
+        print("Running: " + " ".join(command))
+        try:
+            return subprocess.run(command, env={"PATH": __import__("os").environ.get("PATH", "/usr/bin:/bin"),
+                                                "HOME": "/tmp", "LANG": "C.UTF-8"}).returncode
+        except FileNotFoundError:
+            print("❌ uv is not installed here (pip install uv), or run the same command on any machine with uv.")
+            return 1
+
+    if args.command == "modal-deploy":
+        from workers.engines.modal_deploy import DeployError, deploy
+        try:
+            deploy(args.engine, args.feature, dry_run=args.dry_run, allow_unhashed=args.allow_unhashed)
+            return 0
+        except DeployError as e:
+            print(f"❌ {e}")
+            return 1
+
+    # test
+    import json
+
+    from workers.engines.remote_tasks import test_engine_now
+    report = test_engine_now(args.engine)
+    print(json.dumps(report, indent=1))
+    if args.spend and report.get("ok"):
+        from datetime import datetime
+
+        from shared.database import SessionLocal
+        from shared.engines import budget
+        from shared.models import Engine
+        from workers.engines import remote
+        from workers.engines.remote_tasks import _next_period
+
+        db = SessionLocal()
+        try:
+            engine = db.query(Engine).filter(Engine.slug == args.engine).first()
+            db.expunge(engine)
+        finally:
+            db.close()
+        start = budget.period_start(engine, datetime.utcnow())
+        spent = remote.adapter_factory(engine, remote.open_credentials(engine)).provider_spend(
+            start, _next_period(engine, start))
+        print(f"Reported spend since {start}: US$ {spent} (Modal's report lags a few minutes)")
+    return 0 if report.get("ok") else 1
+
+
 def _alive() -> dict:
     try:
         from shared.engines.features import FEATURES
@@ -278,6 +388,28 @@ def main(argv=None) -> int:
     routes_delete = routes_sub.add_parser("delete")
     routes_delete.add_argument("feature")
 
+    budget_p = sub.add_parser("budget", help="set a remote engine's spending ceiling per period")
+    budget_p.add_argument("engine")
+    budget_p.add_argument("--limit-usd", type=float, required=True)
+    budget_p.add_argument("--min-remaining-usd", type=float)
+    budget_p.add_argument("--soft-pct", type=int)
+    budget_p.add_argument("--tz", help="IANA time zone of the period (default UTC)")
+    budget_p.add_argument("--anchor-day", type=int, help="first day of the period, 1-28 (default 1)")
+    for name in ("activate", "pause"):
+        life = sub.add_parser(name, help=f"{name} an engine")
+        life.add_argument("engine")
+
+    sub.add_parser("modal-lock", help="regenerate the hashed requirements lock of the Modal image")
+    test = sub.add_parser("test", help="check a remote engine's credentials and deployment (no GPU)")
+    test.add_argument("--engine", required=True, help="slug, e.g. modal_1")
+    test.add_argument("--spend", action="store_true", help="also read the account's billing report")
+    deploy_p = sub.add_parser("modal-deploy", help="deploy the Whisper app to an engine's Modal account")
+    deploy_p.add_argument("--engine", required=True, help="slug, e.g. modal_1")
+    deploy_p.add_argument("--feature", default="transcription")
+    deploy_p.add_argument("--dry-run", action="store_true")
+    deploy_p.add_argument("--allow-unhashed", action="store_true",
+                          help="deploy even if the requirements lock has no hashes (recorded on the engine)")
+
     args = parser.parse_args(argv)
 
     if args.command == "keygen":
@@ -302,6 +434,12 @@ def main(argv=None) -> int:
 
     if args.command == "routes":
         return _routes(args)
+
+    if args.command in ("budget", "activate", "pause"):
+        return _lifecycle(args)
+
+    if args.command in ("modal-lock", "modal-deploy", "test"):
+        return _remote(args)
 
     if args.command == "import-modal-toml":
         return _import(accounts_from_modal_toml(Path(args.path).read_text()), args.limit_usd, args.apply)

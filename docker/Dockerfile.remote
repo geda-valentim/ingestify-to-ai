@@ -1,0 +1,27 @@
+# worker-remote (spec 0003, slice 4a): runs remote engine attempts (Modal) and
+# their control tasks. No model, no GPU, no media decoding - a slim image with
+# the Celery app, the database/Redis/MinIO/Elasticsearch clients and the Modal
+# SDK (backend/requirements-remote.txt).
+FROM python:3.13-slim
+
+WORKDIR /app
+
+COPY backend/requirements-remote.txt ./
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install -r requirements-remote.txt
+
+COPY backend/workers/ ./workers/
+COPY backend/shared/ ./shared/
+# The engines CLI (test, modal-deploy, modal-lock) runs here: only this service
+# holds the private keys
+COPY scripts/engines.py ./scripts/
+
+RUN useradd --create-home --uid 10001 --user-group app \
+    && mkdir -p /tmp/ingestify \
+    && chown -R app:app /tmp/ingestify
+
+COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+
+CMD ["celery", "-A", "workers.celery_app", "worker", "--loglevel=info", "--pool=threads", "--concurrency=16", \
+     "-Q", "ingestify-remote,ingestify-remote-ctl", "-n", "ingestify-remote@%h"]

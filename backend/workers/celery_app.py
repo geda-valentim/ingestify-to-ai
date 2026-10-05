@@ -95,10 +95,17 @@ celery_app.conf.task_routes = {
     "workers.vision_tasks.*": {"queue": settings.vision_queue},
     # The dispatcher's own tasks (spec 0003): only published once a feature has a route
     "workers.engines.tasks.*": {"queue": settings.dispatch_queue},
+    # worker-remote (spec 0003, slice 4a): attempts on one queue, control on another,
+    # so a test or a cancel never waits behind long remote transcriptions
+    "workers.engines.remote_tasks.execute_remote": {"queue": settings.remote_queue},
+    "workers.engines.remote_tasks.*": {"queue": settings.remote_ctl_queue},
 }
 
 # Dispatcher tasks (probe, tick, sweeper); importing them loads no media library
 import workers.engines.tasks  # noqa: F401,E402
+
+# Remote engine tasks (worker-remote); importing them loads no provider SDK
+import workers.engines.remote_tasks  # noqa: F401,E402
 
 # Only worker-dispatch (compose profile `engines`) runs these, with its embedded
 # beat (`celery worker -B`, ENGINES_DISPATCH_BEAT=true): the shared beat must not
@@ -115,6 +122,18 @@ if settings.engines_dispatch_beat:
             'task': 'workers.engines.tasks.sweep_usage',
             'schedule': 30.0,
             'options': {'queue': settings.dispatch_queue, 'expires': 30},
+        },
+    }
+
+# Only worker-remote (ENGINES_REMOTE_BEAT=true, embedded beat): the provider's own
+# spend report, every 10 minutes (spec 0003, 4.8)
+if settings.engines_remote_beat:
+    celery_app.conf.beat_schedule = {
+        **(celery_app.conf.beat_schedule or {}),
+        'engines-reconcile-spend': {
+            'task': 'workers.engines.remote_tasks.reconcile_spend',
+            'schedule': 600.0,
+            'options': {'queue': settings.remote_ctl_queue, 'expires': 600},
         },
     }
 

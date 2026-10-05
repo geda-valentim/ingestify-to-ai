@@ -7,7 +7,8 @@ Admin API for feature routes and the dispatcher (spec 0003, Appendix B).
     GET    /admin/engines/status      in flight / capacity, backlog per feature, the dispatcher lease
 
 Reads need an admin; changes need an admin's login session (JWT) and are audited.
-Until slice 4a a route may only use the local engine (remote steps answer 409).
+A remote step needs its engines active, healthy, deployed and budgeted, and a
+live worker-remote (409 otherwise).
 """
 
 import logging
@@ -19,7 +20,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from api.admin_routes import require_admin
-from api.engine_admin_routes import _alive_by_feature, require_admin_session
+from api.engine_admin_routes import _alive_by_feature, _remote_worker_alive, fingerprint_of, require_admin_session
 from shared.auth import verify_password
 from shared.database import get_db
 from shared.engines import dispatch, routing
@@ -97,7 +98,8 @@ async def put_route(feature: str, body: RouteUpdate, request: Request,
     spec = routing.RouteSpec(**body.model_dump(exclude={"version", "current_password"}))
     try:
         route, warnings = routing.put_route(db, feature, spec, version=body.version, actor_user_id=str(admin_user.id),
-                                            auth_method="jwt", ip=request.client.host if request.client else None)
+                                            auth_method="jwt", ip=request.client.host if request.client else None,
+                                            fingerprint_of=fingerprint_of, remote_worker_alive=_remote_worker_alive)
     except routing.VersionConflict as e:
         db.rollback()
         raise HTTPException(status_code=409, detail=str(e))
@@ -158,5 +160,15 @@ async def engines_status(admin_user=Depends(require_admin), db: Session = Depend
         "dispatcher": _lease_view(db, now),
         "engines": capacity,
         "backlog": {feature: _backlog(db, feature, now) for feature in FEATURES},
-        "remote_worker": None,  # worker-remote arrives with slice 4a
+        "remote_worker": _remote_worker_view(),
     }
+
+
+def _remote_worker_view() -> Optional[Dict[str, Any]]:
+    """worker-remote's heartbeat (None when none is alive)"""
+    try:
+        from shared.engines.liveness import remote_worker
+        from shared.redis_client import get_redis_client
+        return remote_worker(get_redis_client().client) or None
+    except Exception:
+        return None

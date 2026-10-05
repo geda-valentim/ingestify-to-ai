@@ -34,9 +34,13 @@ CACHE_SECONDS = 5.0
 DEFAULT_SCALE_OUT_AFTER_SECONDS = 300
 MAX_STEPS = 10
 
-# Remote execution (Modal) is slice 4a: until then a route may only use the local
-# engine, whatever engines exist in the database
-REMOTE_ROUTING_AVAILABLE = False
+# Remote adapters with an executor (workers/engines/executors.py). A remote engine
+# joins a route only when it is active, healthy, deployed and budgeted, and while a
+# worker-remote is alive to run it (spec 0003, slice 4a)
+REMOTE_ADAPTERS = frozenset({"modal"})
+BAD_HEALTH = ("unhealthy", "exhausted", "degraded")
+# Threads of worker-remote kept for control tasks (test, cancel, reconcile)
+REMOTE_CONTROL_THREADS = 2
 # Only transcription has a routed entry point (submit) so far; Docling pages and
 # vision are slice 8. A route for them would show as active and route nothing.
 ROUTABLE_FEATURES = frozenset({"transcription"})
@@ -199,10 +203,63 @@ def _resolve(db: Session, ref: str) -> Engine:
     return engine
 
 
-def validate(db: Session, feature: str, spec: RouteSpec) -> Tuple[List[Dict[str, Any]], List[str]]:
+def _remote_worker_alive() -> bool:
+    try:
+        from shared.engines.liveness import remote_worker
+        from shared.redis_client import get_redis_client
+        return bool(remote_worker(get_redis_client().client))
+    except Exception:
+        return False
+
+
+def remote_problems(engine: Engine, feature: str, fingerprint_of=None, now: Optional[datetime] = None) -> List[str]:
+    """Why a remote engine cannot be routed now (empty when it can)"""
+    from shared.engines.capacity import deploy_state
+
+    now = now or datetime.utcnow()
+    problems = []
+    if engine.adapter_type not in REMOTE_ADAPTERS:
+        problems.append(f"adapter {engine.adapter_type!r} has no executor")
+    if engine.status != "active":
+        problems.append("it is not active (POST /admin/engines/{id}/activate)")
+    if engine.health in BAD_HEALTH and (engine.health_until is None or engine.health_until > now):
+        problems.append(f"its health is {engine.health} ({engine.health_reason or 'no reason recorded'})")
+    if engine.limit_usd is None:
+        problems.append("it has no budget (limit_usd)")
+    binding = bindings(engine.config or {}).get(feature)
+    if binding is not None:
+        expected = fingerprint_of(engine, feature, binding) if fingerprint_of else None
+        state = deploy_state(engine.adapter_type, engine.deployments, feature, binding, expected)
+        if state != "deployed":
+            problems.append(f"{feature} is {state} (engines.py modal-deploy --engine {engine.slug})")
+    return problems
+
+
+def remote_capacity(db: Session, steps: List[Dict[str, Any]], overrides: Optional[Dict[str, dict]] = None) -> int:
+    """Sum of the remote capacity a set of steps can keep in flight (each remote item holds a worker-remote thread)"""
+    total = 0
+    for step in steps:
+        for engine_id in step.get("engine_ids", []):
+            engine = db.get(Engine, engine_id)
+            if engine is None or engine.adapter_type == "local":
+                continue
+            config = (overrides or {}).get(engine_id, engine.config or {})
+            total += sum(b.capacity for b in bindings(config).values())
+    return total
+
+
+def remote_threads_available() -> int:
+    from shared.config import get_settings
+    return get_settings().remote_worker_concurrency - REMOTE_CONTROL_THREADS
+
+
+def validate(db: Session, feature: str, spec: RouteSpec, *, fingerprint_of=None,
+             remote_worker_alive=None) -> Tuple[List[Dict[str, Any]], List[str]]:
     """
     Check a route against the engines it names. Returns the steps to store (engine
     ids resolved, positions assigned) and the warnings to show; raises RouteError.
+    `fingerprint_of(engine, feature, binding)` (from workers/engines/remote.py) lets
+    a remote engine whose deployed code is stale be refused like a stale binding.
     """
     try:
         get_feature(feature)
@@ -213,7 +270,7 @@ def validate(db: Session, feature: str, spec: RouteSpec) -> Tuple[List[Dict[str,
                          f"routable: {', '.join(sorted(ROUTABLE_FEATURES))}")
 
     steps, seen, has_local, has_remote = [], set(), False, False
-    remote_slugs = []
+    remote_engines = []
     for position, step in enumerate(spec.steps, start=1):
         ids = []
         for ref in step.engine_ids:
@@ -230,7 +287,7 @@ def validate(db: Session, feature: str, spec: RouteSpec) -> Tuple[List[Dict[str,
                 has_local = True
             else:
                 has_remote = True
-                remote_slugs.append(engine.slug)
+                remote_engines.append(engine)
             ids.append(engine.id)
         raw = step.model_dump(mode="json", exclude_none=True)
         raw.update(position=position, engine_ids=ids)
@@ -243,11 +300,19 @@ def validate(db: Session, feature: str, spec: RouteSpec) -> Tuple[List[Dict[str,
                          "(otherwise nobody else's work could run)")
     if spec.remote_allowed_for == "all" and (spec.user_period_limit_usd is None or not spec.remote_data_notice):
         raise RouteError("remote_allowed_for=all needs user_period_limit_usd and remote_data_notice")
-    if has_remote and not REMOTE_ROUTING_AVAILABLE:
-        raise RouteError(
-            f"Remote engines ({', '.join(remote_slugs)}) cannot be routed yet: remote execution arrives "
-            f"in slice 4a of spec 0003. Use only the local engine for now.", status=409,
-        )
+    if has_remote:
+        broken = {e.slug: remote_problems(e, feature, fingerprint_of) for e in remote_engines}
+        broken = {slug: p for slug, p in broken.items() if p}
+        if broken:
+            raise RouteError("Remote engines not ready: " + "; ".join(
+                f"{slug}: {', '.join(p)}" for slug, p in broken.items()), status=409)
+        if not (remote_worker_alive or _remote_worker_alive)():
+            raise RouteError("No worker-remote is running to execute remote steps: "
+                             "docker compose --profile engines up -d worker-remote", status=409)
+        needed, available = remote_capacity(db, steps), remote_threads_available()
+        if needed > available:
+            raise RouteError(f"The route's remote capacity ({needed}) exceeds what worker-remote can hold "
+                             f"(REMOTE_WORKER_CONCURRENCY - {REMOTE_CONTROL_THREADS} = {available})", status=409)
 
     warnings = []
     first_ids = set(steps[0]["engine_ids"])
@@ -277,9 +342,11 @@ def route_values(route: Optional[FeatureRoute]) -> Optional[Dict[str, Any]]:
 
 
 def put_route(db: Session, feature: str, spec: RouteSpec, *, version: Optional[int], actor_user_id: Optional[str],
-              auth_method: str, ip: Optional[str] = None) -> Tuple[FeatureRoute, List[str]]:
+              auth_method: str, ip: Optional[str] = None, fingerprint_of=None,
+              remote_worker_alive=None) -> Tuple[FeatureRoute, List[str]]:
     """Create or replace a feature's route (active); validated, versioned and audited"""
-    steps, warnings = validate(db, feature, spec)
+    steps, warnings = validate(db, feature, spec, fingerprint_of=fingerprint_of,
+                               remote_worker_alive=remote_worker_alive)
     route = db.query(FeatureRoute).filter(FeatureRoute.feature == feature).with_for_update().first()
     if route is not None and version is not None and version != route.version:
         raise VersionConflict(f"The {feature} route is at version {route.version}, not {version}; re-read it")
