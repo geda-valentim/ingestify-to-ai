@@ -110,6 +110,18 @@ class Settings(BaseSettings):
     device: str = "auto"
 
     # Audio Transcription Settings
+    # Live input is opt-in and separate from the file queues/budget ledger.
+    live_transcription_enabled: bool = False
+    live_worker_url: str = "ws://worker-live:8091/internal/stream"
+    live_worker_id: str = "live-local"
+    live_gpu_ref: str = "gpu0"
+    live_internal_token: str = ""
+    live_max_sessions: int = Field(1, ge=1, le=8)
+    live_max_duration_seconds: int = Field(1800, ge=1, le=1800)
+    live_max_audio_backlog_seconds: float = Field(2, gt=0, le=2)
+    live_vram_footprint_gb: float = Field(3, gt=0)
+    live_vram_reserve_gb: float = Field(3.2, ge=0)
+
     audio_transcriber_provider: str = "faster-whisper"  # faster-whisper, openai-whisper, openai-api
     whisper_model: str = "turbo"  # tiny, base, small, medium, large, turbo
     # CHANGED (was "cpu"): empty means "inherit DEVICE". Any non-empty value is

@@ -583,3 +583,23 @@ class AdminAudit(Base):
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     __table_args__ = (Index("ix_audit_target", "target_type", "target_id", "created_at"),)
+
+
+class LiveSession(Base):
+    """Connection facts; ownership/location/results remain on Job."""
+    __tablename__ = 'live_sessions'
+    __table_args__ = (Index('ix_live_sessions_state_audio', 'state', 'last_audio_at'), _UTF8MB4_TABLE)
+    job_id = Column(String(36), ForeignKey('jobs.id', ondelete='CASCADE'), primary_key=True)
+    state = Column(String(20), nullable=False, default='created')
+    backend = Column(String(40), nullable=False)
+    model = Column(String(255), nullable=False)
+    language = Column(String(12), nullable=False)
+    sample_rate = Column(Integer, nullable=False, default=16000)
+    worker_id = Column(String(100), nullable=False)
+    generation = Column(BigInteger, nullable=False)
+    audio_samples = Column(BigInteger, nullable=False, default=0)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    connected_at = Column(DateTime)
+    last_audio_at = Column(DateTime)
+    ended_at = Column(DateTime)
+    error_code = Column(String(100))

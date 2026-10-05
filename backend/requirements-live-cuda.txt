@@ -1,0 +1,5 @@
+# Pilot versions validated by live 1x GPU replay. Existing file worker sets keep
+# their dependency resolution unchanged; only worker-live uses these pins.
+-r requirements-cuda.txt
+faster-whisper==1.2.1
+ctranslate2==4.8.2

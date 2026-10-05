@@ -82,6 +82,9 @@ import api.routes as routes
 # router - divergence between the two is the failure this file catches.
 # ---------------------------------------------------------------------------
 FRONTEND_OPERATIONS = [
+    ("post", "/transcribe/live/sessions", "liveApi.create - microphone admission"),
+    ("get", "/transcribe/live/sessions/{job_id}", "liveApi.getStatus - durable live state"),
+    ("delete", "/transcribe/live/sessions/{job_id}", "liveApi.cancel - cancel capture"),
     ("post", "/auth/register", "authApi.register"),
     ("post", "/auth/login", "authApi.login"),
     ("get", "/auth/me", "authApi.me"),
