@@ -237,3 +237,253 @@ class CrawledFile(Base):
 
     def __repr__(self):
         return f"<CrawledFile(id={self.id}, execution_id={self.execution_id}, filename={self.filename}, status={self.status})>"
+
+
+# ============================================================================
+# Execution engines (spec 0003): where each feature's work runs, what it costs
+# ============================================================================
+#
+# Money is DECIMAL(12,6), rates DECIMAL(14,10). Timestamps that order claims and
+# heartbeats keep microseconds on MySQL. No column holds a secret in clear: engine
+# credentials are sealed (shared/engines/sealing.py) and only worker-remote can open them.
+
+from sqlalchemy import Date, Index, LargeBinary, Numeric, SmallInteger, UniqueConstraint  # noqa: E402
+from sqlalchemy.dialects import mysql  # noqa: E402
+
+Micros = DateTime().with_variant(mysql.DATETIME(fsp=6), "mysql")
+Money = Numeric(12, 6)
+Rate = Numeric(14, 10)
+
+
+def _enum(name, *values):
+    return Enum(*values, name=name)
+
+
+class Engine(Base):
+    """One place a feature can run: the local GPU workers, or a remote account (e.g. a Modal workspace)"""
+    __tablename__ = "engines"
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    slug = Column(String(64), nullable=False, unique=True)  # ^[a-z0-9][a-z0-9_-]*$, e.g. "modal_1"
+    display_name = Column(String(255), nullable=False)
+    adapter_type = Column(String(32), nullable=False)  # local | modal | ...
+    # Not secret; validated per adapter: features/bindings (gpu, workers, executions per
+    # worker), declared GPUs, prices, speeds, timeouts
+    config = Column(JSON, nullable=False, default=dict)
+    deployments = Column(JSON, nullable=False, default=dict)  # {feature: {fingerprint, protocol, verified_at}}
+    status = Column(_enum("engine_status", "active", "paused", "disabled"), nullable=False, default="paused")
+    health = Column(
+        _enum("engine_health", "unknown", "healthy", "degraded", "unhealthy", "exhausted"),
+        nullable=False, default="unknown",
+    )
+    health_reason = Column(Text)  # redacted
+    health_until = Column(DateTime)
+    consecutive_failures = Column(Integer, nullable=False, default=0)
+
+    # Budget for the whole account, per period (the user sets the ceiling)
+    limit_usd = Column(Money)
+    min_remaining_usd = Column(Money, nullable=False, default=0.5)
+    soft_pct = Column(SmallInteger, nullable=False, default=80)
+    period_tz = Column(String(64), nullable=False, default="UTC", server_default="UTC")
+    period_anchor_day = Column(SmallInteger, nullable=False, default=1, server_default="1")  # 1-28
+    alerted_soft_period = Column(Date)
+    alerted_hard_period = Column(Date)
+
+    # What the provider itself reports as spent this period
+    provider_reported_usd = Column(Money)
+    provider_reported_period = Column(Date)
+    provider_reported_at = Column(DateTime)
+
+    # Credentials: sealed, write-only; `credentials_masked` is all the API ever shows
+    credentials_sealed = Column(LargeBinary)
+    credentials_key_id = Column(String(16))
+    credentials_masked = Column(JSON, nullable=False, default=dict)
+    credentials_updated_at = Column(DateTime)
+    credentials_updated_by = Column(String(36))
+
+    is_system = Column(Boolean, nullable=False, default=False)  # the built-in local engine
+    version = Column(Integer, nullable=False, default=0)  # optimistic concurrency for PUTs
+    created_by = Column(String(36))
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
+class FeatureRoute(Base):
+    """The user's ordered rule for one feature; the dispatcher places each queued item by it"""
+    __tablename__ = "feature_routes"
+
+    feature = Column(String(40), primary_key=True)
+    state = Column(_enum("route_state", "active", "draining"), nullable=False, default="active")
+    # [{position, engine_ids[], group_strategy (priority|fill_first), scale_out_after_seconds?,
+    #   when?: {min_wait_seconds?, min_backlog?}, spend_cap?: {usd, window: day|period}}]
+    steps = Column(JSON, nullable=False, default=list)
+    on_no_engine = Column(_enum("route_on_no_engine", "hold", "fail"), nullable=False, default="hold")
+    fail_after_seconds = Column(Integer)
+    max_attempts = Column(Integer, nullable=False, default=3)
+    remote_allowed_for = Column(_enum("route_remote_allowed_for", "admins", "all"), nullable=False, default="admins")
+    user_period_limit_usd = Column(Money)
+    remote_data_notice = Column(Text)
+    dispatcher_fallback = Column(
+        _enum("route_dispatcher_fallback", "local_direct", "hold"), nullable=False, default="local_direct"
+    )
+    dispatcher_down_seconds = Column(Integer, nullable=False, default=120)
+    version = Column(Integer, nullable=False, default=0)
+    updated_by = Column(String(36))
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
+class EngineUsage(Base):
+    """
+    The ledger: one row per attempt to run one item on one engine (kind=job), plus
+    idle tails, probes and benchmarks. Reserved at placement, settled at the end.
+    """
+    __tablename__ = "engine_usage"
+
+    id = Column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True)
+    kind = Column(_enum("usage_kind", "job", "idle_tail", "probe", "benchmark"), nullable=False, default="job")
+    engine_id = Column(String(36), ForeignKey("engines.id", ondelete="RESTRICT"), nullable=False)
+    feature = Column(String(40), nullable=False)
+    subject_type = Column(_enum("usage_subject_type", "job", "page", "vision_request"))
+    subject_id = Column(String(64))
+    attempt = Column(Integer)
+    job_id = Column(String(36))  # no FK: the cost history outlives deleted jobs
+    user_id = Column(String(36))
+    period_start = Column(Date, nullable=False)
+    status = Column(
+        _enum("usage_status", "reserved", "spawning", "running", "settled", "released"),
+        nullable=False, default="reserved",
+    )
+    outcome = Column(_enum("usage_outcome", "succeeded", "failed", "cancelled", "lost"))
+    counts_toward_attempts = Column(Boolean, nullable=False, default=True)
+    placed_by = Column(_enum("usage_placed_by", "dispatcher", "watchdog", "fallback", "cli"))
+    dispatch_epoch = Column(BigInteger)
+    gpu_type = Column(String(32))
+    executions_per_worker = Column(SmallInteger)
+    container_id = Column(String(128))
+    segment_start = Column(Micros)  # idle_tail only
+    exec_started_at = Column(Micros)
+    exec_ended_at = Column(Micros)
+    shared_seconds = Column(Numeric(12, 3))
+    cold_start_seconds = Column(Numeric(9, 3))
+    estimated_usd = Column(Money, nullable=False, default=0)
+    reserved_usd = Column(Money, nullable=False, default=0)
+    actual_usd = Column(Money)
+    cost_basis = Column(_enum("usage_cost_basis", "measured", "reported", "shared", "reserved"))
+    reported_seconds = Column(Numeric(12, 3))
+    measured_seconds = Column(Numeric(12, 3))
+    rate_usd_per_s = Column(Rate, nullable=False, default=0)
+    price_snapshot = Column(JSON)
+    units = Column(JSON)
+    fingerprint = Column(String(64))
+    attempt_key = Column(String(36))
+    provider_call_id = Column(String(128))
+    holder = Column(String(128))
+    heartbeat_at = Column(Micros)
+    published_at = Column(Micros)
+    spawned_at = Column(Micros)
+    deadline_at = Column(Micros)
+    output_persisted_at = Column(Micros)
+    republish_count = Column(Integer, nullable=False, default=0)
+    error_code = Column(String(32))
+    error_detail = Column(Text)  # redacted
+    created_at = Column(Micros, default=datetime.utcnow, nullable=False)
+    finished_at = Column(Micros)
+
+    __table_args__ = (
+        UniqueConstraint("subject_type", "subject_id", "attempt", name="uq_usage_subject_attempt"),
+        UniqueConstraint("container_id", "kind", "segment_start", name="uq_usage_container_segment"),
+        Index("ix_usage_engine_period_status", "engine_id", "period_start", "status"),
+        Index("ix_usage_engine_feature_kind_status", "engine_id", "feature", "kind", "status"),
+        Index("ix_usage_speed_key", "engine_id", "feature", "gpu_type", "executions_per_worker", "status", "finished_at"),
+        Index("ix_usage_container", "container_id"),
+        Index("ix_usage_status_heartbeat", "status", "heartbeat_at"),
+        Index("ix_usage_user_period", "user_id", "period_start"),
+        Index("ix_usage_job", "job_id"),
+    )
+
+
+class JobDispatch(Base):
+    """The durable backlog: one row per routed item waiting for, or placed on, an engine"""
+    __tablename__ = "job_dispatches"
+
+    id = Column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True)
+    feature = Column(String(40), nullable=False)
+    subject_type = Column(_enum("dispatch_subject_type", "job", "page", "vision_request"), nullable=False)
+    subject_id = Column(String(64), nullable=False)
+    job_id = Column(String(36))
+    user_id = Column(String(36))
+    remote_allowed = Column(Boolean, nullable=False, default=False)
+    state = Column(
+        _enum("dispatch_state", "probing", "waiting", "assigned", "running", "done", "failed", "bypassed"),
+        nullable=False, default="probing",
+    )
+    version = Column(Integer, nullable=False, default=0)
+    priority = Column(SmallInteger, nullable=False, default=5)
+    not_before = Column(Micros)
+    placements = Column(Integer, nullable=False, default=0)
+    job_failures = Column(Integer, nullable=False, default=0)
+    skip_count = Column(Integer, nullable=False, default=0)
+    blocked_engine_id = Column(String(36))
+    solo = Column(Boolean, nullable=False, default=False)
+    exclude_engines = Column(JSON, nullable=False, default=list)  # [{engine_id, until}]
+    payload = Column(JSON, nullable=False, default=dict)  # per-feature allowlisted schema, never secrets
+    media_seconds = Column(Numeric(12, 3))
+    media_bytes = Column(BigInteger)
+    usage_id = Column(BigInteger)
+    engine_id = Column(String(36))
+    placed_step = Column(SmallInteger)
+    place_reason = Column(String(64))
+    enqueued_at = Column(Micros, default=datetime.utcnow, nullable=False)
+    unplaceable_since = Column(Micros)
+    assigned_at = Column(Micros)
+    error_code = Column(String(32))
+    updated_at = Column(Micros, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("subject_type", "subject_id", name="uq_dispatch_subject"),
+        Index("ix_dispatch_feature_state_order", "feature", "state", "priority", "enqueued_at"),
+        Index("ix_dispatch_feature_state_remote_order", "feature", "state", "remote_allowed", "priority", "enqueued_at"),
+    )
+
+
+class DispatcherLease(Base):
+    """Single row: who places items now, and the epoch every placement is fenced by"""
+    __tablename__ = "dispatcher_lease"
+
+    id = Column(SmallInteger, primary_key=True, default=1)
+    epoch = Column(BigInteger, nullable=False, default=0)
+    holder = Column(String(128))
+    holder_kind = Column(_enum("lease_holder_kind", "dispatcher", "watchdog"))
+    renewed_at = Column(Micros)
+    dispatcher_seen_at = Column(Micros)
+
+
+class EngineFeatureState(Base):
+    """Per engine and feature: since when it is full, temporary capacity penalties"""
+    __tablename__ = "engine_feature_state"
+
+    engine_id = Column(String(36), ForeignKey("engines.id", ondelete="CASCADE"), primary_key=True)
+    feature = Column(String(40), primary_key=True)
+    full_since = Column(Micros)
+    capacity_penalty = Column(Integer, nullable=False, default=0)
+    penalty_until = Column(Micros)
+    alive_below_configured_since = Column(Micros)
+    updated_at = Column(Micros, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
+class AdminAudit(Base):
+    """Every admin change to engines, routes, budgets and credentials (never secret values)"""
+    __tablename__ = "admin_audit"
+
+    id = Column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True)
+    actor_user_id = Column(String(36))
+    auth_method = Column(_enum("audit_auth_method", "jwt", "cli"), nullable=False)
+    ip = Column(String(45))
+    action = Column(String(64), nullable=False)
+    target_type = Column(String(32), nullable=False)
+    target_id = Column(String(64), nullable=False)
+    before = Column(JSON)
+    after = Column(JSON)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (Index("ix_audit_target", "target_type", "target_id", "created_at"),)
