@@ -268,8 +268,27 @@ def _job_open(session_factory, job_id: str) -> bool:
     return ledger.run_txn(session_factory, work)
 
 
+def _live_captions(redis_client, job_id: str) -> Callable[[list], None]:
+    """
+    Live captions of a remote attempt (spec 0003, slice 7): segments the container
+    pushed to its Queue partition, drained by the adapter between waits, go to the
+    same Redis list the local path writes (job:{id}:transcript:partial), so
+    GET /jobs/{id}/transcript/partial and the job page work the same for both.
+    """
+    def on_segments(segments: list) -> None:
+        redis_client.append_partial_transcript(job_id, segments)
+    return on_segments
+
+
+def _drop_live_text(redis_client, job_id: str) -> None:
+    try:
+        redis_client.delete_partial_transcript(job_id)
+    except Exception:
+        pass
+
+
 def _progress(redis_client, job_id: str, expected_seconds: float) -> Callable[[float], None]:
-    """Estimated progress while the remote call runs (no live captions remotely in v1)"""
+    """Estimated progress while the remote call runs (the live text comes separately, _live_captions)"""
     def on_progress(elapsed: float) -> None:
         share = min(elapsed / max(expected_seconds, 1.0), 0.95)
         try:
@@ -363,6 +382,7 @@ def _execute(usage: EngineUsage, engine: Engine, d: Optional[JobDispatch], holde
         expected = float(d.media_seconds or 0) / float((engine.config or {}).get("default_speed") or
                                                        pricing.DEFAULT_SPEED) + pricing.DEFAULT_COLD_START_SECONDS
         ctx.on_progress = _progress(redis_client, job_id, expected)
+        ctx.on_segments = _live_captions(redis_client, job_id)
 
         job_row = ledger.run_txn(session_factory, lambda db: _detached(db, Job, job_id))
         if job_row is None:
@@ -384,6 +404,8 @@ def _execute(usage: EngineUsage, engine: Engine, d: Optional[JobDispatch], holde
                 adapter.cancel(usage.provider_call_id, usage.attempt_key)
             result = adapter.resume(usage.provider_call_id, ctx, spawned_at or clock())
         else:
+            # A fresh spawn: whatever live text an earlier attempt left is not this one's
+            _drop_live_text(redis_client, job_id)
             budget_seconds = pricing.deadline_seconds(usage.reserved_usd, rate)
             max_bytes = int((engine.config or {}).get("max_input_bytes") or 0) or None
             extra = {"max_media_bytes": max_bytes} if max_bytes else {}

@@ -10,7 +10,9 @@ environment built from scratch with the token as variables, never in argv.
     test_connection()   auth + workspace + is the app deployed; no container, no GPU
     ensure_ready()      compares the recorded deploy with the expected fingerprint; no network
     execute()           spawn, persist the call id, wait in 15 s slices (heartbeat), cancel at
-                        deadline_at; validate the output against protocol.py
+                        deadline_at; validate the output against protocol.py. With live
+                        captions (ctx.on_segments) it waits in 3 s slices and drains the
+                        attempt's partition of the live Queue between them (protocol 3)
     resume()            re-attach to a recorded call (worker-remote restarted)
     cancel()            the cooperative flag in the state Dict + FunctionCall.cancel()
     lookup_attempt()    attempt_key -> {container_id, call_id} written by the container
@@ -184,6 +186,10 @@ class ModalAdapter:
         return self.modal.Dict.from_name(protocol.STATE_DICT, environment_name=self.environment,
                                          create_if_missing=True, client=self.client())
 
+    def _live_queue(self):
+        return self.modal.Queue.from_name(protocol.LIVE_QUEUE, environment_name=self.environment,
+                                          create_if_missing=True, client=self.client())
+
     def _runner(self):
         cls = self.modal.Cls.from_name(protocol.APP_NAME, protocol.CLS_NAME, environment_name=self.environment,
                                        client=self.client())
@@ -244,7 +250,7 @@ class ModalAdapter:
                 request = protocol.build_request(attempt_key=ctx.attempt_key,
                                                  media=media() if callable(media) else media, suffix=suffix,
                                                  options=options, deadline_unix=now + budget_seconds,
-                                                 max_media_bytes=max_media_bytes)
+                                                 max_media_bytes=max_media_bytes, live=ctx.on_segments is not None)
                 call = self._runner().transcribe.spawn(request)
         except protocol.ProtocolError as e:
             raise EngineError(ErrorCode.INPUT_REJECTED, str(e)) from None
@@ -272,26 +278,74 @@ class ModalAdapter:
             usage.container_id = str(entry.get("container_id") or "")[:protocol.MAX_ID_CHARS] or None
         return usage
 
-    def _wait(self, call, call_id: str, ctx: ExecutionContext, spawned_at: datetime) -> ExecResult:
-        while True:
-            now = datetime.utcfromtimestamp(self._clock())
-            remaining = (ctx.deadline_at - now).total_seconds() if ctx.deadline_at else ctx.poll_seconds
-            if remaining <= 0:
-                self.cancel(call_id, ctx.attempt_key)
-                raise EngineError(ErrorCode.TIMEOUT, "deadline_at passed: the call was cancelled",
-                                  self._partial_usage(ctx, spawned_at))
+    def drain_live(self, attempt_key: str, on_segments: Callable[[list], None], *, max_batches: int = 0) -> int:
+        """
+        Move what the container pushed for this attempt to `on_segments`, validated;
+        returns the batches read. Best effort: live text is cosmetic, so a read
+        error or a malformed batch is logged and skipped, never raised.
+        """
+        limit = max_batches or protocol.LIVE_DRAIN_MAX
+        try:
+            raw = self._live_queue().get_many(limit, block=False, partition=protocol.live_partition(attempt_key))
+        except Exception as e:
+            logger.debug(f"[ENGINES] Live captions of {attempt_key} unreadable: {redact(str(e))[:200]}")
+            return 0
+        segments = []
+        for entry in raw or []:
             try:
-                raw = call.get(timeout=max(min(ctx.poll_seconds, remaining), 0.01))
-                break
+                segments.extend(protocol.parse_live_batch(entry))
+            except protocol.ProtocolError as e:
+                logger.warning(f"[ENGINES] Dropped a malformed live batch of {attempt_key}: {e}")
+        if segments:
+            try:
+                on_segments(segments)
             except Exception as e:
-                if _is_wait_timeout(e):
-                    if not ctx.heartbeat():
-                        logger.warning(f"[ENGINES] Usage {ctx.usage_id} is no longer ours; still waiting for "
-                                       f"the call so its output is not lost")
-                    if ctx.on_progress:
-                        ctx.on_progress((now - spawned_at).total_seconds())
-                    continue
-                raise EngineError(classify_error(e), redact(str(e))[:500], self._partial_usage(ctx, spawned_at)) from None
+                logger.warning(f"[ENGINES] Could not record live captions of {attempt_key}: {e}")
+        return len(raw or [])
+
+    def clear_live(self, attempt_key: str) -> None:
+        """Drop an attempt's partition once its result is in (its TTL would, later)"""
+        try:
+            self._live_queue().clear(partition=protocol.live_partition(attempt_key))
+        except Exception as e:
+            logger.debug(f"[ENGINES] Could not clear live captions of {attempt_key}: {redact(str(e))[:200]}")
+
+    def _wait(self, call, call_id: str, ctx: ExecutionContext, spawned_at: datetime) -> ExecResult:
+        live = ctx.on_segments is not None
+        slice_seconds = min(ctx.live_poll_seconds, ctx.poll_seconds) if live else ctx.poll_seconds
+        beat_at = self._clock()
+        try:  # the partition is dropped once the attempt is over, never when this thread just dies
+            while True:
+                now = datetime.utcfromtimestamp(self._clock())
+                remaining = (ctx.deadline_at - now).total_seconds() if ctx.deadline_at else slice_seconds
+                if remaining <= 0:
+                    self.cancel(call_id, ctx.attempt_key)
+                    raise EngineError(ErrorCode.TIMEOUT, "deadline_at passed: the call was cancelled",
+                                      self._partial_usage(ctx, spawned_at))
+                try:
+                    raw = call.get(timeout=max(min(slice_seconds, remaining), 0.01))
+                    break
+                except Exception as e:
+                    if _is_wait_timeout(e):
+                        if live:
+                            self.drain_live(ctx.attempt_key, ctx.on_segments)
+                        # With live captions the slices are short; the heartbeat keeps its cadence
+                        if not live or self._clock() - beat_at >= ctx.poll_seconds - slice_seconds / 2:
+                            beat_at = self._clock()
+                            if not ctx.heartbeat():
+                                logger.warning(f"[ENGINES] Usage {ctx.usage_id} is no longer ours; still waiting "
+                                               f"for the call so its output is not lost")
+                            if ctx.on_progress:
+                                ctx.on_progress((now - spawned_at).total_seconds())
+                        continue
+                    raise EngineError(classify_error(e), redact(str(e))[:500],
+                                      self._partial_usage(ctx, spawned_at)) from None
+        except EngineError:
+            if live:
+                self.clear_live(ctx.attempt_key)
+            raise
+        if live:
+            self.clear_live(ctx.attempt_key)
 
         ended = datetime.utcfromtimestamp(self._clock())
         try:

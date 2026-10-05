@@ -733,7 +733,13 @@ async def convert_document(
     tags: Optional[str] = Form(None, description=TAGS_FORM_DESCRIPTION),
     authorization: Optional[str] = Header(
         None,
-        description="Token de autenticação no formato 'Bearer {token}' (obrigatório para gdrive e dropbox)"
+        description="Autenticação do Ingestify ('Bearer {jwt}'). Nunca é repassada a provedores externos."
+    ),
+    source_token: Optional[str] = Header(
+        None,
+        alias="X-Source-Token",
+        description="Token OAuth/acesso do provedor (obrigatório para gdrive e dropbox). "
+                    "Não vai na mensagem do Celery: o worker o lê de uma chave Redis com TTL e a apaga após o download.",
     ),
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
@@ -756,13 +762,16 @@ async def convert_document(
     ### 3. Google Drive
     - `source_type`: "gdrive"
     - `source`: "1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms" (file ID)
-    - `authorization`: "Bearer ya29.a0AfH6SMB..." (OAuth2 token)
+    - header `X-Source-Token`: "ya29.a0AfH6SMB..." (OAuth2 token do Google)
     - `file`: Deixe vazio
 
     ### 4. Dropbox
     - `source_type`: "dropbox"
     - `source`: "/documents/report.pdf" (path do arquivo)
-    - `authorization`: "Bearer sl.B1a2c3..." (access token)
+    - header `X-Source-Token`: "sl.B1a2c3..." (access token do Dropbox)
+
+    O header `Authorization` autentica no Ingestify e nunca é repassado ao
+    provedor nem colocado na mensagem do Celery (S-01).
     - `file`: Deixe vazio
 
     ## Formatos suportados
@@ -772,6 +781,8 @@ async def convert_document(
     Retorna imediatamente um `job_id` para consultar o progresso via `/jobs/{job_id}`
     """
     redis_client = get_redis_client()
+    if not isinstance(source_token, str):  # called directly (tests): the Header() default
+        source_token = None
 
     # Validate source_type
     if source_type not in ["file", "url", "gdrive", "dropbox"]:
@@ -795,9 +806,10 @@ async def convert_document(
 
     tag_list = parse_tags_or_422(tags)
 
-    # Validate authentication for gdrive and dropbox
-    if source_type in ["gdrive", "dropbox"] and not authorization:
-        raise HTTPException(status_code=401, detail="Authorization header é obrigatório para esta fonte")
+    # The provider's own token, in its own header (S-01: the Ingestify JWT in
+    # Authorization authenticates here and is never forwarded anywhere)
+    if source_type in ["gdrive", "dropbox"] and not source_token:
+        raise HTTPException(status_code=400, detail="O header X-Source-Token (token do provedor) é obrigatório para esta fonte")
 
     # Stream the uploaded file (if any) to disk in chunks (size limit + checksum)
     staging_path = None
@@ -909,9 +921,11 @@ async def convert_document(
                 "options": {},  # Default options for now
             }
 
-            # Add auth token if present
-            if authorization and authorization.startswith("Bearer "):
-                task_kwargs["auth_token"] = authorization.replace("Bearer ", "")
+            # The provider's token never travels in the task (broker, result backend,
+            # redeliveries): the worker reads it from a short-lived key (S-01)
+            if source_type in ["gdrive", "dropbox"]:
+                if not redis_client.set_source_token(str(job_id), source_token):
+                    raise RuntimeError("could not hand the source token to the worker")
 
             # Save file to MinIO and temporarily to filesystem if uploaded
             if staging_path:
@@ -2213,12 +2227,23 @@ async def retry_failed_page(
 
         pdf_path = str(pdf_files[0])
 
-        # Enqueue retry task
-        process_page.delay(
-            job_id=new_page_job_id,
-            parent_job_id=job_id,
-            pdf_path=pdf_path,
-            page_number=page_number,
+        # Enqueue retry task: through the document_conversion route when there is one
+        # (spec 0003, 4.14); without a route, exactly as before
+        def enqueue():
+            process_page.delay(
+                job_id=new_page_job_id,
+                parent_job_id=job_id,
+                pdf_path=pdf_path,
+                page_number=page_number,
+            )
+
+        engine_dispatch.submit(
+            feature="document_conversion", job_id=job_id, subject_type="page", subject_id=new_page_job_id,
+            user_id=current_user.id, is_admin=is_effective_admin(current_user),
+            payload=engine_dispatch.page_payload(
+                page_job_id=new_page_job_id, parent_job_id=job_id, page_number=page_number, options={},
+                source_pdf_path=pdf_path, today_queue=settings.celery_task_default_queue),
+            today=enqueue, celery=_engine_celery(), session_factory=SessionLocal,
         )
 
         logger.info(f"Page {page_number} of job {job_id} enqueued for retry with new job_id {new_page_job_id}")

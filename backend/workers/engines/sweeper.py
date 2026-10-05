@@ -11,6 +11,8 @@ redelivery (spec 0003, Appendix E). Every action is conditional, so two sweepers
                                                            counts) and back to the backlog
     `probing` for 60 s                                  -> republish probe_media (3 tries,
                                                            then `waiting` without a duration)
+    vision request `reserved`, never published, 60 s    -> `released` (the API request that placed
+                                                           it is gone; there is no backlog)
 
 Remote rows (slice 4a) are never settled while their call may still finish -
 the sweeper only republishes execute_remote, whose next holder resumes the
@@ -153,6 +155,12 @@ def _publish_unpublished(db: Session, celery, session_factory, local: Dict[str, 
         EngineUsage.published_at.is_(None),
         EngineUsage.created_at < now - timedelta(seconds=PUBLISH_AFTER_SECONDS)).all()
     for usage in rows:
+        if usage.subject_type == "vision_request":
+            # Placed inline by an API request that never sent it (it crashed in between):
+            # nobody is waiting for it any more, so give the slot back
+            if ledger.release(usage.id, error_code="NEVER_PUBLISHED", session_factory=session_factory, now=now)[0]:
+                counts["released"] += 1
+            continue
         d = db.query(JobDispatch).filter(JobDispatch.subject_type == usage.subject_type,
                                          JobDispatch.subject_id == usage.subject_id).first()
         if d is None or d.usage_id != usage.id:

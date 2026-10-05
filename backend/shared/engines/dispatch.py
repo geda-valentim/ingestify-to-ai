@@ -21,6 +21,7 @@ not depend on workers/.
 import logging
 import threading
 import time
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, Callable, Dict, Optional, Tuple
 
@@ -44,8 +45,15 @@ KICK_KEY = "engines:kick"
 KICK_DEDUP_MS = 500
 SEEN_CACHE_SECONDS = 5.0
 
-# The local task of each routed feature (the LocalAdapter's `execute` is the task of today)
-LOCAL_TASKS = {"transcription": PROCESS_CONVERSION}
+CONVERT_PAGE = "workers.tasks.convert_page_task"
+
+# The local task of each routed backlog feature (the LocalAdapter's `execute` is the task
+# of today). Vision is synchronous and has no backlog: see place_now().
+LOCAL_TASKS = {"transcription": PROCESS_CONVERSION, "document_conversion": CONVERT_PAGE}
+
+# Features whose items are measured before placement (media duration). A PDF page
+# needs no probe: it is one unit, and only local steps run it for now.
+PROBED_FEATURES = frozenset({"transcription"})
 
 # Allowlisted payload of a transcription item: the arguments of process_conversion
 # for a file already on the shared temp volume. Never an auth token (spec S21).
@@ -77,6 +85,28 @@ def transcription_payload(job_id: str, source: str, options: Dict[str, Any], tod
         },
         "today_queue": today_queue,
     }
+
+
+# Allowlisted payload of a document page (spec 0003, 4.14 and S21): what convert_page_task
+# needs for one page. The converter reads only the preset; nothing else is carried.
+PAGE_OPTIONS = frozenset({"docling_preset"})
+
+
+def page_payload(*, page_job_id: str, parent_job_id: str, page_number: int, options: Optional[Dict[str, Any]],
+                 page_file_path: Optional[str] = None, source_pdf_path: Optional[str] = None,
+                 today_queue: str) -> Dict[str, Any]:
+    """The backlog payload of one PDF page (a split page file, or the whole PDF for a retry)"""
+    kwargs: Dict[str, Any] = {
+        "page_job_id": str(page_job_id),
+        "parent_job_id": str(parent_job_id),
+        "page_number": int(page_number),
+        "options": {k: v for k, v in (options or {}).items() if k in PAGE_OPTIONS},
+    }
+    if page_file_path:
+        kwargs["page_file_path"] = str(page_file_path)
+    else:
+        kwargs["source_pdf_path"] = str(source_pdf_path)
+    return {"kwargs": kwargs, "today_queue": today_queue}
 
 
 def local_queue(feature: str) -> str:
@@ -124,11 +154,15 @@ def dispatcher_down(route: routing.RouteSnapshot, seen: Optional[datetime], now:
 
 def submit(*, feature: str, job_id: str, user_id: Optional[str], is_admin: bool, payload: Dict[str, Any],
            today: Optional[Callable[[], Any]], celery, media_bytes: Optional[int] = None, allow_remote: bool = True,
-           session_factory=None, now: Optional[datetime] = None) -> str:
+           session_factory=None, now: Optional[datetime] = None, subject_type: str = "job",
+           subject_id: Optional[str] = None) -> str:
     """
     Hand one item of a feature to its route. Returns "today" (no route: `today()`
     was called, or nothing was done when it is None), "fallback" or "queued".
     A publish failure (Redis down) raises, as today's path does.
+
+    The subject is the job itself, or (document_conversion) one page: subject_type
+    "page", subject_id the page job id, job_id the parent job.
     """
     route = routing.get_route(feature, session_factory)
     if route is None or not route.active:
@@ -136,39 +170,46 @@ def submit(*, feature: str, job_id: str, user_id: Optional[str], is_admin: bool,
             today()
         return "today"
 
+    subject = (subject_type, str(subject_id or job_id))
     now = now or datetime.utcnow()
     remote_allowed = bool(allow_remote and (route.remote_allowed_for == "all" or is_admin))
     down = dispatcher_down(route, dispatcher_seen_at(session_factory), now)
 
     if down and route.dispatcher_fallback == "local_direct" and route.has_local_step():
         usage_id, dispatch_id = _reserve_fallback(route, feature, job_id, user_id, remote_allowed, payload,
-                                                  media_bytes, session_factory, now)
+                                                  media_bytes, session_factory, now, subject)
         try:
             publish_local(celery, feature, payload, usage_id)
         except Exception:
             _forget(session_factory, dispatch_id, usage_id)
             raise
         mark_published(session_factory, usage_id, now)
-        logger.warning(f"[ENGINES] Dispatcher down: {feature} job {job_id} sent straight to the local workers "
-                       f"(fallback, usage {usage_id})")
+        logger.warning(f"[ENGINES] Dispatcher down: {feature} {subject[0]} {subject[1]} sent straight to the local "
+                       f"workers (fallback, usage {usage_id})")
         return "fallback"
 
-    dispatch_id = _insert_probing(feature, job_id, user_id, remote_allowed, payload, media_bytes, session_factory, now)
+    probed = feature in PROBED_FEATURES
+    dispatch_id = _insert_item(feature, job_id, user_id, remote_allowed, payload, media_bytes, session_factory, now,
+                               subject, "probing" if probed else "waiting")
     try:
-        celery.send_task(PROBE_TASK, args=[dispatch_id], queue=get_settings().dispatch_queue)
+        if probed:
+            celery.send_task(PROBE_TASK, args=[dispatch_id], queue=get_settings().dispatch_queue)
     except Exception:
         _forget(session_factory, dispatch_id, None)
         raise
+    if not probed:
+        kick(celery)
     if down:
         logger.warning(f"[ENGINES] Dispatcher down and {feature} fallback is {route.dispatcher_fallback}: "
-                       f"job {job_id} waits in the backlog")
+                       f"{subject[0]} {subject[1]} waits in the backlog")
     return "queued"
 
 
-def _insert_probing(feature, job_id, user_id, remote_allowed, payload, media_bytes, session_factory, now) -> int:
+def _insert_item(feature, job_id, user_id, remote_allowed, payload, media_bytes, session_factory, now, subject,
+                 state) -> int:
     def work(db: Session):
-        d = JobDispatch(feature=feature, subject_type="job", subject_id=str(job_id), job_id=str(job_id),
-                        user_id=user_id, remote_allowed=remote_allowed, state="probing", priority=5,
+        d = JobDispatch(feature=feature, subject_type=subject[0], subject_id=subject[1], job_id=str(job_id),
+                        user_id=user_id, remote_allowed=remote_allowed, state=state, priority=5,
                         payload=payload, media_bytes=media_bytes, enqueued_at=now, updated_at=now,
                         exclude_engines=[])
         db.add(d)
@@ -179,21 +220,21 @@ def _insert_probing(feature, job_id, user_id, remote_allowed, payload, media_byt
 
 
 def _reserve_fallback(route, feature, job_id, user_id, remote_allowed, payload, media_bytes, session_factory,
-                      now) -> Tuple[int, int]:
+                      now, subject) -> Tuple[int, int]:
     def work(db: Session):
         local_id = next(e for s in route.steps for e in s["engine_ids"] if e in route.local_engine_ids)
         engine = db.get(Engine, local_id)
         binding = bindings(engine.config or {}).get(feature)
         usage = EngineUsage(
-            kind="job", engine_id=engine.id, feature=feature, subject_type="job", subject_id=str(job_id), attempt=1,
-            job_id=str(job_id), user_id=user_id, period_start=period_start(engine, now), status="reserved",
-            placed_by="fallback", gpu_type=binding.gpu_ref if binding else None,
+            kind="job", engine_id=engine.id, feature=feature, subject_type=subject[0], subject_id=subject[1],
+            attempt=1, job_id=str(job_id), user_id=user_id, period_start=period_start(engine, now),
+            status="reserved", placed_by="fallback", gpu_type=binding.gpu_ref if binding else None,
             executions_per_worker=binding.executions_per_worker if binding else None,
             estimated_usd=0, reserved_usd=0, rate_usd_per_s=0, heartbeat_at=now, created_at=now,
         )
         db.add(usage)
         db.flush()
-        d = JobDispatch(feature=feature, subject_type="job", subject_id=str(job_id), job_id=str(job_id),
+        d = JobDispatch(feature=feature, subject_type=subject[0], subject_id=subject[1], job_id=str(job_id),
                         user_id=user_id, remote_allowed=remote_allowed, state="bypassed", priority=5,
                         payload=payload, media_bytes=media_bytes, enqueued_at=now, updated_at=now,
                         exclude_engines=[], placements=1, usage_id=usage.id, engine_id=engine.id,
@@ -259,6 +300,119 @@ def kick(celery, redis_client=None) -> bool:
     except Exception as e:
         logger.warning(f"[ENGINES] Could not kick the dispatcher: {e}")
         return False
+
+
+# --- synchronous features: placed inline by the API (vision; spec 0003, 4.14) ---------
+
+# How long a caller refused with 503 is told to wait before trying again
+SYNC_RETRY_AFTER_SECONDS = 30
+
+
+@dataclass(frozen=True)
+class Placement:
+    """
+    What place_now decided: "today" (no route, or nothing fits and the route has a
+    local step: the feature's own queue, exactly as without a route), "placed" (a
+    reservation to hand the local task as usage_id) or "unavailable" (503 with
+    Retry-After: nothing can take it now and there is no local step to fall back on).
+    """
+    outcome: str
+    usage_id: Optional[int] = None
+    engine_slug: Optional[str] = None
+    retry_after: Optional[int] = None
+    reason: Optional[str] = None
+
+
+def place_now(*, feature: str, subject_id: str, job_id: Optional[str], user_id: Optional[str], is_admin: bool,
+              allow_remote: bool = True, session_factory=None, now: Optional[datetime] = None) -> Placement:
+    """
+    Place one synchronous request without a backlog: walk the route's steps in
+    order and reserve the first engine with a free slot, under its row lock, like
+    the dispatcher does. A caller is holding a connection open, so nothing waits:
+    a remote engine is only eligible when it is warm (no cold start inside the
+    request) and none is yet - remote vision has no adapter in this slice -, so
+    today only local slots are placed; a full local engine sends the request down
+    today's path (the vision queue) rather than refusing it.
+    """
+    route = routing.get_route(feature, session_factory)
+    if route is None or not route.active:
+        return Placement("today")
+    now = now or datetime.utcnow()
+    remote_allowed = bool(allow_remote and (route.remote_allowed_for == "all" or is_admin))
+
+    def work(db: Session) -> Placement:
+        from shared.engines.store import in_flight
+
+        refusals = []
+        for step in route.steps:
+            for engine_id in step["engine_ids"]:
+                engine = db.get(Engine, engine_id)
+                if engine is None:
+                    continue
+                why = _sync_ineligible(engine, feature, remote_allowed, now)
+                if why:
+                    refusals.append(f"{engine.slug}:{why}")
+                    continue
+                binding = bindings(engine.config or {})[feature]
+                locked = db.query(Engine).filter(Engine.id == engine.id).with_for_update().one()
+                if in_flight(db, locked.id, feature) >= binding.capacity:
+                    refusals.append(f"{engine.slug}:full")
+                    continue
+                usage = EngineUsage(
+                    kind="job", engine_id=locked.id, feature=feature, subject_type="vision_request",
+                    subject_id=str(subject_id), attempt=1, job_id=job_id, user_id=user_id,
+                    period_start=period_start(locked, now), status="reserved", placed_by=None,
+                    gpu_type=binding.gpu_type or binding.gpu_ref, executions_per_worker=binding.executions_per_worker,
+                    estimated_usd=0, reserved_usd=0, rate_usd_per_s=0, heartbeat_at=now, created_at=now,
+                )
+                db.add(usage)
+                db.flush()
+                return Placement("placed", usage_id=usage.id, engine_slug=locked.slug)
+        reason = ", ".join(refusals) or "no engine"
+        if route.has_local_step():
+            return Placement("today", reason=reason)
+        return Placement("unavailable", retry_after=SYNC_RETRY_AFTER_SECONDS, reason=reason)
+
+    return run_txn(session_factory, work)
+
+
+def _sync_ineligible(engine: Engine, feature: str, remote_allowed: bool, now: datetime) -> Optional[str]:
+    if engine.status != "active":
+        return "paused"
+    if engine.health in routing.BAD_HEALTH and (engine.health_until is None or engine.health_until > now):
+        return "unhealthy"
+    binding = bindings(engine.config or {}).get(feature)
+    if binding is None or binding.capacity <= 0:
+        return "no_binding"
+    if engine.adapter_type != "local":
+        # A synchronous request cannot wait for a cold container, and no remote adapter
+        # runs this feature yet (spec 0003, slice 8: remote vision is out of this slice)
+        return "not_remote_allowed" if not remote_allowed else "no_warm_remote"
+    return None
+
+
+def publish_sync(session_factory, usage_id: int, send: Callable[[], Any], now: Optional[datetime] = None):
+    """Send a placed synchronous request; a send that fails gives the slot back at once"""
+    try:
+        result = send()
+    except Exception:
+        release_sync(session_factory, usage_id, "PUBLISH_FAILED")
+        raise
+    mark_published(session_factory, usage_id, now)
+    return result
+
+
+def release_sync(session_factory, usage_id: int, error_code: str) -> None:
+    from sqlalchemy import update
+
+    def work(db: Session):
+        db.execute(update(EngineUsage).where(EngineUsage.id == usage_id, EngineUsage.status == "reserved")
+                   .values(status="released", finished_at=datetime.utcnow(), error_code=error_code, actual_usd=0)
+                   .execution_options(synchronize_session=False))
+    try:
+        run_txn(session_factory, work)
+    except Exception as e:  # the sweeper releases an unclaimed reservation anyway
+        logger.warning(f"[ENGINES] Could not release usage {usage_id}: {e}")
 
 
 # --- what the job page may say (owner only) -----------------------------------------

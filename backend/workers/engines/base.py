@@ -92,4 +92,8 @@ class ExecutionContext:
     heartbeat: Callable[[], bool]
     on_progress: Optional[Callable[[float], None]] = None  # seconds elapsed since spawn
     deadline_at: Optional[datetime] = None  # set once known (resume)
-    poll_seconds: float = 15.0
+    poll_seconds: float = 15.0  # heartbeat cadence (and wait slice without live captions)
+    # Live captions (spec 0003, slice 7): validated segments drained while the call
+    # runs, every live_poll_seconds; None = no live text for this attempt
+    on_segments: Optional[Callable[[list], None]] = None
+    live_poll_seconds: float = 3.0

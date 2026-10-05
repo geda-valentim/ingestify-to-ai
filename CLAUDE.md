@@ -314,6 +314,7 @@ job:{job_id}:result          # Job result payload (RESULT_TTL_SECONDS)
 job:{job_id}:pages:total     # Total page count for a split PDF (24h TTL)
 job:{job_id}:owner           # Cached owner user_id; deps.py fallback only (24h TTL)
 job:{job_id}:transcript:partial  # LIST of {start,end,text} segments of a running transcription (24h TTL; dropped once the result is stored)
+job:{job_id}:source_token     # Drive/Dropbox provider token handed to the worker out of band (S-01; 6h TTL; deleted after download)
 user:{user_id}:jobs          # SET of that user's job IDs (30d TTL)
 monitoring:broker_unacked    # Last orphaned-broker-message check, for /admin/broker/unacked (1h TTL)
 ```

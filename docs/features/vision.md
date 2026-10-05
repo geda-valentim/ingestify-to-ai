@@ -129,3 +129,11 @@ pré-baixa os pesos.
   da visão não tem `markdown`, que o schema `JobResultResponse` exige — **não verificado**
   se essa rota responde corretamente para jobs de imagem.
 - Um worker de visão por máquina; requisições concorrentes enfileiram e podem dar `504`.
+
+## Com rota de visão (spec 0003, fatia 8)
+
+Opcional. Com `engines.py routes set vision --step local`, cada requisição reserva uma vaga do
+motor `local` (capacidade declarada de `vision`) dentro da própria requisição e entrega a reserva
+ao worker; sem vaga, segue a fila `ingestify-vision` como sem rota; uma rota sem passo local e sem
+motor que atenda agora responde `503 VISION_ENGINE_UNAVAILABLE` com `Retry-After`. Detalhes em
+[engines.md](engines.md#visão-síncrona-fatia-8).

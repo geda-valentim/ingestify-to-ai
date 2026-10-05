@@ -61,6 +61,11 @@ class Account:
         self.behaviour: Callable[[dict], Any] = lambda request: (1, response_for(request))
         self.meta = None
         self.clock: Optional["Clock"] = None  # waiting on a call moves it forward by the timeout
+        self.queues: Dict[str, List[Any]] = {}  # the live Queue, by partition (protocol 3)
+        self.cleared: List[str] = []
+        self.queue_error: Optional[Exception] = None
+        # call -> None, run on every wait that times out: lets a test push live batches mid-call
+        self.on_poll: Optional[Callable[["FakeCall"], None]] = None
 
 
 class FakeCall:
@@ -81,6 +86,8 @@ class FakeCall:
                 self.polls_left -= 1
             if self.account.clock is not None:
                 self.account.clock.now += timeout or 0
+            if self.account.on_poll is not None:
+                self.account.on_poll(self)
             raise TimeoutError()
         if isinstance(self.outcome, BaseException):
             raise self.outcome
@@ -157,6 +164,35 @@ class FakeModal:
                                           "started_unix": 1_000.0})
                 return call
 
+        class _Queue:
+            def __init__(self, client):
+                self.client = client
+
+            def _account(self):
+                _check(self.client)
+                if self.client.account.queue_error is not None:
+                    raise self.client.account.queue_error
+                return self.client.account
+
+            def put(self, v, block=True, timeout=None, *, partition=None, partition_ttl=86400):
+                self._account().queues.setdefault(partition, []).append(v)
+
+            def get_many(self, n_values, block=True, timeout=None, *, partition=None):
+                items = self._account().queues.get(partition, [])
+                taken = items[:n_values]
+                del items[:n_values]
+                return taken
+
+            def clear(self, *, partition=None, all=False):
+                account = self._account()
+                account.cleared.append(partition)
+                account.queues.pop(partition, None)
+
+        class Queue:
+            @staticmethod
+            def from_name(name, *, environment_name=None, create_if_missing=False, client=None):
+                return _Queue(client)
+
         class Cls:
             @staticmethod
             def from_name(app, name, *, environment_name=None, client=None):
@@ -187,6 +223,7 @@ class FakeModal:
                 return client.account.calls[call_id]
 
         self.Client, self.Dict, self.Cls, self.Function, self.FunctionCall = Client, Dict, Cls, Function, FunctionCall
+        self.Queue = Queue
 
     def account(self, token_id: str) -> Account:
         return self.accounts.setdefault(token_id, Account(token_id))

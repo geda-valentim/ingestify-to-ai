@@ -138,7 +138,7 @@ app.add_middleware(
     # Methods actually exposed by the API (plus the CORS preflight verb).
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     # Headers the frontend / API clients actually send.
-    allow_headers=["Authorization", "Content-Type", "Accept", "X-API-Key"],
+    allow_headers=["Authorization", "Content-Type", "Accept", "X-API-Key", "X-Source-Token"],
 )
 
 

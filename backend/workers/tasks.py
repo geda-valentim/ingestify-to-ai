@@ -365,7 +365,8 @@ def process_conversion(
         source: Fonte do documento
         options: Opções de conversão
         callback_url: Webhook opcional
-        auth_token: Token de autenticação
+        auth_token: Legacy - only messages queued before the S-01 fix carry it. The
+            provider token of gdrive/dropbox is read from Redis (job:{id}:source_token)
         usage_id: Set only when the dispatcher (or its fallback) placed this item on
             the local engine (spec 0003): the reservation to claim before running.
             Without it, everything below runs exactly as it always did.
@@ -417,13 +418,20 @@ def process_conversion(
         if source_type == 'file':
             file_path = _resolve_uploaded_file(source, job_id)
         else:
+            # The provider's token comes out of band (S-01); auth_token survives only
+            # for messages queued before that change
+            source_token = auth_token
+            if source_type in ('gdrive', 'dropbox') and not source_token:
+                source_token = redis_client.get_source_token(job_id)
             file_path = asyncio.run(
                 handler.download(
                     source=source,
                     temp_path=temp_dir,
-                    auth_token=auth_token
+                    auth_token=source_token
                 )
             )
+            if source_type in ('gdrive', 'dropbox'):
+                redis_client.delete_source_token(job_id)
 
         logger.info(f"[MAIN JOB {job_id}] File downloaded: {file_path}")
         redis_client.update_job_progress(job_id, 20)
@@ -714,6 +722,10 @@ def split_pdf_task(
         finally:
             db.close()
 
+        # With a document_conversion route each page joins the backlog and the
+        # dispatcher places it (spec 0003, 4.14); without one, nothing changes
+        page_route = _page_route()
+
         # Create PAGE records in MySQL and PAGE JOBS for each page
         for page_num, page_file_path, minio_path in page_files:
             page_job_id = str(uuid4())
@@ -738,6 +750,13 @@ def split_pdf_task(
                 logger.error(f"[SPLIT JOB {split_job_id}] MySQL page creation error: {e}")
             finally:
                 db.close()
+
+            # Add page job as child of main job (Redis); before a routed page can run,
+            # so the merge trigger always sees every page
+            if page_route is not None:
+                redis_client.add_child_job(parent_job_id, "page", page_job_id)
+                _submit_page(page_job_id, parent_job_id, page_num, options, page_file_path=str(page_file_path))
+                continue
 
             # Launch page conversion task
             convert_page_task.delay(
@@ -780,6 +799,43 @@ def split_pdf_task(
         raise self.retry(exc=exc, countdown=30 * (2 ** self.request.retries))
 
 
+def _page_route():
+    """The active document_conversion route, or None (no route: today's path, untouched)"""
+    from shared.engines import routing
+
+    route = routing.get_route("document_conversion", session_factory=SessionLocal)
+    return route if route is not None and route.active else None
+
+
+def _submit_page(page_job_id: str, parent_job_id: str, page_number: int, options: dict, *,
+                 page_file_path: str = None, source_pdf_path: str = None, today=None) -> str:
+    """Hand one PDF page to the document_conversion route (subject_type=page)"""
+    from shared.admin import is_effective_admin
+    from shared.engines import dispatch as engine_dispatch
+
+    db = SessionLocal()
+    try:
+        job = db.query(Job).filter(Job.id == parent_job_id).first()
+        user_id = job.user_id if job else None
+        is_admin = is_effective_admin(job.user) if job is not None and job.user is not None else False
+    finally:
+        db.close()
+    payload = engine_dispatch.page_payload(
+        page_job_id=page_job_id, parent_job_id=parent_job_id, page_number=page_number, options=options,
+        page_file_path=page_file_path, source_pdf_path=source_pdf_path,
+        today_queue=settings.celery_task_default_queue,
+    )
+    if today is None:
+        def today():
+            convert_page_task.delay(**payload["kwargs"])
+    path = Path(page_file_path or source_pdf_path)
+    return engine_dispatch.submit(
+        feature="document_conversion", job_id=parent_job_id, subject_type="page", subject_id=page_job_id,
+        user_id=user_id, is_admin=is_admin, payload=payload, today=today, celery=celery_app,
+        media_bytes=path.stat().st_size if path.exists() else None, session_factory=SessionLocal,
+    )
+
+
 # ============================================
 # PAGE JOB - Converte página individual
 # ============================================
@@ -790,20 +846,9 @@ def _recount_parent_pages(db, parent_job_id: str):
     Both counters are recomputed on every outcome: a retry that succeeds moves a
     page out of FAILED, so pages_failed is only correct if it is recounted too.
     """
-    from shared.models import Page as PageModel
+    from shared.engines.ledger import recount_parent_pages
 
-    parent_job = db.query(Job).filter(Job.id == parent_job_id).first()
-    if not parent_job:
-        return
-
-    parent_job.pages_completed = db.query(PageModel).filter(
-        PageModel.job_id == parent_job_id,
-        PageModel.status == JobStatus.COMPLETED
-    ).count()
-    parent_job.pages_failed = db.query(PageModel).filter(
-        PageModel.job_id == parent_job_id,
-        PageModel.status == JobStatus.FAILED
-    ).count()
+    recount_parent_pages(db, parent_job_id)
     db.commit()
 
 
@@ -854,6 +899,7 @@ def _run_page_conversion(
     page_file_path: str = None,
     source_pdf_path: str = None,
     options: dict = None,
+    on_failure=None,
 ):
     """Convert a single PDF page and record the outcome.
 
@@ -870,6 +916,9 @@ def _run_page_conversion(
         page_file_path: Path to an already-split single-page PDF.
         source_pdf_path: Path to the full PDF; the page is extracted here.
         options: Conversion options.
+        on_failure: Routed pages only (spec 0003, slice 8): called with
+            (exception, timed_out) instead of marking the page failed and
+            retrying - the backlog decides what a failed attempt means.
     """
     if bool(page_file_path) == bool(source_pdf_path):
         raise ValueError(
@@ -1030,12 +1079,18 @@ def _run_page_conversion(
         error_msg = f"Page conversion exceeded soft time limit ({settings.conversion_timeout_seconds - 30}s)"
         logger.warning(f"{log_prefix} Page {page_number} soft timeout exceeded - marking as failed for retry")
 
+        if on_failure is not None:
+            return on_failure(error_msg, True)
+
         _mark_page_failed(log_prefix, page_job_id, parent_job_id, page_number, error_msg)
 
         raise task.retry(exc=SoftTimeLimitExceeded(), countdown=30 * (2 ** task.request.retries))
 
     except Exception as exc:
         logger.error(f"{log_prefix} Page {page_number} failed: {exc}", exc_info=True)
+
+        if on_failure is not None:
+            return on_failure(str(exc), False)
 
         _mark_page_failed(log_prefix, page_job_id, parent_job_id, page_number, str(exc))
 
@@ -1049,6 +1104,59 @@ def _run_page_conversion(
                 logger.warning(f"{log_prefix} Could not remove extracted page file: {e}")
 
 
+def _run_routed_page(task, usage_id: int, *, page_job_id: str, parent_job_id: str, page_number: int,
+                     page_file_path: str = None, source_pdf_path: str = None, options: dict = None):
+    """
+    A PDF page placed by the dispatcher on the local engine (spec 0003, 4.14).
+
+    Claims the reservation before any work (lost claim => acknowledge and leave),
+    heartbeats the usage row and settles it. Never task.retry: a failure settles
+    `failed` and the backlog decides - back to the queue with backoff until
+    max_attempts, then the page (never the whole document) is FAILED.
+    """
+    from shared.engines import dispatch as engine_dispatch
+    from shared.engines import ledger
+    from workers.engines.local import UsageHeartbeat
+
+    log_prefix = f"[PAGE JOB {page_job_id}]"
+    holder = ledger.holder_id()
+    outcome, _ = ledger.claim(usage_id, holder, session_factory=SessionLocal)
+    if outcome != ledger.CLAIMED:
+        logger.info(f"{log_prefix} Usage {usage_id}: {outcome} - acknowledged without running")
+        if outcome != ledger.LOST:
+            engine_dispatch.kick(celery_app)
+        return {"page_job_id": page_job_id, "page_number": page_number, "status": outcome}
+
+    heartbeat = UsageHeartbeat(usage_id, holder, session_factory=SessionLocal).start()
+    started = time.monotonic()
+    failed = {}
+
+    def on_failure(error: str, timed_out: bool):
+        heartbeat.stop()
+        _, failed["change"] = ledger.settle_failed(usage_id, holder, error_code="TIMEOUT" if timed_out else "INTERNAL",
+                                                   detail=error, session_factory=SessionLocal)
+        change = failed["change"]
+        return {"page_job_id": page_job_id, "page_number": page_number,
+                "status": change.status if change else "failed"}
+
+    try:
+        logger.info(f"{log_prefix} Routed page {page_number} of job {parent_job_id}, usage {usage_id}")
+        result = _run_page_conversion(task, page_job_id=page_job_id, parent_job_id=parent_job_id,
+                                      page_number=page_number, page_file_path=page_file_path,
+                                      source_pdf_path=source_pdf_path, options=options, on_failure=on_failure)
+    finally:
+        heartbeat.stop()
+    if "change" in failed or (result or {}).get("status") != "completed":
+        change = failed.get("change")
+        ledger.apply_job_change(get_redis_client(), change)
+        engine_dispatch.kick(celery_app)
+        return result
+    ledger.settle_succeeded(usage_id, holder, measured_seconds=round(time.monotonic() - started, 3),
+                            session_factory=SessionLocal)
+    engine_dispatch.kick(celery_app)
+    return result
+
+
 @celery_app.task(bind=True, max_retries=3, name="workers.tasks.convert_page_task")
 def convert_page_task(
     self,
@@ -1058,6 +1166,7 @@ def convert_page_task(
     page_file_path: str = None,
     source_pdf_path: str = None,
     options: dict = None,
+    usage_id: int = None,
 ):
     """
     Page job - converte página individual de PDF
@@ -1071,7 +1180,14 @@ def convert_page_task(
         page_file_path: Caminho de uma página já dividida (fluxo split_pdf_task)
         source_pdf_path: Caminho do PDF completo; a página é extraída aqui
         options: Opções de conversão
+        usage_id: Set only when the dispatcher placed this page on the local engine
+            (spec 0003, document_conversion route): the reservation to claim first.
+            Without it, everything runs exactly as it always did.
     """
+    if usage_id is not None:
+        return _run_routed_page(self, usage_id, page_job_id=page_job_id, parent_job_id=parent_job_id,
+                                page_number=page_number, page_file_path=page_file_path,
+                                source_pdf_path=source_pdf_path, options=options)
     return _run_page_conversion(
         self,
         page_job_id=page_job_id,

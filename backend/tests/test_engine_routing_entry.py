@@ -440,10 +440,23 @@ def test_a_route_needs_capacity_on_its_engines(world):
     assert exc.value.status_code == 422 and "no capacity" in exc.value.detail
 
 
-def test_only_transcription_can_be_routed_for_now(world):
+def test_document_pages_and_vision_can_be_routed_on_local_engines_only(world, monkeypatch):
+    """Slice 8: every feature has a routed entry; remote steps stay transcription-only"""
+    from shared.models import Engine
+    monkeypatch.setattr(admin, "_alive_by_feature", lambda: {})
+    with world.Session() as db:
+        local = db.get(Engine, LOCAL)
+        local.config = {**local.config, "features": {**local.config["features"],
+                                                     "vision": {"gpu_ref": "gpu0", "workers": 1},
+                                                     "document_conversion": {"workers": 2}}}
+        db.commit()
+    assert put(world, feature="vision", steps=[{"engine_ids": ["local"]}])["state"] == "active"
+    assert put(world, feature="document_conversion", steps=[{"engine_ids": ["local"]}])["state"] == "active"
+
+    world.add_remote("fake_1", config={"features": {"vision": {"gpu_type": "L4", "workers": 1}}})
     with pytest.raises(HTTPException) as exc:
-        put(world, feature="vision", steps=[{"engine_ids": ["local"]}])
-    assert exc.value.status_code == 422 and "slice 8" in exc.value.detail
+        put(world, feature="vision", steps=[{"engine_ids": ["local"]}, {"engine_ids": ["fake_1"]}])
+    assert exc.value.status_code == 422 and "local engines only" in exc.value.detail
 
 
 def test_opening_remote_work_to_everyone_needs_the_password(world):

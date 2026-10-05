@@ -13,7 +13,8 @@ containers) and the fingerprint. The spec is baked into the image, so the
 container's own import of this file builds the same classes.
 
     meta()                   CPU only, no GPU: protocol and fingerprint, to verify a deploy
-    WhisperRunner.transcribe one request (bytes + options) -> result + usage
+    WhisperRunner.transcribe one request (bytes + options) -> result + usage; with
+                             `live`, decoded segments also go to the live Queue (protocol 3)
 
 Never min_containers > 0 (an idle GPU is billed), retries=0 (the backlog decides
 what a failure means), one input per container until gates T4/T8 pass (E=1).
@@ -77,6 +78,7 @@ class WhisperRunner:
         self.first_input = True
         self.container_id = runner.container_id()
         self.state = modal.Dict.from_name(protocol.STATE_DICT, create_if_missing=True)
+        self.live = modal.Queue.from_name(protocol.LIVE_QUEUE, create_if_missing=True)
 
     @modal.method()
     def transcribe(self, request: dict) -> dict:
@@ -85,7 +87,7 @@ class WhisperRunner:
         return runner.handle(
             request, model=self.model, state=self.state, container_id=self.container_id,
             call_id=modal.current_function_call_id(), cold_start_seconds=cold, gpu=DECORATOR["gpu"],
-            fingerprint=FINGERPRINT,
+            fingerprint=FINGERPRINT, live=self.live,
         )
 
 

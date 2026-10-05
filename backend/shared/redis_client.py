@@ -169,12 +169,41 @@ class RedisClient:
         """Delete job data from Redis"""
         try:
             self.client.delete(
-                f"job:{job_id}:status", f"job:{job_id}:result", f"job:{job_id}:transcript:partial"
+                f"job:{job_id}:status", f"job:{job_id}:result", f"job:{job_id}:transcript:partial",
+                f"job:{job_id}:source_token",
             )
             return True
         except Exception as e:
             logger.error("Failed to evict cache entries for job %s: %s", job_id, e)
             return False
+
+    # A cloud source's own token (Google Drive, Dropbox) for one job, handed from
+    # the API to the worker out of band: never in the Celery message (broker,
+    # result backend, redeliveries) and never the Ingestify JWT (S-01). The
+    # worker deletes it once the download succeeded; the TTL bounds the rest.
+    SOURCE_TOKEN_TTL_SECONDS = 6 * 3600
+
+    def set_source_token(self, job_id: str, token: str, ttl: int = SOURCE_TOKEN_TTL_SECONDS) -> bool:
+        try:
+            self.client.set(f"job:{job_id}:source_token", token, ex=ttl)
+            return True
+        except Exception as e:
+            logger.error("Failed to store the source token of job %s: %s", job_id, type(e).__name__)
+            return False
+
+    def get_source_token(self, job_id: str) -> Optional[str]:
+        try:
+            value = self.client.get(f"job:{job_id}:source_token")
+        except Exception as e:
+            logger.error("Failed to read the source token of job %s: %s", job_id, type(e).__name__)
+            return None
+        return value.decode() if isinstance(value, bytes) else value
+
+    def delete_source_token(self, job_id: str) -> None:
+        try:
+            self.client.delete(f"job:{job_id}:source_token")
+        except Exception as e:
+            logger.warning("Failed to drop the source token of job %s: %s", job_id, type(e).__name__)
 
     def append_partial_transcript(self, job_id: str, segments: List[Dict[str, Any]]) -> bool:
         """Append transcribed segments ({start, end, text}) to a running transcription's live text"""
