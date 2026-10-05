@@ -152,20 +152,42 @@ async def list_gpus(admin_user=Depends(require_admin), db: Session = Depends(get
             })
             gpu["workers"].append({"feature": feature, "hostname": w["hostname"]})
 
+    # Live has no Celery lane. Display its separate resident footprint in the
+    # same inventory and include it in the physical GPU budget.
+    live_worker = None
+    try:
+        from shared.live.store import LiveStore
+        live_worker = LiveStore(get_redis_client().client, settings.live_worker_id).readiness()
+    except Exception:
+        pass
+    if live_worker and live_worker.get('gpu'):
+        gpu = live_worker['gpu']
+        seen = detected.setdefault(gpu['uuid'], {"uuid": gpu['uuid'], "name": "Live GPU",
+            "vram_total_gb": gpu['total_gb'], "vram_used_gb": gpu['used_gb'], "workers": []})
+        seen['workers'].append({"feature": "live-transcription", "hostname": settings.live_worker_id})
+
     gpus = []
     for g in declared:
         users = [(f, b) for f, b in by_feature.items() if b.gpu_ref == g.ref]
         budget = sum(b.workers * b.executions_per_worker * footprint_gb(f, b, settings.vision_model_id) for f, b in users)
+        live_reserved = 0.0
+        if live_worker and (live_worker.get('gpu') or {}).get('uuid') == g.uuid:
+            live_reserved = float(live_worker.get('resident_vram_gb') or 0)
+        elif settings.live_transcription_enabled and settings.live_gpu_ref == g.ref:
+            live_reserved = settings.live_vram_footprint_gb
+        budget += live_reserved
+        reserve = max(g.vram_reserve_gb, settings.live_vram_reserve_gb, .2 * g.vram_gb) if live_reserved else g.vram_reserve_gb
         seen = detected.pop(g.uuid, None) if g.uuid else None
         gpus.append({
-            "ref": g.ref, "name": g.name, "uuid": g.uuid, "vram_gb": g.vram_gb, "reserve_gb": g.vram_reserve_gb,
-            "budgeted_gb": round(budget + g.vram_reserve_gb, 2),
+            "ref": g.ref, "name": g.name, "uuid": g.uuid, "vram_gb": g.vram_gb, "reserve_gb": reserve,
+            "budgeted_gb": round(budget + reserve, 2),
+            "live_reserved_gb": live_reserved,
             "used_gb": seen["vram_used_gb"] if seen else None,
             "detected": seen is not None,
             "bindings": [{"feature": f, "workers": b.workers, "executions_per_worker": b.executions_per_worker,
                           "vram_each_gb": footprint_gb(f, b, settings.vision_model_id)} for f, b in users],
         })
-    return {"declared": gpus, "undeclared_detected": list(detected.values())}
+    return {"declared": gpus, "undeclared_detected": list(detected.values()), "live_worker": live_worker}
 
 
 class BindingUpdate(Binding):

@@ -59,6 +59,10 @@ export default function GpusPage() {
         </Card>
       )}
 
+      {query.data?.live_worker && <Card><CardHeader><CardTitle className="text-base">Live transcription</CardTitle>
+        <CardDescription>{query.data.live_worker.model} · {query.data.live_worker.ready ? "Ready" : "Not ready"} · {query.data.live_worker.capacity} simultaneous sessions</CardDescription>
+        </CardHeader><CardContent className="text-sm">Resident GPU budget: {query.data.live_worker.resident_vram_gb} GB. This service receives continuous audio over WebSocket.</CardContent></Card>}
+
       {declared.map((gpu) => (
         <DeclaredGpuCard key={gpu.ref} gpu={gpu} />
       ))}
@@ -107,11 +111,12 @@ function DeclaredGpuCard({ gpu }: { gpu: PhysicalGpu }) {
       </CardHeader>
       <CardContent className="space-y-3">
         <Meter
-          label="Budgeted (bindings + reserve)"
+          label="Budgeted (bindings + live + reserve)"
           value={gpu.budgeted_gb}
           max={usable}
           valueText={`${gpu.budgeted_gb} of ${usable} GB${gpu.budgeted_gb > usable ? " — over" : ""}`}
         />
+        {!!gpu.live_reserved_gb && <p className="text-xs text-muted-foreground">Includes {gpu.live_reserved_gb} GB reserved for the live resident model.</p>}
         {gpu.used_gb !== null ? (
           <Meter
             label="Used now (nvidia-smi via heartbeat)"

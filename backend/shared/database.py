@@ -43,7 +43,13 @@ def init_db():
     Called during app startup.
     """
     from shared.models import User, APIKey, Job, Page  # Import models to register them
-    Base.metadata.create_all(bind=engine)
+    from sqlalchemy import inspect
+    existing = "jobs" in inspect(engine).get_table_names()
+    # Existing deployments use the explicit 0005 migration. Disabled live must
+    # not introduce DDL or require its table on a routine API restart.
+    tables = [table for table in Base.metadata.sorted_tables
+              if not (existing and table.name == "live_sessions")]
+    Base.metadata.create_all(bind=engine, tables=tables)
     _add_missing_columns()
 
     # The built-in local engine (spec 0003): this server's workers, no bindings until declared

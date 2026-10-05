@@ -139,6 +139,7 @@ export interface PhysicalGpu {
   vram_gb: number;
   reserve_gb: number;
   budgeted_gb: number;
+  live_reserved_gb?: number;
   used_gb: number | null;
   detected: boolean;
   bindings: { feature: Feature; workers: number; executions_per_worker: number; vram_each_gb: number }[];
@@ -149,12 +150,13 @@ export interface DetectedGpu {
   name: string | null;
   vram_total_gb: number;
   vram_used_gb: number;
-  workers: { feature: Feature; hostname: string }[];
+  workers: { feature: Feature | "live-transcription"; hostname: string }[];
 }
 
 export interface GpusResponse {
   declared: PhysicalGpu[];
   undeclared_detected: DetectedGpu[];
+  live_worker?: { ready: boolean; capacity: number; resident_vram_gb: number; model: string; backend: string } | null;
 }
 
 export interface RouteStepEngine {

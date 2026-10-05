@@ -1,0 +1,49 @@
+# OPT-IN local GPU live worker. Merge with base + GPU overlays only after the
+# explicit 0005 migration and benchmark gates. No host port is exposed.
+services:
+  api:
+    command: uvicorn api.main:app --host 0.0.0.0 --port 8000 --ws-max-size 16384 --ws-max-queue 10 --no-access-log
+    environment:
+      LIVE_TRANSCRIPTION_ENABLED: ${LIVE_TRANSCRIPTION_ENABLED:-false}
+      LIVE_WORKER_URL: ws://worker-live:8091/internal/stream
+      LIVE_GPU_REF: ${LIVE_GPU_REF:-gpu0}
+      LIVE_WORKER_ID: live-local
+      LIVE_INTERNAL_TOKEN: ${LIVE_INTERNAL_TOKEN:-}
+  worker-live:
+    profiles: [live]
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.worker
+      args:
+        REQUIREMENTS_FILE: requirements-live-cuda.txt
+        TORCH_INDEX_URL: https://download.pytorch.org/whl/cu129
+    env_file: .env
+    environment:
+      HF_HOME: /models/huggingface
+      DEVICE: cuda
+      WHISPER_DEVICE: cuda
+      WHISPER_MODEL: ${WHISPER_MODEL:-turbo}
+      LIVE_GPU_REF: ${LIVE_GPU_REF:-gpu0}
+      LIVE_WORKER_ID: live-local
+      LIVE_INTERNAL_TOKEN: ${LIVE_INTERNAL_TOKEN:-}
+      LIVE_MAX_SESSIONS: ${LIVE_MAX_SESSIONS:-1}
+      LIVE_VRAM_FOOTPRINT_GB: ${LIVE_VRAM_FOOTPRINT_GB:-3}
+      LIVE_VRAM_RESERVE_GB: ${LIVE_VRAM_RESERVE_GB:-3.2}
+    command: uvicorn workers.live.server:app --host 0.0.0.0 --port 8091 --workers 1 --ws-max-size 16384 --ws-max-queue 10 --no-access-log
+    volumes:
+      - hf_cache:/models/huggingface
+    networks: [ingestify-network]
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://localhost:8091/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 120s

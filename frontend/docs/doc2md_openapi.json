@@ -2318,6 +2318,147 @@
         }
       }
     },
+    "/transcribe/live/sessions": {
+      "post": {
+        "tags": [
+          "Live transcription"
+        ],
+        "summary": "Create Session",
+        "operationId": "create_session_transcribe_live_sessions_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateSession"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
+          }
+        ]
+      }
+    },
+    "/transcribe/live/sessions/{job_id}": {
+      "get": {
+        "tags": [
+          "Live transcription"
+        ],
+        "summary": "Session Status",
+        "operationId": "session_status_transcribe_live_sessions__job_id__get",
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Live transcription"
+        ],
+        "summary": "Cancel Session",
+        "operationId": "cancel_session_transcribe_live_sessions__job_id__delete",
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/upload": {
       "post": {
         "tags": [
@@ -3521,6 +3662,31 @@
         "title": "APIKeyResponse",
         "description": "Schema for API key response (after creation)"
       },
+      "AudioFormat": {
+        "properties": {
+          "encoding": {
+            "type": "string",
+            "const": "pcm_s16le",
+            "title": "Encoding",
+            "default": "pcm_s16le"
+          },
+          "sample_rate": {
+            "type": "integer",
+            "const": 16000,
+            "title": "Sample Rate",
+            "default": 16000
+          },
+          "channels": {
+            "type": "integer",
+            "const": 1,
+            "title": "Channels",
+            "default": 1
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "AudioFormat"
+      },
       "BindingUpdate": {
         "properties": {
           "gpu_type": {
@@ -4259,6 +4425,80 @@
           "metadata"
         ],
         "title": "ConversionResult"
+      },
+      "CreateSession": {
+        "properties": {
+          "project": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project"
+          },
+          "project_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project Id"
+          },
+          "folder": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Folder"
+          },
+          "folder_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Folder Id"
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 1000,
+            "minLength": 1,
+            "title": "Name",
+            "default": "Transcrição ao vivo"
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Tags"
+          },
+          "language": {
+            "type": "string",
+            "const": "pt",
+            "title": "Language",
+            "default": "pt"
+          },
+          "audio": {
+            "$ref": "#/components/schemas/AudioFormat"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "CreateSession"
       },
       "CredentialsDelete": {
         "properties": {

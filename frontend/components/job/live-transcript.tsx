@@ -111,12 +111,17 @@ export function LiveTranscriptView({
   status,
   segments,
   preloaded,
+  immediate = false,
+  partial = "",
 }: {
   status: JobStatusResponse;
   segments: TranscriptSegment[];
   preloaded: number;
+  immediate?: boolean;
+  partial?: string;
 }) {
-  const shown = useReveal(segments.length, preloaded);
+  const revealed = useReveal(segments.length, preloaded);
+  const shown = immediate ? segments.length : revealed;
   const visible = segments.slice(0, shown);
   const containerRef = useRef<HTMLDivElement>(null);
   const [following, setFollowing] = useState(true);
@@ -170,7 +175,8 @@ export function LiveTranscriptView({
             <h2 className="text-xl font-semibold">Transcribing…</h2>
           </div>
 
-          {duration > 0 && (
+          {immediate && <p className="text-xs text-muted-foreground tabular-nums">{formatDuration(status.transcribed_seconds ?? 0)} recebidos · {words} palavras confirmadas</p>}
+          {!immediate && duration > 0 && (
             <div className="space-y-1.5">
               <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
                 <div
@@ -201,7 +207,7 @@ export function LiveTranscriptView({
                   key={`${segment.start}-${segment.end}`}
                   className={cn(
                     "flex gap-4 rounded-md px-2 py-2 border-l-2 transition-colors duration-1000",
-                    i >= preloaded && "animate-in fade-in slide-in-from-bottom-2 duration-500",
+                    !immediate && i >= preloaded && "animate-in fade-in slide-in-from-bottom-2 duration-500",
                     newest ? "border-primary bg-primary/5" : "border-transparent"
                   )}
                 >
@@ -219,7 +225,8 @@ export function LiveTranscriptView({
                 {last ? formatDuration(last.end) : formatDuration(0)}
               </span>
               <span className="flex items-center gap-1 text-sm text-muted-foreground">
-                {!last && <span className="mr-2">Listening — the first lines show up in a few seconds</span>}
+                {partial && <span className="mr-2" data-testid="live-partial">{partial}</span>}
+                {!last && !partial && <span className="mr-2">Listening — the first lines show up in a few seconds</span>}
                 {[0, 150, 300].map((delay) => (
                   <span
                     key={delay}

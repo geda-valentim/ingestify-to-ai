@@ -15,6 +15,7 @@ TRANSCRIPT_CONTENT_TYPES = {
 }
 
 
-def transcript_object_name(job_id: str, fmt: str) -> str:
+def transcript_object_name(job_id: str, fmt: str, generation: int = None) -> str:
     """MinIO object name of a transcript format for a job"""
-    return f"transcripts/{job_id}/transcript.{fmt}"
+    prefix = f"transcripts/{job_id}/live/{generation}" if generation is not None else f"transcripts/{job_id}"
+    return f"{prefix}/transcript.{fmt}"
