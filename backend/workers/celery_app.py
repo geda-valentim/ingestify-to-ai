@@ -1,6 +1,11 @@
 from celery import Celery
 from celery.schedules import crontab
 from shared.config import get_settings, redis_url_with_password
+from shared.engines.redact import install_log_redaction
+
+# No provider token or JWT in any log line or traceback (spec 0003); the record
+# factory is process-wide, so it covers the forked pool children too
+install_log_redaction()
 
 settings = get_settings()
 

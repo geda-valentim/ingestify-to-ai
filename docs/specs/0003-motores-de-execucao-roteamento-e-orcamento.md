@@ -732,7 +732,11 @@ Cada item cabe num PR, na ordem. Fora das mudanças deliberadas de 0a/0b, zero-c
       segmentos; clipe de 4 min idêntico byte a byte ao transcritor anterior em GPU float16 e CPU
       int8, inclusive as chamadas de progresso. GPU float16 e CPU int8 diferem entre si (85 × 114
       segmentos), então a paridade local × Modal compara mesma precisão).
-- [ ] **2 — Dados + selagem + redação + CLI de importação** (dry-run). Remotos **não ativáveis**.
+- [x] **2 — Dados + selagem + redação + CLI de importação** (dry-run). Remotos **não ativáveis**.
+      (Feita em 2026-10-04: 7 tabelas em `shared/models.py` + revisão Alembic `b3e1c0d9a7f2`, testadas
+      em SQLite e MySQL 8; selagem X25519 + HKDF + ChaCha20-Poly1305 com `cryptography`, já
+      dependência, no lugar de PyNaCl, presa ao `engine_id` e ao `key_id`; redação pela record
+      factory do `logging`; `scripts/engines.py keygen | import-env | import-modal-toml`.)
 - [ ] **3a — Capacidade**: pegadas, bindings, guarda de VRAM, GPUs declaradas, heartbeats NVML,
       "configurado vs vivos", `GET /admin/gpus`, `set-capacity`. Sem rota ainda.
 - [ ] **3b — Backlog e colocação com executor falso**: `dispatch.submit` (inclui `/upload`,

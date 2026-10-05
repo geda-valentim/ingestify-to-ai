@@ -263,6 +263,23 @@ class Settings(BaseSettings):
     # IDs are used instead of emails because registration does not verify email ownership.
     admin_user_ids: str = ""
 
+    # Execution engines (spec 0003). Remote engine credentials are sealed to the
+    # public key; only worker-remote is given the private keys (a list, for
+    # rotation; or a file with one per line). No defaults: without the public key
+    # credentials cannot be stored, without a private key no remote engine runs.
+    # Generate a pair with: python scripts/engines.py keygen
+    engine_secrets_public_key: str = ""
+    engine_secrets_private_keys: str = ""
+    engine_secrets_private_keys_file: str = ""
+
+    def engine_private_keys(self) -> List[str]:
+        """Private keys from ENGINE_SECRETS_PRIVATE_KEYS (comma-separated) and/or the _FILE"""
+        keys = [k.strip() for k in self.engine_secrets_private_keys.split(",") if k.strip()]
+        if self.engine_secrets_private_keys_file:
+            with open(self.engine_secrets_private_keys_file) as f:
+                keys += [line.strip() for line in f if line.strip() and not line.startswith("#")]
+        return keys
+
     # CORS
     # Comma-separated list of origins allowed to call the API from a browser.
     # Defaults cover local development only (Next.js frontend on :3000 and the

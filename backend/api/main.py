@@ -21,6 +21,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# No provider token or JWT in any log line or traceback (spec 0003)
+from shared.engines.redact import install_log_redaction  # noqa: E402
+install_log_redaction()
+
 settings = get_settings()
 
 # Security schemes for Swagger UI
