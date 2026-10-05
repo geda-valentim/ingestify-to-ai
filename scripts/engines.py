@@ -241,7 +241,8 @@ def _routes(args) -> int:
             spec = routing.RouteSpec(
                 steps=[routing.parse_step(text) for text in args.step], max_attempts=args.max_attempts,
                 dispatcher_fallback=args.fallback, on_no_engine=args.on_no_engine,
-                fail_after_seconds=args.fail_after,
+                fail_after_seconds=args.fail_after, remote_allowed_for=args.remote_allowed_for,
+                user_period_limit_usd=args.user_limit_usd, remote_data_notice=args.remote_data_notice,
             )
             route, warnings = routing.put_route(db, args.feature, spec, version=None, actor_user_id=None,
                                                 auth_method="cli")
@@ -459,6 +460,11 @@ def main(argv=None) -> int:
     routes_set.add_argument("--fallback", choices=["local_direct", "hold"], default="local_direct",
                             help="while the dispatcher is down: send new items straight to the local workers, or hold them")
     routes_set.add_argument("--on-no-engine", choices=["hold", "fail"], default="hold")
+    routes_set.add_argument("--remote-allowed-for", choices=["admins", "all"], default="admins",
+                            help="who may have items sent to remote engines (all requires --user-limit-usd)")
+    routes_set.add_argument("--user-limit-usd", type=float,
+                            help="per-user spend ceiling per period on remote engines (required with all)")
+    routes_set.add_argument("--remote-data-notice", help="shown to users whose media may leave this server")
     routes_set.add_argument("--fail-after", type=int, help="seconds before on-no-engine=fail fails an item")
     routes_delete = routes_sub.add_parser("delete")
     routes_delete.add_argument("feature")
