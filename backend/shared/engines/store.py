@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from shared.engines.capacity import Binding, CapacityError, LocalGpu, bindings, deploy_state, validate_engine_config
 from shared.engines.features import FEATURES, get_feature
-from shared.models import AdminAudit, Engine, EngineUsage
+from shared.models import AdminAudit, DispatcherLease, Engine, EngineUsage
 
 LOCAL_SLUG = "local"
 IN_FLIGHT = ("reserved", "spawning", "running")
@@ -26,6 +26,16 @@ def ensure_local_engine(db: Session) -> Engine:
         db.add(engine)
         db.commit()
     return engine
+
+
+def ensure_lease_row(db: Session) -> None:
+    """The single dispatcher_lease row, epoch 0 and no holder (spec 0003, Appendix E)"""
+    if db.get(DispatcherLease, 1) is None:
+        db.add(DispatcherLease(id=1, epoch=0))
+        try:
+            db.commit()
+        except Exception:  # another process seeded it first
+            db.rollback()
 
 
 def audit(db: Session, *, actor_user_id: Optional[str], auth_method: str, ip: Optional[str], action: str,

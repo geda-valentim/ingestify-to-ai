@@ -326,6 +326,29 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
+  # The dispatcher of execution engines (spec 0003), OPTIONAL: only needed once a
+  # feature has a route (scripts/engines.py routes set ...). Without routes nothing
+  # is ever published to its queue and installs run exactly as before.
+  #   docker compose --profile engines up -d worker-dispatch
+  # It probes media, places backlog items on engines by the route, and sweeps
+  # dead attempts. Its embedded beat (-B, ENGINES_DISPATCH_BEAT) ticks every 5 s and
+  # sweeps every 30 s; MONITORING_ENABLED=false keeps the shared beat's jobs out
+  # of it. If it is down, the API's watchdog places local work instead.
+  worker-dispatch:
+    extends:
+      service: worker
+    profiles: ["engines"]
+    command: celery -A workers.celery_app worker --loglevel=info --concurrency=2 -Q ingestify-dispatch -n ingestify-dispatch@%h -B --schedule /tmp/celerybeat-dispatch
+    environment:
+      - CELERY_WORKER_NAME=ingestify-dispatch
+      - ENGINES_DISPATCH_BEAT=true
+      - MONITORING_ENABLED=false
+      - DEVICE=cpu
+      - PROBE_MAX_BYTES=${PROBE_MAX_BYTES:-8388608}
+    mem_limit: ${DISPATCH_WORKER_MEM_LIMIT:-1g}
+    deploy:
+      replicas: 1
+
   beat:
     build:
       context: .

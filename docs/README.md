@@ -21,6 +21,7 @@ referência · **planejado** = não implementado.
 | [features/vision.md](features/vision.md) | Florence-2: `/images/describe`, `/images/ocr`, `/images/capabilities`. |
 | [features/storage-and-retention.md](features/storage-and-retention.md) | MySQL, Elasticsearch, MinIO, chaves Redis, disco temporário, tarefas agendadas e retenção. |
 | [features/monitoring-and-admin.md](features/monitoring-and-admin.md) | `/health`, rotas `/admin/*`, detecção de jobs travados e retry automático. |
+| [features/engines.md](features/engines.md) | Motores de execução: rotas por feature, backlog, despachante, watchdog, `/admin/routing`. |
 | [features/crawler.md](features/crawler.md) | **Planejado / não implementado**: o que existe de código dormente e onde está o plano. |
 | Transcrição de áudio/vídeo (`POST /transcribe`) | Documentada à parte. Dispositivo e GPU do Whisper: [GPU.md](GPU.md) e [spec 0002](specs/0002-dispositivo-unico-e-migracao-do-whisper.md). |
 

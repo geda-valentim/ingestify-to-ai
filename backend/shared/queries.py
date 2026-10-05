@@ -4,7 +4,7 @@ Database query helpers for monitoring and recovery
 
 from datetime import datetime, timedelta
 from typing import List, Optional
-from sqlalchemy import and_, or_
+from sqlalchemy import and_, exists, or_
 from sqlalchemy.orm import Session
 
 from shared.models import Job, Page, JobStatus
@@ -12,6 +12,23 @@ from shared.database import SessionLocal
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+# A routed job whose attempt still heartbeats is long, not stuck (spec 0003, Appendix J):
+# a 3 h transcription outlives the stuck threshold. Its own sweeper recovers it if
+# the worker dies. Jobs with no usage row - every job without a route - are unaffected.
+LIVE_USAGE_HEARTBEAT_SECONDS = 600
+
+
+def _has_live_engine_usage():
+    from shared.models import EngineUsage
+
+    recent = datetime.utcnow() - timedelta(seconds=LIVE_USAGE_HEARTBEAT_SECONDS)
+    return exists().where(
+        EngineUsage.job_id == Job.id,
+        EngineUsage.status.in_(("reserved", "spawning", "running")),
+        EngineUsage.heartbeat_at >= recent,
+    )
 
 
 def get_stuck_jobs(
@@ -36,7 +53,8 @@ def get_stuck_jobs(
             and_(
                 Job.status == JobStatus.PROCESSING,
                 Job.started_at.isnot(None),
-                Job.started_at < threshold_time
+                Job.started_at < threshold_time,
+                ~_has_live_engine_usage(),
             )
         ).limit(batch_size).all()
 

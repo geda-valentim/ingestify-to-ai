@@ -93,7 +93,30 @@ import workers.engines.heartbeat  # noqa: F401,E402
 # nothing to do with vision.
 celery_app.conf.task_routes = {
     "workers.vision_tasks.*": {"queue": settings.vision_queue},
+    # The dispatcher's own tasks (spec 0003): only published once a feature has a route
+    "workers.engines.tasks.*": {"queue": settings.dispatch_queue},
 }
+
+# Dispatcher tasks (probe, tick, sweeper); importing them loads no media library
+import workers.engines.tasks  # noqa: F401,E402
+
+# Only worker-dispatch (compose profile `engines`) runs these, with its embedded
+# beat (`celery worker -B`, ENGINES_DISPATCH_BEAT=true): the shared beat must not
+# fill a queue that installs without the profile never consume
+if settings.engines_dispatch_beat:
+    celery_app.conf.beat_schedule = {
+        **(celery_app.conf.beat_schedule or {}),
+        'engines-dispatch-tick': {
+            'task': 'workers.engines.tasks.dispatch_tick',
+            'schedule': 5.0,
+            'options': {'queue': settings.dispatch_queue, 'expires': 5},
+        },
+        'engines-sweep-usage': {
+            'task': 'workers.engines.tasks.sweep_usage',
+            'schedule': 30.0,
+            'options': {'queue': settings.dispatch_queue, 'expires': 30},
+        },
+    }
 
 # Explicitly import monitoring tasks to ensure they're registered
 # This is needed because Beat scheduler needs to see these tasks

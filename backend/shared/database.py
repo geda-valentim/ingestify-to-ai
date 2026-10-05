@@ -47,9 +47,10 @@ def init_db():
     _add_missing_columns()
 
     # The built-in local engine (spec 0003): this server's workers, no bindings until declared
-    from shared.engines.store import ensure_local_engine
+    from shared.engines.store import ensure_local_engine, ensure_lease_row
     with SessionLocal() as db:
         ensure_local_engine(db)
+        ensure_lease_row(db)
 
 
 # Columns added to existing tables after they were first created. create_all() only
@@ -60,6 +61,9 @@ _ADDED_COLUMNS = {
     "jobs": {
         "crawler_config": "JSON NULL",  # migrations/002_add_crawler_fields.sql
         "crawler_schedule": "JSON NULL",
+    },
+    "engine_feature_state": {
+        "workers_seen_at": "DATETIME(6) NULL",  # alembic 5d2e8f1a6c47 (spec 0003, slice 3b)
     },
 }
 
