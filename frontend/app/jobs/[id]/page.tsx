@@ -1,6 +1,7 @@
 "use client";
 
 import { use, useEffect, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
@@ -26,6 +27,7 @@ import {
   ArrowLeft,
   Cloud,
   Server,
+  Folder as FolderIcon,
 } from "lucide-react";
 import { jobsApi } from "@/lib/api";
 import { useAuthStore } from "@/lib/store/auth";
@@ -461,6 +463,33 @@ export default function JobStatusPage({ params }: PageProps) {
                   <p className="text-sm text-muted-foreground truncate">
                     {resolvedParams.id}
                   </p>
+                  {status.project && (
+                    <nav
+                      aria-label="Location"
+                      className="mt-1 flex min-w-0 items-center gap-1 text-sm"
+                    >
+                      <FolderIcon className="h-3.5 w-3.5 shrink-0 text-primary" />
+                      <Link
+                        href={`/jobs?project_id=${encodeURIComponent(status.project.id)}`}
+                        className="min-w-0 truncate hover:underline underline-offset-4"
+                        title={`All jobs in ${status.project.name}`}
+                      >
+                        {status.project.name}
+                      </Link>
+                      {status.folder && (
+                        <>
+                          <span className="text-muted-foreground">›</span>
+                          <Link
+                            href={`/jobs?project_id=${encodeURIComponent(status.project.id)}&folder_id=${encodeURIComponent(status.folder.id)}`}
+                            className="min-w-0 truncate hover:underline underline-offset-4"
+                            title={`All jobs in ${status.project.name} › ${status.folder.name}`}
+                          >
+                            {status.folder.name}
+                          </Link>
+                        </>
+                      )}
+                    </nav>
+                  )}
                 </div>
               </div>
               <div className="flex flex-wrap gap-2">

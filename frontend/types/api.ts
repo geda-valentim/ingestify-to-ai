@@ -33,6 +33,15 @@ export interface Token {
 export interface APIKeyCreate {
   name: string;
   expires_in_days?: number | null;
+  /** Bind the key to a project by name (get-or-add). Exclusive with `project_id`. */
+  project?: string;
+  /** Bind the key to an existing project. Exclusive with `project`. */
+  project_id?: string;
+}
+
+/** `PATCH /api-keys/{id}`: rebind (or, with `null`, unbind) the key's project. */
+export interface APIKeyUpdate {
+  project_id: string | null;
 }
 
 export interface APIKeyResponse {
@@ -41,6 +50,7 @@ export interface APIKeyResponse {
   api_key: string;
   expires_at?: string | null;
   created_at: string;
+  project?: ProjectRef | null;
 }
 
 export interface APIKeyInfo {
@@ -50,6 +60,95 @@ export interface APIKeyInfo {
   expires_at?: string | null;
   is_active: boolean;
   created_at: string;
+  /** Where this key's uploads go when the request names no project. */
+  project?: ProjectRef | null;
+}
+
+// ---------------------------------------------------------------------------
+// Projects and folders (spec 0004)
+// ---------------------------------------------------------------------------
+
+/** A project as referenced from a job or an API key. */
+export interface ProjectRef {
+  id: string;
+  name: string;
+}
+
+/** A folder as referenced from a job. */
+export interface FolderRef {
+  id: string;
+  name: string;
+}
+
+/** A folder inside a project, as listed by `GET /projects?include=folders`. */
+export interface Folder {
+  id: string;
+  name: string;
+  job_count: number;
+}
+
+/** One project of `GET /projects`, with its counts (MAIN jobs only). */
+export interface Project {
+  id: string;
+  name: string;
+  description: string | null;
+  archived: boolean;
+  job_count: number;
+  /** Jobs in the project that are in no folder. */
+  root_job_count: number;
+  failed_count: number;
+  active_count: number;
+  last_job_at: string | null;
+  /** API keys whose uploads default to this project. */
+  api_keys: { id: string; name: string }[];
+  /** Present with `?include=folders`. */
+  folders?: Folder[];
+}
+
+export interface ProjectsListResponse {
+  /** Most recently used first, then by name. */
+  projects: Project[];
+  limits: {
+    max_projects: number;
+    max_folders_per_project: number;
+  };
+}
+
+/**
+ * `GET /projects/resolve?name=` and `GET /projects/{id}/folders/resolve?name=`:
+ * whether a typed name matches an existing project/folder, without creating it.
+ * The normalisation rule lives only in the backend; the UI asks instead of
+ * re-implementing it.
+ */
+export interface NameResolveResponse {
+  valid: boolean;
+  /** The existing project/folder the name matches, or null if it would be created. */
+  match?: ProjectRef | null;
+  /** Why the name is not acceptable (when `valid` is false). */
+  error?: string;
+}
+
+/** `project` in an upload response. */
+export interface UploadProjectInfo extends ProjectRef {
+  created: boolean;
+  /** "api_key": the request named no project and the key's binding was used. */
+  source: "request" | "api_key" | "fallback";
+}
+
+/** `folder` in an upload response. */
+export interface UploadFolderInfo extends FolderRef {
+  created: boolean;
+}
+
+/**
+ * Where an upload goes. Exactly one of `project`/`project_id` is required by the
+ * API; `folder`/`folder_id` are optional. Names are get-or-add, ids never create.
+ */
+export interface UploadLocation {
+  project?: string;
+  project_id?: string;
+  folder?: string;
+  folder_id?: string;
 }
 
 export interface DocumentMetadata {
@@ -101,6 +200,8 @@ export interface JobCreatedResponse {
   status: "queued";
   created_at: string;
   message: string;
+  project?: UploadProjectInfo;
+  folder?: UploadFolderInfo | null;
 }
 
 export interface ChildJobs {
@@ -130,6 +231,8 @@ export interface JobStatusResponse {
   /** Transcriptions in progress: how much of the media is done, in seconds */
   transcribed_seconds?: number | null;
   media_duration?: number | null;
+  project?: ProjectRef | null;
+  folder?: FolderRef | null;
   /** Only with routing (spec 0003): where the job runs. Never the engine's name or cost. */
   engine?: { kind: "local" | "cloud" } | null;
   /** Only with routing: why it still waits (`in_queue` = backlog, `starting` = placed, not started). */
@@ -210,7 +313,7 @@ export interface HealthCheckResponse {
   timestamp: string;
 }
 
-export interface ConvertRequest {
+export interface ConvertRequest extends UploadLocation {
   source_type: SourceType;
   source?: string;
   file?: File;
@@ -219,7 +322,7 @@ export interface ConvertRequest {
   authToken?: string; // OAuth token for gdrive/dropbox
 }
 
-export interface UploadRequest {
+export interface UploadRequest extends UploadLocation {
   file: File;
   name?: string;
   tags?: string[];
@@ -238,6 +341,9 @@ export interface JobsListParams {
   /** Matches the job name or file name, not the content (that is /search). */
   q?: string;
   kind?: JobKind;
+  project_id?: string;
+  /** A folder id, or "root" for the jobs of `project_id` that are in no folder. */
+  folder_id?: string;
 }
 
 export interface TagCount {
@@ -277,6 +383,8 @@ export interface JobListItem {
   pages_completed?: number;
   page_number?: number | null;
   parent_job_id?: string | null;
+  project?: ProjectRef | null;
+  folder?: FolderRef | null;
 }
 
 /**

@@ -15,6 +15,7 @@ from api.image_routes import router as image_router
 from api.tag_routes import router as tag_router
 from api.engine_admin_routes import router as engine_admin_router
 from api.routing_admin_routes import router as routing_admin_router
+from api.projects_api import router as projects_router
 
 # Configure logging
 logging.basicConfig(
@@ -58,6 +59,28 @@ Esta API suporta dois métodos de autenticação:
 5. Clique em "Authorize"
 
 Após autorizar, todos os endpoints protegidos usarão automaticamente suas credenciais.
+
+Se um request trouxer **os dois** (Bearer e `X-API-Key`), vale o JWT.
+
+## Projetos e pastas
+
+Todo job pertence a um **projeto** (obrigatório) e, opcionalmente, a uma **pasta** do
+projeto (um nível). Os endpoints que criam jobs (`/upload`, `/convert`, `/transcribe`,
+`/images/*`) aceitam:
+
+- `project`: nome do projeto. É criado se não existir (*get-or-add*). Caixa, espaços e
+  acentos sobre letras latinas não contam: `Reunião` e ` reuniao ` são o mesmo projeto;
+- `project_id`: ID de um projeto existente (nunca cria);
+- `folder` / `folder_id`: a pasta dentro do projeto (o nome não pode ter `/`).
+
+Sem `project`/`project_id`, o job vai para o projeto **vinculado à API key** (veja
+`PATCH /api-keys/{key_id}`). Isso só vale para requests autenticados apenas pela key: com
+JWT, o vínculo é ignorado. Sem projeto no request e sem vínculo, a resposta é **422**.
+Um arquivo repetido só é reaproveitado dentro do mesmo projeto.
+
+```bash
+curl -H "X-API-Key: ..." -F "file=@aula.mp3" -F "project=Aulas" -F "folder=Setembro" .../transcribe
+```
 """,
     version="1.0.0",
     docs_url="/docs",
@@ -136,7 +159,7 @@ app.add_middleware(
     allow_origins=cors_origins,
     allow_credentials=True,
     # Methods actually exposed by the API (plus the CORS preflight verb).
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     # Headers the frontend / API clients actually send.
     allow_headers=["Authorization", "Content-Type", "Accept", "X-API-Key", "X-Source-Token"],
 )
@@ -164,6 +187,40 @@ async def global_exception_handler(request: Request, exc: Exception):
     )
 
 
+def init_database_on_boot() -> None:
+    """
+    Schema guard, create_all and the spec 0004 boot steps (§ 4.3, step 5).
+
+    The guard runs BEFORE init_db and OUTSIDE the try below on purpose: that
+    try swallows every error unless ENVIRONMENT == "production", and production
+    runs with ENVIRONMENT=development. A database that has `jobs` but not the
+    0004 columns ends the process (SystemExit(1)) whatever ENVIRONMENT says.
+    """
+    from shared import database
+    from shared.migration_0004 import boot_schema_guard, finish_boot_migration
+
+    db_state = boot_schema_guard(database.engine)
+
+    # Initialize MySQL database (create tables if they don't exist)
+    try:
+        logger.info("Initializing MySQL database...")
+        database.init_db()
+        logger.info("✓ MySQL database initialized successfully")
+    except Exception as e:
+        logger.error(f"✗ Failed to initialize MySQL database: {e}")
+        if settings.environment == "production":
+            raise  # Fail fast in production
+
+    if db_state == "unreachable":
+        return
+    try:
+        finish_boot_migration(database.engine, fresh=db_state == "empty")
+    except Exception as e:
+        logger.error(f"✗ Spec 0004 boot migration step failed: {e}", exc_info=True)
+        if settings.environment == "production":
+            raise
+
+
 # Startup/Shutdown events
 @app.on_event("startup")
 async def startup_event():
@@ -185,16 +242,7 @@ async def startup_event():
     from shared.auth import validate_jwt_secret
     validate_jwt_secret(settings.jwt_secret_key)
 
-    # Initialize MySQL database (create tables if they don't exist)
-    try:
-        from shared.database import init_db
-        logger.info("Initializing MySQL database...")
-        init_db()
-        logger.info("✓ MySQL database initialized successfully")
-    except Exception as e:
-        logger.error(f"✗ Failed to initialize MySQL database: {e}")
-        if settings.environment == "production":
-            raise  # Fail fast in production
+    init_database_on_boot()
 
     # Check Elasticsearch connection
     try:
@@ -285,6 +333,7 @@ app.include_router(tag_router)  # GET /tags, PUT /jobs/{job_id}/tags
 # Before engine_admin_router: /admin/engines/status must not match /admin/engines/{engine_id}
 app.include_router(routing_admin_router)  # /admin/routing, /admin/engines/status (spec 0003)
 app.include_router(engine_admin_router)  # /admin/engines, /admin/gpus (spec 0003)
+app.include_router(projects_router)  # GET /projects, /projects/resolve, /projects/{id}/folders/resolve
 app.include_router(router)
 
 
