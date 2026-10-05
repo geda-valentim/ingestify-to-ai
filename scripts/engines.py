@@ -56,6 +56,24 @@ Manage execution engines (spec 0003) from the server shell.
         Build and deploy the Whisper app with the engine's binding, verify it with
         the CPU-only meta() function, and record the fingerprint on the engine.
 
+  Several accounts (slice 4c), each in turn - one failing never stops the next:
+    python scripts/engines.py modal-deploy --all [--dry-run]
+    python scripts/engines.py test --all
+    python scripts/engines.py reconcile [--engine modal_2]
+        The last one reads the billing reports now (worker-remote also does it every
+        10 min): keeps the larger figure, alerts at soft_pct and at exhaustion.
+
+  Benchmark (slice 4b; Appendix H of the spec). Remote costs money: it prints the
+  pessimistic estimate, asks for confirmation (or --yes), reserves --max-usd in the
+  ledger and cuts each (gpu, E) at its share. Samples are paths inside the container
+  (./tmp is /tmp/ingestify in worker-remote), optionally path:seconds:
+    python scripts/engines.py benchmark --engine modal_1 --sample /tmp/ingestify/bench/a.mp3:240 \
+        --gpus T4,L4,A10G --concurrency 1 --max-usd 0.30 [--plan] [--yes] [--apply]
+    python scripts/engines.py benchmark --engine local --sample ./tmp/bench/a.mp3:240 --concurrency 1,2
+        (local: prints the one-off container command that runs it next to the live workers)
+    python scripts/engines.py speed [--engine modal_1]
+        What the estimate uses per (engine, feature, gpu, E): learned from 50 rows on.
+
 Inside Docker (the API container has the database and the public key):
     docker compose exec -T api python scripts/engines.py import-env < /path/to/.env
     docker compose exec -T api python scripts/engines.py import-env --apply < /path/to/.env
@@ -290,7 +308,13 @@ def _remote(args) -> int:
             return 1
 
     if args.command == "modal-deploy":
-        from workers.engines.modal_deploy import DeployError, deploy
+        from workers.engines.modal_deploy import DeployError, deploy, deploy_all
+        if args.all == bool(args.engine):
+            print("❌ Pass --engine <slug> or --all")
+            return 1
+        if args.all:
+            summary = deploy_all(args.feature, dry_run=args.dry_run, allow_unhashed=args.allow_unhashed)
+            return 0 if summary and not any(v.startswith("FAILED") for v in summary.values()) else 1
         try:
             deploy(args.engine, args.feature, dry_run=args.dry_run, allow_unhashed=args.allow_unhashed)
             return 0
@@ -298,10 +322,25 @@ def _remote(args) -> int:
             print(f"❌ {e}")
             return 1
 
+    if args.command == "reconcile":
+        import json
+
+        from workers.engines.remote_tasks import reconcile_now
+        print(json.dumps(reconcile_now(only=args.engine), indent=1, default=str))
+        return 0
+
     # test
     import json
 
-    from workers.engines.remote_tasks import test_engine_now
+    from workers.engines.remote_tasks import test_all_now, test_engine_now
+    if args.all == bool(args.engine):
+        print("❌ Pass --engine <slug> or --all")
+        return 1
+    if args.all:
+        reports = test_all_now()
+        for slug, report in reports.items():
+            print(f"{slug:<12} {'ok' if report.get('ok') else report.get('code')}: {report.get('detail')}")
+        return 0 if reports and all(r.get("ok") for r in reports.values()) else 1
     report = test_engine_now(args.engine)
     print(json.dumps(report, indent=1))
     if args.spend and report.get("ok"):
@@ -324,6 +363,38 @@ def _remote(args) -> int:
             start, _next_period(engine, start))
         print(f"Reported spend since {start}: US$ {spent} (Modal's report lags a few minutes)")
     return 0 if report.get("ok") else 1
+
+
+def _speed(args) -> int:
+    import json
+
+    from shared.database import SessionLocal
+    from shared.engines import speed
+    from shared.engines.capacity import bindings
+    from shared.models import Engine
+
+    db = SessionLocal()
+    try:
+        query = db.query(Engine).order_by(Engine.slug)
+        if args.engine:
+            query = query.filter(Engine.slug == args.engine)
+        rows = []
+        for engine in query:
+            for feature, binding in bindings(engine.config or {}).items():
+                stats = speed.compute(db, engine.id, feature, binding.gpu_type or binding.gpu_ref,
+                                      binding.executions_per_worker)
+                rows.append({"engine": engine.slug, "feature": feature, **stats.view()})
+    finally:
+        db.close()
+    if args.json:
+        print(json.dumps(rows, indent=1))
+        return 0
+    for r in rows:
+        print(f"{r['engine']:<10} {r['feature']:<20} {r['gpu']:<6} E={r['executions_per_worker']} "
+              f"rows={r['rows']} s_p20={r['s_p20']} cold_p80={r['cold_s_p80']} "
+              f"q95 US$/h={r['usd_per_audio_hour_q95']} source={r['source']}"
+              + ("" if r["learned"] else f" (worst case until {r['needs_rows']} more rows)"))
+    return 0
 
 
 def _alive() -> dict:
@@ -401,14 +472,28 @@ def main(argv=None) -> int:
 
     sub.add_parser("modal-lock", help="regenerate the hashed requirements lock of the Modal image")
     test = sub.add_parser("test", help="check a remote engine's credentials and deployment (no GPU)")
-    test.add_argument("--engine", required=True, help="slug, e.g. modal_1")
+    test.add_argument("--engine", help="slug, e.g. modal_1")
+    test.add_argument("--all", action="store_true", help="every remote engine with credentials, in turn")
     test.add_argument("--spend", action="store_true", help="also read the account's billing report")
     deploy_p = sub.add_parser("modal-deploy", help="deploy the Whisper app to an engine's Modal account")
-    deploy_p.add_argument("--engine", required=True, help="slug, e.g. modal_1")
+    deploy_p.add_argument("--engine", help="slug, e.g. modal_1")
+    deploy_p.add_argument("--all", action="store_true",
+                          help="every Modal engine with credentials and a binding, one after the other")
     deploy_p.add_argument("--feature", default="transcription")
     deploy_p.add_argument("--dry-run", action="store_true")
     deploy_p.add_argument("--allow-unhashed", action="store_true",
                           help="deploy even if the requirements lock has no hashes (recorded on the engine)")
+
+    recon = sub.add_parser("reconcile", help="read the providers' spend reports now (as the 10-min beat does)")
+    recon.add_argument("--engine", help="one engine (paused ones too); default every active remote engine")
+
+    from workers.engines.benchmark import add_arguments as benchmark_arguments
+    bench = sub.add_parser("benchmark", help="measure speed, US$/h of audio and VRAM per (gpu, E); remote costs money")
+    benchmark_arguments(bench)
+
+    speed_p = sub.add_parser("speed", help="learned speed and cost per (engine, feature, gpu, E), from the ledger")
+    speed_p.add_argument("--engine", help="one engine (default all)")
+    speed_p.add_argument("--json", action="store_true")
 
     args = parser.parse_args(argv)
 
@@ -438,8 +523,15 @@ def main(argv=None) -> int:
     if args.command in ("budget", "activate", "pause"):
         return _lifecycle(args)
 
-    if args.command in ("modal-lock", "modal-deploy", "test"):
+    if args.command in ("modal-lock", "modal-deploy", "test", "reconcile"):
         return _remote(args)
+
+    if args.command == "benchmark":
+        from workers.engines.benchmark import run_command
+        return run_command(args)
+
+    if args.command == "speed":
+        return _speed(args)
 
     if args.command == "import-modal-toml":
         return _import(accounts_from_modal_toml(Path(args.path).read_text()), args.limit_usd, args.apply)

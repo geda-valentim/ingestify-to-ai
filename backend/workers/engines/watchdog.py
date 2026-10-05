@@ -17,7 +17,7 @@ import logging
 from datetime import datetime
 from typing import Optional
 
-from shared.engines import dispatch, routing
+from shared.engines import alerts, dispatch, routing
 from shared.models import DispatcherLease
 from workers.engines import dispatcher, sweeper
 
@@ -47,8 +47,9 @@ def watchdog_round(*, celery, session_factory=None, now: Optional[datetime] = No
     acting = [r for r in down if r.dispatcher_fallback == "local_direct" and r.has_local_step()]
     if _last_alert["at"] is None or (now - _last_alert["at"]).total_seconds() >= ALERT_EVERY_SECONDS:
         _last_alert["at"] = now
-        logger.warning(
-            f"[ENGINES] ALERT: dispatcher not seen since {seen or 'ever'} - routes "
+        alerts.alert(
+            alerts.DISPATCHER_DOWN, None,
+            f"dispatcher not seen since {seen or 'ever'} - routes "
             f"{', '.join(r.feature for r in down)}; "
             + ("placing local work from the API watchdog" if acting or any(not r.active for r in down)
                else "dispatcher_fallback=hold: items wait")

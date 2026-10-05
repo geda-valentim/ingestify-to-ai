@@ -6,6 +6,7 @@ install without routes.
     probe_media(dispatch_id)  measure the item's duration; probing -> waiting; kick
     dispatch_tick()           one placement round as the epoch-fenced leader
     sweep_usage()             recover unclaimed and dead local attempts (Appendix E)
+    refresh_speed()           learned speed/cost per (engine, feature, gpu, E) -> Redis, 1 h
 
 Ticks come from kicks (submit's probe, settles, requeues; deduplicated to one per
 500 ms) and from worker-dispatch's own beat every 5 s; the sweeper every 30 s.
@@ -102,3 +103,14 @@ def dispatch_tick():
 @celery_app.task(name="workers.engines.tasks.sweep_usage", soft_time_limit=50, time_limit=60)
 def sweep_usage():
     return sweeper.sweep(celery=celery_app)
+
+
+@celery_app.task(name="workers.engines.tasks.refresh_speed", soft_time_limit=100, time_limit=120)
+def refresh_speed():
+    from shared.engines import speed
+
+    db = dispatcher._session(None)
+    try:
+        return {"keys": len(speed.refresh_all(db))}
+    finally:
+        db.close()
