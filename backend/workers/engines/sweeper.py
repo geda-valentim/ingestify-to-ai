@@ -22,6 +22,7 @@ recorded call (or cancels it past its deadline):
     remote `running` past deadline_at + 60 s            -> cancel_remote on the control lane
     remote with republish_count >= 5 and still silent   -> settled/lost charging the whole
                                                            reservation; back to the backlog
+    `benchmark` rows silent for 15 min (CLI died)        -> settled/lost charging the reservation
 
 A redelivered message of an item handled here finds its row out of `reserved`
 and is acknowledged without running.
@@ -50,6 +51,7 @@ REMOTE_UNCLAIMED_REPUBLISH = 3
 REMOTE_SILENT_SECONDS = 120
 REMOTE_MAX_REPUBLISH = 5
 REMOTE_CANCEL_GRACE_SECONDS = 60
+BENCHMARK_STALE_SECONDS = 900  # the benchmark CLI heartbeats its rows every 15 s
 
 
 def _session(session_factory) -> Session:
@@ -62,7 +64,7 @@ def _session(session_factory) -> Session:
 def sweep(*, celery, session_factory=None, now: Optional[datetime] = None, redis_client=None) -> Dict[str, int]:
     now = now or datetime.utcnow()
     counts = {"published": 0, "released": 0, "lost": 0, "succeeded": 0, "probes": 0, "remote_republished": 0,
-              "remote_cancelled": 0}
+              "remote_cancelled": 0, "benchmarks_lost": 0}
     changes = []
     db = _session(session_factory)
     try:
@@ -102,6 +104,7 @@ def sweep(*, celery, session_factory=None, now: Optional[datetime] = None, redis
         if remote_ids:
             _sweep_remote(db, celery, session_factory, remote_ids, now, counts, changes)
         _republish_probes(db, celery, now, counts)
+        _sweep_benchmarks(db, now, counts)
     finally:
         db.close()
 
@@ -116,6 +119,30 @@ def sweep(*, celery, session_factory=None, now: Optional[datetime] = None, redis
     if counts["released"] or counts["lost"]:
         dispatch.kick(celery, redis_client)
     return counts
+
+
+def _sweep_benchmarks(db: Session, now: datetime, counts: Dict[str, int]) -> None:
+    """
+    A benchmark whose CLI died stops heartbeating; its ephemeral app went with it
+    (the provider stops an ephemeral app when its client disconnects). Settle it
+    `lost`, charging the whole reservation on a remote engine (conservative, like a
+    lost remote attempt) so the money is not held forever.
+    """
+    rows = db.query(EngineUsage).filter(
+        EngineUsage.kind == "benchmark", EngineUsage.status.in_(ledger.IN_FLIGHT),
+        EngineUsage.heartbeat_at < now - timedelta(seconds=BENCHMARK_STALE_SECONDS)).all()
+    for usage in rows:
+        charge = usage.reserved_usd if usage.rate_usd_per_s and usage.rate_usd_per_s > 0 else 0
+        n = db.execute(update(EngineUsage).where(EngineUsage.id == usage.id, EngineUsage.status == usage.status,
+                                                 EngineUsage.heartbeat_at == usage.heartbeat_at)
+                       .values(status="settled", outcome="lost", actual_usd=charge, cost_basis="reserved",
+                               finished_at=now, error_code="BENCHMARK_LOST")
+                       .execution_options(synchronize_session=False)).rowcount
+        db.commit()
+        if n:
+            counts["benchmarks_lost"] += 1
+            logger.warning(f"[ENGINES] Benchmark usage {usage.id} silent for {BENCHMARK_STALE_SECONDS}s: "
+                           f"settled lost, charged US$ {charge}")
 
 
 def _publish_unpublished(db: Session, celery, session_factory, local: Dict[str, Engine], now: datetime,

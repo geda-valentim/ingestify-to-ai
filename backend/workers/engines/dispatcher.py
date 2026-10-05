@@ -279,14 +279,35 @@ def _ineligible(tick: _Tick, engine: Engine, cand: JobDispatch, feature: str, bl
     return None
 
 
+def _estimate(executor, engine: Engine, binding, cand: JobDispatch, db: Session) -> Decimal:
+    """The executor's reservation for the item; remote ones read the key's learned speed through `db`"""
+    if getattr(executor, "wants_db", False):
+        return executor.estimate(engine, binding, cand, db=db)
+    return executor.estimate(engine, binding, cand)
+
+
+def _latest_job_rows(db: Session, engines: List[Engine], feature: str, now: datetime) -> Dict[str, datetime]:
+    """Each engine's latest kind=job row in its current budget period (probes, benchmarks and tails never count)"""
+    latest = {}
+    for engine in engines:
+        start = budget.period_start(engine, now)
+        at = (db.query(func.max(EngineUsage.created_at))
+              .filter(EngineUsage.engine_id == engine.id, EngineUsage.feature == feature, EngineUsage.kind == "job",
+                      EngineUsage.period_start == start).scalar())
+        if at is not None:
+            latest[engine.id] = at
+    return latest
+
+
 def _group_order(tick: _Tick, db: Session, step: dict, engines: List[Engine], cand, feature, blocked) -> List[Engine]:
-    """priority: as listed. fill_first: the current engine (latest job row, among eligible) first"""
+    """
+    priority: as listed. fill_first: the current engine first - the eligible one
+    with the latest kind=job row of its period, else the first listed - then the
+    rest in the group's order after it (spec 0003, 4.5)
+    """
     if step.get("group_strategy") != "fill_first" or len(engines) < 2:
         return engines
-    ids = [e.id for e in engines]
-    latest = dict(db.query(EngineUsage.engine_id, func.max(EngineUsage.created_at))
-                  .filter(EngineUsage.engine_id.in_(ids), EngineUsage.feature == feature, EngineUsage.kind == "job")
-                  .group_by(EngineUsage.engine_id).all())
+    latest = _latest_job_rows(db, engines, feature, tick.now)
     eligible = [e for e in engines if latest.get(e.id) and _ineligible(tick, e, cand, feature, blocked) is None]
     if not eligible:
         return engines
@@ -329,7 +350,7 @@ def _place(tick: _Tick, db: Session, route, cand: JobDispatch, engine: Engine, i
     feature = route.feature
     executor = executors.get(engine.adapter_type)
     binding = bindings(engine.config or {})[feature]
-    estimate = executor.estimate(engine, binding, cand)
+    estimate = _estimate(executor, engine, binding, cand, db)
     now = tick.now
     try:
         if not lease.holds(db, tick.epoch):
@@ -341,17 +362,19 @@ def _place(tick: _Tick, db: Session, route, cand: JobDispatch, engine: Engine, i
             _set_full(db, locked.id, feature, now)
             return "full"
         period = budget.period_start(locked, now)
+        refusal = None
         if not budget.admits(db, locked, estimate, period):
-            db.rollback()
-            return "budget"
-        if not budget.spend_cap_ok(db, locked, feature, step.get("spend_cap"), estimate, now):
-            db.rollback()
-            return "spend_cap"
-        if (executor.remote and route.remote_allowed_for == "all" and route.user_period_limit_usd is not None
+            refusal = "budget"
+        elif not budget.spend_cap_ok(db, locked, feature, step.get("spend_cap"), estimate, now):
+            refusal = "spend_cap"
+        elif (executor.remote and route.remote_allowed_for == "all" and route.user_period_limit_usd is not None
                 and cand.user_id and budget.user_committed(db, cand.user_id, period) + estimate
                 > Decimal(str(route.user_period_limit_usd))):
+            refusal = "user_cap"
+        if refusal:
             db.rollback()
-            return "user_cap"
+            _clear_full(db, engine.id, feature)  # it has room: a later "full" starts a new full_since
+            return refusal
         values = dict(
             kind="job", engine_id=locked.id, feature=feature, subject_type=cand.subject_type,
             subject_id=cand.subject_id, attempt=cand.placements + 1, job_id=cand.job_id, user_id=cand.user_id,
@@ -465,7 +488,7 @@ def _could_run_on(tick: _Tick, db: Session, route, cand: JobDispatch, engine: En
     max_media = (engine.config or {}).get("max_media_seconds")
     if max_media and cand.media_seconds is not None and float(cand.media_seconds) > float(max_media):
         return False
-    estimate = executor.estimate(engine, binding, cand)
+    estimate = _estimate(executor, engine, binding, cand, db)
     if not budget.could_ever_admit(db, engine, estimate, budget.period_start(engine, tick.now)):
         return False
     return budget.spend_cap_ok(db, engine, route.feature, step.get("spend_cap"), estimate, tick.now,

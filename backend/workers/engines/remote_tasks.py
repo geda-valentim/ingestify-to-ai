@@ -3,8 +3,10 @@ Celery tasks of worker-remote (spec 0003, slice 4a; compose profile `engines`).
 
     ingestify-remote      execute_remote(usage_id)   one remote attempt (workers/engines/remote.py)
     ingestify-remote-ctl  test_engine(engine_id)     credentials + deployment, no GPU
+                          test_all_engines()         the same for every account, in turn
                           cancel_remote(usage_id)    stop a call past its deadline (sweeper)
                           reconcile_spend()          the provider's own spend report (every 10 min)
+                          probe_engines()            cheap health of accounts used in 24 h (10 min)
 
 Only worker-remote consumes these queues, and only it holds the private keys
 that open engine credentials. Nothing is published here on an install without
@@ -18,13 +20,14 @@ import logging
 import socket
 import threading
 import time
-from datetime import date, datetime
-from typing import Any, Dict, Optional
+from datetime import date, datetime, timedelta
+from decimal import Decimal
+from typing import Any, Dict, List, Optional
 
 from celery.signals import worker_ready, worker_shutting_down
 
 from shared.config import get_settings
-from shared.engines import budget, ledger
+from shared.engines import alerts, budget, budget_watch, ledger
 from shared.engines.liveness import REMOTE_KEY, REMOTE_TTL_SECONDS
 from shared.engines.redact import redact
 from shared.models import Engine, EngineUsage
@@ -130,28 +133,44 @@ def test_engine(engine_id: str):
 
 
 def _next_period(engine: Engine, start: date) -> date:
-    month = start.month % 12 + 1
-    return date(start.year + (1 if month == 1 else 0), month, start.day)
+    return budget.next_period_start(engine, start)
 
 
-def reconcile_now(*, session_factory=None, now: Optional[datetime] = None) -> Dict[str, Any]:
+# The billing report's resolution (cents); "zero while our ledger says otherwise" only counts above
+# max(0.50, 5 x resolution), for longer than 3 h (spec 0003, 4.8)
+BILLING_RESOLUTION_USD = Decimal("0.01")
+ZERO_REPORT_LEDGER_USD = max(Decimal("0.50"), 5 * BILLING_RESOLUTION_USD)
+ZERO_REPORT_HOURS = 3
+
+
+def _remote_engines(session_factory, only: Optional[str] = None) -> List[Engine]:
+    db = _session(session_factory)
+    try:
+        query = db.query(Engine).filter(Engine.adapter_type != "local")
+        if only:
+            query = query.filter((Engine.id == only) | (Engine.slug == only))
+        engines = [e for e in query.order_by(Engine.slug).all()
+                   if e.credentials_sealed and (only or e.status == "active")]
+        for e in engines:
+            db.expunge(e)
+        return engines
+    finally:
+        db.close()
+
+
+def reconcile_now(*, session_factory=None, now: Optional[datetime] = None, only: Optional[str] = None) -> Dict[str, Any]:
     """
     Pull each remote engine's spend for its current period from the provider and
     keep the larger of what was known and what is reported (never decreases). A
     report that cannot be read marks the engine `degraded` - it takes no new work
-    until a later report succeeds (fail closed; spec 0003, 4.8).
+    until a later report succeeds (fail closed; spec 0003, 4.8). So does a report
+    of zero for more than 3 h while our own ledger has settled more than US$ 0.50.
+    Then the period's alerts and exhaustion are re-evaluated (budget_watch).
+    `only` (id or slug) reconciles one engine, paused or not.
     """
     now = now or datetime.utcnow()
-    db = _session(session_factory)
-    try:
-        engines = [e for e in db.query(Engine).filter(Engine.adapter_type != "local").all()
-                   if e.credentials_sealed and e.status == "active"]
-        for e in engines:
-            db.expunge(e)
-    finally:
-        db.close()
     out: Dict[str, Any] = {}
-    for engine in engines:
+    for engine in _remote_engines(session_factory, only):
         start = budget.period_start(engine, now)
         try:
             adapter = remote.adapter_factory(engine, remote.open_credentials(engine))
@@ -159,13 +178,7 @@ def reconcile_now(*, session_factory=None, now: Optional[datetime] = None) -> Di
         except Exception as e:
             reason = redact(f"BILLING: {e}")[:1000]
             out[engine.slug] = {"error": reason}
-
-            def degrade(db, engine_id=engine.id, reason=reason):
-                row = db.query(Engine).filter(Engine.id == engine_id).with_for_update().one()
-                if row.health in ("unknown", "healthy"):
-                    row.health, row.health_reason, row.health_until = "degraded", reason, None
-            ledger.run_txn(session_factory, degrade)
-            logger.warning(f"[ENGINES] Spend of {engine.slug} could not be read: {reason}")
+            _degrade(session_factory, engine, reason, now)
             continue
 
         def store(db, engine_id=engine.id, spent=spent, start=start):
@@ -174,16 +187,149 @@ def reconcile_now(*, session_factory=None, now: Optional[datetime] = None) -> Di
             row.provider_reported_usd = max(spent, previous) if previous is not None else spent
             row.provider_reported_period = start
             row.provider_reported_at = now
+            ledger_usd = budget.settled(db, engine_id, start)
+            config = dict(row.config or {})
+            zero_since = None
+            if row.provider_reported_usd == 0 and ledger_usd > ZERO_REPORT_LEDGER_USD:
+                zero_since = config.get("billing_zero_since") or now.isoformat()
+            if zero_since != config.get("billing_zero_since"):
+                if zero_since is None:
+                    config.pop("billing_zero_since", None)
+                else:
+                    config["billing_zero_since"] = zero_since
+                row.config = config
+            stuck_at_zero = zero_since is not None and \
+                (now - datetime.fromisoformat(zero_since)).total_seconds() > ZERO_REPORT_HOURS * 3600
+            if stuck_at_zero:
+                return row.provider_reported_usd, ledger_usd, "zero"
             if row.health == "degraded" and (row.health_reason or "").startswith("BILLING"):
                 row.health, row.health_reason, row.health_until = "healthy", None, None
-            return row.provider_reported_usd
-        out[engine.slug] = {"reported_usd": str(ledger.run_txn(session_factory, store)), "period": start.isoformat()}
+            return row.provider_reported_usd, ledger_usd, None
+        reported, ledger_usd, problem = ledger.run_txn(session_factory, store)
+        out[engine.slug] = {"reported_usd": str(reported), "ledger_usd": str(ledger_usd),
+                            "unattributed_usd": str(reported - ledger_usd), "period": start.isoformat()}
+        if problem == "zero":
+            reason = (f"BILLING: the report says US$ 0 for over {ZERO_REPORT_HOURS} h while the ledger settled "
+                      f"US$ {ledger_usd} this period")
+            out[engine.slug]["error"] = reason
+            _degrade(session_factory, engine, reason, now)
+            continue
+        budget_watch.check(engine.id, session_factory=session_factory, now=now)
     return out
+
+
+def _degrade(session_factory, engine: Engine, reason: str, now: datetime) -> None:
+    def degrade(db, engine_id=engine.id):
+        row = db.query(Engine).filter(Engine.id == engine_id).with_for_update().one()
+        if row.health in ("unknown", "healthy"):
+            row.health, row.health_reason, row.health_until = "degraded", reason, None
+            return True
+        return False
+    if ledger.run_txn(session_factory, degrade):
+        alerts.alert(alerts.BILLING_DEGRADED, engine.slug, f"spend report unusable, no new work: {reason}",
+                     now=now)
+    else:
+        logger.warning(f"[ENGINES] Spend of {engine.slug} could not be read: {reason}")
 
 
 @celery_app.task(name="workers.engines.remote_tasks.reconcile_spend", soft_time_limit=240, time_limit=300)
 def reconcile_spend():
     return reconcile_now()
+
+
+@celery_app.task(name="workers.engines.remote_tasks.reconcile_one", soft_time_limit=75, time_limit=90)
+def reconcile_one(engine_id: str):
+    return reconcile_now(only=engine_id)
+
+
+# --- cheap health probes and testing every account (slice 4c) ----------------------------------
+
+PROBE_USED_WITHIN_HOURS = 24
+PROBE_UNHEALTHY_MINUTES = 10
+
+
+def probe_engines_now(*, session_factory=None, now: Optional[datetime] = None) -> Dict[str, Any]:
+    """
+    Health of the active remote engines that ran a job in the last 24 h, without a
+    container: test_connection() only checks the token, the workspace and that the
+    deployed app answers with the fingerprint this engine recorded (spec 0003,
+    A12). Free, so no ledger row. A failure keeps the engine off routes for 10 min
+    (AUTH: until a new test) and alerts; transient errors change nothing.
+    """
+    now = now or datetime.utcnow()
+    engines = _remote_engines(session_factory)
+    db = _session(session_factory)
+    try:
+        since = now - timedelta(hours=PROBE_USED_WITHIN_HOURS)
+        used = {e for e, in db.query(EngineUsage.engine_id).filter(
+            EngineUsage.kind == "job", EngineUsage.created_at >= since).distinct()}
+    finally:
+        db.close()
+    out: Dict[str, Any] = {}
+    for engine in engines:
+        if engine.id not in used:
+            out[engine.slug] = "skipped: no job in 24 h"
+            continue
+        try:
+            report = remote.adapter_factory(engine, remote.open_credentials(engine)).test_connection()
+        except EngineError as e:
+            report = HealthReport(False, e.code, redact(e.detail)[:300], checked_at=now.isoformat())
+        except Exception as e:
+            report = HealthReport(False, ErrorCode.TRANSIENT, redact(f"{type(e).__name__}: {e}")[:300],
+                                  checked_at=now.isoformat())
+        problem, code = None, report.code
+        recorded = {f: (d or {}).get("fingerprint") for f, d in (engine.deployments or {}).items()}
+        if not report.ok:
+            problem = f"PROBE {report.code}: {report.detail}"
+        elif report.deployed is False and any(recorded.values()):
+            problem, code = "PROBE NOT_DEPLOYED: the app is gone from the account", ErrorCode.NOT_DEPLOYED
+        elif report.deployed_fingerprint and any(recorded.values()) \
+                and report.deployed_fingerprint not in recorded.values():
+            problem, code = (f"PROBE DEPLOY_CHANGED: the account serves {report.deployed_fingerprint[:12]}, "
+                             f"not what this engine recorded"), ErrorCode.NOT_DEPLOYED
+        if code == ErrorCode.TRANSIENT:
+            out[engine.slug] = {"ok": None, "detail": "transient, unchanged: " + report.detail[:200]}
+            continue
+
+        def record(db, engine_id=engine.id, problem=problem, code=code):
+            row = db.query(Engine).filter(Engine.id == engine_id).with_for_update().one()
+            config = dict(row.config or {})
+            config["last_probe"] = {"ok": problem is None, "code": code if problem else None, "at": now.isoformat()}
+            row.config = config
+            if problem:
+                probe_owned = row.health == "unhealthy" and (row.health_reason or "").startswith("PROBE")
+                if row.health in ("unknown", "healthy", "degraded") or probe_owned \
+                        or (row.health_until is not None and row.health_until <= now):
+                    row.health, row.health_reason = "unhealthy", problem[:1000]
+                    row.health_until = None if code == ErrorCode.AUTH else now + timedelta(minutes=PROBE_UNHEALTHY_MINUTES)
+            elif row.health == "unhealthy" and (row.health_reason or "").startswith("PROBE"):
+                row.health, row.health_reason, row.health_until = "healthy", None, None
+        ledger.run_txn(session_factory, record)
+        out[engine.slug] = {"ok": problem is None, "detail": problem or report.detail[:200]}
+        if problem:
+            alerts.alert(alerts.ENGINE_PROBE_FAILED, engine.slug, problem, {"code": code}, now=now)
+    return out
+
+
+@celery_app.task(name="workers.engines.remote_tasks.probe_engines", soft_time_limit=240, time_limit=300)
+def probe_engines():
+    return probe_engines_now()
+
+
+def test_all_now(*, session_factory=None) -> Dict[str, Any]:
+    """test_engine_now() on every remote engine with credentials, one after the other (paused ones too)"""
+    db = _session(session_factory)
+    try:
+        slugs = [e.slug for e in db.query(Engine).filter(Engine.adapter_type != "local").order_by(Engine.slug)
+                 if e.credentials_sealed]
+    finally:
+        db.close()
+    return {slug: test_engine_now(slug, session_factory=session_factory) for slug in slugs}
+
+
+@celery_app.task(name="workers.engines.remote_tasks.test_all_engines", soft_time_limit=170, time_limit=200)
+def test_all_engines():
+    return test_all_now()
 
 
 # --- worker-remote heartbeat -----------------------------------------------------------------

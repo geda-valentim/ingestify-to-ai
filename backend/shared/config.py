@@ -300,6 +300,10 @@ class Settings(BaseSettings):
     remote_max_concurrent_uploads: int = 4
     # True only in worker-remote: its embedded beat reconciles provider spend
     engines_remote_beat: bool = False
+    # Engine alerts (budget soft/hard, exhaustion, billing unreadable, dispatcher down,
+    # cost divergence) are always logged; with a URL they are also POSTed as a small
+    # generic JSON body - engine slug, event, numbers; never secrets or user data
+    engine_alert_webhook_url: str = ""
 
     def engine_private_keys(self) -> List[str]:
         """Private keys from ENGINE_SECRETS_PRIVATE_KEYS (comma-separated) and/or the _FILE"""

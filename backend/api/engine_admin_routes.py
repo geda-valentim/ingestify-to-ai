@@ -10,6 +10,9 @@ lifecycle of a remote engine:
     POST   /admin/engines/{id}/activate      needs a passing test, a budget, a verified deploy and E=1
     POST   /admin/engines/{id}/pause         nothing new is placed; work in flight finishes
     POST   /admin/engines/{id}/reset-health
+    POST   /admin/engines/{id}/reconcile     read the provider's spend report now (worker-remote)
+    POST   /admin/engines/test-all           test every remote engine in turn (worker-remote, no GPU)
+    GET    /admin/engines/{id}/benchmarks    benchmark rows (gpu x E) and the learned speed per key
 
 Reads need an admin; changes need an admin's login session (a JWT) - an API key
 is refused - and are audited. Nothing here ever returns a secret.
@@ -391,3 +394,86 @@ async def delete_engine_credentials(engine_id: str, body: CredentialsDelete, req
         raise HTTPException(status_code=409, detail=str(e))
     logger.warning(f"[ADMIN] {admin_user.id} removed the credentials of engine {engine.slug}")
     return _view(db, engine)
+
+
+# --- benchmarks, learned speed, spend and every account at once (slices 4b/4c) ----------------
+
+
+@router.get("/engines/{engine_id}/benchmarks", summary="Benchmark results (gpu x E) and the learned speed per key")
+async def engine_benchmarks(engine_id: str, feature: str = "transcription", limit: int = 50,
+                            admin_user=Depends(require_admin), db: Session = Depends(get_db)) -> Dict[str, Any]:
+    from shared.engines import speed
+    from shared.models import EngineUsage
+
+    engine = _engine_or_404(db, engine_id)
+    rows = (db.query(EngineUsage)
+            .filter(EngineUsage.engine_id == engine.id, EngineUsage.feature == feature,
+                    EngineUsage.kind == "benchmark")
+            .order_by(EngineUsage.created_at.desc(), EngineUsage.id.desc()).limit(min(max(limit, 1), 200)).all())
+    results = [{"usage_id": r.id, "status": r.status, "outcome": r.outcome, "gpu": r.gpu_type,
+                "executions_per_worker": r.executions_per_worker,
+                "reserved_usd": str(r.reserved_usd) if r.reserved_usd is not None else None,
+                "actual_usd": str(r.actual_usd) if r.actual_usd is not None else None,
+                "contended": (r.units or {}).get("contended"), "result": (r.units or {}).get("result"),
+                "created_at": r.created_at.isoformat() if r.created_at else None} for r in rows]
+    keys = []
+    binding = bindings(engine.config or {}).get(feature)
+    seen = set()
+    for gpu, e in ([(binding.gpu_type or binding.gpu_ref, binding.executions_per_worker)] if binding else []) + \
+            [(r["gpu"], r["executions_per_worker"]) for r in results]:
+        if (gpu, e) in seen or e is None:
+            continue
+        seen.add((gpu, e))
+        keys.append(speed.compute(db, engine.id, feature, gpu, e).view())
+    return {"engine": engine.slug, "feature": feature, "benchmarks": results, "speed": keys}
+
+
+def _send_control(task: str, args: list, timeout: float) -> Any:
+    from workers.celery_app import celery_app
+
+    result = celery_app.send_task(task, args=args, queue=settings.remote_ctl_queue, expires=timeout)
+    try:
+        return result.get(timeout=timeout, propagate=True)
+    finally:
+        result.forget()
+
+
+@router.post("/engines/{engine_id}/reconcile", summary="Read the provider's spend report for one engine now")
+async def reconcile_engine(engine_id: str, request: Request, admin_user=Depends(require_admin_session),
+                           db: Session = Depends(get_db)) -> Dict[str, Any]:
+    engine = _engine_or_404(db, engine_id)
+    if engine.adapter_type == "local":
+        raise HTTPException(status_code=409, detail="The local engine has no provider spend")
+    if not _remote_worker_alive():
+        raise HTTPException(status_code=409, detail="worker-remote is not running; only it can read spend reports")
+    store.audit(db, actor_user_id=str(admin_user.id), auth_method="jwt", ip=_ip(request), action="engine.reconcile",
+                engine=engine, before=None, after=None)
+    db.commit()
+    try:
+        out = await run_in_threadpool(_send_control, "workers.engines.remote_tasks.reconcile_one", [engine.id], 90.0)
+    except Exception as e:
+        logger.warning(f"[ADMIN] Reconcile of engine {engine.slug} did not answer: {type(e).__name__}")
+        raise HTTPException(status_code=504, detail="worker-remote did not answer within 90 s")
+    db.expire_all()
+    return {"reconcile": out, "engine": _view(db, _engine_or_404(db, engine.id))}
+
+
+@router.post("/engines/test-all", summary="Test every remote engine's credentials and deployment, in turn (no GPU)")
+async def test_all_engines(request: Request, admin_user=Depends(require_admin_session),
+                           db: Session = Depends(get_db)) -> Dict[str, Any]:
+    remote = [e for e in db.query(Engine).filter(Engine.adapter_type != "local") if e.credentials_sealed]
+    if not remote:
+        return {"results": {}}
+    if not _remote_worker_alive():
+        raise HTTPException(status_code=409, detail="worker-remote is not running; only it can open credentials")
+    for engine in remote:
+        store.audit(db, actor_user_id=str(admin_user.id), auth_method="jwt", ip=_ip(request), action="engine.test",
+                    engine=engine, before=None, after=None)
+    db.commit()
+    timeout = min(30.0 * len(remote), 170.0)
+    try:
+        out = await run_in_threadpool(_send_control, "workers.engines.remote_tasks.test_all_engines", [], timeout)
+    except Exception as e:
+        logger.warning(f"[ADMIN] Test of all engines did not answer: {type(e).__name__}")
+        raise HTTPException(status_code=504, detail=f"worker-remote did not answer within {timeout:.0f} s")
+    return {"results": out}

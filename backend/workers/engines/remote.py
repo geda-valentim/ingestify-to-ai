@@ -38,7 +38,7 @@ from typing import Any, Callable, Dict, Optional, Tuple
 from uuid import uuid4
 
 from shared.config import get_settings
-from shared.engines import budget, dispatch, ledger, pricing
+from shared.engines import alerts, budget, budget_watch, dispatch, ledger, pricing, speed
 from shared.engines.capacity import Binding, bindings, deploy_state
 from shared.engines.redact import redact, register_secret
 from shared.models import Engine, EngineUsage, Job, JobDispatch, JobStatus
@@ -102,8 +102,16 @@ class RemoteExecutor:
     """The dispatcher's view of a remote adapter type: money and publication, no provider code"""
     remote = True
 
-    def estimate(self, engine: Engine, binding: Binding, item: JobDispatch) -> Decimal:
-        return pricing.hold_usd(engine.config or {}, binding, float(item.media_seconds))
+    wants_db = True  # the estimate reads the key's learned speed (shared/engines/speed.py)
+
+    def estimate(self, engine: Engine, binding: Binding, item: JobDispatch, db=None) -> Decimal:
+        stats = None
+        if db is not None:
+            try:
+                stats = speed.get_stats(db, engine.id, item.feature, binding.gpu_type, binding.executions_per_worker)
+            except Exception as e:  # never block placement on the cache: the defaults are the worst case
+                logger.warning(f"[ENGINES] Speed of {engine.slug} unavailable, using the defaults: {type(e).__name__}")
+        return pricing.hold_usd(engine.config or {}, binding, float(item.media_seconds), stats)
 
     def reservation_values(self, engine: Engine, binding: Binding, feature: str) -> Dict[str, Any]:
         config = engine.config or {}
@@ -236,10 +244,7 @@ def _mark_engine(session_factory, engine_id: str, code: Optional[str], detail: s
 
 
 def _period_end(engine: Engine, now: datetime) -> datetime:
-    start = budget.period_start(engine, now)
-    month = start.month % 12 + 1
-    year = start.year + (1 if month == 1 else 0)
-    return datetime(year, month, start.day)
+    return budget.period_end(engine, now)
 
 
 def _set_processing(session_factory, redis_client, job_id: str) -> None:
@@ -421,6 +426,7 @@ def _execute(usage: EngineUsage, engine: Engine, d: Optional[JobDispatch], holde
         return f"failed:{error.code}"
     finally:
         ledger.apply_job_change(redis_client, change)
+        budget_watch.check(engine.id, session_factory=session_factory, now=clock())  # soft/hard alerts, exhausted
         if celery is not None:
             dispatch.kick(celery, redis_client)
 
@@ -442,8 +448,10 @@ def _check_divergence(usage_id: int, usage) -> None:
     if usage.reported_seconds and usage.reported_seconds > 0:
         ratio = usage.measured_seconds / usage.reported_seconds
         if abs(ratio - 1) > 0.3:
-            logger.warning(f"[ENGINES] Usage {usage_id}: measured {usage.measured_seconds:.1f}s vs reported "
-                           f"{usage.reported_seconds:.1f}s (x{ratio:.2f}); billed the larger")
+            alerts.alert(alerts.COST_DIVERGENCE, None,
+                         f"usage {usage_id}: measured {usage.measured_seconds:.1f}s vs reported "
+                         f"{usage.reported_seconds:.1f}s (x{ratio:.2f}); billed the larger",
+                         {"usage_id": usage_id, "ratio": round(ratio, 3)})
 
 
 def _fail(usage: EngineUsage, engine: Engine, holder: str, error: EngineError, spawned_at: Optional[datetime],
@@ -463,6 +471,8 @@ def _fail(usage: EngineUsage, engine: Engine, holder: str, error: EngineError, s
         measured_seconds=round(measured, 3), container_id=error.usage.container_id,
     )
     _mark_engine(session_factory, engine.id, error.code, error.detail, now, period_end=_period_end(engine, now))
+    if error.code == ErrorCode.QUOTA_EXHAUSTED:
+        budget_watch.quota_exhausted(engine.id, redact(error.detail), session_factory=session_factory, now=now)
     logger.warning(f"[ENGINES] Usage {usage.id} on {engine.slug}: {error.code} ({redact(error.detail)[:200]}); "
                    f"charged US$ {actual}, " + ("job failed" if terminal else "item back in the backlog"))
     return change

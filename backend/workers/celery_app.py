@@ -123,15 +123,27 @@ if settings.engines_dispatch_beat:
             'schedule': 30.0,
             'options': {'queue': settings.dispatch_queue, 'expires': 30},
         },
+        # Learned speed per (engine, feature, gpu, E), cached 1 h for the estimate (slice 4b)
+        'engines-refresh-speed': {
+            'task': 'workers.engines.tasks.refresh_speed',
+            'schedule': 600.0,
+            'options': {'queue': settings.dispatch_queue, 'expires': 600},
+        },
     }
 
 # Only worker-remote (ENGINES_REMOTE_BEAT=true, embedded beat): the provider's own
-# spend report, every 10 minutes (spec 0003, 4.8)
+# spend report and the accounts' cheap health probe, every 10 minutes (spec 0003, 4.8)
 if settings.engines_remote_beat:
     celery_app.conf.beat_schedule = {
         **(celery_app.conf.beat_schedule or {}),
         'engines-reconcile-spend': {
             'task': 'workers.engines.remote_tasks.reconcile_spend',
+            'schedule': 600.0,
+            'options': {'queue': settings.remote_ctl_queue, 'expires': 600},
+        },
+        # Cheap health of the accounts used in the last 24 h: no container, no GPU (slice 4c)
+        'engines-probe': {
+            'task': 'workers.engines.remote_tasks.probe_engines',
             'schedule': 600.0,
             'options': {'queue': settings.remote_ctl_queue, 'expires': 600},
         },

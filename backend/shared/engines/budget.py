@@ -41,6 +41,23 @@ def period_start(engine: Engine, now: datetime) -> date:
     return date(previous.year, previous.month, anchor)
 
 
+def next_period_start(engine: Engine, start: date) -> date:
+    """The first day of the period after the one starting at `start`"""
+    month = start.month % 12 + 1
+    return date(start.year + (1 if month == 1 else 0), month, start.day)
+
+
+def period_end(engine: Engine, now: datetime) -> datetime:
+    """When the engine's current period ends: midnight of the next anchor day in its zone, as naive UTC"""
+    try:
+        tz = ZoneInfo(engine.period_tz or "UTC")
+    except Exception:
+        tz = ZoneInfo("UTC")
+    nxt = next_period_start(engine, period_start(engine, now))
+    local_midnight = datetime(nxt.year, nxt.month, nxt.day, tzinfo=tz)
+    return local_midnight.astimezone(ZoneInfo("UTC")).replace(tzinfo=None)
+
+
 def _dec(value) -> Decimal:
     return ZERO if value is None else Decimal(str(value))
 

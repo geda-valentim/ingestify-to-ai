@@ -148,6 +148,8 @@ services:
       - ADMIN_USER_IDS=${ADMIN_USER_IDS:-}
       # Seals remote engine credentials (spec 0003); the private key never comes here
       - ENGINE_SECRETS_PUBLIC_KEY=${ENGINE_SECRETS_PUBLIC_KEY:-}
+      # Optional: engine alerts are also POSTed here as generic JSON (spec 0003, 4.8)
+      - ENGINE_ALERT_WEBHOOK_URL=${ENGINE_ALERT_WEBHOOK_URL:-}
     networks:
       - ingestify-network
     volumes:
@@ -348,6 +350,7 @@ services:
       - MONITORING_ENABLED=false
       - DEVICE=cpu
       - PROBE_MAX_BYTES=${PROBE_MAX_BYTES:-8388608}
+      - ENGINE_ALERT_WEBHOOK_URL=${ENGINE_ALERT_WEBHOOK_URL:-}
     mem_limit: ${DISPATCH_WORKER_MEM_LIMIT:-1g}
     deploy:
       replicas: 1
@@ -395,6 +398,7 @@ services:
       - REMOTE_WORKER_CONCURRENCY=${REMOTE_WORKER_CONCURRENCY:-16}
       - REMOTE_MAX_CONCURRENT_UPLOADS=${REMOTE_MAX_CONCURRENT_UPLOADS:-4}
       - ENGINE_SECRETS_PUBLIC_KEY=${ENGINE_SECRETS_PUBLIC_KEY:-}
+      - ENGINE_ALERT_WEBHOOK_URL=${ENGINE_ALERT_WEBHOOK_URL:-}
       # The entrypoint copies it to the tmpfs below, readable by the app user only
       - ENGINE_SECRETS_PRIVATE_KEYS_FILE=/run/secrets/engine_secrets_private
     networks:

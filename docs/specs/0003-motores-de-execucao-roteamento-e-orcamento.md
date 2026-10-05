@@ -812,13 +812,64 @@ Cada item cabe num PR, na ordem. Fora das mudanças deliberadas de 0a/0b, zero-c
       de 3–5 min (`container_id` gravado, settle medido × reportado); T4 (`E=1`) um item com
       `limit`/reserva pequenos para forçar `deadline_at` e medir a latência do cancel no relatório de
       gasto; T8 (`E=1`) o mesmo clipe local × Modal em float16 comparando o texto.)
-- [ ] **4b — Benchmark** remoto (estimativa pessimista, reserva, prazo por combinação, app
+- [x] **4b — Benchmark** remoto (estimativa pessimista, reserva, prazo por combinação, app
       efêmero) e local (container avulso, guarda de VRAM); `--apply`; quantis por chave.
-- [ ] **4c — Várias contas**: `fill_first` com `full_since`, `reconcile_spend`, `exhausted`,
+      (Código feito em 2026-10-05, testado com runners falsos e um `modal run` simulado; **nada
+      rodado contra o Modal**. `shared/engines/speed.py` (quantis por chave sobre as últimas 200
+      linhas, cache Redis 1 h, beat `refresh_speed` no `worker-dispatch`), `pricing.hold_usd` com
+      pior caso até 50 linhas e `q95` depois, `workers/engines/benchmark.py`,
+      `modal_apps/{bench_entry,bench_protocol}.py`, CLI `benchmark` e `speed`,
+      `GET /admin/engines/{id}/benchmarks`. Desvios: (1) a reserva é o `--max-usd` repartido entre
+      as combinações na proporção das estimativas (uma linha `benchmark` por combinação, para a
+      chave), não só o total estimado: assim o prazo por combinação ("sua parte de `--max-usd`")
+      também fica reservado; (2) o app efêmero é `python -m modal run -m
+      …bench_entry::bench` num subprocesso com env do zero (como o deploy), não `with app.run()`
+      no processo, porque o app lê o spec do env e nenhum código muta `os.environ`; `bench_entry`
+      não entra na imagem nem no fingerprint (o deploy da `modal_1` continua válido); o prazo conta
+      do momento em que o app sobe (antes disso há só build, 15 min no máximo) e o corte é Ctrl-C;
+      o custo liquidado é o tempo do app de pé × `rate` (o subprocesso inteiro se cortado);
+      (3) VRAM remota não é medida (a imagem não tem `nvidia-ml-py`, desvio 1 da 4a): a
+      recomendação remota usa `E × pegada + reserva`; (4) `P_cold = 1` no pior caso (todo item
+      frio); com menos de 5 velocidades na chave vale o último benchmark dela; a duração de linhas
+      locais vem de `job_dispatches.media_seconds`; (5) no local, "E" é o número de processos
+      simultâneos (cada um com seu modelo, como réplicas): `--apply` grava `workers=E`,
+      `executions_per_worker=1` e a pegada medida por processo como `vram_override_gb`; o comando
+      local, fora do container avulso, só imprime o `docker compose … run --rm --no-deps
+      worker-audio python -m workers.engines.benchmark … --here` (a imagem do worker não tem
+      `scripts/`); `--pause-local` pausa o motor `local` inteiro (só itens roteados param);
+      (6) a duração das amostras vem de `path:segundos` quando não há PyAV (o `worker-remote` não
+      tem); (7) os quantis locais não foram semeados com o histórico do Elasticsearch (mediana
+      15,7× por job com 2 réplicas, 7.318 jobs): a spec manda benchmark ou `default_speed ÷ E`, e a
+      velocidade local não entra em dinheiro; (8) benchmark com CLI morto: o sweeper liquida a
+      linha `lost` em 15 min cobrando a reserva.)
+- [x] **4c — Várias contas**: `fill_first` com `full_since`, `reconcile_spend`, `exhausted`,
       alertas, probes baratos.
+      (Código feito em 2026-10-05, testado com um `modal` falso e várias contas. `fill_first` já
+      vinha da 3b; aqui: o corrente é a linha `kind=job` mais recente **do período** de cada motor,
+      e `full_since` é zerado quando o motor tem vaga mas recusa por dinheiro. `budget_watch.py`:
+      alerta `soft_pct` e `exhausted` (sobra ≤ 0 ou menor que o custo mediano de um item) até o
+      início do próximo período no fuso do motor, uma vez por período; `alerts.py`: log +
+      `ENGINE_ALERT_WEBHOOK_URL` (POST JSON genérico), também para despachante parado, relatório
+      ilegível, divergência medido × reportado e `QUOTA_EXHAUSTED`; `reconcile_spend` ganhou o
+      zero > 3 h com ledger > US$ 0,50 ⇒ `degraded` e `unattributed`; `probe_engines` (10 min);
+      `modal-deploy --all`, `test --all`, `reconcile [--engine]`, `POST /admin/engines/test-all`,
+      `POST /admin/engines/{id}/reconcile`. Desvios: (1) probes nunca sobem container
+      (`test_connection` checa token, workspace, app e fingerprint gravado), então não há linha
+      `kind=probe` nem `scaledown_window=2`; (2) "zero > 3 h" é guardado em
+      `config.billing_zero_since`; (3) `exhausted` por orçamento não sobrescreve um `unhealthy`
+      ainda válido (`AUTH`); (4) o alerta de divergência sai sem slug (só `usage_id`).
+      **A rodar com as contas reais**: benchmark da `modal_1` (grade T4/L4/A10G, `E=1`,
+      `--max-usd 0.30`) e deploy/teste das `modal_2..4`; comandos em `docs/features/engines.md`.)
 - [ ] **4d — `E > 1` remoto**, depois de T4/T8 com `max_inputs ≥ 2`: settle fatiado, `idle_tail`
       por container, correlação por `container_id`, `solo`, flag de cancelamento, `memory`.
-- [ ] **5 — UI admin somente leitura** + CSP de `/admin`. **6 — Doc** `docs/engines/`.
+- [x] **5 — UI admin somente leitura** + CSP de `/admin` (feita em 2026-10-05: item "Compute" no
+      cabeçalho só com `is_admin`; `frontend/app/admin/{engines,engines/[id],gpus,routing,status}`,
+      tipos em `frontend/types/compute.ts` espelhando os payloads reais (não o Apêndice C), leitura em
+      `computeApi` (`lib/api.ts`), polling 10–15 s; cada tela mostra o comando `engines.py`/compose que
+      a muda; `/jobs/{id}` mostra `engine.kind` e `queue_reason`; CSP só em `/admin/:path*` no
+      `next.config.ts`. Faltam no backend: gasto do período por motor (estimado × reportado),
+      `GET /admin/usage`, `/admin/engines/{id}/ledger`, `/admin/audit`, `/admin/jobs/{id}/engine`.)
+- [ ] **6 — Doc** `docs/engines/`.
 - [ ] **7 — Legendas ao vivo remotas.** **8 — Docling por página e visão** (pré-requisito: S-01).
 
 ## 9. Questões em aberto

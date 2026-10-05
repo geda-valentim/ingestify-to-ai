@@ -29,7 +29,7 @@ MODAL_MEM_USD_PER_GIB_S = Decimal("0.00000222")
 
 # Defaults of an engine's config (Appendix A); all overridable per engine
 DEFAULT_MAX_MEDIA_SECONDS = 4 * 3600  # remote admission limit: longer items stay local
-DEFAULT_SPEED = 10.0  # x real time, until measured (benchmark, slice 4b)
+DEFAULT_SPEED = 10.0  # x real time per item, until measured (benchmark or 50 ledger rows)
 DEFAULT_MIN_SPEED = 3.0  # worst case for the function timeout
 DEFAULT_COLD_START_SECONDS = 30.0
 DEFAULT_SCALEDOWN_WINDOW = 60
@@ -103,20 +103,42 @@ def rate_usd_per_s(config: dict, binding) -> Decimal:
     return rate.quantize(Decimal("0.0000000001"), rounding=ROUND_CEILING)
 
 
-def hold_usd(config: dict, binding, media_seconds: Optional[float]) -> Decimal:
+def hold_usd(config: dict, binding, media_seconds: Optional[float], stats=None) -> Decimal:
     """
-    The worst-case reservation of one attempt (spec 0003, 4.6.6), with every item
-    assumed cold. With E executions sharing a container, the item is assumed to
-    get 1/E of it. Learned quantiles (>= 50 settled rows per key) come with the
-    benchmark slice (4b); until then this is the only estimate.
+    The reservation of one attempt (spec 0003, 4.6.6).
+
+    Worst case, while the key (engine, feature, gpu, E) has fewer than 50 settled
+    successful job rows - every item assumed cold, at the slow end of the speed:
+
+        (D / s_p20 + 15 + cold_s_p80) x rate x (1 + margin)
+
+    with s_p20 / cold_s_p80 from the key's ledger rows, else its latest benchmark,
+    else default_speed / E and the configured cold start. From 50 rows on, the
+    learned cost, which already includes cold starts and sharing:
+
+        D x q95(actual_usd / D) x (1 + margin)
+
+    `stats` is a speed.SpeedStats (or None: the defaults).
     """
     if media_seconds is None:
         raise ValueError("A remote reservation needs the media duration")
-    speed = float(config.get("default_speed") or DEFAULT_SPEED) / binding.executions_per_worker
-    cold = float(config.get("cold_start_seconds") or DEFAULT_COLD_START_SECONDS)
     margin = _dec(config.get("margin", DEFAULT_MARGIN))
+    if stats is not None and getattr(stats, "learned", False):
+        return round_up(_dec(float(media_seconds)) * _dec(stats.usd_per_s_q95) * (1 + margin))
+    speed, cold = worst_case_speed(config, binding, stats)
     seconds = _dec(float(media_seconds) / speed + FIXED_OVERHEAD_SECONDS + cold)
     return round_up(seconds * rate_usd_per_s(config, binding) * (1 + margin))
+
+
+def worst_case_speed(config: dict, binding, stats=None):
+    """(speed x real time per item, cold start seconds) the worst case uses"""
+    speed = getattr(stats, "s_p20", None) if stats is not None else None
+    if not speed or speed <= 0:
+        speed = float(config.get("default_speed") or DEFAULT_SPEED) / binding.executions_per_worker
+    cold = getattr(stats, "cold_s_p80", None) if stats is not None else None
+    if cold is None:
+        cold = float(config.get("cold_start_seconds") or DEFAULT_COLD_START_SECONDS)
+    return float(speed), float(cold)
 
 
 def deadline_seconds(reserved_usd: Decimal, rate: Decimal) -> float:

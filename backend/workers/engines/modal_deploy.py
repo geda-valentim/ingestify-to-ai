@@ -2,6 +2,7 @@
 Deploy the Whisper app to one Modal account, and verify it (spec 0003, 4.11).
 
     python scripts/engines.py modal-deploy --engine modal_1 [--dry-run] [--allow-unhashed]
+    python scripts/engines.py modal-deploy --all [--dry-run]      every account with a binding, in turn
 
 Run it where the private keys are - the worker-remote container:
 
@@ -123,6 +124,39 @@ def deploy(slug: str, feature: str = "transcription", *, dry_run: bool = False, 
         return entry
     finally:
         db.close()
+
+
+def deploy_all(feature: str = "transcription", *, dry_run: bool = False, allow_unhashed: bool = False,
+               session_factory=None, run: Callable = subprocess.run, out: Callable[[str], None] = print,
+               deploy_one: Optional[Callable] = None) -> Dict[str, str]:
+    """
+    Deploy every Modal engine that has credentials and a binding for `feature`, one
+    after the other (slice 4c: several accounts). A failure is reported and the
+    next account is still deployed; nothing is activated or routed here.
+    """
+    db = _session(session_factory)
+    try:
+        slugs = [e.slug for e in db.query(Engine).filter(Engine.adapter_type == "modal").order_by(Engine.slug)
+                 if e.credentials_sealed and feature in bindings(e.config or {})]
+    finally:
+        db.close()
+    if not slugs:
+        out(f"No Modal engine with credentials and a {feature} binding.")
+        return {}
+    summary: Dict[str, str] = {}
+    for slug in slugs:
+        out(f"\n=== {slug} ===")
+        try:
+            entry = (deploy_one or deploy)(slug, feature, dry_run=dry_run, allow_unhashed=allow_unhashed,
+                                           session_factory=session_factory, run=run, out=out)
+            summary[slug] = "dry run" if dry_run else f"deployed {entry['fingerprint'][:12]}" if entry else "deployed"
+        except Exception as e:  # DeployError, EngineError (credentials), provider errors: next account
+            summary[slug] = f"FAILED: {redact(str(e))[:300]}"
+            out(f"❌ {slug}: {summary[slug]}")
+    out("\nSummary:")
+    for slug, outcome in summary.items():
+        out(f"  {slug:<12} {outcome}")
+    return summary
 
 
 if __name__ == "__main__":  # python -m workers.engines.modal_deploy --engine modal_1
