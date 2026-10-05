@@ -364,7 +364,7 @@ const COPY = {
       images: "Imagens: descrição e OCR",
       transcribe: "Transcrição de áudio e vídeo",
       status: "Acompanhar o job",
-      live: "Legendas ao vivo",
+      live: "Legendas de arquivos",
       result: "Baixar o resultado",
       errors: "Erros",
     },
@@ -633,7 +633,7 @@ const COPY = {
       images: "Images: description and OCR",
       transcribe: "Audio and video transcription",
       status: "Track the job",
-      live: "Live transcript",
+      live: "File captions",
       result: "Download the result",
       errors: "Errors",
     },
@@ -1060,6 +1060,82 @@ function MediaSections({ lang }: { lang: Lang }) {
   );
 }
 
+const LIVE_CAPTURE_COPY = {
+  pt: {
+    title: "Microfone ao vivo",
+    intro: "Transmita áudio pelo microfone e receba legendas enquanto fala. A página /live permite escolher projeto e pasta, iniciar a captura, finalizar para salvar ou cancelar a sessão. Requer HTTPS ou localhost e permissão para usar o microfone.",
+    availability: "Piloto opt-in, desabilitado por padrão. Depende da ativação pelo operador e de capacidade GPU disponível. A validação de qualidade e os critérios para produção ainda estão pendentes; os tempos medidos no piloto não são uma garantia de latência.",
+    open: "Abrir captura de microfone",
+    api: "Integração pela API",
+    auth: "Crie a sessão com JWT ou API key e informe o projeto, como nos uploads. O retorno contém job_id, ws_url e um ticket de uso único válido por 60 segundos. Conecte à ws_url retornada e envie o ticket no primeiro frame JSON, sem colocá-lo na URL.",
+    capture: "Espere session.ready antes de enviar áudio. O formato é PCM s16le, mono, 16 kHz. Cada bloco de 200 ms contém 3.200 amostras (6.400 bytes), precedidas por um cabeçalho little-endian de 12 bytes: seq uint32 e offset_samples uint64, ambos iniciando em zero. Avance seq por bloco e offset_samples pelas amostras enviadas. A cauda pode ser menor; o máximo por bloco é 500 ms.",
+    events: "Eventos e encerramento",
+    head: ["Evento / ação", "Comportamento"],
+    rows: [
+      ["transcript.partial", "Substitua o texto provisório pela revisão mais recente; não concatene revisões."],
+      ["transcript.final", "Acrescente o segmento confirmado uma vez, em ordem de segment_id. Ele não será alterado."],
+      ["finish", "Envie a cauda do áudio e depois finish com last_seq. Continue lendo até session.completed."],
+      ["session.completed", "O resultado foi salvo. Use /jobs/{job_id}/result?format=txt|json|vtt|srt ou abra a página do job."],
+      ["cancel / DELETE", "Encerra a sessão e descarta os parciais. Uma queda de conexão exige uma nova sessão."],
+    ],
+    limits: "Limites padrão: uma sessão simultânea por worker, até 30 minutos por sessão e 2 segundos de backlog. Falta de capacidade retorna 503 com Retry-After; não há fila de arquivos nem retry automático do áudio. LIVE_DISABLED indica piloto desligado; LIVE_NOT_READY, serviço ainda indisponível; LIVE_CAPACITY_FULL, capacidade ocupada.",
+    privacy: "O áudio original não é armazenado. Ao finalizar, o texto e os formatos de legenda ficam no projeto, com acesso restrito ao dono. Finalizar espera a persistência; fechar a conexão não salva um resultado concluído.",
+  },
+  en: {
+    title: "Live microphone",
+    intro: "Stream microphone audio and receive captions as you speak. The /live page lets you choose a project and folder, start capture, finish to save or cancel the session. HTTPS or localhost and microphone permission are required.",
+    availability: "Opt-in pilot, disabled by default. An operator must enable it and GPU capacity must be available. Quality validation and production criteria are still pending; pilot timings are not a latency guarantee.",
+    open: "Open microphone capture",
+    api: "API integration",
+    auth: "Create a session with a JWT or API key and specify its project, as for uploads. The response includes job_id, ws_url and a single-use ticket valid for 60 seconds. Connect to the returned ws_url and send the ticket in the first JSON frame, without putting it in the URL.",
+    capture: "Wait for session.ready before sending audio. Use mono 16 kHz PCM s16le. Each 200 ms block contains 3,200 samples (6,400 bytes), preceded by a 12-byte little-endian header: seq uint32 and offset_samples uint64, both starting at zero. Increment seq per block and offset_samples by the samples sent. The tail may be shorter; the maximum block is 500 ms.",
+    events: "Events and completion",
+    head: ["Event / action", "Behavior"],
+    rows: [
+      ["transcript.partial", "Replace provisional text with the latest revision; do not concatenate revisions."],
+      ["transcript.final", "Append each confirmed segment once, in segment_id order. It will not change."],
+      ["finish", "Send the audio tail, then finish with last_seq. Keep reading until session.completed."],
+      ["session.completed", "The result has been saved. Use /jobs/{job_id}/result?format=txt|json|vtt|srt or open the job page."],
+      ["cancel / DELETE", "Ends the session and discards partial captions. A disconnected session requires a new session."],
+    ],
+    limits: "Default limits: one concurrent session per worker, up to 30 minutes per session and 2 seconds of backlog. Unavailable capacity returns 503 with Retry-After; there is no file queue or automatic audio retry. LIVE_DISABLED means the pilot is off; LIVE_NOT_READY means the service is unavailable; LIVE_CAPACITY_FULL means capacity is occupied.",
+    privacy: "The original audio is not stored. Finishing saves the text and caption formats in the project, accessible only to its owner. Finish waits for persistence; closing the connection does not save a completed result.",
+  },
+};
+
+function LiveCaptureDocs({ lang, copyLabel }: { lang: Lang; copyLabel: string }) {
+  const t = LIVE_CAPTURE_COPY[lang];
+  const key = lang === "pt" ? "SUA_API_KEY" : "YOUR_API_KEY";
+  const body = JSON.stringify({ project: lang === "pt" ? "Aulas" : "Classes", name: lang === "pt" ? "Transcrição ao vivo" : "Live transcript", language: "pt" });
+  const create = `curl --fail -X POST "${API_URL}/transcribe/live/sessions" \\
+  -H "X-API-Key: ${key}" \\
+  -H "Content-Type: application/json" \\
+  --data '${body}'`;
+  return (
+    <Section id="microfone-live" title={t.title}>
+      <P>{t.intro}</P>
+      <P><A href="/live">{t.open}</A></P>
+      <P small>{t.availability}</P>
+      <P>{lang === "pt" ? "Idioma do piloto: Português." : "Pilot language: Portuguese."}</P>
+      <H3>{t.api}</H3>
+      <Endpoint method="POST" path="/transcribe/live/sessions" />
+      <Endpoint method="GET" path="/transcribe/live/sessions/{job_id}" />
+      <Endpoint method="DELETE" path="/transcribe/live/sessions/{job_id}" />
+      <P>{t.auth}</P>
+      <CodeBlock code={create} copyLabel={copyLabel} />
+      <Endpoint method="WS" path="/transcribe/live/sessions/{job_id}/stream" />
+      <CodeBlock code={'{"type":"authenticate","protocol":1,"ticket":"<ticket>"}'} copyLabel={copyLabel} />
+      <P>{t.capture}</P>
+      <H3>{t.events}</H3>
+      <Table head={t.head} rows={t.rows} />
+      <CodeBlock code={'{"type":"finish","last_seq":149}\n{"type":"cancel"}'} copyLabel={copyLabel} />
+      <P small>{lang === "pt" ? "As mensagens acima são alternativas. last_seq deve ser a última sequência enviada na sua sessão." : "The messages above are alternatives. last_seq must be the last sequence sent in your session."}</P>
+      <P>{t.limits}</P>
+      <P>{t.privacy}</P>
+    </Section>
+  );
+}
+
 const COMPUTE_COPY = {
   pt: {
     title: "Compute: execução e capacidade",
@@ -1171,6 +1247,7 @@ export default function DocsPage() {
     { id: "transcribe", label: t.sections.transcribe },
     { id: "transcribe-status", label: t.sections.status },
     { id: "transcribe-live", label: t.sections.live },
+    { id: "microfone-live", label: LIVE_CAPTURE_COPY[lang].title },
     { id: "transcribe-result", label: t.sections.result },
     { id: "transcribe-erros", label: t.sections.errors },
   ];
@@ -1292,6 +1369,8 @@ export default function DocsPage() {
               {block(code.curlLive)}
               {block(RESPONSES.live)}
             </Section>
+
+            <LiveCaptureDocs lang={lang} copyLabel={t.copy} />
 
             <Section id="transcribe-result" title={t.sections.result}>
               <Endpoint method="GET" path="/jobs/{job_id}/result?format=…" />

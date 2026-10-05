@@ -24,6 +24,7 @@ referência · **planejado** = não implementado.
 | [features/engines.md](features/engines.md) | **Guia Compute do operador**: execução CPU/GPU, provider × motor, telas admin, diagnóstico, chaves, capacidade/VRAM, deploy Modal, rotas, orçamentos, benchmark e legendas parciais de arquivos. |
 | [features/crawler.md](features/crawler.md) | **Planejado / não implementado**: o que existe de código dormente e onde está o plano. |
 | Transcrição de áudio/vídeo (`POST /transcribe`) | Documentada à parte. Dispositivo e GPU do Whisper: [GPU.md](GPU.md) e [spec 0002](specs/0002-dispositivo-unico-e-migracao-do-whisper.md). |
+| [features/live-transcription.md](features/live-transcription.md) | Piloto opt-in de microfone: protocolo WebSocket, legendas provisórias/confirmadas, persistência, ativação e rollback. Desabilitado por padrão; [resultados e limites do piloto](benchmarks/live-transcribe-pilot.md). |
 
 ## Arquitetura
 
@@ -52,6 +53,7 @@ referência · **planejado** = não implementado.
 |---|---|
 | `docker-compose.yml` | Base: `api` (:8000), `worker` (5 réplicas, fila `ingestify`), `worker-audio` (fila `ingestify-audio`), `worker-vision` (fila `ingestify-vision`), `beat`, `frontend` (:3000). Redis, Elasticsearch e MinIO ficam no profile `infra` e publicam só em `127.0.0.1`. MySQL **não** está no compose (padrão: `host.docker.internal`). |
 | `docker-compose.gpu.yml` | Overlay opt-in de GPU (`make gpu`): `worker` vira 1 processo em CUDA, `worker-audio` com `AUDIO_WORKER_REPLICAS` (padrão 2) em CUDA, `worker-vision` em CUDA. Ver [GPU.md](GPU.md). |
+| `docker-compose.live.yml` | Overlay opt-in de live com worker GPU privado e profile `live`. Exige migração explícita e validação antes de ativar em produção; ver [guia live](features/live-transcription.md). |
 | `docker-compose.prod.yml` | Produção (`make prod`): `ENVIRONMENT=production` em todos os serviços (o base usa `development`), `uvicorn --workers 4`, `worker` com `--concurrency=4`, frontend sem volumes de dev. |
 | `docker-compose.infra.yml` | Só a infraestrutura compartilhada (`make infra-start`). Ver [SHARED_INFRASTRUCTURE.md](SHARED_INFRASTRUCTURE.md). |
 | `docker-compose.override.yml` | Overlay **local, fora do git**, aplicado automaticamente pelo `docker compose` quando existe (ex.: remapear portas). Não é parte do produto. |

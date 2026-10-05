@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { BookOpen, Cpu, FileText, Key, LogIn, LogOut, Search, Upload as UploadIcon } from "lucide-react";
+import { BookOpen, Cpu, FileText, Key, Mic, LogIn, LogOut, Search, Upload as UploadIcon } from "lucide-react";
 import { authApi } from "@/lib/api";
 import { useAuthStore } from "@/lib/store/auth";
 import { Button } from "@/components/ui/button";
@@ -14,6 +14,7 @@ type NavLink = { href: string; label: string; icon: typeof UploadIcon; public?: 
 
 const NAV_LINKS: NavLink[] = [
   { href: "/dashboard", label: "Upload", icon: UploadIcon },
+  { href: "/live", label: "Live", icon: Mic },
   { href: "/jobs", label: "My Jobs", icon: Search },
   { href: "/api-keys", label: "API Keys", icon: Key },
   // Engines, GPUs and routes (spec 0003); the API enforces admin, this only hides the link.
