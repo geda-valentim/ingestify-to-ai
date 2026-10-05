@@ -2,15 +2,22 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { BookOpen, FileText, Key, LogIn, LogOut, Search, Upload as UploadIcon } from "lucide-react";
+import { useEffect } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { BookOpen, Cpu, FileText, Key, LogIn, LogOut, Search, Upload as UploadIcon } from "lucide-react";
+import { authApi } from "@/lib/api";
 import { useAuthStore } from "@/lib/store/auth";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
-const NAV_LINKS = [
+type NavLink = { href: string; label: string; icon: typeof UploadIcon; public?: boolean; admin?: boolean };
+
+const NAV_LINKS: NavLink[] = [
   { href: "/dashboard", label: "Upload", icon: UploadIcon },
   { href: "/jobs", label: "My Jobs", icon: Search },
   { href: "/api-keys", label: "API Keys", icon: Key },
+  // Engines, GPUs and routes (spec 0003); the API enforces admin, this only hides the link.
+  { href: "/admin", label: "Compute", icon: Cpu, admin: true },
   { href: "/docs", label: "Docs", icon: BookOpen, public: true },
 ];
 
@@ -24,6 +31,20 @@ export function AppHeader({ className }: { className?: string }) {
   const pathname = usePathname();
   const user = useAuthStore((state) => state.user);
   const clearAuth = useAuthStore((state) => state.clearAuth);
+  const token = useAuthStore((state) => state.token);
+  const setAuth = useAuthStore((state) => state.setAuth);
+
+  // Sessions saved by builds before `is_admin` lack it: ask once, so admins see Compute.
+  const needsProfile = !!token && !!user && user.is_admin === undefined;
+  const { data: profile } = useQuery({
+    queryKey: ["auth-me", token],
+    queryFn: () => authApi.me(),
+    enabled: needsProfile,
+    staleTime: 5 * 60 * 1000,
+  });
+  useEffect(() => {
+    if (needsProfile && profile && token) setAuth(profile, token);
+  }, [needsProfile, profile, token, setAuth]);
 
   const handleLogout = () => {
     clearAuth();
@@ -51,7 +72,7 @@ export function AppHeader({ className }: { className?: string }) {
                 Welcome, <span className="font-medium text-foreground">{user.username}</span>
               </span>
             )}
-            {NAV_LINKS.filter((link) => user || link.public).map(({ href, label, icon: Icon }) => (
+            {NAV_LINKS.filter((link) => (link.admin ? user?.is_admin === true : user || link.public)).map(({ href, label, icon: Icon }) => (
               <Button
                 key={href}
                 asChild

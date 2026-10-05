@@ -23,6 +23,7 @@ import type {
   SearchParams,
   SearchResponse,
 } from "@/types/api";
+import type { AdapterDescriptor, Engine, EnginesStatus, FeatureRoute, GpusResponse } from "@/types/compute";
 
 export const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080";
 
@@ -477,4 +478,36 @@ export const apiKeysApi = {
       throw new Error(`Failed to revoke API key: ${response.statusText}`);
     }
   },
+};
+
+/** A non-2xx answer that keeps its HTTP status (the admin pages tell 403 and 404 apart). */
+export class ApiError extends Error {
+  constructor(message: string, readonly status: number) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
+
+async function adminGet<T>(path: string): Promise<T> {
+  const response = await apiFetch(`${API_URL}${path}`, { headers: getHeaders(true) });
+  if (!response.ok) {
+    const body = await response.json().catch(() => null);
+    const detail = typeof body?.detail === "string" ? body.detail : response.statusText;
+    throw new ApiError(detail || `Request failed (${response.status})`, response.status);
+  }
+  return response.json();
+}
+
+/**
+ * Execution engines, capacity and routing (spec 0003). Read-only on purpose: the
+ * v1 admin UI shows state and the CLI command that changes it (spec 0003, 4.6.8),
+ * so the mutation endpoints under /admin/engines and /admin/routing are not here.
+ */
+export const computeApi = {
+  adapters: () => adminGet<AdapterDescriptor[]>("/admin/engine-adapters"),
+  engines: () => adminGet<Engine[]>("/admin/engines"),
+  engine: (idOrSlug: string) => adminGet<Engine>(`/admin/engines/${encodeURIComponent(idOrSlug)}`),
+  gpus: () => adminGet<GpusResponse>("/admin/gpus"),
+  routing: () => adminGet<FeatureRoute[]>("/admin/routing"),
+  status: () => adminGet<EnginesStatus>("/admin/engines/status"),
 };

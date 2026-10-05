@@ -130,6 +130,10 @@ export interface JobStatusResponse {
   /** Transcriptions in progress: how much of the media is done, in seconds */
   transcribed_seconds?: number | null;
   media_duration?: number | null;
+  /** Only with routing (spec 0003): where the job runs. Never the engine's name or cost. */
+  engine?: { kind: "local" | "cloud" } | null;
+  /** Only with routing: why it still waits (`in_queue` = backlog, `starting` = placed, not started). */
+  queue_reason?: "in_queue" | "starting" | null;
 }
 
 /** One transcribed stretch of the media, in seconds */
