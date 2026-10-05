@@ -11,6 +11,10 @@ from api.routes import router
 from api.auth_routes import router as auth_router
 from api.apikey_routes import router as apikey_router
 from api.admin_routes import router as admin_router
+from api.image_routes import router as image_router
+from api.tag_routes import router as tag_router
+from api.engine_admin_routes import router as engine_admin_router
+from api.routing_admin_routes import router as routing_admin_router
 
 # Configure logging
 logging.basicConfig(
@@ -18,6 +22,10 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+# No provider token or JWT in any log line or traceback (spec 0003)
+from shared.engines.redact import install_log_redaction  # noqa: E402
+install_log_redaction()
 
 settings = get_settings()
 
@@ -27,7 +35,7 @@ security_scheme_apikey = APIKeyHeader(name="X-API-Key")
 
 # Create FastAPI app
 app = FastAPI(
-    title="Doc2MD API",
+    title="Ingestify API",
     description="""
 API assíncrona para conversão de documentos para Markdown usando Docling
 
@@ -116,12 +124,21 @@ def custom_openapi():
 app.openapi = custom_openapi
 
 # Configure CORS
+# Explicit allowlist: "*" combined with allow_credentials=True is rejected by
+# browsers and would expose credentialed endpoints to any origin.
+# The allowlist comes from CORS_ALLOWED_ORIGINS (comma-separated); its default
+# covers local development only - production must set the real frontend origin.
+cors_origins = settings.cors_origins
+logger.info(f"CORS allowed origins: {cors_origins}")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Configure properly in production
+    allow_origins=cors_origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    # Methods actually exposed by the API (plus the CORS preflight verb).
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    # Headers the frontend / API clients actually send.
+    allow_headers=["Authorization", "Content-Type", "Accept", "X-API-Key", "X-Source-Token"],
 )
 
 
@@ -151,7 +168,7 @@ async def global_exception_handler(request: Request, exc: Exception):
 @app.on_event("startup")
 async def startup_event():
     """Initialize services on startup"""
-    logger.info("Starting Doc2MD API...")
+    logger.info("Starting Ingestify API...")
     logger.info(f"Environment: {settings.environment}")
     logger.info(f"Redis host: {settings.redis_host}:{settings.redis_port}")
     logger.info(f"MySQL database: {settings.database_url.split('@')[-1] if '@' in settings.database_url else 'N/A'}")
@@ -224,17 +241,50 @@ async def startup_event():
         logger.warning("  Continuing with filesystem storage fallback")
         # Don't fail - MinIO is optional, we can use filesystem fallback
 
+    # Watchdog for the dispatcher (spec 0003): with no route it only reads feature_routes
+    if settings.engines_watchdog_enabled:
+        import asyncio
+        app.state.engines_watchdog = asyncio.create_task(_engines_watchdog())
+
+
+async def _engines_watchdog():
+    """Every 15 s: if a routed feature's dispatcher is down, place its local work from here"""
+    import asyncio
+    from starlette.concurrency import run_in_threadpool
+
+    try:
+        from workers.celery_app import celery_app
+        from workers.engines.watchdog import INTERVAL_SECONDS, watchdog_round
+    except ImportError as e:  # an API image older than its mounted code: rebuild it
+        logger.warning(f"[ENGINES] Watchdog unavailable ({e}); routed work relies on worker-dispatch alone")
+        return
+
+    while True:
+        await asyncio.sleep(INTERVAL_SECONDS)
+        try:
+            await run_in_threadpool(watchdog_round, celery=celery_app)
+        except Exception as e:  # the API must never go down over its watchdog
+            logger.warning(f"[ENGINES] Watchdog round failed: {e}")
+
 
 @app.on_event("shutdown")
 async def shutdown_event():
     """Cleanup on shutdown"""
-    logger.info("Shutting down Doc2MD API...")
+    logger.info("Shutting down Ingestify API...")
+    task = getattr(app.state, "engines_watchdog", None)
+    if task is not None:
+        task.cancel()
 
 
 # Include routers
 app.include_router(auth_router, prefix="/auth", tags=["Authentication"])
 app.include_router(apikey_router, prefix="/api-keys", tags=["API Keys"])
 app.include_router(admin_router)  # Admin routes (already has /admin prefix)
+app.include_router(image_router)  # Vision routes (already has /images prefix)
+app.include_router(tag_router)  # GET /tags, PUT /jobs/{job_id}/tags
+# Before engine_admin_router: /admin/engines/status must not match /admin/engines/{engine_id}
+app.include_router(routing_admin_router)  # /admin/routing, /admin/engines/status (spec 0003)
+app.include_router(engine_admin_router)  # /admin/engines, /admin/gpus (spec 0003)
 app.include_router(router)
 
 
@@ -243,7 +293,7 @@ app.include_router(router)
 async def root():
     """Root endpoint"""
     return {
-        "name": "Doc2MD API",
+        "name": "Ingestify API",
         "version": "1.0.0",
         "status": "running",
         "timestamp": datetime.utcnow().isoformat(),

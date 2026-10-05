@@ -56,7 +56,7 @@ show_status() {
         echo -e "${CYAN}Access URLs:${NC}"
         echo -e "  Redis:         localhost:6379"
         echo -e "  MinIO API:     http://localhost:9000"
-        echo -e "  MinIO UI:      http://localhost:9001 (minioadmin/minioadmin)"
+        echo -e "  MinIO UI:      http://localhost:9001 (credentials: MINIO_ROOT_USER / MINIO_ROOT_PASSWORD in .env)"
         echo -e "  Elasticsearch: http://localhost:9200"
     fi
 

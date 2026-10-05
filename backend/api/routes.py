@@ -5,8 +5,9 @@ from typing import Optional, List, Tuple
 from pathlib import Path
 import hashlib
 import os
+import shutil
 from uuid import uuid4
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 import logging
 
 from shared.schemas import (
@@ -22,27 +23,49 @@ from shared.schemas import (
     JobType,
     JobStatus,
     ChildJobs,
+    PartialTranscriptResponse,
 )
 from shared.redis_client import get_redis_client
 from shared.elasticsearch_client import get_es_client
 from shared.minio_client import get_minio_client
 from shared.transcripts import TRANSCRIPT_CONTENT_TYPES, TRANSCRIPT_FORMATS, transcript_object_name
 from shared.database import SessionLocal, get_db
-from shared.models import Job, Page, JobStatus as DBJobStatus, User
+from shared.models import Job, JobTag, Page, JobStatus as DBJobStatus, User
 from shared.config import get_settings
+from shared.utils import calculate_file_checksum
 from shared.auth import get_current_active_user
+from api.deps import get_owned_job, get_owned_page_or_none
 from shared.utils import sanitize_upload_filename
+from shared.tags import set_job_tags
+from shared.admin import is_effective_admin
+from shared.engines import dispatch as engine_dispatch
+from shared.engines.media import is_audio_filename
+from api.tag_routes import TAGS_FORM_DESCRIPTION, add_tags_to_existing_job, parse_tags_or_422
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["Conversion"])
 settings = get_settings()
 
+# Validade da URL pré-assinada do PDF de uma página.
+#
+# 15 minutos é o meio-termo entre dois erros: um TTL curto demais faz o PDF
+# falhar no meio do carregamento (arquivos grandes, conexão ruim, o pdf.js
+# refazendo requisições de range) e obriga o usuário a recarregar; um TTL longo
+# transforma a URL — que trafega em JSON, fica no histórico do navegador, em
+# logs de proxy e no Referer — num link público de longa duração, que é
+# exatamente o problema que estamos fechando. 15 min cobre com folga o
+# carregamento e a leitura de uma página, e o front pede outra URL ao trocar de
+# página, então a renovação é transparente.
+PAGE_PDF_URL_TTL_SECONDS = 15 * 60
+
 
 @router.post("/upload", response_model=JobCreatedResponse, summary="Upload e converter arquivo")
 async def upload_and_convert(
     file: UploadFile = File(..., description="Arquivo para conversão (PDF, DOCX, HTML, etc.)"),
     name: Optional[str] = Form(None, description="Nome de identificação (opcional, padrão: nome do arquivo)"),
+    tags: Optional[str] = Form(None, description=TAGS_FORM_DESCRIPTION),
     docling_preset: Optional[str] = Form(
         "fast",
         description="Quality/speed preset for PDF conversion: 'fast' (~35s/MB, text-only), 'balanced' (~70-105s/MB, with images), 'quality' (~350s/MB, with OCR)"
@@ -87,6 +110,7 @@ async def upload_and_convert(
       -F "docling_preset=quality"
     ```
     """
+    tag_list = parse_tags_or_422(tags)
     redis_client = get_redis_client()
 
     filename = sanitize_upload_filename(file.filename)
@@ -104,11 +128,14 @@ async def upload_and_convert(
         existing_job = db.query(Job).filter(
             Job.user_id == current_user.id,
             Job.file_checksum == file_checksum,
-            Job.job_type == "MAIN"
+            Job.job_type == "MAIN",
+            # A failed job must not swallow a resubmission: sending the file again is the retry
+            Job.status != DBJobStatus.FAILED,
         ).first()
 
         if existing_job:
             logger.info(f"Duplicate file detected! Returning existing job: {existing_job.id}")
+            add_tags_to_existing_job(db, existing_job, tag_list)
             return JobCreatedResponse(
                 job_id=existing_job.id,
                 status="queued",  # Use current status from DB
@@ -155,6 +182,7 @@ async def upload_and_convert(
                 created_at=created_at,
             )
             db.add(db_job)
+            set_job_tags(db_job, tag_list)
             db.commit()
             logger.info(f"Job {job_id} created in MySQL with name: {job_name} and checksum: {file_checksum}")
         except Exception as e:
@@ -196,12 +224,15 @@ async def upload_and_convert(
                 # Continue with filesystem fallback
 
             # Enqueue task
-            process_conversion.delay(
-                job_id=str(job_id),
-                source_type="file",
-                source=str(temp_file_path),
-                options={"docling_preset": docling_preset},
-            )
+            def enqueue():
+                process_conversion.delay(
+                    job_id=str(job_id),
+                    source_type="file",
+                    source=str(temp_file_path),
+                    options={"docling_preset": docling_preset},
+                )
+
+            _enqueue_maybe_routed(filename, job_id, temp_file_path, current_user, file_size_bytes, enqueue)
             logger.info(f"MAIN JOB {job_id} enqueued to Celery successfully")
 
         except ImportError as e:
@@ -248,6 +279,29 @@ async def upload_and_convert(
     finally:
         # Remove the staged upload unless it was moved to the job directory
         staging_path.unlink(missing_ok=True)
+
+
+def _engine_celery():
+    """The Celery app routed work is published with (by task name, see shared/engines/dispatch.py)"""
+    from workers.celery_app import celery_app
+    return celery_app
+
+
+def _enqueue_maybe_routed(filename, job_id, file_path, user, file_size_bytes, enqueue) -> None:
+    """
+    /upload and /convert: an audio file goes through the transcription route when
+    one exists (spec 0003, R5), with /transcribe's default options; anything else,
+    and audio without a route, is enqueued exactly as before.
+    """
+    if not is_audio_filename(filename):
+        enqueue()
+        return
+    engine_dispatch.submit(
+        feature="transcription", job_id=str(job_id), user_id=user.id, is_admin=is_effective_admin(user),
+        payload=engine_dispatch.transcription_payload(job_id, file_path, engine_dispatch.DEFAULT_TRANSCRIPTION_OPTIONS,
+                                                      settings.celery_task_default_queue),
+        today=enqueue, celery=_engine_celery(), media_bytes=file_size_bytes, session_factory=SessionLocal,
+    )
 
 
 TRANSCRIPT_OUTPUT_FORMATS = ["markdown", "vtt", "srt", "txt", "json"]
@@ -328,12 +382,17 @@ async def _stream_upload_to_file(file: UploadFile, destination: Path, max_size_m
 async def transcribe_audio(
     file: UploadFile = File(..., description="Arquivo de áudio (MP3, WAV, M4A, FLAC, OGG...) ou vídeo (MP4, MKV, MOV, WEBM, AVI...)"),
     name: Optional[str] = Form(None, description="Nome de identificação (opcional, padrão: nome do arquivo)"),
+    tags: Optional[str] = Form(None, description=TAGS_FORM_DESCRIPTION),
     language: Optional[str] = Form(None, description="Código do idioma (ex: 'en', 'pt'). Auto-detectar se não fornecido"),
     include_timestamps: bool = Form(True, description="Incluir marcadores de tempo na transcrição"),
     include_word_timestamps: bool = Form(False, description="Incluir timestamps em nível de palavra (mais detalhado)"),
     output_format: str = Form(
         "markdown",
         description="Formato padrão do resultado em /jobs/{job_id}/result: markdown, vtt, srt, txt ou json",
+    ),
+    purge_source: bool = Form(
+        False,
+        description="Apagar o áudio/vídeo enviado assim que a transcrição terminar (guarda só o texto)",
     ),
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
@@ -342,20 +401,34 @@ async def transcribe_audio(
     Transcrever áudio ou vídeo para texto usando Whisper (STT)
 
     Aceita áudio ou vídeo (só a faixa de áudio do vídeo é transcrita).
-    O job entra na fila; o worker usa GPU quando disponível (detectada uma vez por
-    worker, com fallback automático para CPU).
+    O job entra na fila própria de transcrição (`ingestify-audio`), consumida por
+    workers dedicados, e não disputa vaga com a conversão de documentos.
+
+    ## Autenticação
+    Obrigatória: header `X-API-Key: <chave>` ou `Authorization: Bearer <token JWT>`.
+    Sem ele a resposta é 401.
 
     Todos os formatos são gerados: Markdown, legendas WebVTT e SRT, texto puro e
     JSON com segmentos. Escolha o formato em `GET /jobs/{job_id}/result?format=vtt`
     (ou defina o padrão com `output_format`).
 
     ## Parâmetros:
-    - `file`: Arquivo de áudio para transcrição
+    - `file`: Arquivo de áudio ou vídeo para transcrição
     - `name`: Nome de identificação opcional
+    - `tags`: Tags do job, separadas por vírgula (ex: `focus,aula`)
     - `language`: Código de idioma ISO 639-1 (ex: 'en', 'pt', 'es'). Auto-detecta se não fornecido
     - `include_timestamps`: Adicionar marcadores de tempo [MM:SS] na transcrição
     - `include_word_timestamps`: Adicionar timestamps em cada palavra (mais detalhado)
     - `output_format`: Formato padrão do resultado (`markdown`, `vtt`, `srt`, `txt`, `json`)
+    - `purge_source`: Se `true`, apaga o arquivo enviado (disco e MinIO) quando o job
+      termina com sucesso; ficam só as transcrições. `DELETE /jobs/{job_id}` também
+      apaga o arquivo de origem e as transcrições
+
+    ## Arquivo repetido
+    Reenviar um arquivo idêntico (mesmo SHA-256) que já tem job **não falho** devolve
+    esse job em vez de criar outro: as tags novas são somadas às dele e o
+    `output_format` enviado passa a ser o padrão do resultado. Se o job anterior
+    falhou, o reenvio cria um job novo; é assim que se tenta de novo.
 
     ## Formatos suportados
     - Áudio: MP3, WAV, M4A, FLAC, OGG, OPUS, WEBM, WMA, AAC
@@ -365,15 +438,38 @@ async def transcribe_audio(
     - Áudio: até 50MB (MAX_AUDIO_FILE_SIZE_MB)
     - Vídeo: até 500MB (MAX_VIDEO_FILE_SIZE_MB)
 
+    ## Tempo limite
+    Definido pelo worker de transcrição (`TRANSCRIPTION_TIMEOUT_SECONDS`, padrão 3h),
+    independente do `CONVERSION_TIMEOUT_SECONDS` dos documentos. Um job que estoura o
+    tempo falha sem novas tentativas automáticas.
+
     ## Retorno
     Retorna imediatamente um `job_id` para consultar o progresso via `/jobs/{job_id}`
 
-    ## Exemplo:
+    ## Erros
+    - 401: sem autenticação
+    - 413: arquivo acima do limite
+    - 422: formato não suportado, `output_format` inválido ou `tags` inválidas
+    - 503: transcrição desabilitada ou workers indisponíveis
+
+    ## Exemplos:
     ```bash
     curl -X POST http://localhost:8080/transcribe \\
+      -H "X-API-Key: $INGESTIFY_API_KEY" \\
       -F "file=@meeting.mp3" \\
       -F "language=pt" \\
       -F "include_timestamps=true"
+    ```
+
+    Vídeo com legenda SRT como padrão, tags e descarte do arquivo ao terminar:
+    ```bash
+    curl -X POST http://localhost:8080/transcribe \\
+      -H "Authorization: Bearer $TOKEN" \\
+      -F "file=@aula.mp4" \\
+      -F "language=pt" \\
+      -F "output_format=srt" \\
+      -F "tags=focus,aula" \\
+      -F "purge_source=true"
     ```
 
     ## Resultado
@@ -389,6 +485,7 @@ async def transcribe_audio(
             detail="Audio transcription is currently disabled"
         )
 
+    tag_list = parse_tags_or_422(tags)
     redis_client = get_redis_client()
 
     filename = sanitize_upload_filename(file.filename)
@@ -434,11 +531,14 @@ async def transcribe_audio(
         existing_job = db.query(Job).filter(
             Job.user_id == current_user.id,
             Job.file_checksum == file_checksum,
-            Job.job_type == "MAIN"
+            Job.job_type == "MAIN",
+            # A failed job must not swallow a resubmission: sending the file again is the retry
+            Job.status != DBJobStatus.FAILED,
         ).first()
 
         if existing_job:
             logger.info(f"Duplicate audio file detected! Returning existing job: {existing_job.id}")
+            add_tags_to_existing_job(db, existing_job, tag_list)
             # The latest request decides the default result format of the reused job
             redis_client.set_job_output_format(str(existing_job.id), output_format)
             return JobCreatedResponse(
@@ -485,6 +585,7 @@ async def transcribe_audio(
                 created_at=created_at,
             )
             db.add(db_job)
+            set_job_tags(db_job, tag_list)
             db.commit()
             logger.info(f"Audio transcription job {job_id} created in MySQL with name: {job_name} and checksum: {file_checksum}")
         except Exception as e:
@@ -534,15 +635,32 @@ async def transcribe_audio(
                 "include_word_timestamps": include_word_timestamps,
                 "output_format": output_format,
                 "media_kind": media_kind,
-                "is_audio": True  # Flag to indicate this is audio transcription
+                "is_audio": True,  # Flag to indicate this is audio transcription
+                "purge_source": purge_source,
             }
 
             # Enqueue task (use 'file' source type since audio is already saved locally)
-            process_conversion.delay(
-                job_id=str(job_id),
-                source_type="file",
-                source=str(temp_file_path),
-                options=options,
+            # on the transcription queue, served by the dedicated worker-audio service
+            def enqueue():
+                process_conversion.apply_async(
+                    kwargs=dict(
+                        job_id=str(job_id),
+                        source_type="file",
+                        source=str(temp_file_path),
+                        options=options,
+                    ),
+                    queue=settings.transcription_queue,
+                )
+
+            # With a transcription route the job joins the backlog instead (spec 0003);
+            # without one, submit() just calls enqueue()
+            engine_dispatch.submit(
+                feature="transcription", job_id=str(job_id), user_id=current_user.id,
+                is_admin=is_effective_admin(current_user),
+                payload=engine_dispatch.transcription_payload(job_id, temp_file_path, options,
+                                                              settings.transcription_queue),
+                today=enqueue, celery=_engine_celery(), media_bytes=file_size_bytes,
+                session_factory=SessionLocal,
             )
             logger.info(f"AUDIO JOB {job_id} enqueued to Celery successfully")
 
@@ -612,9 +730,16 @@ async def convert_document(
         None,
         description="Nome de identificação opcional (padrão: nome do arquivo ou URL)"
     ),
+    tags: Optional[str] = Form(None, description=TAGS_FORM_DESCRIPTION),
     authorization: Optional[str] = Header(
         None,
-        description="Token de autenticação no formato 'Bearer {token}' (obrigatório para gdrive e dropbox)"
+        description="Autenticação do Ingestify ('Bearer {jwt}'). Nunca é repassada a provedores externos."
+    ),
+    source_token: Optional[str] = Header(
+        None,
+        alias="X-Source-Token",
+        description="Token OAuth/acesso do provedor (obrigatório para gdrive e dropbox). "
+                    "Não vai na mensagem do Celery: o worker o lê de uma chave Redis com TTL e a apaga após o download.",
     ),
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
@@ -637,13 +762,16 @@ async def convert_document(
     ### 3. Google Drive
     - `source_type`: "gdrive"
     - `source`: "1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms" (file ID)
-    - `authorization`: "Bearer ya29.a0AfH6SMB..." (OAuth2 token)
+    - header `X-Source-Token`: "ya29.a0AfH6SMB..." (OAuth2 token do Google)
     - `file`: Deixe vazio
 
     ### 4. Dropbox
     - `source_type`: "dropbox"
     - `source`: "/documents/report.pdf" (path do arquivo)
-    - `authorization`: "Bearer sl.B1a2c3..." (access token)
+    - header `X-Source-Token`: "sl.B1a2c3..." (access token do Dropbox)
+
+    O header `Authorization` autentica no Ingestify e nunca é repassado ao
+    provedor nem colocado na mensagem do Celery (S-01).
     - `file`: Deixe vazio
 
     ## Formatos suportados
@@ -653,6 +781,8 @@ async def convert_document(
     Retorna imediatamente um `job_id` para consultar o progresso via `/jobs/{job_id}`
     """
     redis_client = get_redis_client()
+    if not isinstance(source_token, str):  # called directly (tests): the Header() default
+        source_token = None
 
     # Validate source_type
     if source_type not in ["file", "url", "gdrive", "dropbox"]:
@@ -674,9 +804,12 @@ async def convert_document(
     if source_type != "file" and not source:
         raise HTTPException(status_code=400, detail=f"source é obrigatório para source_type={source_type}")
 
-    # Validate authentication for gdrive and dropbox
-    if source_type in ["gdrive", "dropbox"] and not authorization:
-        raise HTTPException(status_code=401, detail="Authorization header é obrigatório para esta fonte")
+    tag_list = parse_tags_or_422(tags)
+
+    # The provider's own token, in its own header (S-01: the Ingestify JWT in
+    # Authorization authenticates here and is never forwarded anywhere)
+    if source_type in ["gdrive", "dropbox"] and not source_token:
+        raise HTTPException(status_code=400, detail="O header X-Source-Token (token do provedor) é obrigatório para esta fonte")
 
     # Stream the uploaded file (if any) to disk in chunks (size limit + checksum)
     staging_path = None
@@ -707,6 +840,7 @@ async def convert_document(
 
             if existing_job:
                 logger.info(f"Duplicate file detected! Returning existing job: {existing_job.id}")
+                add_tags_to_existing_job(db, existing_job, tag_list)
                 return JobCreatedResponse(
                     job_id=existing_job.id,
                     status="queued",
@@ -762,6 +896,7 @@ async def convert_document(
                 created_at=created_at,
             )
             db.add(db_job)
+            set_job_tags(db_job, tag_list)
             db.commit()
             checksum_info = f" and checksum: {file_checksum}" if file_checksum else ""
             logger.info(f"Job {job_id} created in MySQL with name: {job_name} (source_type: {source_type}){checksum_info}")
@@ -786,9 +921,11 @@ async def convert_document(
                 "options": {},  # Default options for now
             }
 
-            # Add auth token if present
-            if authorization and authorization.startswith("Bearer "):
-                task_kwargs["auth_token"] = authorization.replace("Bearer ", "")
+            # The provider's token never travels in the task (broker, result backend,
+            # redeliveries): the worker reads it from a short-lived key (S-01)
+            if source_type in ["gdrive", "dropbox"]:
+                if not redis_client.set_source_token(str(job_id), source_token):
+                    raise RuntimeError("could not hand the source token to the worker")
 
             # Save file to MinIO and temporarily to filesystem if uploaded
             if staging_path:
@@ -821,7 +958,14 @@ async def convert_document(
                     # Continue with filesystem fallback
 
             # Enqueue task
-            process_conversion.delay(**task_kwargs)
+            def enqueue():
+                process_conversion.delay(**task_kwargs)
+
+            if staging_path:
+                _enqueue_maybe_routed(filename, job_id, task_kwargs["source"], current_user, file_size_bytes,
+                                      enqueue)
+            else:
+                enqueue()  # URL / Drive / Dropbox: audio is only recognised once the worker downloads it
             logger.info(f"MAIN JOB {job_id} enqueued to Celery successfully")
 
         except ImportError as e:
@@ -875,6 +1019,7 @@ async def convert_document(
 async def get_job_status(
     job_id: str,
     current_user: User = Depends(get_current_active_user),
+    owned_job: Optional[Job] = Depends(get_owned_job),
     db: Session = Depends(get_db),
     page_limit: Optional[int] = None,
     page_offset: int = 0,
@@ -887,8 +1032,14 @@ async def get_job_status(
     - `page_offset`: Number of pages to skip (default: 0)
 
     Example: GET /jobs/{job_id}?page_limit=50&page_offset=0
+
+    ## Permissões:
+    - Apenas o dono do job (verificado no MySQL) pode consultá-lo.
+      Jobs de outros usuários retornam 404.
     """
     redis_client = get_redis_client()
+
+    # Ownership já validada em get_owned_job (MySQL como fonte da verdade)
 
     # Get job status from Redis (real-time data)
     status_data = redis_client.get_job_status(job_id)
@@ -896,12 +1047,8 @@ async def get_job_status(
     if not status_data:
         raise HTTPException(status_code=404, detail="Job não encontrado ou expirado")
 
-    # Verify job ownership
-    if not redis_client.verify_job_ownership(job_id, current_user.id):
-        raise HTTPException(status_code=403, detail="Acesso negado: este job pertence a outro usuário")
-
-    # Get job metadata from MySQL
-    db_job = db.query(Job).filter(Job.id == job_id).first()
+    # Get job metadata from MySQL (child jobs não possuem linha própria)
+    db_job = owned_job if (owned_job is not None and owned_job.id == job_id) else None
 
     # Parse timestamps
     started_at = None
@@ -932,7 +1079,12 @@ async def get_job_status(
         "started_at": started_at,
         "completed_at": completed_at,
         "error": status_data.get("error"),
-        "name": status_data.get("name"),
+        # Workers rewrite the Redis status without the name, so MySQL (where
+        # /upload, /convert and /transcribe store it) is the fallback.
+        "name": status_data.get("name") or (
+            owned_job.name if owned_job is not None and str(owned_job.id) == job_id else None
+        ),
+        "tags": owned_job.tags if owned_job is not None and str(owned_job.id) == job_id else [],
     }
 
     # Add parent_job_id for child jobs (split, page, merge)
@@ -942,6 +1094,22 @@ async def get_job_status(
     # Add page_number for page jobs
     if "page_number" in status_data:
         response_data["page_number"] = status_data["page_number"]
+
+    # Transcription progress in media time (set by the audio worker as it goes)
+    for field in ("transcribed_seconds", "media_duration"):
+        if status_data.get(field) is not None:
+            response_data[field] = status_data[field]
+
+    # Routed work only (spec 0003): local or cloud, and why it still waits
+    if db_job is not None:
+        try:
+            engine, queue_reason = engine_dispatch.job_signal(db, job_id)
+        except Exception as e:  # informative; never fail the status over it
+            logger.warning(f"Could not read the dispatch state of job {job_id}: {e}")
+            db.rollback()
+            engine, queue_reason = None, None
+        response_data["engine"] = engine
+        response_data["queue_reason"] = queue_reason
 
     # Add child jobs info for main jobs
     if job_type == "main":
@@ -988,11 +1156,20 @@ async def get_job_status(
                     }
                     page_status = status_map.get(db_page.status, "pending")
 
+                    # No fabricated ids: a page row without `page_job_id` has no
+                    # page job to address, and inventing one ("page-3") both
+                    # failed schema validation (500) and pointed callers at a
+                    # URL that 404s. `None` says what is true; the URL falls back
+                    # to the by-page-number route, which is real either way.
                     pages_status_dict[db_page.page_number] = {
                         "page_number": db_page.page_number,
-                        "job_id": db_page.page_job_id or f"page-{db_page.page_number}",
+                        "job_id": db_page.page_job_id,
                         "status": page_status,
-                        "url": f"/jobs/{db_page.page_job_id or job_id}/result",
+                        "url": (
+                            f"/jobs/{db_page.page_job_id}/result"
+                            if db_page.page_job_id
+                            else f"/jobs/{job_id}/pages/{db_page.page_number}/result"
+                        ),
                         "error_message": db_page.error_message,
                         "retry_count": db_page.retry_count or 0,
                     }
@@ -1026,10 +1203,11 @@ async def get_job_status(
                 if page_num in pages_status_dict:
                     pages_status_list.append(pages_status_dict[page_num])
                 else:
-                    # Add placeholder for pages not yet created
+                    # Placeholder for pages the split task has not created yet.
+                    # `job_id` stays None - there is no page job to point at.
                     pages_status_list.append({
                         "page_number": page_num,
-                        "job_id": f"pending-{page_num}",
+                        "job_id": None,
                         "status": "queued",
                         "url": f"/jobs/{job_id}/pages/{page_num}/result",
                         "error_message": None,
@@ -1062,6 +1240,7 @@ async def get_job_status(
 async def delete_job(
     job_id: str,
     current_user: User = Depends(get_current_active_user),
+    owned_job: Optional[Job] = Depends(get_owned_job),
     db: Session = Depends(get_db),
 ):
     """
@@ -1071,6 +1250,7 @@ async def delete_job(
     - Metadados do MySQL (job e pages)
     - Conteúdo do Elasticsearch (markdown)
     - Status temporário do Redis
+    - Para transcrições: o áudio/vídeo enviado e as transcrições guardadas no MinIO
 
     **Atenção:** Esta operação é irreversível!
 
@@ -1081,12 +1261,12 @@ async def delete_job(
     - Remove todo o conteúdo markdown
 
     ## Permissões:
-    - Apenas o dono do job pode deletá-lo
+    - Apenas o dono do job (verificado no MySQL) pode deletá-lo
 
     ## Retorno:
     - 200: Job deletado com sucesso
-    - 403: Acesso negado (job de outro usuário)
-    - 404: Job não encontrado
+    - 404: Job não encontrado (também retornado quando o job pertence a outro
+      usuário, para não expor a existência do recurso)
     """
     redis_client = get_redis_client()
 
@@ -1097,21 +1277,14 @@ async def delete_job(
     except Exception as e:
         logger.info(f"Elasticsearch not available: {e}")
 
-    # Verify job exists and ownership
+    # Ownership já validada em get_owned_job (MySQL como fonte da verdade)
     status_data = redis_client.get_job_status(job_id)
 
-    # Also check MySQL
-    db_job = db.query(Job).filter(Job.id == job_id).first()
+    # Linha própria no MySQL (jobs filhos não são persistidos)
+    db_job = owned_job if (owned_job is not None and owned_job.id == job_id) else None
 
     if not status_data and not db_job:
         raise HTTPException(status_code=404, detail="Job não encontrado")
-
-    # Verify ownership
-    if status_data and not redis_client.verify_job_ownership(job_id, current_user.id):
-        raise HTTPException(status_code=403, detail="Acesso negado: este job pertence a outro usuário")
-
-    if db_job and db_job.user_id and db_job.user_id != current_user.id:
-        raise HTTPException(status_code=403, detail="Acesso negado: este job pertence a outro usuário")
 
     logger.info(f"Deleting job {job_id} for user {current_user.username}")
 
@@ -1130,6 +1303,18 @@ async def delete_job(
             logger.info(f"Failed to delete job {job_id} from Elasticsearch: {e}")
     else:
         logger.info(f"Elasticsearch not available, skipping content deletion for job {job_id}")
+
+    # Transcriptions: the uploaded media and the stored transcript formats
+    if db_job and db_job.source_type == "audio":
+        try:
+            minio_client = get_minio_client()
+            if db_job.minio_upload_path:
+                minio_client.delete_file(minio_client.bucket_audio, db_job.minio_upload_path)
+            minio_client.delete_folder(minio_client.bucket_audio, f"transcripts/{job_id}/")
+        except Exception as e:
+            logger.warning(f"Failed to delete audio objects of job {job_id} from MinIO: {e}")
+        # Local copy left behind by a failed job (a completed one has none)
+        shutil.rmtree(Path(settings.temp_storage_path) / "audio" / job_id, ignore_errors=True)
 
     # 2. Delete from MySQL
     try:
@@ -1201,10 +1386,15 @@ async def get_job_result(
                     "Sem este parâmetro vale o output_format escolhido no /transcribe.",
     ),
     current_user: User = Depends(get_current_active_user),
+    owned_job: Optional[Job] = Depends(get_owned_job),
     db: Session = Depends(get_db),
 ):
     """
     Recuperar resultado de qualquer tipo de job (main ou page individual)
+
+    ## Permissões:
+    - Apenas o dono do job (verificado no MySQL) pode acessar o resultado.
+      Jobs de outros usuários retornam 404.
 
     Para jobs de transcrição (/transcribe), `?format=vtt|srt|txt|json` retorna o
     arquivo no formato pedido (ex.: legenda WebVTT com `Content-Type: text/vtt`).
@@ -1220,15 +1410,13 @@ async def get_job_result(
     redis_client = get_redis_client()
     es_client = get_es_client()
 
+    # Ownership já validada em get_owned_job (MySQL como fonte da verdade)
+
     # Check job status first
     status_data = redis_client.get_job_status(job_id)
 
     if not status_data:
         raise HTTPException(status_code=404, detail="Job não encontrado ou expirado")
-
-    # Verify job ownership
-    if not redis_client.verify_job_ownership(job_id, current_user.id):
-        raise HTTPException(status_code=403, detail="Acesso negado: este job pertence a outro usuário")
 
     if status_data["status"] == "processing" or status_data["status"] == "queued":
         raise HTTPException(status_code=400, detail="Job ainda está em processamento")
@@ -1275,7 +1463,7 @@ async def get_job_result(
 
     # Get completed_at timestamp
     completed_at = None
-    db_job = db.query(Job).filter(Job.id == job_id).first()
+    db_job = owned_job if (owned_job is not None and owned_job.id == job_id) else None
 
     if db_job and db_job.completed_at:
         completed_at = db_job.completed_at
@@ -1329,18 +1517,58 @@ def _transcript_response(job_id: str, fmt: str, redis_client) -> Response:
     )
 
 
+@router.get("/jobs/{job_id}/transcript/partial", response_model=PartialTranscriptResponse)
+async def get_partial_transcript(
+    job_id: str,
+    since: int = Query(0, ge=0, description="Índice do primeiro segmento a retornar (o `next` da consulta anterior)"),
+    current_user: User = Depends(get_current_active_user),
+    owned_job: Optional[Job] = Depends(get_owned_job),
+):
+    """
+    Texto de uma transcrição enquanto ela acontece
+
+    Retorna os segmentos já transcritos a partir de `since`, e em `next` o valor de
+    `since` para a próxima consulta - assim cada consulta traz só o texto novo.
+    Só o provider faster-whisper transcreve em segmentos; com os providers da OpenAI
+    a lista fica vazia até o fim. Quando o job termina a lista também fica vazia:
+    o texto completo passa a estar em `GET /jobs/{job_id}/result`.
+
+    ## Permissões:
+    - Apenas o dono do job (verificado no MySQL) pode consultá-lo.
+      Jobs de outros usuários retornam 404.
+    """
+    redis_client = get_redis_client()
+
+    status_data = redis_client.get_job_status(job_id)
+    if not status_data:
+        raise HTTPException(status_code=404, detail="Job não encontrado ou expirado")
+
+    segments, total = redis_client.get_partial_transcript(job_id, since)
+    return PartialTranscriptResponse(
+        job_id=job_id,
+        status=status_data.get("status", "pending"),
+        segments=segments,
+        next=total,
+    )
+
+
 @router.get("/jobs/{job_id}/pages", response_model=JobPagesResponse)
 async def get_job_pages(
     job_id: str,
     current_user: User = Depends(get_current_active_user),
+    owned_job: Optional[Job] = Depends(get_owned_job),
     db: Session = Depends(get_db),
 ):
-    """Obter progresso detalhado por página com job_id de cada página (para PDFs)"""
+    """
+    Obter progresso detalhado por página com job_id de cada página (para PDFs)
+
+    ## Permissões:
+    - Apenas o dono do job (verificado no MySQL) pode consultar as páginas.
+      Jobs de outros usuários retornam 404.
+    """
     redis_client = get_redis_client()
 
-    # Verify job ownership
-    if not redis_client.verify_job_ownership(job_id, current_user.id):
-        raise HTTPException(status_code=403, detail="Acesso negado: este job pertence a outro usuário")
+    # Ownership já validada em get_owned_job (MySQL como fonte da verdade)
 
     # Try to get pages from MySQL first
     db_pages = db.query(Page).filter(Page.job_id == job_id).order_by(Page.page_number).all()
@@ -1359,11 +1587,16 @@ async def get_job_pages(
             }
             page_status = status_map.get(db_page.status, "pending")
 
+            # Same rule as GET /jobs/{job_id}: never invent a page job id.
             pages_list.append(PageJobInfo(
                 page_number=db_page.page_number,
-                job_id=db_page.page_job_id or f"page-{db_page.page_number}",
+                job_id=db_page.page_job_id,
                 status=page_status,
-                url=f"/jobs/{db_page.page_job_id or job_id}/result",
+                url=(
+                    f"/jobs/{db_page.page_job_id}/result"
+                    if db_page.page_job_id
+                    else f"/jobs/{job_id}/pages/{db_page.page_number}/result"
+                ),
                 error_message=db_page.error_message,
                 retry_count=db_page.retry_count or 0,
             ))
@@ -1442,6 +1675,7 @@ async def get_page_status_by_number(
     job_id: str,
     page_number: int,
     current_user: User = Depends(get_current_active_user),
+    db_page: Optional[Page] = Depends(get_owned_page_or_none),
     db: Session = Depends(get_db),
 ):
     """
@@ -1460,18 +1694,15 @@ async def get_page_status_by_number(
     ```
 
     Retorna o status da página 5 do job especificado.
+
+    ## Permissões:
+    - Apenas o dono do job (verificado no MySQL) pode consultar a página.
+      Jobs de outros usuários retornam 404.
     """
     redis_client = get_redis_client()
 
-    # Verify job ownership
-    if not redis_client.verify_job_ownership(job_id, current_user.id):
-        raise HTTPException(status_code=403, detail="Acesso negado: este job pertence a outro usuário")
-
-    # Try MySQL first
-    db_page = db.query(Page).filter(
-        Page.job_id == job_id,
-        Page.page_number == page_number
-    ).first()
+    # Ownership já validada em get_owned_page_or_none -> get_owned_job
+    # (MySQL como fonte da verdade). db_page vem da mesma dependência.
 
     if db_page:
         # Map database status to schema status
@@ -1537,6 +1768,7 @@ async def get_page_result_by_number(
     job_id: str,
     page_number: int,
     current_user: User = Depends(get_current_active_user),
+    db_page: Optional[Page] = Depends(get_owned_page_or_none),
     db: Session = Depends(get_db),
 ):
     """
@@ -1558,25 +1790,22 @@ async def get_page_result_by_number(
 
     ## Vantagem:
     Não precisa conhecer o `page_job_id` - basta usar o job principal + número da página!
+
+    ## Permissões:
+    - Apenas o dono do job (verificado no MySQL) pode acessar o resultado.
+      Jobs de outros usuários retornam 404.
     """
     redis_client = get_redis_client()
     es_client = get_es_client()
 
-    # Verify job ownership
-    if not redis_client.verify_job_ownership(job_id, current_user.id):
-        raise HTTPException(status_code=403, detail="Acesso negado: este job pertence a outro usuário")
+    # Ownership já validada em get_owned_page_or_none -> get_owned_job
+    # (MySQL como fonte da verdade). db_page vem da mesma dependência.
 
     # Try to get page from Elasticsearch first
     es_page_result = es_client.get_page_result(job_id, page_number)
 
     if es_page_result:
         logger.info(f"Retrieved page {page_number} from Elasticsearch for job {job_id}")
-
-        # Get page metadata from MySQL
-        db_page = db.query(Page).filter(
-            Page.job_id == job_id,
-            Page.page_number == page_number
-        ).first()
 
         # Check status
         if db_page:
@@ -1666,112 +1895,127 @@ async def get_page_result_by_number(
     }
 
 
+# `kind` of a job, derived from Job.source_type: what the user sees it as.
+JOB_KINDS = ("document", "transcription", "image")
+_KIND_SOURCE_TYPES = {"transcription": "audio", "image": "image"}
+
+# MySQL's PENDING is the API's "queued".
+_DB_TO_API_STATUS = {
+    DBJobStatus.PENDING: "queued",
+    DBJobStatus.PROCESSING: "processing",
+    DBJobStatus.COMPLETED: "completed",
+    DBJobStatus.FAILED: "failed",
+    DBJobStatus.CANCELLED: "cancelled",
+}
+_API_TO_DB_STATUS = {api: db for db, api in _DB_TO_API_STATUS.items()}
+
+
+def job_kind(source_type: Optional[str]) -> str:
+    for kind, st in _KIND_SOURCE_TYPES.items():
+        if source_type == st:
+            return kind
+    return "document"
+
+
 @router.get("/jobs", summary="Listar jobs do usuário")
 async def list_jobs(
     limit: int = 50,
     offset: int = 0,
     status: Optional[str] = None,
     job_type: str = "main",
+    tag: Optional[List[str]] = Query(None, description="Só jobs com esta tag. Repita para exigir várias (E)."),
+    q: Optional[str] = Query(None, description="Busca no nome e no nome do arquivo (não no conteúdo; para isso use /search)."),
+    kind: Optional[str] = Query(None, description="document, transcription ou image"),
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
 ):
     """
-    Lista jobs do usuário autenticado
+    Lista os jobs do usuário autenticado, do mais recente para o mais antigo.
+
+    A lista vem do MySQL (fonte da verdade); o Redis só complementa o status e
+    o progresso ao vivo dos jobs em andamento.
 
     ## Parâmetros:
-    - `limit`: Número máximo de jobs a retornar (padrão: 50, máximo: 100)
-    - `offset`: Quantidade de jobs a pular (paginação)
-    - `status`: Filtrar por status: queued, processing, completed, failed
-    - `job_type`: Filtrar por tipo (padrão: "main" - apenas jobs principais)
-      - "main": Jobs principais do usuário (recomendado)
-      - "page": Jobs de página individual
-      - "all": Todos os tipos de jobs
+    - `limit`: Máximo de jobs (padrão: 50, máximo: 100)
+    - `offset`: Quantos pular (paginação)
+    - `status`: queued, processing, completed, failed ou cancelled
+    - `tag`: Filtra por tag; `?tag=a&tag=b` exige as duas
+    - `q`: Texto no nome do job ou do arquivo
+    - `kind`: `document`, `transcription` ou `image`
+    - `job_type`: `main` (padrão) ou `all`
 
     ## Retorno:
-    Lista de jobs com seus IDs, status e informações básicas
-
-    ## Exemplos:
-    - `/jobs` - Lista apenas jobs principais (padrão)
-    - `/jobs?job_type=all` - Lista todos os tipos de jobs
-    - `/jobs?status=processing` - Apenas jobs principais em processamento
-    - `/jobs?status=completed&limit=10` - Últimos 10 jobs principais completados
+    `{total, limit, offset, jobs, counts}`. `total` é o total filtrado antes da
+    paginação; `counts` traz quantos jobs há em cada status com os demais
+    filtros aplicados (para montar os filtros da interface).
     """
+    limit = max(1, min(limit, 100))
+    offset = max(0, offset)
+
+    if status is not None and status not in _API_TO_DB_STATUS:
+        raise HTTPException(status_code=422, detail=f"status inválido: {status}")
+    if kind is not None and kind not in JOB_KINDS:
+        raise HTTPException(status_code=422, detail=f"kind inválido: {kind}. Use: {', '.join(JOB_KINDS)}")
+    tag_filter = parse_tags_or_422(tag)
+
+    query = db.query(Job).filter(Job.user_id == current_user.id)
+    if job_type != "all":
+        query = query.filter(func.upper(Job.job_type) == job_type.upper())
+    for t in tag_filter:
+        query = query.filter(Job.tag_rows.any(JobTag.tag == t))
+    if q and q.strip():
+        like = f"%{q.strip()}%"
+        query = query.filter(or_(Job.name.ilike(like), Job.filename.ilike(like)))
+    if kind == "document":
+        query = query.filter(or_(Job.source_type.is_(None), Job.source_type.notin_(list(_KIND_SOURCE_TYPES.values()))))
+    elif kind is not None:
+        query = query.filter(Job.source_type == _KIND_SOURCE_TYPES[kind])
+
+    counts = {"all": 0, **{api: 0 for api in _API_TO_DB_STATUS}}
+    for db_status, n in query.with_entities(Job.status, func.count(Job.id)).group_by(Job.status).all():
+        counts[_DB_TO_API_STATUS.get(db_status, "queued")] += n
+        counts["all"] += n
+
+    if status is not None:
+        query = query.filter(Job.status == _API_TO_DB_STATUS[status])
+
+    total = query.count()
+    rows = query.order_by(Job.created_at.desc()).offset(offset).limit(limit).all()
+
     redis_client = get_redis_client()
+    jobs = []
+    for job in rows:
+        job_id = str(job.id)
+        db_status = _DB_TO_API_STATUS.get(job.status, "queued")
+        live = None
+        if db_status in ("queued", "processing"):
+            try:
+                live = redis_client.get_job_status(job_id)
+            except Exception as e:
+                logger.warning(f"Redis unavailable for job {job_id} status: {e}")
 
-    # Validate limit
-    if limit > 100:
-        limit = 100
-
-    # Get all job keys from Redis
-    try:
-        # Get only jobs belonging to current user
-        user_job_ids = redis_client.get_user_jobs(current_user.id, limit=1000)
-
-        if not user_job_ids:
-            return {
-                "total": 0,
-                "limit": limit,
-                "offset": offset,
-                "jobs": [],
-            }
-
-        # Get status for each job
-        jobs_list = []
-        for job_id in user_job_ids:
-            status_data = redis_client.get_job_status(job_id)
-            if status_data:
-                # Filter by job_type (skip if not "all" and doesn't match)
-                job_data_type = status_data.get("type", "main").lower()
-                if job_type != "all" and job_data_type != job_type:
-                    continue
-
-                # Filter by status if specified
-                if status and status_data.get("status") != status:
-                    continue
-
-                # Get additional data from MySQL (name, timestamps)
-                db_job = db.query(Job).filter(Job.id == job_id).first()
-
-                job_info = {
-                    "job_id": job_id,
-                    "type": job_data_type,
-                    "status": status_data.get("status"),
-                    "progress": status_data.get("progress", 0),
-                    "name": db_job.name if db_job and db_job.name else status_data.get("name"),
-                    "created_at": db_job.created_at.isoformat() if db_job and db_job.created_at else None,
-                    "completed_at": db_job.completed_at.isoformat() if db_job and db_job.completed_at else None,
-                }
-
-                # Add total_pages for main jobs if available
-                if status_data.get("type") == "main":
-                    total_pages = redis_client.get_job_pages_total(job_id)
-                    if total_pages:
-                        job_info["total_pages"] = total_pages
-                        job_info["pages_completed"] = redis_client.count_completed_page_jobs(job_id)
-
-                # Add page_number for page jobs
-                if status_data.get("type") == "page":
-                    job_info["page_number"] = status_data.get("page_number")
-                    job_info["parent_job_id"] = status_data.get("parent_job_id")
-
-                jobs_list.append(job_info)
-
-        # Sort by created_at (most recent first)
-        jobs_list.sort(key=lambda x: x.get("created_at") or "", reverse=True)
-
-        # Apply pagination
-        paginated_jobs = jobs_list[offset : offset + limit]
-
-        return {
-            "total": len(jobs_list),
-            "limit": limit,
-            "offset": offset,
-            "jobs": paginated_jobs,
+        item = {
+            "job_id": job_id,
+            "type": (job.job_type or "main").lower(),
+            "status": (live or {}).get("status") or db_status,
+            "progress": (live or {}).get("progress", 100 if db_status == "completed" else (job.progress or 0)),
+            "name": job.name or job.filename,
+            "filename": job.filename,
+            "kind": job_kind(job.source_type),
+            "source_type": job.source_type,
+            "mime_type": job.mime_type,
+            "file_size_bytes": job.file_size_bytes,
+            "tags": job.tags,
+            "error": job.error_message,
+            "created_at": job.created_at.isoformat() if job.created_at else None,
+            "completed_at": job.completed_at.isoformat() if job.completed_at else None,
         }
+        if job.total_pages:
+            item["total_pages"] = job.total_pages
+            item["pages_completed"] = job.pages_completed or 0
+        jobs.append(item)
 
-    except Exception as e:
-        logger.error(f"Error listing jobs: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Erro ao listar jobs")
+    return {"total": total, "limit": limit, "offset": offset, "jobs": jobs, "counts": counts}
 
 
 @router.get("/search", summary="Buscar jobs por conteúdo")
@@ -1837,6 +2081,8 @@ async def retry_failed_page(
     job_id: str,
     page_number: int,
     current_user: User = Depends(get_current_active_user),
+    owned_job: Optional[Job] = Depends(get_owned_job),
+    db_page: Optional[Page] = Depends(get_owned_page_or_none),
     db: Session = Depends(get_db),
 ):
     """
@@ -1855,18 +2101,15 @@ async def retry_failed_page(
     ```
 
     Reprocessa a página 5 do job especificado.
+
+    ## Permissões:
+    - Apenas o dono do job (verificado no MySQL) pode reprocessar a página.
+      Jobs de outros usuários retornam 404.
     """
     redis_client = get_redis_client()
 
-    # Verify job ownership
-    if not redis_client.verify_job_ownership(job_id, current_user.id):
-        raise HTTPException(status_code=403, detail="Acesso negado: este job pertence a outro usuário")
-
-    # Get page from MySQL
-    db_page = db.query(Page).filter(
-        Page.job_id == job_id,
-        Page.page_number == page_number
-    ).first()
+    # Ownership já validada em get_owned_page_or_none -> get_owned_job
+    # (MySQL como fonte da verdade). db_page vem da mesma dependência.
 
     # If page doesn't exist in MySQL, try to get it from Redis (backwards compatibility)
     if not db_page:
@@ -1919,7 +2162,7 @@ async def retry_failed_page(
             )
 
     # Get main job info to access original file
-    db_job = db.query(Job).filter(Job.id == job_id).first()
+    db_job = owned_job if (owned_job is not None and owned_job.id == job_id) else None
     if not db_job:
         raise HTTPException(status_code=404, detail="Job principal não encontrado")
 
@@ -1984,12 +2227,23 @@ async def retry_failed_page(
 
         pdf_path = str(pdf_files[0])
 
-        # Enqueue retry task
-        process_page.delay(
-            job_id=new_page_job_id,
-            parent_job_id=job_id,
-            pdf_path=pdf_path,
-            page_number=page_number,
+        # Enqueue retry task: through the document_conversion route when there is one
+        # (spec 0003, 4.14); without a route, exactly as before
+        def enqueue():
+            process_page.delay(
+                job_id=new_page_job_id,
+                parent_job_id=job_id,
+                pdf_path=pdf_path,
+                page_number=page_number,
+            )
+
+        engine_dispatch.submit(
+            feature="document_conversion", job_id=job_id, subject_type="page", subject_id=new_page_job_id,
+            user_id=current_user.id, is_admin=is_effective_admin(current_user),
+            payload=engine_dispatch.page_payload(
+                page_job_id=new_page_job_id, parent_job_id=job_id, page_number=page_number, options={},
+                source_pdf_path=pdf_path, today_queue=settings.celery_task_default_queue),
+            today=enqueue, celery=_engine_celery(), session_factory=SessionLocal,
         )
 
         logger.info(f"Page {page_number} of job {job_id} enqueued for retry with new job_id {new_page_job_id}")
@@ -2014,65 +2268,109 @@ async def retry_failed_page(
         raise HTTPException(status_code=500, detail="Erro ao reprocessar página")
 
 
-@router.get("/jobs/{job_id}/pages/{page_number}/pdf")
+@router.get("/jobs/{job_id}/pages/{page_number}/pdf", summary="URL temporária do PDF de uma página")
 async def get_page_pdf(
     job_id: str,
     page_number: int,
+    request: Request,
     current_user: User = Depends(get_current_active_user),
-    db: Session = Depends(get_db),
+    db_page: Optional[Page] = Depends(get_owned_page_or_none),
 ):
     """
-    Download the PDF of a single page (for the PDF preview)
+    Devolve uma **URL pré-assinada de curta duração** para o PDF de uma página.
 
-    Requires authentication and only serves pages of the caller's own jobs.
-    The file is streamed through the API; MinIO buckets are private.
+    ## Autenticação
+    Obrigatória. Só o dono do job (verificado no MySQL) recebe a URL; jobs de
+    outros usuários retornam 404, igual aos demais endpoints de job.
 
-    ## Parameters:
-    - `job_id`: Main job ID
-    - `page_number`: Page number (1-indexed)
+    Este endpoint já foi público e redirecionava (307) para uma URL pública do
+    MinIO — quem tivesse um UUID de job lia o PDF de qualquer usuário. Agora o
+    bucket é privado e o acesso é sempre por URL assinada com TTL curto.
+
+    ## Parâmetros:
+    - `job_id`: ID do job principal
+    - `page_number`: Número da página (1-indexed)
+
+    ## Retorno (JSON, não é mais um redirect):
+    ```json
+    {
+      "job_id": "550e8400-e29b-41d4-a716-446655440000",
+      "page_number": 5,
+      "url": "http://127.0.0.1:9000/ingestify-pages/pages/<job_id>/page_0005.pdf?X-Amz-...",
+      "expires_in": 900,
+      "expires_at": "2026-08-26T12:15:00+00:00"
+    }
+    ```
+
+    - `url`: URL assinada, para ser buscada **diretamente** pelo navegador. Não
+      aceita header `Authorization` (e não precisa dele).
+    - `expires_in`: validade em segundos a partir de agora.
+    - `expires_at`: instante de expiração em UTC (ISO-8601). O cliente deve
+      pedir uma URL nova depois disso em vez de reutilizar a antiga.
+
+    Um redirect não serviria: o header `Authorization` do chamador não sobrevive
+    ao salto para o MinIO, e o cliente precisa saber quando a URL expira.
+
+    ## Atenção
+    A query string faz parte da assinatura — acrescentar qualquer parâmetro
+    (`?t=<timestamp>`, por exemplo) invalida a URL e gera 403 no MinIO.
     """
-    db_job = db.query(Job).filter(Job.id == job_id).first()
-    if not db_job or db_job.user_id != current_user.id:
-        # Same answer for "missing" and "not yours" so job IDs can't be probed
-        raise HTTPException(status_code=404, detail="Job não encontrado")
-
-    db_page = db.query(Page).filter(
-        Page.job_id == job_id,
-        Page.page_number == page_number
-    ).first()
-
+    # Ownership já validada em get_owned_page_or_none -> get_owned_job
+    # (MySQL como fonte da verdade).
     if not db_page:
         raise HTTPException(status_code=404, detail=f"Página {page_number} não encontrada")
 
     minio_client = get_minio_client()
-    minio_object_path = db_page.minio_page_path or f"pages/{job_id}/page_{page_number:04d}.pdf"
 
-    try:
-        # Blocking MinIO call: run it off the event loop
-        pdf_object = await run_in_threadpool(minio_client.open_object, minio_client.bucket_pages, minio_object_path)
-    except Exception as e:
-        logger.warning(f"Page {page_number} PDF for job {job_id} not available in MinIO: {e}")
+    # If page has MinIO path stored, use it
+    if db_page.minio_page_path:
+        minio_object_path = db_page.minio_page_path
+    else:
+        # Fallback to expected path pattern
+        minio_object_path = f"pages/{job_id}/page_{page_number:04d}.pdf"
+
+    # Check if file exists in MinIO
+    if not minio_client.file_exists(minio_client.bucket_pages, minio_object_path):
         raise HTTPException(
             status_code=404,
-            detail=f"Arquivo PDF da página {page_number} não encontrado. O job pode não ter sido dividido em páginas."
+            detail=f"Arquivo PDF da página {page_number} não encontrado no MinIO. O job pode não ter sido dividido em páginas."
         )
 
-    def pdf_chunks():
-        # Sync generator: StreamingResponse iterates it in a thread pool
-        try:
-            yield from pdf_object.stream(64 * 1024)
-        finally:
-            pdf_object.close()
-            pdf_object.release_conn()
+    # O host da requisição serve para descobrir o endereço do MinIO visível pelo
+    # navegador quando MINIO_PUBLIC_ENDPOINT não está configurado. A assinatura
+    # cobre esse host, por isso ele precisa ser o mesmo que o navegador usará.
+    request_host = request.headers.get("host")
 
-    return StreamingResponse(
-        pdf_chunks(),
-        media_type="application/pdf",
-        headers={
-            "Content-Disposition": f'inline; filename="page_{page_number:04d}.pdf"',
-            "Cache-Control": "private, no-store",
-        },
+    expires = timedelta(seconds=PAGE_PDF_URL_TTL_SECONDS)
+    expires_at = datetime.now(timezone.utc) + expires
+
+    try:
+        presigned_url = minio_client.get_presigned_url(
+            minio_client.bucket_pages,
+            minio_object_path,
+            expires=expires,
+            request_host=request_host,
+        )
+    except Exception as e:
+        logger.error(
+            f"Failed to sign URL for page {page_number} of job {job_id}: {e}",
+            exc_info=True,
+        )
+        raise HTTPException(status_code=503, detail="Armazenamento de arquivos indisponível")
+
+    logger.info(
+        f"Issued presigned PDF URL for page {page_number} of job {job_id} "
+        f"to user {current_user.id} (ttl {PAGE_PDF_URL_TTL_SECONDS}s)"
     )
+
+    return {
+        "job_id": job_id,
+        "page_number": page_number,
+        "url": presigned_url,
+        "expires_in": PAGE_PDF_URL_TTL_SECONDS,
+        "expires_at": expires_at.isoformat(),
+    }
+
 
 @router.get("/health", response_model=HealthCheckResponse)
 async def health_check():

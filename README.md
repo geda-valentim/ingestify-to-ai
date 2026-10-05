@@ -275,6 +275,21 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml down
 - ✅ **API**: Edite arquivos em `backend/api/` e veja mudanças instantaneamente
 - ✅ **Workers**: Edite arquivos em `backend/workers/` e workers reiniciam automaticamente
 
+### Motores de execução (opcional)
+
+Por padrão cada feature pesada roda na sua fila local (transcrição no `worker-audio`, Docling no
+`worker`, visão no `worker-vision`) e nada abaixo é necessário. Para rotear trabalho com backlog
+durável, capacidade declarada, várias GPUs/contas e orçamento (inclusive contas Modal como válvula
+de rajada para transcrição), veja o guia do operador
+**[docs/features/engines.md](docs/features/engines.md)** (setup, chaves, capacidade, deploy,
+rotas, orçamentos, alertas, benchmark, custos e solução de problemas):
+
+```bash
+docker compose --profile engines up -d worker-dispatch          # despachante (qualquer rota)
+docker compose --profile engines up -d --build worker-remote    # só com motores remotos
+docker compose exec api python scripts/engines.py routes show
+```
+
 ## 🔗 Infraestrutura Compartilhada (Novo!)
 
 O Ingestify agora suporta **auto-detecção de infraestrutura compartilhada**! Isso significa:
@@ -380,7 +395,12 @@ ingestify-to-ai/
 │   │   ├── elasticsearch_client.py  # Search client
 │   │   └── pdf_splitter.py  # PDF processing
 │   ├── tests/               # Unit tests
-│   ├── requirements.txt
+│   ├── requirements.txt     # Default install (alias -> requirements-cpu.txt)
+│   ├── requirements-base.txt      # Shared package list (do not install directly)
+│   ├── requirements-cpu.txt       # CPU torch
+│   ├── requirements-cuda.txt      # NVIDIA GPU torch (see docs/GPU.md)
+│   ├── requirements-vision.txt         # CPU + Florence-2
+│   ├── requirements-vision-cuda.txt    # GPU + Florence-2
 │   └── pytest.ini
 │
 ├── docker/
@@ -444,6 +464,10 @@ DROPBOX_APP_SECRET=your_app_secret
 
 # Storage
 RESULT_TTL_SECONDS=3600
+
+# Motores de execução (opcionais; ver docs/features/engines.md e o bloco no .env.example)
+# ENGINE_SECRETS_PUBLIC_KEY=
+# ENGINE_ALERT_WEBHOOK_URL=
 ```
 
 ## 🔒 Autenticação
@@ -486,7 +510,7 @@ Acesse: http://localhost:5555
 python -m venv venv
 source venv/bin/activate  # Linux/Mac
 
-# Instalar dependências (setuptools incluído para compatibilidade Python 3.13+)
+# Instalar dependências (CPU - o default correto para praticamente todo mundo)
 pip install -r backend/requirements.txt
 
 # Executar API (porta 8080)
@@ -495,6 +519,41 @@ pip install -r backend/requirements.txt
 # Executar worker (terminal separado)
 ./run_worker.sh
 ```
+
+> **Tem uma GPU NVIDIA?** Não use o comando acima — leia **[docs/GPU.md](docs/GPU.md)**
+> primeiro e instale `backend/requirements-cuda.txt` (ou
+> `backend/requirements-vision-cuda.txt`, se quiser Florence-2 na GPU).
+
+<details>
+<summary><strong>Por que existem cinco arquivos de requirements</strong></summary>
+
+O `torch` não é dependência direta deste projeto: ele chega por transitividade via
+`docling → docling-slim[standard] → torch`. Resolvido no PyPI puro isso cai na build
+**CUDA** do torch e arrasta ~1.66 GB de wheels `nvidia-*` + `triton` (~3.4 GB instalados)
+para qualquer máquina Linux, inclusive um notebook sem GPU nenhuma — e, pior, inclui o
+`nvidia-cudnn-cu13`, que é exatamente a árvore que quebra o `ctranslate2`/`faster-whisper`
+com `Unable to load libcudnn_ops.so.9`.
+
+Por isso `backend/requirements.txt` é só um apelido para o conjunto CPU: o comando que
+todo mundo digita é o **certo por construção**, não por ter lido a documentação antes.
+
+| Arquivo | torch | Vision (Florence-2) | Quando usar |
+|---|---|---|---|
+| `backend/requirements.txt` | CPU | não | **O default.** Apelido de `requirements-cpu.txt`. |
+| `backend/requirements-cpu.txt` | CPU | não | Igual ao anterior, nomeado explicitamente. |
+| `backend/requirements-vision.txt` | CPU | sim | Default das imagens de worker. |
+| `backend/requirements-cuda.txt` | cu129 | não | Host com GPU NVIDIA. Ver [docs/GPU.md](docs/GPU.md). |
+| `backend/requirements-vision-cuda.txt` | cu129 | sim | Host com GPU rodando Florence-2. |
+| `backend/requirements-base.txt` | — | — | Lista compartilhada de pacotes. **Não instale direto.** |
+
+Medido com `pip install --dry-run --report` num venv 3.12 limpo:
+
+| Comando | Pacotes | torch | wheels `nvidia-*`/`triton` |
+|---|---|---|---|
+| `-r backend/requirements-base.txt` (o que `requirements.txt` era) | 194 | `2.13.0` (CUDA) | 16, incluindo `nvidia-cudnn-cu13` |
+| `-r backend/requirements.txt` (hoje) | 175 | `2.13.0+cpu` | 0 |
+
+</details>
 
 **Frontend:**
 ```bash

@@ -11,6 +11,7 @@ These endpoints provide system administrators with tools to:
 from fastapi import APIRouter, HTTPException, Depends
 from typing import List, Dict, Any
 from datetime import datetime
+import json
 import logging
 
 from shared.config import get_settings
@@ -25,8 +26,8 @@ from shared.models import Job, Page, JobStatus
 from shared.database import SessionLocal
 from shared.redis_client import get_redis_client
 from shared.auth import get_current_active_user
+from shared.admin import is_effective_admin
 from workers.monitoring import detect_stuck_jobs, auto_retry_failed_pages, cleanup_old_jobs
-from workers.tasks import convert_page_task
 from uuid import uuid4
 
 logger = logging.getLogger(__name__)
@@ -37,14 +38,21 @@ router = APIRouter(prefix="/admin", tags=["Admin & Monitoring"])
 
 def require_admin(current_user=Depends(get_current_active_user)):
     """
-    Dependency to check if user is admin
+    Dependency that restricts an endpoint to administrators.
 
-    Admins are the users whose IDs are listed in ADMIN_USER_IDS (comma-separated).
+    A user is an admin if EITHER the `users.is_admin` column is true (set with
+    scripts/make_admin.py) OR their ID is listed in ADMIN_USER_IDS
+    (comma-separated). Both default to nobody.
+
+    Raises:
+        HTTPException 403: If the authenticated user is not an admin
     """
-    admin_ids = {uid.strip() for uid in settings.admin_user_ids.split(",") if uid.strip()}
-    if str(current_user.id) not in admin_ids:
+    if not is_effective_admin(current_user, settings):
         logger.warning(f"[ADMIN] Access denied for user {current_user.id}")
-        raise HTTPException(status_code=403, detail="Admin privileges required")
+        raise HTTPException(
+            status_code=403,
+            detail="Acesso negado: privilégios de administrador necessários"
+        )
     return current_user
 
 
@@ -62,7 +70,7 @@ async def get_stats(admin_user=Depends(require_admin)) -> Dict[str, Any]:
         # Add Redis info
         redis_client = get_redis_client()
         try:
-            redis_info = redis_client.redis.info()
+            redis_info = redis_client.client.info()
             stats["redis"] = {
                 "connected_clients": redis_info.get("connected_clients", 0),
                 "used_memory_human": redis_info.get("used_memory_human", "unknown"),
@@ -374,3 +382,66 @@ async def monitoring_health(admin_user=Depends(require_admin)) -> Dict[str, Any]
     except Exception as e:
         logger.error(f"Error checking monitoring health: {e}")
         raise HTTPException(status_code=500, detail="Failed to check health")
+
+
+@router.get("/broker/unacked", summary="List unacknowledged broker messages")
+async def list_broker_unacked(admin_user=Depends(require_admin)) -> Dict[str, Any]:
+    """
+    Messages the Celery broker holds as delivered but not yet acknowledged.
+
+    Each one is either a task running now or one whose worker died - the latter only
+    returns to its queue after CELERY_VISIBILITY_TIMEOUT_SECONDS (hours). `orphans` is
+    the latest check by workers.monitoring.check_broker_unacked: messages no live
+    worker held on two consecutive checks. Requeue one with
+    POST /admin/broker/unacked/{delivery_tag}/requeue.
+    """
+    from starlette.concurrency import run_in_threadpool
+    from shared import broker_unacked
+
+    messages = await run_in_threadpool(lambda: broker_unacked.list_unacked(broker_unacked.broker_client()))
+    report = get_redis_client().client.get(broker_unacked.REPORT_KEY)
+    return {
+        "visibility_timeout_seconds": settings.celery_visibility_timeout_seconds,
+        "unacked": [m.to_dict() for m in messages],
+        "last_check": json.loads(report) if report else None,
+    }
+
+
+@router.post("/broker/unacked/{delivery_tag}/requeue", summary="Requeue an orphaned broker message")
+async def requeue_broker_unacked(delivery_tag: str, admin_user=Depends(require_admin)) -> Dict[str, Any]:
+    """
+    Put an orphaned message back at the head of its queue, so its task runs again now
+    instead of after the visibility timeout.
+
+    Refused (409) unless the latest monitoring check flagged it as orphaned AND no
+    worker reports holding it right now - otherwise a task still running would run
+    twice.
+    """
+    from starlette.concurrency import run_in_threadpool
+    from shared import broker_unacked
+    from workers.celery_app import celery_app
+
+    report = json.loads(get_redis_client().client.get(broker_unacked.REPORT_KEY) or "{}")
+    flagged = {o["delivery_tag"]: o for o in report.get("orphans") or []}
+    if delivery_tag not in flagged:
+        raise HTTPException(
+            status_code=409,
+            detail="Not flagged as orphaned by the latest monitoring check; wait for the next check",
+        )
+
+    live = await run_in_threadpool(
+        lambda: broker_unacked.live_task_ids(celery_app.control.inspect(timeout=5))
+    )
+    if live is None:
+        raise HTTPException(status_code=409, detail="No worker answered; cannot confirm the task is not running")
+    if flagged[delivery_tag].get("task_id") in live:
+        raise HTTPException(status_code=409, detail="A worker is holding this task now; not requeued")
+
+    if not await run_in_threadpool(lambda: broker_unacked.requeue(broker_unacked.broker_client(), delivery_tag)):
+        raise HTTPException(status_code=404, detail="No longer unacknowledged (acked or already restored)")
+
+    logger.warning(
+        f"[ADMIN] Requeued orphaned broker message {delivery_tag} "
+        f"(task {flagged[delivery_tag].get('task_id')}, job {flagged[delivery_tag].get('job_id')})"
+    )
+    return {"requeued": True, **flagged[delivery_tag]}

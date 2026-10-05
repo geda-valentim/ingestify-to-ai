@@ -3,13 +3,18 @@ Factory for audio transcriber instances
 
 Provides singleton access to audio transcribers based on configuration.
 This allows switching between different Whisper implementations via environment variables.
+
+A forced provider (`force_provider`, e.g. one job's `transcriber_provider`
+option) that differs from the configured one gets a throwaway instance and never
+replaces the cached one: one request must not repoint the worker process for
+every later job (spec 0003, slice 4a - the same rule as workers/vision/factory.py).
 """
 
 import logging
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Tuple
 
-from workers.audio.base_transcriber import AudioTranscriber
+from workers.audio.base_transcriber import AudioTranscriber, ProgressCallback
 from workers.audio.device import (
     WhisperDevice,
     get_whisper_device,
@@ -19,8 +24,9 @@ from workers.audio.device import (
 
 logger = logging.getLogger(__name__)
 
-# Global singleton instance
+# Global singleton instance, and the provider it was built for
 _transcriber_instance: Optional[AudioTranscriber] = None
+_transcriber_provider: Optional[str] = None
 
 
 def get_audio_transcriber(force_provider: Optional[str] = None) -> AudioTranscriber:
@@ -34,8 +40,9 @@ def get_audio_transcriber(force_provider: Optional[str] = None) -> AudioTranscri
     - openai-api: Cloud-based, fastest but requires API key and costs money
 
     Args:
-        force_provider: Override the configured provider (optional)
-                       Use this to temporarily switch providers without changing config
+        force_provider: Override the configured provider for this call only. A
+                       provider other than the configured one is built as a throwaway
+                       instance; the cached (configured) one is left alone.
 
     Returns:
         AudioTranscriber instance
@@ -51,40 +58,41 @@ def get_audio_transcriber(force_provider: Optional[str] = None) -> AudioTranscri
         >>> # Force specific provider
         >>> api_transcriber = get_audio_transcriber(force_provider="openai-api")
     """
-    global _transcriber_instance
+    global _transcriber_instance, _transcriber_provider
 
     # Get configuration
     from shared.config import get_settings
     settings = get_settings()
 
-    # Determine which provider to use
-    provider = force_provider or settings.audio_transcriber_provider
+    configured = settings.audio_transcriber_provider
+    provider = force_provider or configured
 
-    # Return cached instance if provider hasn't changed
-    if _transcriber_instance is not None and not force_provider:
+    if provider != configured:
+        logger.info(f"Building a one-off audio transcriber with provider: {provider}")
+        return _build_transcriber(provider, settings)
+
+    # Return the cached instance while it is the configured provider's
+    if _transcriber_instance is not None and _transcriber_provider == provider:
         return _transcriber_instance
 
     logger.info(f"Initializing audio transcriber with provider: {provider}")
-
-    # Create appropriate transcriber based on provider
-    if provider == "faster-whisper":
-        _transcriber_instance = _create_faster_whisper_transcriber(settings)
-
-    elif provider == "openai-whisper":
-        _transcriber_instance = _create_openai_whisper_transcriber(settings)
-
-    elif provider == "openai-api":
-        _transcriber_instance = _create_openai_api_transcriber(settings)
-
-    else:
-        raise ValueError(
-            f"Unknown audio transcriber provider: {provider}. "
-            f"Supported providers: faster-whisper, openai-whisper, openai-api"
-        )
-
+    _transcriber_instance = _build_transcriber(provider, settings)
+    _transcriber_provider = provider
     logger.info(f"Audio transcriber initialized successfully with provider: {provider}")
-
     return _transcriber_instance
+
+
+def _build_transcriber(provider: str, settings) -> AudioTranscriber:
+    if provider == "faster-whisper":
+        return _create_faster_whisper_transcriber(settings)
+    if provider == "openai-whisper":
+        return _create_openai_whisper_transcriber(settings)
+    if provider == "openai-api":
+        return _create_openai_api_transcriber(settings)
+    raise ValueError(
+        f"Unknown audio transcriber provider: {provider}. "
+        f"Supported providers: faster-whisper, openai-whisper, openai-api"
+    )
 
 
 def _create_faster_whisper_transcriber(settings) -> AudioTranscriber:
@@ -167,7 +175,7 @@ def _create_on_best_device(create: Callable[[WhisperDevice], AudioTranscriber]) 
         return create(device)
     except Exception as e:
         # Only GPU problems disable the GPU; e.g. a model download error must not
-        if device.device != "cuda" or not is_gpu_error(e):
+        if not device.device.startswith("cuda") or not is_gpu_error(e):
             raise
         logger.error(f"Failed to load Whisper on GPU, falling back to CPU: {e}")
         return create(mark_gpu_unavailable(str(e)))
@@ -177,6 +185,7 @@ def transcribe_with_gpu_fallback(
     audio_path: Path,
     options: Optional[Dict[str, Any]] = None,
     force_provider: Optional[str] = None,
+    on_progress: Optional[ProgressCallback] = None,
 ) -> Tuple[Dict[str, Any], AudioTranscriber]:
     """
     Transcribe with the configured transcriber, retrying once on CPU if the GPU fails.
@@ -185,17 +194,19 @@ def transcribe_with_gpu_fallback(
     runs, not when it loads. In that case the GPU is marked unavailable for this
     worker process, the transcriber is rebuilt on CPU and the job is retried.
     """
+    # Only passed when asked for, so a transcriber on the older two-argument interface still works
+    progress_kwargs = {"on_progress": on_progress} if on_progress else {}
     transcriber = get_audio_transcriber(force_provider=force_provider)
     try:
-        result = transcriber.transcribe(audio_path, options)
+        result = transcriber.transcribe(audio_path, options, **progress_kwargs)
     except Exception as e:
-        if getattr(transcriber, "device", None) != "cuda" or not is_gpu_error(e):
+        if not str(getattr(transcriber, "device", "")).startswith("cuda") or not is_gpu_error(e):
             raise
         logger.error(f"Transcription failed on GPU, retrying on CPU: {e}")
         mark_gpu_unavailable(str(e))
         reset_audio_transcriber()
         transcriber = get_audio_transcriber(force_provider=force_provider)
-        result = transcriber.transcribe(audio_path, options)
+        result = transcriber.transcribe(audio_path, options, **progress_kwargs)
 
     result.setdefault("device", getattr(transcriber, "device", None) or "remote")
     return result, transcriber
@@ -208,8 +219,9 @@ def reset_audio_transcriber() -> None:
     Useful for testing or when you want to reload the transcriber
     with different configuration.
     """
-    global _transcriber_instance
+    global _transcriber_instance, _transcriber_provider
     _transcriber_instance = None
+    _transcriber_provider = None
     logger.info("Audio transcriber instance reset")
 
 

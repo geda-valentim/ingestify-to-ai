@@ -1,0 +1,35 @@
+# ---------------------------------------------------------------------------
+# Ingestify - worker-remote dependency set (spec 0003, slice 4a; OPT-IN)
+# ---------------------------------------------------------------------------
+# Only for the optional worker-remote service (compose profile `engines`,
+# docker/Dockerfile.remote). It runs no model: it waits on remote engines
+# (Modal), so it needs none of docling, torch, faster-whisper or PyAV - those
+# stay out of this image (~300 MB instead of several GB), and `modal` stays out
+# of every other image. tests/test_worker_remote_imports.py checks that the
+# modules worker-remote loads import without the heavy packages.
+#
+# Versions follow requirements-base.txt for everything shared with the other
+# services.
+# ---------------------------------------------------------------------------
+setuptools>=75.0.0
+celery==5.3.4
+redis==5.0.1
+pydantic>=2.9.0,<3.0.0
+pydantic-core>=2.23.0,<3.0.0
+pydantic-settings>=2.3.0,<3.0.0
+python-dotenv==1.0.0
+httpx[socks]>=0.27.0,<0.28
+requests>=2.32.2,<3.0.0
+sqlalchemy>=2.0.0,<3.0.0
+pymysql>=1.1.0
+cryptography>=43,<51
+bcrypt>=4.0.0
+elasticsearch>=8.11.0,<9.0.0
+minio>=7.2.0,<8.0.0
+
+# The Modal SDK and CLI, pinned: its surface (Client.from_credentials, client= on
+# Cls/Function/FunctionCall/Dict, Dict.put(skip_if_exists=...), the billing
+# report's JSON) is what gate T1 verifies
+modal==1.5.2
+# `scripts/engines.py modal-lock`: the hashed lock of the Modal image
+uv>=0.5

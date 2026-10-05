@@ -1,0 +1,23 @@
+# Inputs of the Modal Whisper image (spec 0003, slice 4a). Same versions as the
+# local GPU worker (worker-audio), so a lesson transcribed on either engine gives
+# the same text at the same precision (float16 on CUDA).
+#
+# The image installs requirements-whisper-modal.lock - every transitive pin WITH
+# sha256 hashes (pip --require-hashes --no-deps). Regenerate it after changing this
+# file, on a machine that can reach PyPI (it never talks to Modal):
+#
+#     python scripts/engines.py modal-lock
+#
+# which runs: uv pip compile requirements-whisper-modal.in --generate-hashes
+#             --python-version 3.13 --python-platform x86_64-manylinux_2_28
+faster-whisper==1.2.1
+ctranslate2==4.8.2
+# faster-whisper 1.2.x opens media with av.open(metadata_errors=...), which PyAV 19 removed
+av==18.1.0
+numpy==2.5.3
+onnxruntime==1.30.0
+tokenizers==0.23.2
+huggingface_hub==1.33.0
+# ctranslate2 4.x links the cu12 cuBLAS and cuDNN 9 layout (see docs/GPU.md)
+nvidia-cublas-cu12==12.9.1.4
+nvidia-cudnn-cu12==9.20.0.48

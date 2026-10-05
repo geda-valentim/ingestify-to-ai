@@ -1,0 +1,102 @@
+# ---------------------------------------------------------------------------
+# BASE dependency set - the shared package list. Do NOT install it directly.
+#
+# It names no index and no torch build on purpose, so the CPU and the CUDA sets
+# can both reuse it unchanged. torch is never named here either, but it arrives
+# transitively via docling -> docling-slim[standard] -> torch. Resolved from
+# plain PyPI that lands on the CUDA build and pulls ~1.66GB of nvidia-* wheels
+# onto a machine that may have no GPU - including, in the current resolution,
+# the `nvidia-cudnn-cu13` tree that breaks ctranslate2 / faster-whisper with
+# `Unable to load libcudnn_ops.so.9` (see requirements-cuda.txt).
+#
+# That is why this file is not the one called `requirements.txt`. Install one
+# of these instead - each configures a torch index and pins torch explicitly at
+# top level, so docling's transitive requirement can only resolve to that build
+# (the mechanism is spelled out in requirements-cpu.txt):
+#
+#   backend/requirements.txt               CPU - the default, an alias of below
+#   backend/requirements-cpu.txt           CPU only, explicit
+#   backend/requirements-vision.txt        CPU + Florence-2 vision extra
+#   backend/requirements-cuda.txt          NVIDIA GPU
+#   backend/requirements-vision-cuda.txt   NVIDIA GPU + Florence-2 vision extra
+#
+# See docs/GPU.md.
+# ---------------------------------------------------------------------------
+
+# Python 3.13+ compatibility - setuptools provides distutils
+setuptools>=75.0.0
+
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+celery==5.3.4
+redis==5.0.1
+# Pydantic - versões compatíveis com Docling 2.x
+pydantic>=2.9.0,<3.0.0
+pydantic-core>=2.23.0,<3.0.0
+pydantic-settings>=2.3.0,<3.0.0
+httpx[socks]>=0.27.0,<0.28  # SOCKS proxy support for crawler; 0.28 breaks starlette 0.27 TestClient
+python-multipart==0.0.6
+python-dotenv==1.0.0
+
+# Docling and dependencies (use latest compatible version)
+docling>=2.0.0,<3.0.0
+beautifulsoup4>=4.12.3,<5.0.0
+lxml>=5.0.0  # Fast HTML/XML parser for BeautifulSoup
+requests>=2.32.2,<3.0.0
+
+# PDF processing
+# qpdf instalado via apt-get nos Dockerfiles (usado para split)
+PyPDF2>=3.0.0  # Re-added for PDF merge functionality in crawler
+
+# Web Scraping - Crawler
+playwright>=1.40.0  # Browser automation for JS-heavy sites
+python-socks>=2.4.0  # SOCKS proxy protocol support
+
+# Google Drive integration
+google-api-python-client==2.108.0
+google-auth==2.25.2
+google-auth-oauthlib==1.1.0
+google-auth-httplib2==0.2.0
+
+# Dropbox integration
+dropbox==11.36.2
+
+# Logging
+structlog==23.2.0
+
+# Testing
+pytest==7.4.3
+pytest-asyncio==0.21.1
+pytest-cov==4.1.0
+fakeredis==2.26.2  # in-memory Redis for unit tests
+
+# Database (MySQL)
+sqlalchemy>=2.0.0,<3.0.0
+pymysql>=1.1.0
+alembic>=1.13.0
+
+# Crawler scheduling
+croniter>=2.0.0  # Cron expression parsing for recurring crawlers
+pytz>=2024.1     # Timezone handling for scheduled crawlers
+
+# Authentication & Security
+bcrypt>=4.0.0
+python-jose[cryptography]>=3.3.0
+# Engine credentials are sealed with X25519 + ChaCha20-Poly1305 (shared/engines/sealing.py)
+cryptography>=43,<51
+passlib[bcrypt]>=1.7.4
+
+# Elasticsearch
+elasticsearch>=8.11.0,<9.0.0
+
+# MinIO Object Storage
+minio>=7.2.0,<8.0.0
+
+# Audio transcription - multiple providers supported
+# Default: faster-whisper (recommended, 4-5x faster)
+faster-whisper>=1.0.0  # Recommended: Optimized Whisper using CTranslate2
+av<19  # faster-whisper 1.2.x opens media with av.open(metadata_errors=...), which PyAV 19 removed
+# openai-whisper>=20240930  # Fallback: Original OpenAI Whisper implementation (slow to compile)
+openai>=1.0.0  # Optional: For openai-api provider (cloud-based)
+pydub>=0.25.1  # Audio file handling and metadata extraction
+ffmpeg-python>=0.2.0  # Audio format conversion support

@@ -35,12 +35,13 @@ class OpenAIWhisperTranscriber(AudioTranscriber):
 
         Args:
             model_size: Model size ('tiny', 'base', 'small', 'medium', 'large', 'turbo')
-            device: Device to use ('cpu', 'cuda', or None for auto-detect)
+            device: Resolved device ('cpu', 'cuda' or 'cuda:N'), already
+                    decided by shared.device.resolve_whisper_device().
+                    None falls back to 'cpu'; do NOT auto-detect here.
             download_root: Directory to store downloaded models
         """
         try:
             import whisper
-            import torch
         except ImportError as e:
             logger.error(
                 "openai-whisper is not installed. "
@@ -51,7 +52,10 @@ class OpenAIWhisperTranscriber(AudioTranscriber):
             ) from e
 
         self.model_size = model_size
-        self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+        # The device arrives already resolved by shared.device.resolve_device().
+        # This class must not probe torch itself: there is exactly one CUDA
+        # probe in the codebase and it lives in shared/device.py.
+        self.device = device or "cpu"
 
         logger.info(
             f"Initializing OpenAI Whisper (model={model_size}, device={self.device})"
@@ -66,7 +70,12 @@ class OpenAIWhisperTranscriber(AudioTranscriber):
 
         logger.info(f"OpenAI Whisper model '{model_size}' loaded successfully")
 
-    def transcribe(self, audio_path: Path, options: Dict[str, Any] = None) -> Dict[str, Any]:
+    def transcribe(
+        self,
+        audio_path: Path,
+        options: Dict[str, Any] = None,
+        on_progress=None,  # whole-file result: no intermediate progress to report
+    ) -> Dict[str, Any]:
         """Transcribe audio file using OpenAI Whisper"""
         if options is None:
             options = {}

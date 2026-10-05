@@ -20,8 +20,14 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Depois (COM cache)
 RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install -r requirements.txt
+    pip install --index-url ${TORCH_INDEX_URL} --extra-index-url https://pypi.org/simple \
+                -r ${REQUIREMENTS_FILE}
 ```
+
+> `REQUIREMENTS_FILE` é um `ARG` (default `requirements-cpu.txt` na API,
+> `requirements-vision.txt` no worker) e o `COPY` traz `backend/requirements*.txt` inteiro,
+> porque esses arquivos se encadeiam via `-r` até `requirements-base.txt`. Ver
+> [docs/GPU.md](GPU.md).
 
 **Benefícios:**
 - ✅ Primeiro build: baixa tudo normalmente (~10 min)
@@ -47,6 +53,12 @@ export COMPOSE_DOCKER_CLI_BUILD=1
 ### 3. Docker Compose para Desenvolvimento
 
 Criado `docker-compose.dev.yml` com:
+
+> **Atualização (2026-10-04):** `docker-compose.dev.yml` não existe mais no repositório.
+> O `docker-compose.yml` base já monta o código (`./backend/api`, `./backend/shared`,
+> `./backend/workers`) como volumes, e `make dev` sobe o modo de desenvolvimento. Os
+> comandos com `-f docker-compose.dev.yml` abaixo são históricos. Perfis atuais: seção
+> "Perfis de deploy" de [README.md](README.md).
 - **Volumes montados**: código atualiza sem rebuild
 - **Hot-reload**: uvicorn e celery recarregam automaticamente
 - **Pool solo**: Celery usa pool solo para hot-reload funcionar
@@ -205,7 +217,7 @@ docker builder prune -af
 
 ### 2. Layers de Docker
 O Docker cacheia cada layer. Para máximo aproveitamento:
-- ✅ COPY requirements.txt ANTES de COPY código
+- ✅ COPY `backend/requirements*.txt` (o glob inteiro — os arquivos se encadeiam) ANTES de COPY código
 - ✅ Instale packages ANTES de copiar código
 - ✅ Agrupe comandos RUN relacionados
 
@@ -248,7 +260,7 @@ Mudança no código Python:
   Antes: 10 min (rebuild completo)
   Depois: 0 seg (hot-reload)
 
-Mudança em requirements.txt:
+Mudança em qualquer backend/requirements*.txt:
   Antes: 10 min (rebuild completo)
   Depois: 30 seg (reutiliza cache de alguns packages)
 ```

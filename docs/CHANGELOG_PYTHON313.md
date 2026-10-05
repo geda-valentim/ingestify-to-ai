@@ -2,6 +2,13 @@
 
 ## Date: 2025-10-19
 
+> **Later note (2026-08-26):** the `setuptools>=75.0.0` pin described below has since moved,
+> together with the rest of the shared package list, from `backend/requirements.txt` to
+> [`backend/requirements-base.txt`](../backend/requirements-base.txt). `backend/requirements.txt`
+> is now a one-line alias for the CPU dependency set, so every `pip install -r
+> backend/requirements.txt` in this file still does the right thing — it just reaches the pin
+> through one more `-r`. See [docs/GPU.md](GPU.md) for the file layout.
+
 ## Summary
 
 Updated Ingestify to support Python 3.13 and later versions by adding `setuptools` for `distutils` compatibility.

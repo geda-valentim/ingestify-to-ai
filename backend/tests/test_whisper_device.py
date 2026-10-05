@@ -21,7 +21,7 @@ def config(monkeypatch):
     from shared.config import get_settings
     settings = get_settings()
 
-    def set_config(device="auto", compute_type="auto"):
+    def set_config(device="", compute_type=""):
         monkeypatch.setattr(settings, "whisper_device", device)
         monkeypatch.setattr(settings, "whisper_compute_type", compute_type)
     set_config()
@@ -30,14 +30,22 @@ def config(monkeypatch):
 
 @pytest.fixture
 def gpus(monkeypatch):
+    """Fake what shared.device resolves to; each call is one detection."""
+    import shared.device as shared_device
+    from shared.config import get_settings
     calls = []
+    state = {"count": 0}
+
+    def fake_resolve():
+        calls.append(1)
+        requested = get_settings().whisper_device or "auto"
+        if requested != "auto":
+            return requested
+        return "cuda" if state["count"] > 0 else "cpu"
 
     def set_count(count):
-        def fake_count():
-            calls.append(1)
-            return count
-        monkeypatch.setattr(device_module, "_cuda_device_count", fake_count)
-    set_count(0)
+        state["count"] = count
+    monkeypatch.setattr(shared_device, "resolve_whisper_device", fake_resolve)
     return set_count, calls
 
 
@@ -61,11 +69,11 @@ def test_detection_runs_only_once(config, gpus):
     assert len(calls) == 1
 
 
-def test_forced_device_skips_detection(config, gpus):
-    _, calls = gpus
+def test_forced_device_is_respected(config, gpus):
+    set_count, _ = gpus
+    set_count(1)
     config(device="cpu")
     assert device_module.get_whisper_device().device == "cpu"
-    assert calls == []
 
 
 def test_explicit_compute_type_is_respected(config, gpus):

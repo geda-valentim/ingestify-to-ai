@@ -1,4 +1,5 @@
 import os
+from functools import lru_cache
 from pathlib import Path
 from typing import Dict, Any
 import logging
@@ -45,6 +46,15 @@ class DoclingConverter:
             pipeline_options.do_table_structure = enable_table_structure  # Disable if no tables
             pipeline_options.generate_picture_images = enable_images  # Disable image extraction for speed
 
+            # Pin the accelerator explicitly. Docling's own default is
+            # device="auto", which resolves to cuda:0 whenever a GPU is visible
+            # -- in every worker process at once, each with its own CUDA context
+            # and layout/table weights, and with nothing logged. Passing the
+            # value here makes the decision ours and visible; note that a
+            # pydantic-settings init kwarg outranks the environment, so
+            # DOCLING_DEVICE is ignored from now on in favour of DEVICE.
+            self._apply_accelerator_options(pipeline_options)
+
             # Use optimized PDF backend if available
             if backend:
                 self.converter = DocumentConverter(
@@ -69,6 +79,49 @@ class DoclingConverter:
         except ImportError as e:
             logger.error(f"Failed to import Docling: {e}")
             self.converter = None
+
+    @staticmethod
+    def _apply_accelerator_options(pipeline_options) -> None:
+        """
+        Set pipeline_options.accelerator_options from DEVICE / DOCLING_NUM_THREADS.
+
+        Logged once per converter construction: the resolved device is the one
+        piece of information missing from every "Failed to convert document"
+        report today.
+
+        A *docling* failure here must never stop the conversion: an older
+        docling that does not expose AcceleratorOptions still converts, it just
+        keeps its own device default. A DEVICE misconfiguration is different and
+        is deliberately NOT swallowed -- an explicit DEVICE=cuda that cannot be
+        satisfied is a hard error, never a silent downgrade.
+        """
+        from shared.config import get_settings
+        from shared.device import resolve_docling_device
+
+        settings = get_settings()
+        num_threads = settings.docling_num_threads
+        device = resolve_docling_device()  # may raise DeviceUnavailableError
+
+        try:
+            try:
+                from docling.datamodel.accelerator_options import AcceleratorOptions
+            except ImportError:
+                # Older docling re-exports it from pipeline_options.
+                from docling.datamodel.pipeline_options import AcceleratorOptions
+
+            pipeline_options.accelerator_options = AcceleratorOptions(
+                device=device,
+                num_threads=num_threads,
+            )
+            logger.info(
+                "Docling accelerator: device=%s num_threads=%s", device, num_threads
+            )
+        except Exception as e:
+            logger.warning(
+                "Could not set docling accelerator options (%s); "
+                "docling will use its own device default",
+                e,
+            )
 
     def detect_format(self, file_path: Path) -> str:
         """Detect document format from file extension"""
@@ -219,7 +272,15 @@ def get_converter(preset: str = None) -> DoclingConverter:
         enable_images = settings.docling_enable_images
         enable_table_structure = settings.docling_enable_table_structure
 
-    # Always create new instance for different presets
+    return _cached_converter(enable_ocr, enable_table_structure, enable_images)
+
+
+# One converter per option set and process: building one loads docling's layout
+# and table models (onto the GPU when DEVICE=cuda), so a fresh instance per task
+# reloaded the weights for every page. Two slots cover a preset plus the default
+# without letting every combination pile up in VRAM.
+@lru_cache(maxsize=2)
+def _cached_converter(enable_ocr: bool, enable_table_structure: bool, enable_images: bool) -> DoclingConverter:
     return DoclingConverter(
         enable_ocr=enable_ocr,
         enable_table_structure=enable_table_structure,

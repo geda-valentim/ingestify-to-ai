@@ -69,7 +69,7 @@ def backend(monkeypatch):
 
 
 def get_result(fmt=None):
-    return asyncio.run(routes.get_job_result(JOB_ID, format_=fmt, current_user=USER, db=FakeDB()))
+    return asyncio.run(routes.get_job_result(JOB_ID, format_=fmt, current_user=USER, owned_job=None, db=FakeDB()))
 
 
 def test_vtt_from_redis(backend):

@@ -1,9 +1,20 @@
+import sys
 from logging.config import fileConfig
+from pathlib import Path
 
 from sqlalchemy import engine_from_config
 from sqlalchemy import pool
 
 from alembic import context
+
+# backend/ is the import root - its modules import each other as `shared.*`.
+BACKEND_ROOT = Path(__file__).resolve().parent.parent / "backend"
+if str(BACKEND_ROOT) not in sys.path:
+    sys.path.insert(0, str(BACKEND_ROOT))
+
+from shared.config import get_settings  # noqa: E402
+from shared.database import Base  # noqa: E402
+import shared.models  # noqa: E402,F401  (registers every table on Base.metadata)
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
@@ -14,11 +25,13 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# add your model's MetaData object here
-# for 'autogenerate' support
-# from myapp import mymodel
-# target_metadata = mymodel.Base.metadata
-target_metadata = None
+# The single source of truth for the schema, so `alembic revision --autogenerate`
+# can diff the models against the live database.
+target_metadata = Base.metadata
+
+# alembic.ini ships a placeholder URL; the real one comes from the same settings
+# the application uses, so migrations can never target a different database.
+config.set_main_option("sqlalchemy.url", get_settings().database_url)
 
 # other values from the config, defined by the needs of env.py,
 # can be acquired:
