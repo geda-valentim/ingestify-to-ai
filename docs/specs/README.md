@@ -75,5 +75,6 @@ Rascunho ──▶ Em revisão ──▶ Aprovada ──▶ Implementada
 | 0001 | [Remover as camadas de Clean Architecture não utilizadas](0001-remover-clean-architecture-morta.md) | Implementada | 2026-08-26 |
 | 0002 | [Dispositivo único (`DEVICE`) e a migração do Whisper para CPU→CUDA](0002-dispositivo-unico-e-migracao-do-whisper.md) | Implementada | 2026-08-26 |
 | 0003 | [Motores de execução: roteamento por feature com orçamento (local + Modal)](0003-motores-de-execucao-roteamento-e-orcamento.md) | Em revisão | 2026-10-04 |
+| 0004 | [Projetos e pastas: o Ingestify como portal de ingestão](0004-projects-and-folders.md) | Rascunho | 2026-10-01 |
 
 <!-- Adicione uma linha aqui ao criar cada spec. -->

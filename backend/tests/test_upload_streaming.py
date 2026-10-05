@@ -10,6 +10,7 @@ from fastapi import HTTPException, UploadFile
 
 import workers.celery_app  # noqa: F401  (import order used by the worker; avoids a circular import)
 from api import routes
+from api.projects_api import UploadLocation
 from workers import tasks
 
 USER = SimpleNamespace(id="user-1", username="alice")
@@ -69,6 +70,14 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr(routes, "get_redis_client", lambda: FakeRedis())
     monkeypatch.setattr(routes, "get_minio_client", lambda: minio)
     monkeypatch.setattr(tasks.process_conversion, "delay", lambda **kwargs: enqueued.append(kwargs))
+    # Project resolution has its own tests (test_upload_projects.py); here every
+    # upload goes to one project and dedup only asks the fake database.
+    location = UploadLocation(project=SimpleNamespace(id="project-1", name="Docs"))
+    monkeypatch.setattr(routes, "prepare_upload_location", lambda *args: "plan")
+    monkeypatch.setattr(routes, "resolve_upload_location", lambda *args: location)
+    monkeypatch.setattr(routes, "find_duplicate_job",
+                        lambda db, user_id, checksum, loc: (db.query(None).filter().first(), None))
+    monkeypatch.setattr(routes, "existing_job_location", lambda db, job, loc: {})
     return SimpleNamespace(tmp=tmp_path, minio=minio, enqueued=enqueued)
 
 

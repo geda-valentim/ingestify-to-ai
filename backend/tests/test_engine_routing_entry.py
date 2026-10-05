@@ -18,6 +18,7 @@ from fastapi import HTTPException, UploadFile
 
 from api import routes
 from api import routing_admin_routes as admin
+from api.projects_api import LocationFields
 from shared.engines import dispatch, ledger, routing
 from shared.models import AdminAudit, EngineUsage, FeatureRoute, Job, JobDispatch, JobStatus, User
 from workers import tasks
@@ -65,7 +66,9 @@ def transcribe(world, user_id=ALICE, name="aula.mp3"):
     try:
         return asyncio.run(routes.transcribe_audio(
             file=upload(name), name=None, tags=None, language="pt", include_timestamps=True,
-            include_word_timestamps=False, output_format="markdown", purge_source=False, current_user=who, db=db))
+            include_word_timestamps=False, output_format="markdown", purge_source=False,
+            location=LocationFields(project="Engines"),
+            current_user=who, db=db))
     finally:
         db.close()
 
@@ -74,7 +77,8 @@ def upload_endpoint(world, name="aula.mp3", content_type="audio/mpeg"):
     db, who = user(world, ALICE)
     try:
         return asyncio.run(routes.upload_and_convert(file=upload(name, content_type=content_type), name=None,
-                                                     tags=None, docling_preset="fast", current_user=who, db=db))
+                                                     tags=None, docling_preset="fast",
+                                                     location=LocationFields(project="Engines"), current_user=who, db=db))
     finally:
         db.close()
 
@@ -83,7 +87,8 @@ def convert_endpoint(world, name="aula.mp3"):
     db, who = user(world, ALICE)
     try:
         return asyncio.run(routes.convert_document(source_type="file", source=None, file=upload(name), name=None,
-                                                   tags=None, authorization=None, current_user=who, db=db))
+                                                   tags=None, authorization=None,
+                                                   location=LocationFields(project="Engines"), current_user=who, db=db))
     finally:
         db.close()
 
@@ -184,6 +189,21 @@ def test_with_a_route_transcribe_joins_the_backlog(world):
     [probe_call] = world.celery.named(dispatch.PROBE_TASK)
     assert probe_call.args == [dispatch_id] and probe_call.queue == "ingestify-dispatch"
     assert world.count(EngineUsage) == 0
+
+
+def test_a_routed_job_keeps_its_project_and_the_backlog_never_carries_it(world):
+    # Spec 0004 x spec 0003: the location lives on the MAIN job row, written before
+    # dispatch.submit; the allowlisted backlog payload stays free of it.
+    world.set_route([LOCAL])
+    world.dispatcher_alive()
+    response = transcribe(world)
+
+    assert response.project.name == "Engines"
+    with world.Session() as db:
+        job = db.get(Job, str(response.job_id))
+        assert job.project_id == response.project.id and job.folder_id is None
+        d = db.query(JobDispatch).one()
+        assert "project" not in repr(d.payload) and job.project_id not in repr(d.payload)
 
 
 def test_admins_items_may_go_remote(world):

@@ -20,6 +20,7 @@ const LANG_STORAGE_KEY = "docs-lang";
 
 // Real responses, captured from a run of the transcription flow on this stack.
 const EXAMPLE_JOB_ID = "7186e44b-3098-4590-9b5f-a29e9991e4e7";
+const EXAMPLE_PROJECT_ID = "3f2b9c1e-5a7d-4e8b-9c0a-1d2e3f4a5b6c";
 
 /**
  * Language of the page: `?lang=` wins (shareable links), then the last choice,
@@ -151,13 +152,34 @@ function samples(lang: Lang) {
   const pt = lang === "pt";
   const key = pt ? "SUA_CHAVE" : "YOUR_KEY";
   const file = pt ? "reuniao.mp3" : "meeting.mp3";
+  const project = pt ? "Aulas" : "Lessons";
 
   return {
     curlCreate: `curl -X POST ${API_URL}/transcribe \\
   -H "X-API-Key: ${key}" \\
   -F "file=@${file}" \\
+  -F "project=${project}" \\
   -F "language=pt" \\
   -F "output_format=vtt"`,
+
+    curlProject: `# ${pt ? "Projeto e pasta por nome: criados se ainda não existirem" : "Project and folder by name: created if they do not exist yet"}
+curl -X POST ${API_URL}/transcribe \\
+  -H "X-API-Key: ${key}" \\
+  -F "file=@${file}" \\
+  -F "project=${pt ? "Cliente X" : "Client X"}" \\
+  -F "folder=${pt ? "Reuniões" : "Meetings"}"
+
+# ${pt ? "Projeto existente por ID (nunca cria)" : "An existing project by ID (never creates)"}
+curl -X POST ${API_URL}/upload \\
+  -H "X-API-Key: ${key}" \\
+  -F "file=@${pt ? "contrato.pdf" : "contract.pdf"}" \\
+  -F "project_id=${EXAMPLE_PROJECT_ID}"
+
+# ${pt ? "Seus projetos, pastas e contagens" : "Your projects, folders and counts"}
+curl "${API_URL}/projects?include=folders" -H "X-API-Key: ${key}"
+
+# ${pt ? "Jobs de um projeto; folder_id=root = os que estão fora de pastas" : "Jobs of one project; folder_id=root = those in no folder"}
+curl "${API_URL}/jobs?project_id=${EXAMPLE_PROJECT_ID}&folder_id=root" -H "X-API-Key: ${key}"`,
 
     curlStatus: `curl ${API_URL}/jobs/${EXAMPLE_JOB_ID} \\
   -H "X-API-Key: ${key}"`,
@@ -187,7 +209,7 @@ with open("${file}", "rb") as f:
         f"{API}/transcribe",
         headers=HEADERS,
         files={"file": f},
-        data={"language": "pt", "output_format": "vtt"},
+        data={"project": "${project}", "language": "pt", "output_format": "vtt"},
     )
 r.raise_for_status()
 job_id = r.json()["job_id"]
@@ -216,6 +238,7 @@ const headers = { "X-API-Key": "${key}" };
 // 1. ${pt ? "Envia o arquivo (em Node 18+, use fs.openAsBlob para ler do disco)" : "Upload the file (on Node 18+, use fs.openAsBlob to read it from disk)"}
 const form = new FormData();
 form.append("file", ${pt ? "arquivo" : "file"}); // ${pt ? "um File/Blob, ex.: de um <input type=\"file\">" : "a File/Blob, e.g. from an <input type=\"file\">"}
+form.append("project", "${project}");
 form.append("language", "pt");
 form.append("output_format", "vtt");
 
@@ -243,7 +266,14 @@ const RESPONSES = {
   "job_id": "${EXAMPLE_JOB_ID}",
   "status": "queued",
   "created_at": "2026-09-25T18:32:29.301477",
-  "message": "Job de transcrição de áudio enfileirado para processamento"
+  "message": "Job de transcrição de áudio enfileirado para processamento",
+  "project": { "id": "${EXAMPLE_PROJECT_ID}", "name": "Aulas", "created": false, "source": "request" },
+  "folder": null
+}`,
+  projectRequired: `HTTP/1.1 422 Unprocessable Entity
+
+{
+  "detail": "Informe o projeto do upload: campo 'project' (nome; é criado se não existir) ou\\n'project_id'. Exemplo: curl -H \\"X-API-Key: ...\\" -F \\"file=@arquivo.mp3\\" -F \\"project=Aulas\\" .../transcribe\\nPara não precisar enviar o projeto, vincule a API key a um projeto em /api-keys."
 }`,
   status: `{
   "job_id": "${EXAMPLE_JOB_ID}",
@@ -328,6 +358,7 @@ const COPY = {
     sections: {
       intro: "Introdução",
       auth: "Autenticação",
+      projects: "Projetos e pastas",
       transcribe: "Transcrição de áudio e vídeo",
       status: "Acompanhar o job",
       live: "Legendas ao vivo",
@@ -369,6 +400,43 @@ const COPY = {
         <C>job_id</C> de outra pessoa responde <C>404</C>.
       </P>
     ),
+    projectsIntro: (
+      <P>
+        Todo job pertence a exatamente um <strong>projeto</strong> seu e, opcionalmente, a uma{" "}
+        <strong>pasta</strong> desse projeto (um nível só). O projeto é obrigatório em todo upload (
+        <C>/upload</C>, <C>/convert</C>, <C>/transcribe</C>, <C>/images/…</C>); a pasta, não.
+      </P>
+    ),
+    projectsHead: ["Campo", "Significado"],
+    projectsRows: [
+      [<C key="p">project</C>, "Nome do projeto. Se não existir, é criado (get-or-add)."],
+      [<C key="pi">project_id</C>, "ID de um projeto existente. Nunca cria. Não pode vir junto com project."],
+      [<C key="f">folder</C>, "Nome da pasta dentro do projeto. Se não existir, é criada. Não pode conter “/”."],
+      [<C key="fi">folder_id</C>, "ID de uma pasta existente; precisa ser do projeto do upload."],
+    ],
+    projectsResolution: (
+      <P>
+        O projeto vem do request (<C>project</C> ou <C>project_id</C>). Se o request não diz, vale o projeto
+        vinculado à API key usada (veja <A href="/api-keys">API Keys</A>). Sem nenhum dos dois, a API responde{" "}
+        <C>422</C> e nada é gravado:
+      </P>
+    ),
+    projectsNormalization: (
+      <P small>
+        Nomes são comparados sem diferenciar maiúsculas, espaços repetidos e acentos sobre letras latinas:{" "}
+        <C>reuniao   SEMANAL</C> cai no projeto “Reunião Semanal”. Outros alfabetos não são alterados. Até 100
+        caracteres.
+      </P>
+    ),
+    projectsPrecedence: (
+      <P small>
+        Com <C>Authorization: Bearer</C> e <C>X-API-Key</C> no mesmo request, vale o token, e o projeto
+        vinculado à key não é usado. Arquivos repetidos só são reaproveitados dentro do mesmo projeto: o mesmo
+        arquivo enviado a outro projeto é processado de novo.
+      </P>
+    ),
+    projectsExampleTitle: "Exemplos",
+    projectsRequiredTitle: "Upload sem projeto — 422",
     transcribeIntro: (
       <P>
         Transcreve a fala de um áudio ou vídeo (Whisper). Do vídeo, só a faixa de áudio é usada. A resposta
@@ -381,6 +449,30 @@ const COPY = {
     paramsHead: ["Campo", "Tipo", "Padrão", "Descrição"],
     paramsRows: [
       [<C key="f">file</C>, "arquivo", <em key="r">obrigatório</em>, "O áudio ou vídeo."],
+      [
+        <span key="p">
+          <C>project</C> ou <C>project_id</C>
+        </span>,
+        "texto / uuid",
+        <span key="r">
+          <em>obrigatório</em>, salvo key vinculada
+        </span>,
+        <span key="d">
+          Projeto do job, por nome (criado se não existir) ou por ID. Veja{" "}
+          <a href="#projetos" className="text-primary underline-offset-4 hover:underline">
+            Projetos e pastas
+          </a>
+          .
+        </span>,
+      ],
+      [
+        <span key="p">
+          <C>folder</C> ou <C>folder_id</C>
+        </span>,
+        "texto / uuid",
+        "nenhuma",
+        "Pasta dentro do projeto, por nome (criada se não existir) ou por ID.",
+      ],
       [<C key="n">name</C>, "texto", "nome do arquivo", "Nome para identificar o job na lista."],
       [
         <C key="tg">tags</C>,
@@ -444,7 +536,7 @@ const COPY = {
     duplicate: (
       <>
         <strong className="text-foreground">Arquivo repetido:</strong> se você já enviou exatamente o mesmo
-        arquivo, nenhum job novo é criado. A resposta traz o <C>job_id</C> do job existente (com{" "}
+        arquivo <em>para o mesmo projeto</em>, nenhum job novo é criado. A resposta traz o <C>job_id</C> do job existente (com{" "}
         <C>status: &quot;queued&quot;</C> e uma mensagem avisando). Consulte o status dele normalmente — pode já
         estar concluído. O <C>output_format</C> do novo envio passa a valer para esse job.
       </>
@@ -516,9 +608,9 @@ const COPY = {
     errors: {
       "401": "Sem credencial, chave inválida ou token expirado.",
       "400": "Arquivo vazio; ou, em /result, o job ainda está em processamento.",
-      "404": "Job inexistente, de outro usuário, ou formato pedido indisponível (ex.: ?format=vtt num job de documento).",
+      "404": "Job, projeto ou pasta inexistente ou de outro usuário, ou formato pedido indisponível (ex.: ?format=vtt num job de documento).",
       "413": "Arquivo acima do limite de tamanho.",
-      "422": "Formato de arquivo não suportado, ou output_format/format inválido.",
+      "422": "Formato de arquivo não suportado, output_format/format inválido, upload sem projeto, ou nome de projeto/pasta inválido.",
       "500": "Em /result: o job falhou (o motivo vem em detail).",
       "503": "Transcrição desabilitada no servidor ou workers indisponíveis.",
     },
@@ -531,6 +623,7 @@ const COPY = {
     sections: {
       intro: "Introduction",
       auth: "Authentication",
+      projects: "Projects and folders",
       transcribe: "Audio and video transcription",
       status: "Track the job",
       live: "Live transcript",
@@ -572,6 +665,42 @@ const COPY = {
         person&apos;s <C>job_id</C> answers <C>404</C>.
       </P>
     ),
+    projectsIntro: (
+      <P>
+        Every job belongs to exactly one of your <strong>projects</strong> and, optionally, to a{" "}
+        <strong>folder</strong> in that project (one level only). The project is required on every upload (
+        <C>/upload</C>, <C>/convert</C>, <C>/transcribe</C>, <C>/images/…</C>); the folder is not.
+      </P>
+    ),
+    projectsHead: ["Field", "Meaning"],
+    projectsRows: [
+      [<C key="p">project</C>, "Project name. Created if it does not exist (get-or-add)."],
+      [<C key="pi">project_id</C>, "ID of an existing project. Never creates. Not allowed together with project."],
+      [<C key="f">folder</C>, "Folder name inside the project. Created if it does not exist. Cannot contain “/”."],
+      [<C key="fi">folder_id</C>, "ID of an existing folder; it must belong to the upload's project."],
+    ],
+    projectsResolution: (
+      <P>
+        The project comes from the request (<C>project</C> or <C>project_id</C>). When the request names none,
+        the project bound to the API key is used (see <A href="/api-keys">API Keys</A>). With neither, the API
+        answers <C>422</C> and nothing is stored:
+      </P>
+    ),
+    projectsNormalization: (
+      <P small>
+        Names are matched ignoring case, repeated spaces and accents on Latin letters: <C>reuniao   SEMANAL</C>{" "}
+        lands in the “Reunião Semanal” project. Other scripts are left as they are. Up to 100 characters.
+      </P>
+    ),
+    projectsPrecedence: (
+      <P small>
+        With both <C>Authorization: Bearer</C> and <C>X-API-Key</C> on one request, the token wins and the
+        key&apos;s project is not used. Repeated files are only reused within the same project: the same file
+        sent to another project is processed again.
+      </P>
+    ),
+    projectsExampleTitle: "Examples",
+    projectsRequiredTitle: "Upload with no project — 422",
     transcribeIntro: (
       <P>
         Transcribes the speech in an audio or video file (Whisper). For video, only the audio track is used. The
@@ -584,6 +713,30 @@ const COPY = {
     paramsHead: ["Field", "Type", "Default", "Description"],
     paramsRows: [
       [<C key="f">file</C>, "file", <em key="r">required</em>, "The audio or video."],
+      [
+        <span key="p">
+          <C>project</C> or <C>project_id</C>
+        </span>,
+        "string / uuid",
+        <span key="r">
+          <em>required</em>, unless the key is bound
+        </span>,
+        <span key="d">
+          The job&apos;s project, by name (created if new) or by ID. See{" "}
+          <a href="#projetos" className="text-primary underline-offset-4 hover:underline">
+            Projects and folders
+          </a>
+          .
+        </span>,
+      ],
+      [
+        <span key="p">
+          <C>folder</C> or <C>folder_id</C>
+        </span>,
+        "string / uuid",
+        "none",
+        "A folder inside the project, by name (created if new) or by ID.",
+      ],
       [<C key="n">name</C>, "string", "file name", "Name that identifies the job in your list."],
       [
         <C key="tg">tags</C>,
@@ -645,8 +798,8 @@ const COPY = {
     responseTitle: "Response — 200",
     duplicate: (
       <>
-        <strong className="text-foreground">Repeated file:</strong> if you already uploaded the exact same file,
-        no new job is created. The response carries the existing job&apos;s <C>job_id</C> (with{" "}
+        <strong className="text-foreground">Repeated file:</strong> if you already uploaded the exact same file{" "}
+        <em>to the same project</em>, no new job is created. The response carries the existing job&apos;s <C>job_id</C> (with{" "}
         <C>status: &quot;queued&quot;</C> and a message saying so). Check its status as usual — it may already be
         done. The <C>output_format</C> of the new request becomes that job&apos;s default.
       </>
@@ -716,9 +869,9 @@ const COPY = {
     errors: {
       "401": "No credentials, invalid key or expired token.",
       "400": "Empty file; or, on /result, the job is still processing.",
-      "404": "Job doesn't exist, belongs to another user, or the requested format isn't available (e.g. ?format=vtt on a document job).",
+      "404": "Job, project or folder doesn't exist or belongs to another user, or the requested format isn't available (e.g. ?format=vtt on a document job).",
       "413": "File above the size limit.",
-      "422": "Unsupported file type, or invalid output_format/format.",
+      "422": "Unsupported file type, invalid output_format/format, an upload with no project, or an invalid project/folder name.",
       "500": "On /result: the job failed (the reason is in detail).",
       "503": "Transcription disabled on the server, or no workers available.",
     },
@@ -763,6 +916,7 @@ export default function DocsPage() {
   const sections = [
     { id: "introducao", label: t.sections.intro },
     { id: "autenticacao", label: t.sections.auth },
+    { id: "projetos", label: t.sections.projects },
     { id: "transcribe", label: t.sections.transcribe },
     { id: "transcribe-status", label: t.sections.status },
     { id: "transcribe-live", label: t.sections.live },
@@ -820,6 +974,18 @@ export default function DocsPage() {
               {t.authIntro}
               <Table head={t.authHead} rows={t.authRows} />
               {t.authNote}
+            </Section>
+
+            <Section id="projetos" title={t.sections.projects}>
+              {t.projectsIntro}
+              <Table head={t.projectsHead} rows={t.projectsRows} />
+              {t.projectsResolution}
+              <H3>{t.projectsRequiredTitle}</H3>
+              {block(RESPONSES.projectRequired)}
+              {t.projectsNormalization}
+              {t.projectsPrecedence}
+              <H3>{t.projectsExampleTitle}</H3>
+              {block(code.curlProject)}
             </Section>
 
             <Section id="transcribe" title={t.sections.transcribe}>
