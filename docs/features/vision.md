@@ -1,6 +1,6 @@
 # Visão: descrição de imagem e OCR (Florence-2)
 
-> Verificado contra o código em 2026-10-04. Fonte da verdade:
+> Verificado contra o código em 2026-10-05 (branch `main`). Fonte da verdade:
 > [backend/api/image_routes.py](../../backend/api/image_routes.py),
 > [backend/workers/vision_tasks.py](../../backend/workers/vision_tasks.py),
 > [backend/workers/vision/](../../backend/workers/vision/),
@@ -17,43 +17,95 @@ Recebe uma imagem e devolve, **na mesma requisição** (síncrono, com prazo):
 - **ocr** — o texto da imagem e, por linha, o quadrilátero (`quad_box`, 8 valores) e o
   retângulo (`bbox`, 4 valores) em pixels da imagem original (`<OCR_WITH_REGION>`).
 
-Não há UI no frontend para estes endpoints; o uso é via API.
+Não há formulário de inferência no frontend; o uso é via API. O guia bilíngue de uso
+está no frontend em `/docs#imagens`.
 
 ## Como usar
 
-Todos exigem autenticação (JWT ou API key).
+Todos exigem autenticação (JWT ou API key). Cada inferência precisa de um projeto:
+`project` (nome; criado se não existir) ou `project_id` (ID existente), salvo uma API key
+vinculada a projeto. `folder` / `folder_id` são opcionais. Não combine nome e ID do mesmo
+recurso; pasta deve pertencer ao projeto; IDs alheios respondem `404`. Com JWT e key
+juntos, vale o JWT e a vinculação da key não é usada. Imagens repetidas criam novos jobs;
+não há deduplicação nessas rotas.
 
 | Método e caminho | Entrada |
 |---|---|
-| `POST /images/describe` | JSON `{image_base64, filename?, task?, tags?}` |
-| `POST /images/describe/upload` | multipart `file`, `task?`, `tags?` |
-| `POST /images/ocr` | JSON `{image_base64, filename?, tags?}` |
-| `POST /images/ocr/upload` | multipart `file`, `tags?` |
+| `POST /images/describe` | JSON `{image_base64, project?, project_id?, folder?, folder_id?, filename?, task?, tags?}` |
+| `POST /images/describe/upload` | multipart `file`, localização, `task?`, `tags?` |
+| `POST /images/ocr` | JSON `{image_base64, project?, project_id?, folder?, folder_id?, filename?, tags?}` |
+| `POST /images/ocr/upload` | multipart `file`, localização, `tags?` |
 | `GET /images/capabilities` | — (estado do subsistema; ver abaixo) |
 
-- `image_base64` aceita o prefixo `data:image/...;base64,`.
+- `image_base64` aceita o prefixo `data:image/...;base64,` e quebras de linha.
 - `task` padrão: `<MORE_DETAILED_CAPTION>` (configurável por `VISION_CAPTION_TASK`).
+  Só aceita as três tarefas de descrição acima; não é um campo de prompt livre. OCR
+  sempre usa `<OCR_WITH_REGION>` e não recebe `task`.
+- `tags` é uma lista no JSON e texto separado por vírgula no multipart.
 - Formatos aceitos (detectados pelos *magic bytes*, não pela extensão): PNG, JPEG, WEBP,
   BMP, GIF, TIFF.
+- Limites padrão: 10 MB da imagem decodificada e 50 milhões de pixels.
 
 ```bash
 curl -X POST http://localhost:8000/images/describe/upload \
-  -H "X-API-Key: $INGESTIFY_API_KEY" -F "file=@foto.jpg" -F "task=<CAPTION>"
+  -H "X-API-Key: $INGESTIFY_API_KEY" \
+  -F "file=@foto.jpg" -F "project=Documentos" \
+  --form-string "task=<CAPTION>"
 
-curl -X POST http://localhost:8000/images/ocr \
-  -H "X-API-Key: $INGESTIFY_API_KEY" -H "Content-Type: application/json" \
-  -d "{\"image_base64\": \"$(base64 -w0 recibo.png)\"}"
+curl -X POST http://localhost:8000/images/ocr/upload \
+  -H "X-API-Key: $INGESTIFY_API_KEY" \
+  -F "file=@recibo.png" -F "project=Documentos" -F "folder=Recibos"
+```
+
+Use `--form-string` para os tokens `<…>`: o `-F` do curl interpreta um valor começando
+em `<` como leitura de arquivo. Exemplo JSON em Python (sem limite de argumentos do shell):
+
+```python
+import base64
+import requests
+
+with open("recibo.png", "rb") as file:
+    image = base64.b64encode(file.read()).decode("ascii")
+
+response = requests.post(
+    "http://localhost:8000/images/ocr",
+    headers={"X-API-Key": "SUA_CHAVE"},
+    json={"image_base64": image, "filename": "recibo.png",
+          "project": "Documentos", "folder": "Recibos", "tags": ["ocr"]},
+    timeout=75,
+)
+response.raise_for_status()
+print(response.json()["text"])
 ```
 
 Resposta comum: `job_id`, `status: "completed"`, `image_base64` (eco byte a byte da imagem
 enviada), `image_mime_type`, `image_bytes`, `image_sha256`, `width`, `height`,
-`model {model_id, revision, device, dtype}`, `duration_ms`; mais `description` e `task`
+`model {model_id, revision, device, dtype}`, `duration_ms`, `project` e `folder`; mais `description` e `task`
 (describe) ou `text` e `lines[]` (ocr). Imagem sem texto no OCR é `200` com `text: ""` e
 `lines: []`.
 
+`duration_ms` é o tempo reportado pelo worker; não inclui necessariamente fila, upload
+e resposta HTTP. Exemplo ilustrativo dos campos de OCR (os demais campos comuns foram
+omitidos):
+
+```json
+{
+  "text": "TOTAL 42.00",
+  "lines": [{
+    "text": "TOTAL 42.00",
+    "quad_box": [12, 20, 180, 20, 180, 40, 12, 40],
+    "bbox": [12, 20, 180, 40]
+  }]
+}
+```
+
+`quad_box` contém `[x1,y1,x2,y2,x3,y3,x4,y4]`; `bbox` contém
+`[x_min,y_min,x_max,y_max]`, ambos em pixels absolutos da imagem original.
+
 ### Erros
 
-Formato `{"detail": {"error_code", "message", ...}}`.
+Erros produzidos pela rota usam `{"detail": {"error_code", "message", "job_id", ...}}`.
+Erros de autenticação, tags e validação Pydantic podem usar outro formato de `detail`.
 
 | HTTP | `error_code` | Quando |
 |---|---|---|
@@ -61,8 +113,24 @@ Formato `{"detail": {"error_code", "message", ...}}`.
 | 422 | `IMAGE_TOO_LARGE` | Mais pixels que `VISION_MAX_IMAGE_PIXELS` (proteção contra bomba de descompressão). |
 | 422 | `INVALID_BASE64` / `UNSUPPORTED_IMAGE_FORMAT` / `UNSUPPORTED_CAPTION_TASK` | Entrada inválida. |
 | 503 | `VISION_DISABLED` | `ENABLE_IMAGE_DESCRIPTION=false`. |
+| 503 | `VISION_ENGINE_UNAVAILABLE` | Roteamento configurado sem motor disponível; respeite o header `Retry-After`. |
 | 503 | `VISION_DEPENDENCIES_MISSING`, `VISION_MODEL_NOT_DOWNLOADED`, `VISION_MODEL_LOAD_FAILED`, `VISION_DEVICE_UNAVAILABLE`, `CELERY_UNAVAILABLE` | Worker sem torch/transformers, pesos ausentes com download desabilitado, falha de carga, `DEVICE=cuda` sem GPU, broker fora. |
-| 504 | `VISION_TIMEOUT` | Passou de `VISION_REQUEST_TIMEOUT_SECONDS`. O corpo traz `job_id`, `poll_url` e `result_url`; **a task continua** e o resultado pode ser buscado depois. |
+| 504 | `VISION_TIMEOUT` | Passou de `VISION_REQUEST_TIMEOUT_SECONDS`. `detail` traz `job_id`, `poll_url` e `result_url`; **a task continua**, mas a recuperação do resultado tem a limitação de schema descrita abaixo. |
+
+No `504`, salve `detail.job_id` e acompanhe `poll_url`. Não reenvie automaticamente a
+imagem: uma nova inferência criará outro job. Exemplo ilustrativo:
+
+```json
+{
+  "detail": {
+    "error_code": "VISION_TIMEOUT",
+    "message": "O job continua processando.",
+    "job_id": "7186e44b-3098-4590-9b5f-a29e9991e4e7",
+    "poll_url": "/jobs/7186e44b-3098-4590-9b5f-a29e9991e4e7",
+    "result_url": "/jobs/7186e44b-3098-4590-9b5f-a29e9991e4e7/result"
+  }
+}
+```
 
 ### `GET /images/capabilities`
 
@@ -73,6 +141,8 @@ enfileira nada. Campos: `enabled`, `provider`, `model_id`, `revision`, `device_r
 `dependencies_installed`, `model_downloaded`, `model_loaded`, `trust_remote_code`,
 `reason`. Sem heartbeat recente: `dependencies_installed=false` e `reason` explicando que
 não há worker.
+Quando a feature está habilitada, essa sonda retorna `200` mesmo com worker ausente;
+quando `ENABLE_IMAGE_DESCRIPTION=false`, responde `503 VISION_DISABLED`.
 
 ## O que acontece por dentro
 
@@ -125,9 +195,13 @@ pré-baixa os pesos.
   `queued`.
 - O resultado só vive no Redis (`RESULT_TTL_SECONDS`, 1 h): depois disso
   `/jobs/{id}/result` devolve `404`. A imagem não é guardada.
-- `/jobs/{id}/result` foi pensado para recuperar o resultado após um `504`, mas o payload
-  da visão não tem `markdown`, que o schema `JobResultResponse` exige — **não verificado**
-  se essa rota responde corretamente para jobs de imagem.
+- **Recuperação por `/jobs/{id}/result` incompatível com visão.** Verificado no código:
+  `vision_tasks._store_result()` salva o payload de inferência sem `markdown` e
+  `metadata`; `get_job_result()` passa esse payload para `JobResultResponse`, que exige
+  ambos. Assim, quando só o resultado de visão está no Redis, a validação falha e a rota
+  não devolve a inferência (normalmente `500`). O `result_url` do `504` não é garantia de
+  recuperação. Clientes devem salvar a resposta `200` da própria rota de imagem;
+  corrigir a recuperação exige mudança de backend, fora do escopo deste guia.
 - Um worker de visão por máquina; requisições concorrentes enfileiram e podem dar `504`.
 
 ## Com rota de visão (spec 0003, fatia 8)

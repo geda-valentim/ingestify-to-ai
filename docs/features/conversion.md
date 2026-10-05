@@ -1,6 +1,6 @@
 # Conversão de documentos (Docling)
 
-> Verificado contra o código em 2026-10-04 (branch `chore/code-review-and-specs`).
+> Verificado contra o código em 2026-10-05 (branch `main`).
 > Fonte da verdade: [backend/api/routes.py](../../backend/api/routes.py),
 > [backend/workers/tasks.py](../../backend/workers/tasks.py),
 > [backend/workers/converter.py](../../backend/workers/converter.py),
@@ -29,6 +29,8 @@ Os dois endpoints exigem autenticação (`Authorization: Bearer <jwt>` **ou**
 | Campo | Obrigatório | Padrão | Descrição |
 |---|---|---|---|
 | `file` | sim | — | O arquivo. Limite `MAX_FILE_SIZE_MB` (50 MB); acima disso, `413`. Arquivo vazio, `400`. |
+| `project` / `project_id` | sim, salvo API key vinculada | — | Nome (criado se não existir) ou ID de projeto existente do usuário; não envie ambos. Sem projeto, `422`. |
+| `folder` / `folder_id` | não | nenhuma | Nome (criado se não existir) ou ID de pasta do projeto; não envie ambos. Pastas têm um nível e o nome não aceita `/`. |
 | `name` | não | nome do arquivo | Nome amigável do job. |
 | `tags` | não | — | Tags separadas por vírgula (ver [tags.md](tags.md)). |
 | `docling_preset` | não | `fast` | `fast`, `balanced` ou `quality` (tabela abaixo). Qualquer outro valor cai nos defaults do `config.py`. |
@@ -37,38 +39,49 @@ Os dois endpoints exigem autenticação (`Authorization: Bearer <jwt>` **ou**
 curl -X POST http://localhost:8000/upload \
   -H "X-API-Key: $INGESTIFY_API_KEY" \
   -F "file=@relatorio.pdf" \
+  -F "project=Documentos" \
+  -F "folder=Financeiro" \
   -F "docling_preset=quality" \
   -F "tags=cliente-x, financeiro"
-# {"job_id":"<uuid>","status":"queued","created_at":"...","message":"Job enfileirado para processamento"}
+# {"job_id":"<uuid>","status":"queued","created_at":"...","message":"...","project":{"id":"<uuid>","name":"Documentos","created":true,"source":"request"},"folder":{"id":"<uuid>","name":"Financeiro","created":true}}
 ```
 
 ### `POST /convert` — endpoint unificado (arquivo, URL, Google Drive, Dropbox)
 
 `multipart/form-data` com `source_type` (`file` | `url` | `gdrive` | `dropbox`), `source`
-(URL, file ID ou path; ignorado quando `source_type=file`), `file`, `name`, `tags`.
+(URL, file ID ou path; ignorado quando `source_type=file`), `file`, `name`, `tags` e os
+mesmos campos de projeto/pasta do `/upload`. Não envie JSON: o contrato da rota é form.
 Detalhes de cada fonte em [sources.md](sources.md).
 
 ```bash
 curl -X POST http://localhost:8000/convert \
   -H "X-API-Key: $INGESTIFY_API_KEY" \
   -F "source_type=url" \
-  -F "source=https://example.com/documento.pdf"
+  -F "source=https://example.com/documento.pdf" \
+  -F "project=Documentos"
 ```
 
 Diferenças em relação ao `/upload` (comportamento atual, não necessariamente desejado):
 
 - `/convert` **não aceita `docling_preset`**: envia `options={}` ao worker, então vale a
   configuração `DOCLING_*` do ambiente.
-- A deduplicação do `/convert` **não** exclui jobs `FAILED`: reenviar um arquivo cuja
-  conversão falhou devolve o job falho em vez de criar outro. No `/upload`, reenviar é o
-  retry.
+- Os dois endpoints excluem jobs `FAILED` da deduplicação; reenviar o arquivo de um job
+  falho cria outro job (a regra compartilhada está em `api/projects_api.py`).
 
 ### Deduplicação por checksum
 
 Nos dois endpoints, quando há arquivo, a API calcula o SHA-256 enquanto grava o upload em
-disco. Se o mesmo usuário já tem um job `MAIN` com o mesmo checksum, a resposta devolve o
+disco. Se o mesmo usuário já tem um job `MAIN` não falho com o mesmo checksum **no mesmo
+projeto**, a resposta devolve o
 `job_id` existente (com `message` "Arquivo já foi processado anteriormente…") e as tags
-enviadas são **adicionadas** ao job existente. Não há opção para forçar reprocessamento.
+enviadas são **adicionadas** ao job existente. A pasta original é preservada e trocar
+`docling_preset` no reenvio não reprocessa. Enviar para outro projeto cria uma conversão
+independente. Não há opção para forçar reprocessamento de um job não falho no mesmo projeto.
+
+O projeto vem do request ou, quando não há campo de projeto, da API key vinculada.
+Com JWT e API key juntos, vale o JWT e a vinculação da key não é usada. IDs de projetos
+ou pastas de outro usuário retornam `404`. Nomes usam a normalização compartilhada
+(sem diferenciar maiúsculas, espaços repetidos e acentos latinos; até 100 caracteres).
 
 ### Presets do Docling
 
@@ -95,6 +108,25 @@ do Docling instalada (o `.doc`/`.ppt`/`.xls` legado e `.rtf` costumam falhar).
 
 `GET /jobs/{job_id}` para progresso e `GET /jobs/{job_id}/result` para o Markdown — ver
 [jobs-api.md](jobs-api.md).
+
+```bash
+curl "http://localhost:8000/jobs/$JOB_ID" -H "X-API-Key: $INGESTIFY_API_KEY"
+curl "http://localhost:8000/jobs/$JOB_ID/pages" -H "X-API-Key: $INGESTIFY_API_KEY"
+curl "http://localhost:8000/jobs/$JOB_ID/pages/1/result" -H "X-API-Key: $INGESTIFY_API_KEY"
+curl "http://localhost:8000/jobs/$JOB_ID/result" -H "X-API-Key: $INGESTIFY_API_KEY"
+```
+
+`/result` responde JSON com `result.markdown` e `result.metadata`; não é download de
+texto Markdown puro. Documentos não geram VTT/SRT. Para PDF dividido, é possível ler
+cada página concluída antes do merge. Os números de página começam em 1. Antes do split,
+`/pages` pode retornar `404`; durante a criação, a lista pode estar incompleta e o
+`job_id` de uma página pode ser `null` — consulte de novo, sem inventar IDs.
+
+`GET /jobs/{id}/pages/{n}/pdf` retorna `{url, expires_in: 900, expires_at, ...}`.
+Abra a URL assinada diretamente, sem credenciais do Ingestify e sem alterar a query;
+ela expira em 15 minutos. PDF de uma página não é dividido e não tem esses jobs filhos.
+`POST /jobs/{id}/pages/{n}/retry` reprocessa uma página `failed` (até 3 tentativas
+manuais) e devolve o novo `page_job_id`; uma página falha impede o merge final.
 
 ## O que acontece por dentro
 
