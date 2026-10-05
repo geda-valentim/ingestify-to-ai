@@ -774,8 +774,18 @@ Cada item cabe num PR, na ordem. Fora das mudanças deliberadas de 0a/0b, zero-c
 - [x] **4a — Uma conta Modal, `E=1`**: app Whisper, imagem com hashes, deploy por CLI com
       fingerprint, `ModalAdapter`, `container_id` no protocolo, `worker-remote`, rotas admin de
       mutação, correção do `force_provider`. Gates T1–T5, T8. **Primeiro PR que ativa remoto.**
-      (Código feito em 2026-10-05, testado contra um `modal` falso; **gates ainda por rodar numa
-      conta real**, abaixo. `workers/engines/{base,remote,remote_tasks,modal_deploy}.py`,
+      (Código feito em 2026-10-05, testado contra um `modal` falso. **Gates rodados em 2026-10-05 na
+      `modal_1`**, chamando o adapter direto, sem rota: T3/T5 ok (auth por conta, relatório de
+      cobrança lido estritamente, US$ 0 no mês); T1 deploy em 49 s, fingerprint e protocolo
+      conferidos por `meta()`; lock com 25 pacotes, todos com hash, mesmas versões do
+      `worker-audio`; T1/T8 com `E=1` num clipe de 4 min: frio 49,3 s ponta a ponta (cold start
+      3 s, execução 11 s, ~30× tempo real na L4), quente 10,5 s (6,1 s, 39×), mesmo `container_id`
+      reaproveitado; custo cobrado US$ 0,013 frio e US$ 0,003 quente; T4 o prazo de 4 s cancelou a
+      chamada em 4,9 s (≤ US$ 0,0012). Paridade: mesmo modelo, mesma revisão e mesmas versões, mas
+      a L4 dá outra segmentação que a RTX 5060 Ti (31 × 85 segmentos), determinística entre
+      rodadas, com 9,9 % de palavras diferentes, a mesma ordem que GPU × CPU local (9,2 %): é
+      aritmética float16 de cada GPU, não perda de qualidade; a paridade local × remoto deve medir
+      palavras, nunca bytes. `modal_1` fica pausada até o dono pedir rota.) `workers/engines/{base,remote,remote_tasks,modal_deploy}.py`,
       `adapters/modal.py`, `modal_apps/{protocol,runner,files,fingerprint,image,whisper_app}.py`,
       `shared/engines/pricing.py`, `docker/Dockerfile.remote` + `requirements-remote.txt`
       (`modal==1.5.2`), serviço `worker-remote`, `POST …/test|activate|pause|reset-health`,
