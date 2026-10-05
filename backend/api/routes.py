@@ -1103,6 +1103,15 @@ async def get_job_status(
     # Get job status from Redis (real-time data)
     status_data = redis_client.get_job_status(job_id)
 
+    if owned_job is not None and owned_job.id == job_id:
+        from shared.live.lifecycle import available
+        from shared.models import LiveSession
+        if available(db):
+            live = db.get(LiveSession, job_id)
+            if live is not None:
+                status_data = {"type": "main", "status": owned_job.status.value,
+                    "progress": 100 if live.state == "completed" else 0,
+                    "error": live.error_code, "transcribed_seconds": live.audio_samples / 16000}
     if not status_data:
         raise HTTPException(status_code=404, detail="Job não encontrado ou expirado")
 
@@ -1347,6 +1356,18 @@ async def delete_job(
     if not status_data and not db_job:
         raise HTTPException(status_code=404, detail="Job não encontrado")
 
+    # Revoke under the same SQL lock order as strict finalization, before any
+    # external cleanup. Late writes cannot publish or recreate caches afterward.
+    if db_job:
+        from shared.live.lifecycle import available, terminate
+        from shared.live.store import LiveStore
+        if available(db):
+            from shared.models import LiveSession
+            if db.get(LiveSession, job_id) is not None:
+                db.rollback()
+                terminate(job_id, "cancelled", "LIVE_JOB_DELETED",
+                          LiveStore(redis_client.client, settings.live_worker_id), redis_client)
+
     logger.info(f"Deleting job {job_id} for user {current_user.username}")
 
     # 1. Delete from Elasticsearch (if available)
@@ -1390,6 +1411,9 @@ async def delete_job(
             for child_job in child_jobs:
                 db.delete(child_job)
 
+            # Delete live facts together with the job (schema FK also cascades).
+            if available(db):
+                db.query(LiveSession).filter(LiveSession.job_id == job_id).delete()
             # Delete main job
             db.delete(db_job)
             db.commit()
@@ -1473,8 +1497,24 @@ async def get_job_result(
 
     # Ownership já validada em get_owned_job (MySQL como fonte da verdade)
 
+    # Live results require the exact durable row, including after cache expiry.
+    # A cancelled/stale generation may have written external objects, but is
+    # never selected for publication here.
+    live_generation = None
+    if owned_job is not None and owned_job.id == job_id:
+        from shared.live.lifecycle import available
+        from shared.models import LiveSession
+        if available(db):
+            live = db.get(LiveSession, job_id)
+            if live is not None:
+                if live.state != "completed" or owned_job.status != DBJobStatus.COMPLETED:
+                    raise HTTPException(400, detail="Sessão live não concluída")
+                live_generation = live.generation
+
     # Check job status first
     status_data = redis_client.get_job_status(job_id)
+    if live_generation is not None:
+        status_data = {"type": "main", "status": "completed"}
 
     if not status_data:
         raise HTTPException(status_code=404, detail="Job não encontrado ou expirado")
@@ -1492,7 +1532,7 @@ async def get_job_result(
     # served straight from Redis/MinIO, even if Elasticsearch has no result
     requested_format = format_ or redis_client.get_job_output_format(job_id)
     if requested_format and requested_format != "markdown":
-        return _transcript_response(job_id, requested_format, redis_client)
+        return _transcript_response(job_id, requested_format, redis_client, live_generation)
 
     # Get job type
     job_type = status_data.get("type", "main")
@@ -1520,7 +1560,7 @@ async def get_job_result(
     if not requested_format:
         default_format = (result_data.get("metadata") or {}).get("output_format") or "markdown"
         if default_format != "markdown":
-            return _transcript_response(job_id, default_format, redis_client)
+            return _transcript_response(job_id, default_format, redis_client, live_generation)
 
     # Get completed_at timestamp
     completed_at = None
@@ -1550,7 +1590,7 @@ async def get_job_result(
     return JobResultResponse(**response_data)
 
 
-def _transcript_response(job_id: str, fmt: str, redis_client) -> Response:
+def _transcript_response(job_id: str, fmt: str, redis_client, generation=None) -> Response:
     """Return one transcript format (from Redis, or MinIO once the Redis result expired)"""
     content = ((redis_client.get_job_result(job_id) or {}).get("transcript") or {}).get(fmt)
 
@@ -1559,7 +1599,7 @@ def _transcript_response(job_id: str, fmt: str, redis_client) -> Response:
             minio_client = get_minio_client()
             data = minio_client.download_file(
                 bucket_name=minio_client.bucket_audio,
-                object_name=transcript_object_name(job_id, fmt),
+                object_name=transcript_object_name(job_id, fmt, generation),
             )
             content = data.decode("utf-8") if data is not None else None
         except Exception as e:
@@ -2118,6 +2158,7 @@ async def search_jobs(
     query: str,
     limit: int = 10,
     current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
 ):
     """
     Buscar jobs por conteúdo do markdown usando Elasticsearch
@@ -2147,9 +2188,29 @@ async def search_jobs(
             limit=limit
         )
 
+        # Live indexing happens before its strict SQL publication. ES is not
+        # the authority for a live generation (nor for a cancelled/deleted job).
+        # Resolve only marked live hits, in one query; preserve batch behavior.
+        live_ids = {result.get("job_id") for result in results
+                    if (result.get("metadata") or {}).get("input_mode") == "live"}
+        published_live = {}
+        if live_ids:
+            from shared.live.lifecycle import available
+            from shared.models import LiveSession
+            if available(db):
+                published_live = dict(db.query(Job.id, LiveSession.generation)
+                    .join(LiveSession, LiveSession.job_id == Job.id)
+                    .filter(Job.id.in_(live_ids), Job.user_id == current_user.id,
+                            Job.status == DBJobStatus.COMPLETED, LiveSession.state == "completed").all())
+
         # Format results
         formatted_results = []
         for result in results:
+            metadata = result.get("metadata") or {}
+            if metadata.get("input_mode") == "live":
+                generation = metadata.get("generation")
+                if type(generation) is not int or published_live.get(result.get("job_id")) != generation:
+                    continue
             formatted_results.append({
                 "job_id": result.get("job_id"),
                 "filename": result.get("filename"),

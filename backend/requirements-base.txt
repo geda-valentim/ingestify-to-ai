@@ -28,6 +28,7 @@ setuptools>=75.0.0
 
 fastapi==0.104.1
 uvicorn[standard]==0.24.0
+websockets==17.2  # private/public live protocol, bounded queues
 celery==5.3.4
 redis==5.0.1
 # Pydantic - versões compatíveis com Docling 2.x

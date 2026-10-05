@@ -7,6 +7,7 @@ import logging
 
 from shared.config import get_settings
 from shared.schemas import ErrorResponse
+from api.live_routes import router as live_router
 from api.routes import router
 from api.auth_routes import router as auth_router
 from api.apikey_routes import router as apikey_router
@@ -334,6 +335,7 @@ app.include_router(tag_router)  # GET /tags, PUT /jobs/{job_id}/tags
 app.include_router(routing_admin_router)  # /admin/routing, /admin/engines/status (spec 0003)
 app.include_router(engine_admin_router)  # /admin/engines, /admin/gpus (spec 0003)
 app.include_router(projects_router)  # GET /projects, /projects/resolve, /projects/{id}/folders/resolve
+app.include_router(live_router)
 app.include_router(router)
 
 
@@ -358,3 +360,22 @@ if __name__ == "__main__":
         port=settings.api_port,
         reload=settings.environment == "development",
     )
+
+
+@app.on_event("startup")
+async def start_live_sweeper():
+    if settings.live_transcription_enabled:
+        import asyncio
+        from api.live_routes import sweeper_loop
+        app.state.live_sweeper = asyncio.create_task(sweeper_loop())
+
+
+@app.on_event("shutdown")
+async def stop_live_sweeper():
+    from contextlib import suppress
+    import asyncio
+    task = getattr(app.state, "live_sweeper", None)
+    if task:
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task

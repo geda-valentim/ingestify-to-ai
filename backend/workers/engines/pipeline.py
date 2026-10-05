@@ -42,44 +42,14 @@ def finish_transcription(
     Redis, and removes the job's local files (and the source media with
     purge_source).
     """
-    # Format as markdown
-    include_timestamps = options.get('include_timestamps', True)
-    markdown_content = format_markdown(result, include_timestamps)
-
-    # Subtitle / text outputs, retrievable via GET /jobs/{id}/result?format=...
-    transcript_outputs = {
-        'vtt': format_vtt(result),
-        'srt': format_srt(result),
-        'txt': format_text(result),
-        'json': json.dumps(
-            {k: result.get(k) for k in ('language', 'duration', 'text', 'segments')},
-            ensure_ascii=False,
-        ),
-    }
-    store_transcript_outputs(job_id, transcript_outputs)
-
-    # Store result in Redis
-    result_with_markdown = {
-        'markdown': markdown_content,
-        'metadata': {
+    result_with_markdown, transcript_outputs = build_transcription_outputs(
+        result, options=options, input_metadata={
             'format': file_path.suffix.lower().lstrip('.') or options.get('media_kind', 'audio'),
             'size_bytes': file_path.stat().st_size,
-            'words': result['word_count'],
-            'language': result['language'],
-            'duration': result['duration'],
-            'word_count': result['word_count'],
-            'char_count': result['char_count'],
-            'provider': result.get('provider', 'unknown'),
-            'model': result.get('model', 'unknown'),
-            'device': result.get('device'),
-            'compute_type': compute_type,
-            'language_probability': result.get('language_probability'),
-            'processing_seconds': processing_seconds,
-            'output_format': options.get('output_format', 'markdown'),
-            'available_formats': ['markdown'] + list(transcript_outputs),
-        },
-        'transcript': transcript_outputs,
-    }
+        }, processing_seconds=processing_seconds, compute_type=compute_type)
+    markdown_content = result_with_markdown['markdown']
+    store_transcript_outputs(job_id, transcript_outputs)
+
     redis_client.set_job_result(job_id, result_with_markdown)
     redis_client.delete_partial_transcript(job_id)  # the full result supersedes it
     redis_client.update_job_progress(job_id, 80)
@@ -180,3 +150,23 @@ def store_transcript_outputs(job_id: str, outputs: dict) -> None:
             )
         except Exception as e:
             logger.warning(f"[MAIN JOB {job_id}] Failed to store transcript.{fmt} in MinIO: {e}")
+
+
+def build_transcription_outputs(result, *, options, input_metadata, processing_seconds, compute_type):
+    """Shared formats/metadata for file input and strict live finalization."""
+    outputs = {
+        'vtt': format_vtt(result), 'srt': format_srt(result), 'txt': format_text(result),
+        'json': json.dumps({k: result.get(k) for k in ('language', 'duration', 'text', 'segments')},
+                           ensure_ascii=False),
+    }
+    metadata = {
+        **input_metadata, 'words': result['word_count'], 'language': result['language'],
+        'duration': result['duration'], 'word_count': result['word_count'],
+        'char_count': result['char_count'], 'provider': result.get('provider', 'unknown'),
+        'model': result.get('model', 'unknown'), 'device': result.get('device'),
+        'compute_type': compute_type, 'language_probability': result.get('language_probability'),
+        'processing_seconds': processing_seconds, 'output_format': options.get('output_format', 'markdown'),
+        'available_formats': ['markdown'] + list(outputs),
+    }
+    return {'markdown': format_markdown(result, options.get('include_timestamps', True)),
+            'metadata': metadata, 'transcript': outputs}, outputs
