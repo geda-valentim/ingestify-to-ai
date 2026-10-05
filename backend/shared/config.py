@@ -272,6 +272,22 @@ class Settings(BaseSettings):
     engine_secrets_private_keys: str = ""
     engine_secrets_private_keys_file: str = ""
 
+    # Routing (spec 0003, slice 3b). Only used once a feature has a route; with no
+    # row in feature_routes nothing here is read and no dispatcher is needed.
+    # The dispatcher's queue, consumed by the optional worker-dispatch service
+    # (compose profile `engines`)
+    dispatch_queue: str = "ingestify-dispatch"
+    # True only in worker-dispatch: its embedded beat (celery worker -B) ticks the
+    # dispatcher every 5 s and the sweeper every 30 s. Never in the shared beat,
+    # which would fill a queue nobody consumes on installs without the profile
+    engines_dispatch_beat: bool = False
+    # The API's watchdog loop (places routed local work while the dispatcher is
+    # down); with no route it only reads feature_routes every 15 s
+    engines_watchdog_enabled: bool = True
+    # The media probe reads at most this many bytes of an upload, for at most this long
+    probe_max_bytes: int = 8 * 1024 * 1024
+    probe_timeout_seconds: int = 10
+
     def engine_private_keys(self) -> List[str]:
         """Private keys from ENGINE_SECRETS_PRIVATE_KEYS (comma-separated) and/or the _FILE"""
         keys = [k.strip() for k in self.engine_secrets_private_keys.split(",") if k.strip()]

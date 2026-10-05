@@ -12,7 +12,7 @@
           "Authentication"
         ],
         "summary": "Register",
-        "description": "Register a new user\n\n## Request Body:\n```json\n{\n  \"email\": \"user@example.com\",\n  \"username\": \"testuser\",\n  \"password\": \"Test123\"\n}\n```\n\n## Returns:\nUser object with id, email, username, is_active, created_at\n\n## Errors:\n- 400: Email or username already exists\n- 429: Too many registrations from this IP",
+        "description": "Register a new user\n\n## Request Body:\n```json\n{\n  \"email\": \"user@example.com\",\n  \"username\": \"testuser\",\n  \"password\": \"Test123\"\n}\n```\n\n## Returns:\nUser object with id, email, username, is_active, created_at, is_admin\n\n## Errors:\n- 400: Email or username already exists\n- 429: Too many registrations from this IP",
         "operationId": "register_auth_register_post",
         "requestBody": {
           "content": {
@@ -560,6 +560,91 @@
         ]
       }
     },
+    "/admin/broker/unacked": {
+      "get": {
+        "tags": [
+          "Admin & Monitoring"
+        ],
+        "summary": "List unacknowledged broker messages",
+        "description": "Messages the Celery broker holds as delivered but not yet acknowledged.\n\nEach one is either a task running now or one whose worker died - the latter only\nreturns to its queue after CELERY_VISIBILITY_TIMEOUT_SECONDS (hours). `orphans` is\nthe latest check by workers.monitoring.check_broker_unacked: messages no live\nworker held on two consecutive checks. Requeue one with\nPOST /admin/broker/unacked/{delivery_tag}/requeue.",
+        "operationId": "list_broker_unacked_admin_broker_unacked_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response List Broker Unacked Admin Broker Unacked Get"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
+          }
+        ]
+      }
+    },
+    "/admin/broker/unacked/{delivery_tag}/requeue": {
+      "post": {
+        "tags": [
+          "Admin & Monitoring"
+        ],
+        "summary": "Requeue an orphaned broker message",
+        "description": "Put an orphaned message back at the head of its queue, so its task runs again now\ninstead of after the visibility timeout.\n\nRefused (409) unless the latest monitoring check flagged it as orphaned AND no\nworker reports holding it right now - otherwise a task still running would run\ntwice.",
+        "operationId": "requeue_broker_unacked_admin_broker_unacked__delivery_tag__requeue_post",
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "delivery_tag",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Delivery Tag"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Requeue Broker Unacked Admin Broker Unacked  Delivery Tag  Requeue Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/images/describe": {
       "post": {
         "tags": [
@@ -881,6 +966,542 @@
         }
       }
     },
+    "/admin/routing": {
+      "get": {
+        "tags": [
+          "Admin - Engines"
+        ],
+        "summary": "Feature routes and their backlog",
+        "operationId": "list_routes_admin_routing_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  "type": "array",
+                  "title": "Response List Routes Admin Routing Get"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
+          }
+        ]
+      }
+    },
+    "/admin/routing/{feature}": {
+      "put": {
+        "tags": [
+          "Admin - Engines"
+        ],
+        "summary": "Create or replace a feature's route",
+        "operationId": "put_route_admin_routing__feature__put",
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "feature",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Feature"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RouteUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Put Route Admin Routing  Feature  Put"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Admin - Engines"
+        ],
+        "summary": "Remove a route (it drains back to today's path)",
+        "operationId": "delete_route_admin_routing__feature__delete",
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "feature",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Feature"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Delete Route Admin Routing  Feature  Delete"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/engines/status": {
+      "get": {
+        "tags": [
+          "Admin - Engines"
+        ],
+        "summary": "Dispatcher, in-flight work and backlog",
+        "operationId": "engines_status_admin_engines_status_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Engines Status Admin Engines Status Get"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
+          }
+        ]
+      }
+    },
+    "/admin/engine-adapters": {
+      "get": {
+        "tags": [
+          "Admin - Engines"
+        ],
+        "summary": "Engine adapters, their GPUs and limits",
+        "operationId": "list_engine_adapters_admin_engine_adapters_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  "type": "array",
+                  "title": "Response List Engine Adapters Admin Engine Adapters Get"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
+          }
+        ]
+      }
+    },
+    "/admin/engines": {
+      "get": {
+        "tags": [
+          "Admin - Engines"
+        ],
+        "summary": "List engines",
+        "operationId": "list_engines_admin_engines_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  "type": "array",
+                  "title": "Response List Engines Admin Engines Get"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
+          }
+        ]
+      }
+    },
+    "/admin/engines/{engine_id}": {
+      "get": {
+        "tags": [
+          "Admin - Engines"
+        ],
+        "summary": "One engine",
+        "operationId": "get_engine_admin_engines__engine_id__get",
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "engine_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Engine Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Engine Admin Engines  Engine Id  Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/gpus": {
+      "get": {
+        "tags": [
+          "Admin - Engines"
+        ],
+        "summary": "Physical GPUs: declared vs detected, VRAM budgeted and used",
+        "operationId": "list_gpus_admin_gpus_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response List Gpus Admin Gpus Get"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
+          }
+        ]
+      }
+    },
+    "/admin/engines/{engine_id}/features/{feature}": {
+      "put": {
+        "tags": [
+          "Admin - Engines"
+        ],
+        "summary": "Set how a feature runs on an engine",
+        "operationId": "put_engine_feature_admin_engines__engine_id__features__feature__put",
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "engine_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Engine Id"
+            }
+          },
+          {
+            "name": "feature",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Feature"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BindingUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Put Engine Feature Admin Engines  Engine Id  Features  Feature  Put"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Admin - Engines"
+        ],
+        "summary": "Stop running a feature on an engine",
+        "operationId": "delete_engine_feature_admin_engines__engine_id__features__feature__delete",
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "engine_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Engine Id"
+            }
+          },
+          {
+            "name": "feature",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Feature"
+            }
+          },
+          {
+            "name": "version",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Version"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Delete Engine Feature Admin Engines  Engine Id  Features  Feature  Delete"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/engines/{engine_id}/gpus": {
+      "put": {
+        "tags": [
+          "Admin - Engines"
+        ],
+        "summary": "Declare the local engine's physical GPUs",
+        "operationId": "put_engine_gpus_admin_engines__engine_id__gpus_put",
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "engine_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Engine Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GpusUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Put Engine Gpus Admin Engines  Engine Id  Gpus Put"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/upload": {
       "post": {
         "tags": [
@@ -937,7 +1558,7 @@
           "Conversion"
         ],
         "summary": "Transcrever áudio ou vídeo (STT, legendas VTT/SRT)",
-        "description": "Transcrever áudio ou vídeo para texto usando Whisper (STT)\n\nAceita áudio ou vídeo (só a faixa de áudio do vídeo é transcrita).\nO job entra na fila; o worker usa GPU quando disponível (detectada uma vez por\nworker, com fallback automático para CPU).\n\nTodos os formatos são gerados: Markdown, legendas WebVTT e SRT, texto puro e\nJSON com segmentos. Escolha o formato em `GET /jobs/{job_id}/result?format=vtt`\n(ou defina o padrão com `output_format`).\n\n## Parâmetros:\n- `file`: Arquivo de áudio para transcrição\n- `name`: Nome de identificação opcional\n- `language`: Código de idioma ISO 639-1 (ex: 'en', 'pt', 'es'). Auto-detecta se não fornecido\n- `include_timestamps`: Adicionar marcadores de tempo [MM:SS] na transcrição\n- `include_word_timestamps`: Adicionar timestamps em cada palavra (mais detalhado)\n- `output_format`: Formato padrão do resultado (`markdown`, `vtt`, `srt`, `txt`, `json`)\n\n## Formatos suportados\n- Áudio: MP3, WAV, M4A, FLAC, OGG, OPUS, WEBM, WMA, AAC\n- Vídeo: MP4, M4V, MKV, MOV, AVI, WEBM, WMV, FLV, MPEG, TS, 3GP\n\n## Limite de tamanho\n- Áudio: até 50MB (MAX_AUDIO_FILE_SIZE_MB)\n- Vídeo: até 500MB (MAX_VIDEO_FILE_SIZE_MB)\n\n## Retorno\nRetorna imediatamente um `job_id` para consultar o progresso via `/jobs/{job_id}`\n\n## Exemplo:\n```bash\ncurl -X POST http://localhost:8080/transcribe \\\n  -F \"file=@meeting.mp3\" \\\n  -F \"language=pt\" \\\n  -F \"include_timestamps=true\"\n```\n\n## Resultado\nConsulte o status em `/jobs/{job_id}` até `completed` e busque o resultado:\n- `GET /jobs/{job_id}/result`: JSON com markdown e metadados (idioma, duração, device)\n- `GET /jobs/{job_id}/result?format=vtt`: legenda WebVTT (`text/vtt`)\n- `?format=srt`, `?format=txt`, `?format=json`: SRT, texto puro, segmentos",
+        "description": "Transcrever áudio ou vídeo para texto usando Whisper (STT)\n\nAceita áudio ou vídeo (só a faixa de áudio do vídeo é transcrita).\nO job entra na fila própria de transcrição (`ingestify-audio`), consumida por\nworkers dedicados, e não disputa vaga com a conversão de documentos.\n\n## Autenticação\nObrigatória: header `X-API-Key: <chave>` ou `Authorization: Bearer <token JWT>`.\nSem ele a resposta é 401.\n\nTodos os formatos são gerados: Markdown, legendas WebVTT e SRT, texto puro e\nJSON com segmentos. Escolha o formato em `GET /jobs/{job_id}/result?format=vtt`\n(ou defina o padrão com `output_format`).\n\n## Parâmetros:\n- `file`: Arquivo de áudio ou vídeo para transcrição\n- `name`: Nome de identificação opcional\n- `tags`: Tags do job, separadas por vírgula (ex: `focus,aula`)\n- `language`: Código de idioma ISO 639-1 (ex: 'en', 'pt', 'es'). Auto-detecta se não fornecido\n- `include_timestamps`: Adicionar marcadores de tempo [MM:SS] na transcrição\n- `include_word_timestamps`: Adicionar timestamps em cada palavra (mais detalhado)\n- `output_format`: Formato padrão do resultado (`markdown`, `vtt`, `srt`, `txt`, `json`)\n- `purge_source`: Se `true`, apaga o arquivo enviado (disco e MinIO) quando o job\n  termina com sucesso; ficam só as transcrições. `DELETE /jobs/{job_id}` também\n  apaga o arquivo de origem e as transcrições\n\n## Arquivo repetido\nReenviar um arquivo idêntico (mesmo SHA-256) que já tem job **não falho** devolve\nesse job em vez de criar outro: as tags novas são somadas às dele e o\n`output_format` enviado passa a ser o padrão do resultado. Se o job anterior\nfalhou, o reenvio cria um job novo; é assim que se tenta de novo.\n\n## Formatos suportados\n- Áudio: MP3, WAV, M4A, FLAC, OGG, OPUS, WEBM, WMA, AAC\n- Vídeo: MP4, M4V, MKV, MOV, AVI, WEBM, WMV, FLV, MPEG, TS, 3GP\n\n## Limite de tamanho\n- Áudio: até 50MB (MAX_AUDIO_FILE_SIZE_MB)\n- Vídeo: até 500MB (MAX_VIDEO_FILE_SIZE_MB)\n\n## Tempo limite\nDefinido pelo worker de transcrição (`TRANSCRIPTION_TIMEOUT_SECONDS`, padrão 3h),\nindependente do `CONVERSION_TIMEOUT_SECONDS` dos documentos. Um job que estoura o\ntempo falha sem novas tentativas automáticas.\n\n## Retorno\nRetorna imediatamente um `job_id` para consultar o progresso via `/jobs/{job_id}`\n\n## Erros\n- 401: sem autenticação\n- 413: arquivo acima do limite\n- 422: formato não suportado, `output_format` inválido ou `tags` inválidas\n- 503: transcrição desabilitada ou workers indisponíveis\n\n## Exemplos:\n```bash\ncurl -X POST http://localhost:8080/transcribe \\\n  -H \"X-API-Key: $INGESTIFY_API_KEY\" \\\n  -F \"file=@meeting.mp3\" \\\n  -F \"language=pt\" \\\n  -F \"include_timestamps=true\"\n```\n\nVídeo com legenda SRT como padrão, tags e descarte do arquivo ao terminar:\n```bash\ncurl -X POST http://localhost:8080/transcribe \\\n  -H \"Authorization: Bearer $TOKEN\" \\\n  -F \"file=@aula.mp4\" \\\n  -F \"language=pt\" \\\n  -F \"output_format=srt\" \\\n  -F \"tags=focus,aula\" \\\n  -F \"purge_source=true\"\n```\n\n## Resultado\nConsulte o status em `/jobs/{job_id}` até `completed` e busque o resultado:\n- `GET /jobs/{job_id}/result`: JSON com markdown e metadados (idioma, duração, device)\n- `GET /jobs/{job_id}/result?format=vtt`: legenda WebVTT (`text/vtt`)\n- `?format=srt`, `?format=txt`, `?format=json`: SRT, texto puro, segmentos",
         "operationId": "transcribe_audio_transcribe_post",
         "requestBody": {
           "content": {
@@ -1132,7 +1753,7 @@
           "Conversion"
         ],
         "summary": "Deletar job",
-        "description": "Deletar job e todos os seus dados associados\n\nRemove completamente um job do sistema, incluindo:\n- Metadados do MySQL (job e pages)\n- Conteúdo do Elasticsearch (markdown)\n- Status temporário do Redis\n\n**Atenção:** Esta operação é irreversível!\n\n## Para jobs MAIN com páginas:\n- Deleta o job principal\n- Deleta todos os jobs filhos (split, pages, merge)\n- Deleta todos os registros de páginas\n- Remove todo o conteúdo markdown\n\n## Permissões:\n- Apenas o dono do job (verificado no MySQL) pode deletá-lo\n\n## Retorno:\n- 200: Job deletado com sucesso\n- 404: Job não encontrado (também retornado quando o job pertence a outro\n  usuário, para não expor a existência do recurso)",
+        "description": "Deletar job e todos os seus dados associados\n\nRemove completamente um job do sistema, incluindo:\n- Metadados do MySQL (job e pages)\n- Conteúdo do Elasticsearch (markdown)\n- Status temporário do Redis\n- Para transcrições: o áudio/vídeo enviado e as transcrições guardadas no MinIO\n\n**Atenção:** Esta operação é irreversível!\n\n## Para jobs MAIN com páginas:\n- Deleta o job principal\n- Deleta todos os jobs filhos (split, pages, merge)\n- Deleta todos os registros de páginas\n- Remove todo o conteúdo markdown\n\n## Permissões:\n- Apenas o dono do job (verificado no MySQL) pode deletá-lo\n\n## Retorno:\n- 200: Job deletado com sucesso\n- 404: Job não encontrado (também retornado quando o job pertence a outro\n  usuário, para não expor a existência do recurso)",
         "operationId": "delete_job_jobs__job_id__delete",
         "security": [
           {
@@ -1227,6 +1848,70 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/JobResultResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/jobs/{job_id}/transcript/partial": {
+      "get": {
+        "tags": [
+          "Conversion"
+        ],
+        "summary": "Get Partial Transcript",
+        "description": "Texto de uma transcrição enquanto ela acontece\n\nRetorna os segmentos já transcritos a partir de `since`, e em `next` o valor de\n`since` para a próxima consulta - assim cada consulta traz só o texto novo.\nSó o provider faster-whisper transcreve em segmentos; com os providers da OpenAI\na lista fica vazia até o fim. Quando o job termina a lista também fica vazia:\no texto completo passa a estar em `GET /jobs/{job_id}/result`.\n\n## Permissões:\n- Apenas o dono do job (verificado no MySQL) pode consultá-lo.\n  Jobs de outros usuários retornam 404.",
+        "operationId": "get_partial_transcript_jobs__job_id__transcript_partial_get",
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          },
+          {
+            "name": "since",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Índice do primeiro segmento a retornar (o `next` da consulta anterior)",
+              "default": 0,
+              "title": "Since"
+            },
+            "description": "Índice do primeiro segmento a retornar (o `next` da consulta anterior)"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PartialTranscriptResponse"
                 }
               }
             }
@@ -1900,6 +2585,87 @@
         "title": "APIKeyResponse",
         "description": "Schema for API key response (after creation)"
       },
+      "BindingUpdate": {
+        "properties": {
+          "gpu_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gpu Type"
+          },
+          "gpu_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gpu Ref"
+          },
+          "workers": {
+            "type": "integer",
+            "maximum": 1000.0,
+            "minimum": 0.0,
+            "title": "Workers"
+          },
+          "executions_per_worker": {
+            "type": "integer",
+            "maximum": 64.0,
+            "minimum": 1.0,
+            "title": "Executions Per Worker",
+            "default": 1
+          },
+          "cpu": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 64.0,
+                "exclusiveMinimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cpu"
+          },
+          "vram_override_gb": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 200.0,
+                "exclusiveMinimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vram Override Gb"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          }
+        },
+        "type": "object",
+        "required": [
+          "workers"
+        ],
+        "title": "BindingUpdate"
+      },
       "Body_convert_document_convert_post": {
         "properties": {
           "source_type": {
@@ -2102,6 +2868,12 @@
             "title": "Output Format",
             "description": "Formato padrão do resultado em /jobs/{job_id}/result: markdown, vtt, srt, txt ou json",
             "default": "markdown"
+          },
+          "purge_source": {
+            "type": "boolean",
+            "title": "Purge Source",
+            "description": "Apagar o áudio/vídeo enviado assim que a transcrição terminar (guarda só o texto)",
+            "default": false
           }
         },
         "type": "object",
@@ -2333,6 +3105,33 @@
           "size_bytes"
         ],
         "title": "DocumentMetadata"
+      },
+      "GpusUpdate": {
+        "properties": {
+          "gpus": {
+            "items": {
+              "$ref": "#/components/schemas/LocalGpu"
+            },
+            "type": "array",
+            "title": "Gpus"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          }
+        },
+        "type": "object",
+        "required": [
+          "gpus"
+        ],
+        "title": "GpusUpdate"
       },
       "HTTPValidationError": {
         "properties": {
@@ -2654,6 +3453,24 @@
         ],
         "title": "JobCreatedResponse"
       },
+      "JobEngine": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "local",
+              "cloud"
+            ],
+            "title": "Kind"
+          }
+        },
+        "type": "object",
+        "required": [
+          "kind"
+        ],
+        "title": "JobEngine",
+        "description": "Onde um job roteado roda: no servidor (local) ou numa conta de nuvem (cloud)"
+      },
       "JobPagesResponse": {
         "properties": {
           "job_id": {
@@ -2917,6 +3734,53 @@
               }
             ],
             "title": "Page Number"
+          },
+          "transcribed_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Transcribed Seconds"
+          },
+          "media_duration": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Media Duration"
+          },
+          "engine": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/JobEngine"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "queue_reason": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "in_queue",
+                  "starting"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Queue Reason"
           }
         },
         "type": "object",
@@ -2979,6 +3843,49 @@
         ],
         "title": "JobType",
         "description": "Tipos de jobs no sistema"
+      },
+      "LocalGpu": {
+        "properties": {
+          "ref": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9_-]*$",
+            "title": "Ref"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name",
+            "default": ""
+          },
+          "uuid": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Uuid"
+          },
+          "vram_gb": {
+            "type": "number",
+            "maximum": 1000.0,
+            "exclusiveMinimum": 0.0,
+            "title": "Vram Gb"
+          },
+          "vram_reserve_gb": {
+            "type": "number",
+            "minimum": 0.0,
+            "title": "Vram Reserve Gb",
+            "default": 1.0
+          }
+        },
+        "type": "object",
+        "required": [
+          "ref",
+          "vram_gb"
+        ],
+        "title": "LocalGpu"
       },
       "OcrLine": {
         "properties": {
@@ -3062,6 +3969,262 @@
         "title": "PageJobInfo",
         "description": "Informação de um page job"
       },
+      "PartialTranscriptResponse": {
+        "properties": {
+          "job_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Job Id"
+          },
+          "status": {
+            "$ref": "#/components/schemas/JobStatus"
+          },
+          "segments": {
+            "items": {
+              "$ref": "#/components/schemas/TranscriptSegment"
+            },
+            "type": "array",
+            "title": "Segments"
+          },
+          "next": {
+            "type": "integer",
+            "title": "Next"
+          }
+        },
+        "type": "object",
+        "required": [
+          "job_id",
+          "status",
+          "segments",
+          "next"
+        ],
+        "title": "PartialTranscriptResponse",
+        "description": "Texto de uma transcrição em andamento, a partir do segmento `since`"
+      },
+      "RouteStep": {
+        "properties": {
+          "position": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Position"
+          },
+          "engine_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 20,
+            "minItems": 1,
+            "title": "Engine Ids"
+          },
+          "group_strategy": {
+            "type": "string",
+            "enum": [
+              "priority",
+              "fill_first"
+            ],
+            "title": "Group Strategy",
+            "default": "priority"
+          },
+          "scale_out_after_seconds": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 86400.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scale Out After Seconds"
+          },
+          "when": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/When"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "spend_cap": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SpendCap"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "engine_ids"
+        ],
+        "title": "RouteStep"
+      },
+      "RouteUpdate": {
+        "properties": {
+          "steps": {
+            "items": {
+              "$ref": "#/components/schemas/RouteStep"
+            },
+            "type": "array",
+            "maxItems": 10,
+            "minItems": 1,
+            "title": "Steps"
+          },
+          "on_no_engine": {
+            "type": "string",
+            "enum": [
+              "hold",
+              "fail"
+            ],
+            "title": "On No Engine",
+            "default": "hold"
+          },
+          "fail_after_seconds": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 2592000.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fail After Seconds"
+          },
+          "max_attempts": {
+            "type": "integer",
+            "maximum": 10.0,
+            "minimum": 1.0,
+            "title": "Max Attempts",
+            "default": 3
+          },
+          "remote_allowed_for": {
+            "type": "string",
+            "enum": [
+              "admins",
+              "all"
+            ],
+            "title": "Remote Allowed For",
+            "default": "admins"
+          },
+          "user_period_limit_usd": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0.0
+              },
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*(?:\\d{0,6}|(?=[\\d.]{1,13}0*$)\\d{0,6}\\.\\d{0,6}0*$)"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User Period Limit Usd"
+          },
+          "remote_data_notice": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Remote Data Notice"
+          },
+          "dispatcher_fallback": {
+            "type": "string",
+            "enum": [
+              "local_direct",
+              "hold"
+            ],
+            "title": "Dispatcher Fallback",
+            "default": "local_direct"
+          },
+          "dispatcher_down_seconds": {
+            "type": "integer",
+            "maximum": 3600.0,
+            "minimum": 30.0,
+            "title": "Dispatcher Down Seconds",
+            "default": 120
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          },
+          "current_password": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Password"
+          }
+        },
+        "type": "object",
+        "required": [
+          "steps"
+        ],
+        "title": "RouteUpdate"
+      },
+      "SpendCap": {
+        "properties": {
+          "usd": {
+            "anyOf": [
+              {
+                "type": "number",
+                "exclusiveMinimum": 0.0
+              },
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*(?:\\d{0,6}|(?=[\\d.]{1,13}0*$)\\d{0,6}\\.\\d{0,6}0*$)"
+              }
+            ],
+            "title": "Usd"
+          },
+          "window": {
+            "type": "string",
+            "enum": [
+              "day",
+              "period"
+            ],
+            "title": "Window"
+          }
+        },
+        "type": "object",
+        "required": [
+          "usd",
+          "window"
+        ],
+        "title": "SpendCap"
+      },
       "TagCount": {
         "properties": {
           "tag": {
@@ -3114,6 +4277,30 @@
         ],
         "title": "Token",
         "description": "Schema for JWT token response"
+      },
+      "TranscriptSegment": {
+        "properties": {
+          "start": {
+            "type": "number",
+            "title": "Start"
+          },
+          "end": {
+            "type": "number",
+            "title": "End"
+          },
+          "text": {
+            "type": "string",
+            "title": "Text"
+          }
+        },
+        "type": "object",
+        "required": [
+          "start",
+          "end",
+          "text"
+        ],
+        "title": "TranscriptSegment",
+        "description": "Trecho transcrito, com início e fim em segundos da mídia"
       },
       "UserCreate": {
         "properties": {
@@ -3169,6 +4356,11 @@
             "type": "string",
             "format": "date-time",
             "title": "Created At"
+          },
+          "is_admin": {
+            "type": "boolean",
+            "title": "Is Admin",
+            "default": false
           }
         },
         "type": "object",
@@ -3334,6 +4526,38 @@
         ],
         "title": "VisionModelInfo",
         "description": "Qual modelo, em qual revisão e em qual device produziu esta resposta."
+      },
+      "When": {
+        "properties": {
+          "min_wait_seconds": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 604800.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min Wait Seconds"
+          },
+          "min_backlog": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 100000.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min Backlog"
+          }
+        },
+        "type": "object",
+        "title": "When"
       }
     },
     "securitySchemes": {

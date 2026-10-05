@@ -29,6 +29,7 @@ from shared.database import SessionLocal
 from shared.models import Job, Page, JobStatus
 from shared.config import get_settings
 from shared.pdf_splitter import PDFSplitter, should_split_pdf
+from shared.engines.media import AUDIO_EXTENSIONS
 # Moved to workers.engines.pipeline; the old names stay importable from here
 from workers.engines.pipeline import (  # noqa: F401
     finish_transcription,
@@ -144,6 +145,206 @@ def _transcription_progress(redis_client, job_id: str, clock=time.monotonic):
     return on_progress
 
 
+class _AttemptNoLongerWanted(Exception):
+    """The job stopped being open (deleted, failed for good) while a routed attempt ran"""
+
+
+def _transcribe_audio(job_id: str, file_path: Path, options: dict, redis_client, es_client, guard=None) -> None:
+    """
+    Transcribe a media file and complete the job (outputs, index, status). `guard`,
+    when given, is asked right before the outputs are written; False aborts.
+    """
+    from workers.audio import transcribe_with_gpu_fallback
+
+    provider_override = options.get('transcriber_provider')
+
+    # Update progress
+    redis_client.update_job_progress(job_id, TRANSCRIPTION_PROGRESS_START)
+
+    # Transcribe audio
+    transcription_options = {
+        'language': options.get('audio_language') or options.get('language'),
+        'include_word_timestamps': options.get('include_word_timestamps', False),
+        'temperature': options.get('temperature', 0.0),
+        'beam_size': options.get('beam_size', 5)
+    }
+
+    # Uses the GPU when available (detected once per worker) and falls back to CPU
+    transcription_started = time.monotonic()
+    result, transcriber = transcribe_with_gpu_fallback(
+        file_path,
+        transcription_options,
+        force_provider=provider_override,
+        on_progress=_transcription_progress(redis_client, job_id),
+    )
+    processing_seconds = round(time.monotonic() - transcription_started, 1)
+
+    logger.info(
+        f"[MAIN JOB {job_id}] Transcription complete with {transcriber.__class__.__name__} "
+        f"on {result.get('device')}: {result['word_count']} words, "
+        f"{result['duration']:.2f}s, language={result['language']}"
+    )
+    redis_client.update_job_progress(job_id, TRANSCRIPTION_PROGRESS_END)
+
+    if guard is not None and not guard():
+        raise _AttemptNoLongerWanted(job_id)
+
+    finish_transcription(
+        job_id,
+        result,
+        options=options,
+        file_path=file_path,
+        processing_seconds=processing_seconds,
+        compute_type=getattr(transcriber, 'compute_type', None),
+        redis_client=redis_client,
+        es_client=es_client,
+    )
+
+
+def _divert_audio_to_backlog(job_id: str, file_path: Path, options: dict, redis_client):
+    """
+    process_conversion without usage_id met audio and transcription has a route:
+    move the file to the shared audio directory, put the job back to PENDING and
+    hand it to dispatch.submit (spec 0003, 4.3). Returns (diverted, file path).
+    Without an active route it returns at once and touches nothing.
+    """
+    from shared.admin import is_effective_admin
+    from shared.engines import dispatch as engine_dispatch
+    from shared.engines import routing
+
+    route = routing.get_route("transcription", session_factory=SessionLocal)
+    if route is None or not route.active:
+        return False, file_path
+
+    audio_dir = Path(settings.temp_storage_path) / "audio" / job_id
+    if not file_path.resolve().is_relative_to(audio_dir.resolve()):
+        audio_dir.mkdir(parents=True, exist_ok=True)
+        moved = audio_dir / file_path.name
+        shutil.move(str(file_path), moved)
+        file_path = moved
+
+    db = SessionLocal()
+    try:
+        job = db.query(Job).filter(Job.id == job_id).first()
+        user_id = job.user_id if job else None
+        is_admin = is_effective_admin(job.user) if job is not None and job.user is not None else False
+        name = job.name if job else None
+        if job:
+            job.status = JobStatus.PENDING
+            job.started_at = None
+            db.commit()
+    finally:
+        db.close()
+    redis_client.set_job_status(job_id=job_id, job_type="main", status="queued", progress=0, name=name)
+
+    routed_options = dict(engine_dispatch.DEFAULT_TRANSCRIPTION_OPTIONS)
+    routed_options.update({k: v for k, v in options.items() if k in engine_dispatch.TRANSCRIPTION_OPTIONS})
+    payload = engine_dispatch.transcription_payload(job_id, file_path, routed_options,
+                                                    today_queue=settings.celery_task_default_queue)
+    outcome = engine_dispatch.submit(
+        feature="transcription", job_id=job_id, user_id=user_id, is_admin=is_admin, payload=payload,
+        today=None, celery=celery_app, media_bytes=file_path.stat().st_size, session_factory=SessionLocal,
+    )
+    if outcome == "today":  # the route went away in between: transcribe here after all
+        _set_processing(job_id)
+        return False, file_path
+    logger.info(f"[MAIN JOB {job_id}] Audio handed to the transcription route ({outcome})")
+    return True, file_path
+
+
+def _set_processing(job_id: str) -> None:
+    db = SessionLocal()
+    try:
+        job = db.query(Job).filter(Job.id == job_id).first()
+        if job:
+            job.status = JobStatus.PROCESSING
+            job.started_at = datetime.utcnow()
+            db.commit()
+    except Exception as e:
+        logger.error(f"[MAIN JOB {job_id}] MySQL update error: {e}")
+    finally:
+        db.close()
+
+
+def _job_still_open(job_id: str) -> bool:
+    db = SessionLocal()
+    try:
+        job = db.query(Job).filter(Job.id == job_id).first()
+        return job is not None and job.status in (JobStatus.PENDING, JobStatus.PROCESSING)
+    finally:
+        db.close()
+
+
+def _run_routed_transcription(job_id: str, source: str, options: dict, usage_id: int):
+    """
+    A transcription placed by the dispatcher on the local engine (spec 0003, 4.7).
+
+    Claims the reservation before any work (lost claim => acknowledge and leave:
+    a redelivered or late message never runs twice), heartbeats the usage row,
+    and settles it. Never self.retry: a failure settles `failed` and the backlog
+    decides - back to the queue with backoff until max_attempts, then FAILED.
+    """
+    from shared.engines import dispatch as engine_dispatch
+    from shared.engines import ledger
+    from workers.engines.local import UsageHeartbeat
+
+    holder = ledger.holder_id()
+    outcome, _ = ledger.claim(usage_id, holder, session_factory=SessionLocal)
+    if outcome != ledger.CLAIMED:
+        logger.info(f"[MAIN JOB {job_id}] Usage {usage_id}: {outcome} - acknowledged without running")
+        if outcome != ledger.LOST:
+            engine_dispatch.kick(celery_app)
+        return {"job_id": job_id, "status": outcome}
+
+    redis_client = get_redis_client()
+    es_client = get_es_client()
+    heartbeat = UsageHeartbeat(usage_id, holder, session_factory=SessionLocal).start()
+    started = time.monotonic()
+    change = None
+    try:
+        logger.info(f"[MAIN JOB {job_id}] Routed transcription, usage {usage_id}")
+        _set_processing(job_id)
+        redis_client.set_job_status(job_id=job_id, job_type="main", status="processing", progress=10,
+                                    started_at=datetime.utcnow())
+        file_path = _resolve_uploaded_file(source, job_id)
+        redis_client.update_job_progress(job_id, 20)
+        _transcribe_audio(job_id, file_path, options, redis_client, es_client, guard=lambda: _job_still_open(job_id))
+    except _AttemptNoLongerWanted:
+        heartbeat.stop()
+        logger.warning(f"[MAIN JOB {job_id}] The job is no longer open; its transcript is discarded")
+        ledger.settle_failed(usage_id, holder, error_code="CANCELLED", detail="job no longer open",
+                             counts=False, terminal=True, outcome="cancelled", session_factory=SessionLocal)
+        return {"job_id": job_id, "status": "cancelled"}
+    except SoftTimeLimitExceeded:
+        heartbeat.stop()
+        # As on today's path, a transcription that ran out of time would again: fail for good
+        error = f"Task exceeded soft time limit ({settings.conversion_timeout_seconds - 30}s)"
+        logger.warning(f"[MAIN JOB {job_id}] {error}")
+        _, change = ledger.settle_failed(usage_id, holder, error_code="TIMEOUT", detail=error, terminal=True,
+                                         session_factory=SessionLocal)
+        return {"job_id": job_id, "status": "failed", "error": error}
+    except Exception as exc:
+        heartbeat.stop()
+        logger.error(f"[MAIN JOB {job_id}] Routed transcription failed: {exc}", exc_info=True)
+        _, change = ledger.settle_failed(usage_id, holder, error_code="INTERNAL", detail=str(exc),
+                                         session_factory=SessionLocal)
+        try:
+            shutil.rmtree(Path(settings.temp_storage_path) / job_id, ignore_errors=True)
+        except Exception:
+            pass
+        return {"job_id": job_id, "status": change.status if change else "failed"}
+    finally:
+        heartbeat.stop()
+        ledger.apply_job_change(redis_client, change)
+        if change is not None:
+            engine_dispatch.kick(celery_app)
+
+    ledger.settle_succeeded(usage_id, holder, measured_seconds=round(time.monotonic() - started, 3),
+                            session_factory=SessionLocal)
+    engine_dispatch.kick(celery_app)
+    return {"job_id": job_id, "status": "completed"}
+
+
 @celery_app.task(bind=True, max_retries=3, name="workers.tasks.process_conversion")
 def process_conversion(
     self,
@@ -153,6 +354,7 @@ def process_conversion(
     options: dict = None,
     callback_url: str = None,
     auth_token: str = None,
+    usage_id: int = None,
 ):
     """
     Main job - processa conversão de documento
@@ -164,9 +366,15 @@ def process_conversion(
         options: Opções de conversão
         callback_url: Webhook opcional
         auth_token: Token de autenticação
+        usage_id: Set only when the dispatcher (or its fallback) placed this item on
+            the local engine (spec 0003): the reservation to claim before running.
+            Without it, everything below runs exactly as it always did.
     """
     if options is None:
         options = {}
+
+    if usage_id is not None:
+        return _run_routed_transcription(job_id, source, options, usage_id)
 
     redis_client = get_redis_client()
     es_client = get_es_client()
@@ -222,55 +430,21 @@ def process_conversion(
 
         # 2. Check if this is an audio file for transcription
         is_audio = options.get('is_audio', False) or source_type == 'audio'
-        audio_extensions = ['.mp3', '.wav', '.m4a', '.flac', '.ogg', '.opus', '.webm', '.wma', '.aac', '.oga', '.spx']
+        audio_extensions = AUDIO_EXTENSIONS
         file_ext = file_path.suffix.lower()
 
         if is_audio or file_ext in audio_extensions:
+            # With a transcription route, audio that only revealed itself here (URL,
+            # Drive, Dropbox, or a route created after the upload) joins the backlog
+            # instead of transcribing in this worker. No route: nothing changes.
+            diverted, file_path = _divert_audio_to_backlog(job_id, file_path, options, redis_client)
+            if diverted:
+                return {"job_id": job_id, "status": "queued"}
+
             logger.info(f"[MAIN JOB {job_id}] Audio file detected - transcribing with Whisper")
 
             try:
-                from workers.audio import transcribe_with_gpu_fallback
-
-                provider_override = options.get('transcriber_provider')
-
-                # Update progress
-                redis_client.update_job_progress(job_id, TRANSCRIPTION_PROGRESS_START)
-
-                # Transcribe audio
-                transcription_options = {
-                    'language': options.get('audio_language') or options.get('language'),
-                    'include_word_timestamps': options.get('include_word_timestamps', False),
-                    'temperature': options.get('temperature', 0.0),
-                    'beam_size': options.get('beam_size', 5)
-                }
-
-                # Uses the GPU when available (detected once per worker) and falls back to CPU
-                transcription_started = time.monotonic()
-                result, transcriber = transcribe_with_gpu_fallback(
-                    file_path,
-                    transcription_options,
-                    force_provider=provider_override,
-                    on_progress=_transcription_progress(redis_client, job_id),
-                )
-                processing_seconds = round(time.monotonic() - transcription_started, 1)
-
-                logger.info(
-                    f"[MAIN JOB {job_id}] Transcription complete with {transcriber.__class__.__name__} "
-                    f"on {result.get('device')}: {result['word_count']} words, "
-                    f"{result['duration']:.2f}s, language={result['language']}"
-                )
-                redis_client.update_job_progress(job_id, TRANSCRIPTION_PROGRESS_END)
-
-                finish_transcription(
-                    job_id,
-                    result,
-                    options=options,
-                    file_path=file_path,
-                    processing_seconds=processing_seconds,
-                    compute_type=getattr(transcriber, 'compute_type', None),
-                    redis_client=redis_client,
-                    es_client=es_client,
-                )
+                _transcribe_audio(job_id, file_path, options, redis_client, es_client)
                 logger.info(f"[MAIN JOB {job_id}] ✓ Audio transcription completed successfully")
                 return
 

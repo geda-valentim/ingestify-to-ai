@@ -89,6 +89,11 @@ class PageStatus(BaseModel):
     error: Optional[str] = None
 
 
+class JobEngine(BaseModel):
+    """Onde um job roteado roda: no servidor (local) ou numa conta de nuvem (cloud)"""
+    kind: Literal["local", "cloud"]
+
+
 class ChildJobs(BaseModel):
     """Jobs filhos de um job principal"""
     split_job_id: Optional[UUID] = None
@@ -150,6 +155,11 @@ class JobStatusResponse(BaseModel):
     # Transcrições em andamento: quanto da mídia já foi transcrito, em segundos
     transcribed_seconds: Optional[float] = None
     media_duration: Optional[float] = None
+
+    # Só com roteamento (spec 0003): onde o job roda e por que ainda espera.
+    # Nada de orçamento ou de outros usuários; null sem rota.
+    engine: Optional[JobEngine] = None
+    queue_reason: Optional[Literal["in_queue", "starting"]] = None
 
 
 class TranscriptSegment(BaseModel):

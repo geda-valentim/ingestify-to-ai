@@ -744,11 +744,33 @@ Cada item cabe num PR, na ordem. Fora das mudanças deliberadas de 0a/0b, zero-c
       `GET /admin/engine-adapters|engines|engines/{id}|gpus`, `PUT …/features/{feature}` e
       `…/gpus` só com sessão JWT e auditados; CLI `list|set-capacity|set-gpus` em
       `scripts/engines.py`. Neste host: gpu0 + transcrição 2, visão 1, Docling 1 = 10,3 de 15,9 GB.)
-- [ ] **3b — Backlog e colocação com executor falso**: `dispatch.submit` (inclui `/upload`,
+- [x] **3b — Backlog e colocação com executor falso**: `dispatch.submit` (inclui `/upload`,
       `/convert` e o desvio em `process_conversion`), sonda, lease com época, transições
       condicionais, candidatos por classe, regra de pulos, passos e condições, local com
       `usage_id` (claim, heartbeat, sem `self.retry`), claim timeout, fallback com linha de uso,
       watchdog na API, rota `draining`, sweeper, estados de job. Rota só com `local` já é útil.
+      (Feita em 2026-10-05: `shared/engines/{routing,dispatch,ledger,budget,media}.py`,
+      `workers/engines/{dispatcher,lease,sweeper,watchdog,executors,local,tasks}.py`,
+      `api/routing_admin_routes.py` (`GET /admin/routing`, `PUT|DELETE /admin/routing/{feature}`,
+      `GET /admin/engines/status`), CLI `routes show|set|delete`, `worker-dispatch` no profile
+      `engines` com beat embutido (`-B`, `ENGINES_DISPATCH_BEAT`), `engine`/`queue_reason` em
+      `GET /jobs/{id}`; ver `docs/features/engines.md`. Desvios: (1) rota só aceita o motor `local`
+      e só a feature `transcription` (409 para remoto até a 4a, 422 para Docling/visão até a 8);
+      as regras remotas (orçamento, `spend_cap`, admins, `fill_first`, pulos) foram testadas com um
+      executor falso registrado só nos testes; (2) coluna nova `engine_feature_state.workers_seen_at`
+      (Alembic `5d2e8f1a6c47` + `_ADDED_COLUMNS`) para medir "sem worker vivo há 180 s";
+      (3) estouro do limite suave com `usage_id` falha de vez (`TIMEOUT`, sem nova tentativa), como
+      a transcrição já fazia; (4) o caminho roteado conclui a partir de `PENDING` ou `PROCESSING`
+      (uma tentativa dada como perdida que termina entrega a saída) e recusa, liquidando
+      `cancelled`, job apagado/`FAILED`; (5) o watchdog também roda o sweeper local e drena rotas
+      `draining` enquanto o despachante está parado; o alerta é só log (webhook fica para a 4c);
+      (6) `unplaceable_since` só marca recusas estruturais (orçamento, inelegível), nunca "cheio"
+      ou condição, para `on_no_engine=fail` não falhar quem só espera vaga; (7) a sonda lê a
+      duração do cabeçalho via PyAV com leitor limitado, sem remux de vídeo; após 3 tentativas o
+      item segue sem duração (passos locais aceitam); itens devolvidos de um fallback não são
+      re-sondados (só passos remotos precisam); (8) `get_stuck_jobs` exclui jobs com linha de uso
+      em voo e heartbeat nos últimos 600 s; (9) linhas terminais de `job_dispatches` ficam sem
+      retenção por enquanto.)
 - [ ] **4a — Uma conta Modal, `E=1`**: app Whisper, imagem com hashes, deploy por CLI com
       fingerprint, `ModalAdapter`, `container_id` no protocolo, `worker-remote`, rotas admin de
       mutação, correção do `force_provider`. Gates T1–T5, T8. **Primeiro PR que ativa remoto.**

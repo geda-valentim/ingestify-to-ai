@@ -468,6 +468,9 @@ class EngineFeatureState(Base):
     capacity_penalty = Column(Integer, nullable=False, default=0)
     penalty_until = Column(Micros)
     alive_below_configured_since = Column(Micros)
+    # Last time the dispatcher saw a live local worker of this feature; with none for
+    # local_unhealthy_after_seconds the local binding is unhealthy (spec 0003, 4.6.7)
+    workers_seen_at = Column(Micros)
     updated_at = Column(Micros, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
 

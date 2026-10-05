@@ -24,6 +24,15 @@ Manage execution engines (spec 0003) from the server shell.
         an engine. Changes are validated against VRAM (summed over every feature on a
         shared local GPU) and audited.
 
+    python scripts/engines.py routes show [--json]
+    python scripts/engines.py routes set transcription --step local [--step "modal_1,modal_2 fill_first min_wait=600"]
+        [--max-attempts 3] [--fallback local_direct|hold] [--on-no-engine hold|fail --fail-after 3600]
+    python scripts/engines.py routes delete transcription
+        Feature routes (spec 0003): with a route, the feature's items queue in the
+        backlog and the dispatcher (worker-dispatch, compose profile `engines`)
+        places them step by step. Deleting a route drains its backlog back to the
+        default path. Until slice 4a a route may only use the local engine.
+
 Inside Docker (the API container has the database and the public key):
     docker compose exec -T api python scripts/engines.py import-env < /path/to/.env
     docker compose exec -T api python scripts/engines.py import-env --apply < /path/to/.env
@@ -156,6 +165,57 @@ def _manage(args) -> int:
         db.close()
 
 
+def _routes(args) -> int:
+    import json
+
+    from shared.database import SessionLocal
+    from shared.engines import routing
+    from shared.models import Engine, FeatureRoute
+
+    db = SessionLocal()
+    try:
+        if args.action == "show":
+            engines = {e.id: e for e in db.query(Engine)}
+            routes = {r.feature: r for r in db.query(FeatureRoute)}
+            views = [routing.describe(routes.get(f), engines, f) for f in routing.all_features()]
+            if args.json:
+                print(json.dumps(views, indent=1, default=str))
+                return 0
+            for v in views:
+                if v["implicit"]:
+                    print(f"{v['feature']:<20} no route: today's path")
+                    continue
+                print(f"{v['feature']:<20} {v['state']} v{v['version']} fallback={v['dispatcher_fallback']} "
+                      f"max_attempts={v['max_attempts']} on_no_engine={v['on_no_engine']}")
+                for s in v["steps"]:
+                    slugs = ",".join(e["slug"] or e["id"] for e in s["engines"])
+                    extra = " ".join(f"{k}={s[k]}" for k in ("when", "spend_cap", "scale_out_after_seconds") if s.get(k))
+                    print(f"  {s['position']}. [{slugs}] {s['group_strategy']} {extra}")
+            return 0
+        if args.action == "set":
+            spec = routing.RouteSpec(
+                steps=[routing.parse_step(text) for text in args.step], max_attempts=args.max_attempts,
+                dispatcher_fallback=args.fallback, on_no_engine=args.on_no_engine,
+                fail_after_seconds=args.fail_after,
+            )
+            route, warnings = routing.put_route(db, args.feature, spec, version=None, actor_user_id=None,
+                                                auth_method="cli")
+            for w in warnings:
+                print(f"⚠ {w}")
+            print(f"✅ {args.feature} route saved (version {route.version}). Items now queue in the backlog; "
+                  f"the dispatcher runs in worker-dispatch (docker compose --profile engines up -d worker-dispatch).")
+            return 0
+        routing.drain_route(db, args.feature, actor_user_id=None, auth_method="cli")
+        print(f"✅ {args.feature} route is draining: its backlog returns to the default path, then it is removed.")
+        return 0
+    except (routing.RouteError, routing.VersionConflict, LookupError, ValueError) as e:
+        db.rollback()
+        print(f"❌ {e}")
+        return 1
+    finally:
+        db.close()
+
+
 def _alive() -> dict:
     try:
         from shared.engines.features import FEATURES
@@ -202,6 +262,22 @@ def main(argv=None) -> int:
     gpus.add_argument("gpu", nargs="+", help="ref:vram_gb[:name[:uuid]], e.g. gpu0:16:RTX5060Ti:GPU-1234")
     gpus.add_argument("--reserve-gb", type=float, default=1.0)
 
+    routes = sub.add_parser("routes", help="show, set or remove feature routes")
+    routes_sub = routes.add_subparsers(dest="action", required=True)
+    routes_show = routes_sub.add_parser("show")
+    routes_show.add_argument("--json", action="store_true")
+    routes_set = routes_sub.add_parser("set")
+    routes_set.add_argument("feature")
+    routes_set.add_argument("--step", action="append", required=True,
+                            help='engines and options, in order, e.g. "local" or "modal_1,modal_2 fill_first min_wait=600"')
+    routes_set.add_argument("--max-attempts", type=int, default=3)
+    routes_set.add_argument("--fallback", choices=["local_direct", "hold"], default="local_direct",
+                            help="while the dispatcher is down: send new items straight to the local workers, or hold them")
+    routes_set.add_argument("--on-no-engine", choices=["hold", "fail"], default="hold")
+    routes_set.add_argument("--fail-after", type=int, help="seconds before on-no-engine=fail fails an item")
+    routes_delete = routes_sub.add_parser("delete")
+    routes_delete.add_argument("feature")
+
     args = parser.parse_args(argv)
 
     if args.command == "keygen":
@@ -223,6 +299,9 @@ def main(argv=None) -> int:
 
     if args.command in ("list", "set-capacity", "set-gpus"):
         return _manage(args)
+
+    if args.command == "routes":
+        return _routes(args)
 
     if args.command == "import-modal-toml":
         return _import(accounts_from_modal_toml(Path(args.path).read_text()), args.limit_usd, args.apply)

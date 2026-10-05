@@ -37,6 +37,9 @@ from shared.auth import get_current_active_user
 from api.deps import get_owned_job, get_owned_page_or_none
 from shared.utils import sanitize_upload_filename
 from shared.tags import set_job_tags
+from shared.admin import is_effective_admin
+from shared.engines import dispatch as engine_dispatch
+from shared.engines.media import is_audio_filename
 from api.tag_routes import TAGS_FORM_DESCRIPTION, add_tags_to_existing_job, parse_tags_or_422
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
@@ -221,12 +224,15 @@ async def upload_and_convert(
                 # Continue with filesystem fallback
 
             # Enqueue task
-            process_conversion.delay(
-                job_id=str(job_id),
-                source_type="file",
-                source=str(temp_file_path),
-                options={"docling_preset": docling_preset},
-            )
+            def enqueue():
+                process_conversion.delay(
+                    job_id=str(job_id),
+                    source_type="file",
+                    source=str(temp_file_path),
+                    options={"docling_preset": docling_preset},
+                )
+
+            _enqueue_maybe_routed(filename, job_id, temp_file_path, current_user, file_size_bytes, enqueue)
             logger.info(f"MAIN JOB {job_id} enqueued to Celery successfully")
 
         except ImportError as e:
@@ -273,6 +279,29 @@ async def upload_and_convert(
     finally:
         # Remove the staged upload unless it was moved to the job directory
         staging_path.unlink(missing_ok=True)
+
+
+def _engine_celery():
+    """The Celery app routed work is published with (by task name, see shared/engines/dispatch.py)"""
+    from workers.celery_app import celery_app
+    return celery_app
+
+
+def _enqueue_maybe_routed(filename, job_id, file_path, user, file_size_bytes, enqueue) -> None:
+    """
+    /upload and /convert: an audio file goes through the transcription route when
+    one exists (spec 0003, R5), with /transcribe's default options; anything else,
+    and audio without a route, is enqueued exactly as before.
+    """
+    if not is_audio_filename(filename):
+        enqueue()
+        return
+    engine_dispatch.submit(
+        feature="transcription", job_id=str(job_id), user_id=user.id, is_admin=is_effective_admin(user),
+        payload=engine_dispatch.transcription_payload(job_id, file_path, engine_dispatch.DEFAULT_TRANSCRIPTION_OPTIONS,
+                                                      settings.celery_task_default_queue),
+        today=enqueue, celery=_engine_celery(), media_bytes=file_size_bytes, session_factory=SessionLocal,
+    )
 
 
 TRANSCRIPT_OUTPUT_FORMATS = ["markdown", "vtt", "srt", "txt", "json"]
@@ -612,14 +641,26 @@ async def transcribe_audio(
 
             # Enqueue task (use 'file' source type since audio is already saved locally)
             # on the transcription queue, served by the dedicated worker-audio service
-            process_conversion.apply_async(
-                kwargs=dict(
-                    job_id=str(job_id),
-                    source_type="file",
-                    source=str(temp_file_path),
-                    options=options,
-                ),
-                queue=settings.transcription_queue,
+            def enqueue():
+                process_conversion.apply_async(
+                    kwargs=dict(
+                        job_id=str(job_id),
+                        source_type="file",
+                        source=str(temp_file_path),
+                        options=options,
+                    ),
+                    queue=settings.transcription_queue,
+                )
+
+            # With a transcription route the job joins the backlog instead (spec 0003);
+            # without one, submit() just calls enqueue()
+            engine_dispatch.submit(
+                feature="transcription", job_id=str(job_id), user_id=current_user.id,
+                is_admin=is_effective_admin(current_user),
+                payload=engine_dispatch.transcription_payload(job_id, temp_file_path, options,
+                                                              settings.transcription_queue),
+                today=enqueue, celery=_engine_celery(), media_bytes=file_size_bytes,
+                session_factory=SessionLocal,
             )
             logger.info(f"AUDIO JOB {job_id} enqueued to Celery successfully")
 
@@ -903,7 +944,14 @@ async def convert_document(
                     # Continue with filesystem fallback
 
             # Enqueue task
-            process_conversion.delay(**task_kwargs)
+            def enqueue():
+                process_conversion.delay(**task_kwargs)
+
+            if staging_path:
+                _enqueue_maybe_routed(filename, job_id, task_kwargs["source"], current_user, file_size_bytes,
+                                      enqueue)
+            else:
+                enqueue()  # URL / Drive / Dropbox: audio is only recognised once the worker downloads it
             logger.info(f"MAIN JOB {job_id} enqueued to Celery successfully")
 
         except ImportError as e:
@@ -1037,6 +1085,17 @@ async def get_job_status(
     for field in ("transcribed_seconds", "media_duration"):
         if status_data.get(field) is not None:
             response_data[field] = status_data[field]
+
+    # Routed work only (spec 0003): local or cloud, and why it still waits
+    if db_job is not None:
+        try:
+            engine, queue_reason = engine_dispatch.job_signal(db, job_id)
+        except Exception as e:  # informative; never fail the status over it
+            logger.warning(f"Could not read the dispatch state of job {job_id}: {e}")
+            db.rollback()
+            engine, queue_reason = None, None
+        response_data["engine"] = engine
+        response_data["queue_reason"] = queue_reason
 
     # Add child jobs info for main jobs
     if job_type == "main":
