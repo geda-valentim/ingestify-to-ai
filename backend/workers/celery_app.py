@@ -83,6 +83,10 @@ celery_app.autodiscover_tasks(["workers"])
 # task_reject_on_worker_lost is redelivered forever rather than failing once.
 import workers.vision_tasks  # noqa: F401,E402
 
+# Local workers announce which feature lane they serve and the GPU they see
+# (spec 0003); signal handlers only, nothing runs at import
+import workers.engines.heartbeat  # noqa: F401,E402
+
 # The vision endpoints answer synchronously, so they cannot queue behind the
 # general work: `ingestify` has 10 slots that multi-minute PDF page jobs can all
 # occupy, and a 60s request behind those would time out for reasons that have

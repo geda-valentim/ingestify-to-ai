@@ -737,8 +737,13 @@ Cada item cabe num PR, na ordem. Fora das mudanças deliberadas de 0a/0b, zero-c
       em SQLite e MySQL 8; selagem X25519 + HKDF + ChaCha20-Poly1305 com `cryptography`, já
       dependência, no lugar de PyNaCl, presa ao `engine_id` e ao `key_id`; redação pela record
       factory do `logging`; `scripts/engines.py keygen | import-env | import-modal-toml`.)
-- [ ] **3a — Capacidade**: pegadas, bindings, guarda de VRAM, GPUs declaradas, heartbeats NVML,
-      "configurado vs vivos", `GET /admin/gpus`, `set-capacity`. Sem rota ainda.
+- [x] **3a — Capacidade**: pegadas, bindings, guarda de VRAM, GPUs declaradas, heartbeats NVML,
+      "configurado vs vivos", `GET /admin/gpus`, `set-capacity`. Sem rota ainda. (Feita em
+      2026-10-05: `shared/engines/{features,gpus,capacity,store,liveness}.py`; heartbeat por
+      `nvidia-smi` em vez de pynvml, sem dependência nova; motor `local` criado no `init_db`;
+      `GET /admin/engine-adapters|engines|engines/{id}|gpus`, `PUT …/features/{feature}` e
+      `…/gpus` só com sessão JWT e auditados; CLI `list|set-capacity|set-gpus` em
+      `scripts/engines.py`. Neste host: gpu0 + transcrição 2, visão 1, Docling 1 = 10,3 de 15,9 GB.)
 - [ ] **3b — Backlog e colocação com executor falso**: `dispatch.submit` (inclui `/upload`,
       `/convert` e o desvio em `process_conversion`), sonda, lease com época, transições
       condicionais, candidatos por classe, regra de pulos, passos e condições, local com

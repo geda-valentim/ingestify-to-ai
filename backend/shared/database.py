@@ -46,6 +46,11 @@ def init_db():
     Base.metadata.create_all(bind=engine)
     _add_missing_columns()
 
+    # The built-in local engine (spec 0003): this server's workers, no bindings until declared
+    from shared.engines.store import ensure_local_engine
+    with SessionLocal() as db:
+        ensure_local_engine(db)
+
 
 # Columns added to existing tables after they were first created. create_all() only
 # creates missing tables, so existing databases need these ALTERs (otherwise every
