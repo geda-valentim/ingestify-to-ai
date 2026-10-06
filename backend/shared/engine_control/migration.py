@@ -1,6 +1,8 @@
 """Explicit idempotent 0007 DDL, independent of legacy Alembic stamping."""
 
-from sqlalchemy import inspect
+from sqlalchemy import inspect, text
+from sqlalchemy.engine import Engine
+from sqlalchemy.schema import CreateColumn
 from shared.engine_control import models
 from shared.database import Base
 
@@ -13,8 +15,30 @@ TABLES = [
 ]
 
 
+def _upgrade(connection):
+    Base.metadata.create_all(connection, tables=TABLES)
+    # Early opt-in installations already created this table. create_all does
+    # not add columns or indexes to it; retain its operations and resource gates.
+    resource = models.ControlResource.__table__
+    column = resource.c.maintenance_operation_id
+    present = {c["name"] for c in inspect(connection).get_columns(resource.name)}
+    if column.name not in present:
+        definition = str(CreateColumn(column).compile(dialect=connection.dialect))
+        connection.execute(
+            text(f"ALTER TABLE {resource.name} ADD COLUMN {definition}")
+        )
+    for index in resource.indexes:
+        if column.name in index.columns:
+            index.create(connection, checkfirst=True)
+
+
 def upgrade(bind):
-    Base.metadata.create_all(bind, tables=TABLES)
+    if isinstance(bind, Engine):
+        with bind.begin() as connection:
+            _upgrade(connection)
+    else:
+        # Alembic supplies a connection with its transaction already open.
+        _upgrade(bind)
 
 
 def downgrade(bind):
