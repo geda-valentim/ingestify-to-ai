@@ -4,6 +4,20 @@ O Ingestify transforma documentos, imagens, áudio e vídeo em informação util
 
 Este documento orienta o conteúdo, o design e a implementação da landing page. Os textos públicos propostos aparecem em blocos de citação; as orientações de composição e comportamento acompanham cada seção. O estado das funcionalidades corresponde à documentação consultada em 5 de outubro de 2026. O repositório foi conferido durante a produção e está público; a home usa “Ver no GitHub”.
 
+## Posicionamento vigente — Data Engineering para AI Engineering
+
+Esta revisão passa a orientar a mensagem pública da home. O Ingestify é a camada de ingestão e conversão de dados não estruturados para pipelines de Data Engineering e AI Engineering. A entrega atual é transformar documentos, imagens e gravações em Markdown, texto, transcrições e metadados, com execução self-hosted e acesso por API.
+
+A abertura usa “Files in. Data out.” e apresenta self-hosted no primeiro parágrafo. O diferencial é a operação em torno da conversão: jobs assíncronos, deduplicação de documentos dentro do projeto, acompanhamento e recuperação de páginas PDF, projetos, pastas e tags. A página mostra formatos comuns e limites padrão, com links para as regras completas da documentação.
+
+A próxima etapa do produto é a entrega direta ao Data Lake. Ela tem seção própria e rótulo **PLANNED** tanto no diagrama quanto em todos os trechos futuros do filme. Hoje o consumidor recupera os resultados pela API. A home não anuncia conectores de destino, Iceberg/Delta, camadas bronze/silver/gold, chunking, embeddings, webhooks ou qualidade de dados como funcionalidades existentes.
+
+O exemplo da API mantém o contrato vigente (`/api/upload` e `/api/jobs/{job_id}/result`). O upload usa arquivo, projeto e tags; não é necessário expor um preset do motor nesse exemplo. A aba JSON apresenta valores de exemplo compatíveis com `JobResultResponse` e `DocumentMetadata`, conferidos no OpenAPI do serviço em execução. Não se inventa `/v1` nem um parâmetro `preset` que o backend ainda não oferece.
+
+Os CTAs iniciais permitem explorar conversões e código sem conta. O acesso ao workspace continua autenticado. A home liga diretamente ao OpenAPI JSON e informa que a licença MIT está declarada no README do repositório, sem acrescentar termos de licença por conta própria. O conteúdo público e os metadados permanecem em inglês. A home tem um único H1 e suas seções principais são renderizadas no HTML inicial.
+
+As recomendações recebidas sobre segurança, autenticação, versionamento da API, documentação e implementação do Data Lake são frentes separadas; esta entrega altera o posicionamento e o conteúdo da home.
+
 ## Revisão implementada — largura total, SVG e inglês
 
 Esta revisão substitui as instruções anteriores de composição e os textos públicos em português. A home publicada usa inglês, incluindo metadados, navegação, exemplos, FAQ e rótulos acessíveis. A abertura passa a ser “Your files. AI-ready.”. O texto vigente está em `frontend/components/landing/content.ts` e `landing-sections.tsx`.

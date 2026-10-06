@@ -42,3 +42,13 @@ O contexto de publicação fica em `/data/tmp/ingestify/release-context/`. A tro
 - Filme com opacidade integral. No mobile, cópia, quadro completo e navegação ocupam linhas separadas; sem máscara de transparência. A tipografia dos capítulos tem regra própria e preserva espaço para o filme nas telas de 320px.
 - Títulos secundários usam preenchimento sólido, sem contorno sobreposto.
 - Revisão independente conferiu cenas de documentos, Compute, Connect e ponte distribuída em telas pequenas, além da separação de texto e mídia no desktop/tablet.
+
+## Posicionamento Data Engineering / AI Engineering
+
+- Formatos e limites conferidos na documentação do frontend publicado e nas configurações do backend; sem anunciar formatos legados não garantidos nem limites fixos de páginas.
+- Resposta JSON de exemplo conferida com `JobResultResponse`, `ConversionResult` e `DocumentMetadata` do OpenAPI do serviço em execução. Mantidos os endpoints existentes; sem introduzir versionamento ou parâmetros fictícios.
+- Deduplicação limitada a documentos no mesmo projeto, recuperação por página e organização por projeto/pasta/tag conferidas na implementação.
+- Entrega direta ao Data Lake aparece como **PLANNED** no diagrama e nos trechos 11, 12 e 13 do filme. Chunks, embeddings e tabelas lakehouse não são anunciados como disponíveis.
+- A licença MIT é citada como declaração do README, sem criar ou substituir arquivos de licença.
+- Teste sem JavaScript confirmou um único H1 e conteúdo de posicionamento/Data Lake no HTML inicial da home. Essa checagem não altera nem certifica o comportamento sem JavaScript de `/docs` ou `/api/docs`.
+- Revisão independente em 320×640, 390×667, 768×1024, 1440×900 e 1920×650; abas do exemplo e cópia JSON verificadas.

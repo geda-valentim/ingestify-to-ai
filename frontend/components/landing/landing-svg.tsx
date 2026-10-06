@@ -351,3 +351,91 @@ export function ComputeDiagram({ cloud }: { cloud: boolean }) {
     </svg>
   );
 }
+
+export function LakeDeliveryDiagram() {
+  const id = useId();
+  return (
+    <div className="lake-flow">
+      <svg
+        className="lake-connections"
+        viewBox="0 0 1000 120"
+        preserveAspectRatio="none"
+        aria-hidden="true"
+      >
+        <defs>
+          <linearGradient
+            id={id}
+            gradientUnits="userSpaceOnUse"
+            x1="166"
+            y1="60"
+            x2="500"
+            y2="60"
+          >
+            <stop stopColor="#f06b91" />
+            <stop offset=".25" stopColor="#eeb94a" />
+            <stop offset=".5" stopColor="#6dc7ad" />
+            <stop offset=".75" stopColor="#6e9fe9" />
+            <stop offset="1" stopColor="#b889df" />
+          </linearGradient>
+        </defs>
+        <path
+          d="M166 60H500"
+          stroke={`url(#${id})`}
+          strokeWidth="2"
+          className="diagram-route"
+        />
+        <path
+          d="M500 60H834"
+          stroke="#999"
+          strokeWidth="1.5"
+          strokeDasharray="5 7"
+        />
+      </svg>
+      <ol>
+        <li>
+          <span className="lake-node">
+            <svg viewBox="0 0 48 48" aria-hidden="true">
+              <path d="M13 7h16l7 7v27H13zM29 7v8h7M19 23h11M19 29h11M19 35h7" />
+            </svg>
+          </span>
+          <span className="lake-state">AVAILABLE</span>
+          <h3>Source files</h3>
+          <p>
+            Documents, images
+            <br />
+            and recordings
+          </p>
+        </li>
+        <li>
+          <span className="lake-node">
+            <svg viewBox="0 0 48 48" aria-hidden="true">
+              <path d="m5 16 19-10 19 10-19 10zM5 24l19 10 19-10M5 32l19 10 19-10" />
+            </svg>
+          </span>
+          <span className="lake-state">AVAILABLE</span>
+          <h3>Conversion API</h3>
+          <p>
+            Markdown, text,
+            <br />
+            transcripts and metadata
+          </p>
+        </li>
+        <li className="lake-planned">
+          <span className="lake-node">
+            <svg viewBox="0 0 48 48" aria-hidden="true">
+              <ellipse cx="24" cy="10" rx="17" ry="6" />
+              <path d="M7 10v27c0 8 34 8 34 0V10M7 23c0 8 34 8 34 0" />
+            </svg>
+          </span>
+          <span className="lake-state">PLANNED DELIVERY</span>
+          <h3>Your Data Lake</h3>
+          <p>
+            The next destination
+            <br />
+            for converted data
+          </p>
+        </li>
+      </ol>
+    </div>
+  );
+}
