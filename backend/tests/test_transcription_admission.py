@@ -34,6 +34,7 @@ def test_public_options_survive_enqueue_and_changed_defaults(env, whisperx, monk
     profile = job.transcription_profile
     assert (profile['language'], profile['diarize'], profile['min_speakers'], profile['max_speakers'], profile['include_word_timestamps']) == ('pt', True, 2, 3, True)
     queued = env.enqueued[-1]
+    assert queued['queue'] == routes.settings.transcription_queue
     queued = queued.get('kwargs', queued)
     assert queued['options']['transcription_profile'] == profile
     assert queued['options']['diarization_explicit'] is True

@@ -343,11 +343,25 @@ def _enqueue_maybe_routed(filename, job_id, file_path, user, file_size_bytes, en
     if known_media is not True and not is_media_filename(filename):
         enqueue()
         return
+    queue = settings.celery_task_default_queue
+    if (options or {}).get("transcriber_provider") == "whisperx":
+        # The general document image does not contain WhisperX. Preserve the
+        # same dedicated queue even when no Compute route has been configured.
+        from workers.tasks import process_conversion
+        queue = settings.transcription_queue
+
+        def enqueue():
+            process_conversion.apply_async(
+                kwargs={"job_id": str(job_id), "source_type": "file",
+                        "source": str(file_path), "options": options},
+                queue=queue,
+            )
+
     engine_dispatch.submit(
         feature="transcription", job_id=str(job_id), user_id=user.id, is_admin=is_effective_admin(user),
         payload=engine_dispatch.transcription_payload(job_id, file_path,
                                                       {**engine_dispatch.DEFAULT_TRANSCRIPTION_OPTIONS, **(options or {})},
-                                                      settings.celery_task_default_queue),
+                                                      queue),
         today=enqueue, celery=_engine_celery(), media_bytes=file_size_bytes, session_factory=SessionLocal,
     )
 
