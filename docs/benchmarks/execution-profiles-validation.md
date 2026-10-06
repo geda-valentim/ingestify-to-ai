@@ -127,10 +127,21 @@ skipados. Não use a URL da base da instalação.
 AST dos arquivos Python alterados, `git diff --check` e links locais dos novos
 documentos também passaram.
 
+## Ativação no dev
+
+Após backup consistente do SQL, a migração 0009 foi aplicada e validada.
+API e executores foram recriados com controle/acesso habilitados. O registro
+do host foi atualizado com hashes atuais dos manifests e imagens, preservando
+a identidade de máquina. As cinco engines da instalação foram classificadas
+como desenvolvimento pela API auditada. Biblioteca, IAM e capabilities responderam
+com sessão de bootstrap, incluindo a biblioteca pelo tunnel público.
+A API ficou saudável; nenhum perfil, grant delegado ou deploy pago foi criado.
+A documentação da funcionalidade é publicada em `/docs/compute` e `/pt/docs/compute`.
+
 ## Limites e rollout
 
-`ENGINE_ACCESS_ENABLED` continua falso por padrão. Não foi feito merge nem
-ativação no ambiente nesta validação. Não foram testados efeitos reais no host
+`ENGINE_ACCESS_ENABLED` continua falso por padrão. O PR #45 foi mergeado e a feature foi ativada no dev em 2026-10-06.
+A rodada automatizada acima ocorreu antes da ativação. Não foram testados efeitos reais no host
 ou uma conta Modal; AWS, GCP e Vast ainda não ganham adapters por esta entrega.
 O canário físico, consumidores completos, atualização do manifest do agente e
 primeiros grants limitados precisam seguir o runbook antes do rollout.
