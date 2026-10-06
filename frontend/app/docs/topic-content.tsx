@@ -1673,11 +1673,85 @@ curl --fail "${API_URL}/admin/gpus" \\
           ],
         ]}
       />
+      <Subheading>
+        {lang === "pt"
+          ? "Perfis de execução e acesso"
+          : "Execution profiles and access"}
+      </Subheading>
       <P>{t.profileFlow}</P>
+      <P>
+        {lang === "pt"
+          ? "Uma publicação fixa um payload imutável e os metadados do modelo aprovado. Novos rascunhos e publicações não mudam engines já vinculadas. Arquivar impede novos vínculos e preserva o histórico. O admin pode importar a configuração desejada legada como rascunho. Credenciais ficam na conexão e não entram no perfil."
+          : "A publication pins an immutable payload and approved model metadata. New drafts and publications do not update engines already bound to a revision. Archiving prevents new bindings and preserves history. The administrator can import legacy desired settings as a draft. Credentials belong to the connection and are excluded from profiles."}
+      </P>
+      <Table
+        head={
+          lang === "pt"
+            ? ["Papel", "Acesso concedível"]
+            : ["Role", "Grantable access"]
+        }
+        rows={[
+          [
+            "observer",
+            lang === "pt"
+              ? "Ler perfis, engines e operações no escopo."
+              : "Read profiles, engines and operations within scope.",
+          ],
+          [
+            "profile_editor",
+            lang === "pt"
+              ? "Criar, revisar, publicar e arquivar perfis permitidos."
+              : "Create, revise, publish and archive permitted profiles.",
+          ],
+          [
+            "runtime_configurator",
+            lang === "pt"
+              ? "Vincular revisão publicada ao desejado da engine."
+              : "Bind a published revision to engine desired state.",
+          ],
+          [
+            "engine_operator",
+            lang === "pt"
+              ? "Preparar planos e executar somente as ações concedidas; cancelamento e recovery têm permissões próprias."
+              : "Prepare plans and execute granted actions only; cancellation and recovery have separate permissions.",
+          ],
+          [
+            "connection_manager",
+            lang === "pt"
+              ? "Gerenciar credenciais da conexão com senha atual; sem orçamento ou configuração bruta."
+              : "Manage connection credentials with the current password; excludes budget and raw configuration.",
+          ],
+          [
+            "access_admin",
+            lang === "pt"
+              ? "Delegar dentro de um envelope explícito de permissões, escopos, limites e validade; não recebe execução por esse papel."
+              : "Delegate within an explicit envelope of permissions, scopes, limits and expiry; this role grants no execution rights.",
+          ],
+        ]}
+      />
+      <P>
+        {lang === "pt"
+          ? "Em Compute → Acesso, o admin classifica o ambiente das engines e qualifica todos os consumidores de cada recurso compartilhado. A política delimita engines/perfis, provider, feature, ambiente, modelo, host/GPU e tetos de réplicas, concorrência, CPU, memória, aquecimento e custo. Um grant completo precisa cobrir a decisão; não se somam partes de grants diferentes. O escopo cobre recursos do desejado e do último aplicado. Consumidor desconhecido ou fora do escopo bloqueia operação delegada."
+          : "Under Compute → Access, the administrator classifies engine environments and qualifies every consumer of shared resources. Policies constrain engines/profiles, provider, feature, environment, model, host/GPU and limits for replicas, concurrency, CPU, memory, warmup and cost. One complete grant must cover the decision; parts of different grants cannot be combined. Scope covers desired and last applied resources. Unknown or out-of-scope consumers block delegated operation."}
+      </P>
+      <P>
+        {lang === "pt"
+          ? "O grant fixa uma revisão da política e uma validade UTC; uma nova revisão não amplia grants existentes. Revogação ou expiração parental invalida grants derivados. A autorização é verificada de novo antes de cada efeito. Revogar não desfaz uma chamada já admitida pelo provider; resultado desconhecido mantém exposição até observação ou cleanup autorizado."
+          : "A grant pins a policy revision and UTC expiry; a new revision does not expand existing grants. Parent revocation or expiry invalidates derived grants. Authorization is checked again before each effect. Revocation cannot undo a call already admitted by the provider; unknown outcomes retain exposure until authorized observation or cleanup."}
+      </P>
+      <P>
+        {lang === "pt"
+          ? "Aquecimento usa uma duração de até 24 horas, resolvida uma vez no vínculo. Retry não renova o prazo. Em VERSION_CONFLICT, consulte o estado atual e revise a intenção antes de repetir. PUBLISHED_REVISION_REQUIRED pede revisão publicada; ENGINE_ENVIRONMENT_REQUIRED pede classificação da engine; MODEL_METADATA_CHANGED pede nova revisão compatível; 404 pode indicar recurso fora do escopo. RUNTIME_PROFILE_REQUIRED pede um vínculo, e HOST_AGENT_NOT_READY pede um heartbeat válido do host."
+          : "Warmup uses a duration of up to 24 hours, resolved once on binding. Retry does not renew it. For VERSION_CONFLICT, read current state and review intent before retrying. PUBLISHED_REVISION_REQUIRED needs a published revision; ENGINE_ENVIRONMENT_REQUIRED needs engine classification; MODEL_METADATA_CHANGED needs a compatible new revision; 404 can mean an out-of-scope resource. RUNTIME_PROFILE_REQUIRED needs a binding, while HOST_AGENT_NOT_READY needs a valid host heartbeat."}
+      </P>
+      <Endpoint method="POST" path="/admin/execution-profiles/{id}/publish" />
+      <Endpoint method="POST" path="/admin/access/grants" />
+      <Endpoint method="POST" path="/admin/access/grants/{id}/revoke" />
+
       <Endpoint method="GET" path="/admin/execution-profiles" />
       <Endpoint
-        method="PUT"
-        path="/admin/engines/{id}/runtime-profile-binding"
+        method="POST"
+        path="/admin/engines/{id}/runtime-profile/bind"
       />
       <P>{t.capacity}</P>
       <P>{t.health}</P>

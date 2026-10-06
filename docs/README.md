@@ -37,7 +37,7 @@ referência · **planejado** = não implementado.
 | [specs/0001-remover-clean-architecture-morta.md](specs/0001-remover-clean-architecture-morta.md) | atual (com ressalva) | Decisão de remover as camadas Clean Architecture. Ressalva: o merge `f1b5917` recolocou arquivos do crawler nessas pastas. |
 | [specs/0002-dispositivo-unico-e-migracao-do-whisper.md](specs/0002-dispositivo-unico-e-migracao-do-whisper.md) | atual | `DEVICE` único para Docling, Whisper e Florence-2. |
 | [specs/0003-motores-de-execucao-roteamento-e-orcamento.md](specs/0003-motores-de-execucao-roteamento-e-orcamento.md) | em implementação | Motores de execução, rotas por feature com orçamento (local + Modal). Fatias 0a–8 feitas, 4d pendente; operação em [features/engines.md](features/engines.md). |
-| [specs/0009-perfis-de-execucao-e-controle-de-acesso.md](specs/0009-perfis-de-execucao-e-controle-de-acesso.md) | implementado na branch, merge/rollout pendentes | Perfis publicados, papéis, escopos, delegação e autorização antes dos efeitos. |
+| [specs/0009-perfis-de-execucao-e-controle-de-acesso.md](specs/0009-perfis-de-execucao-e-controle-de-acesso.md) | implementado; habilitado no dev | Perfis publicados, papéis, escopos, delegação e autorização antes dos efeitos. |
 
 ## Operação e deploy
 
