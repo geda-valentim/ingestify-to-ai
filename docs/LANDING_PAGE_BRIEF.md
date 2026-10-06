@@ -24,13 +24,13 @@ A linguagem deve ser direta e concreta. Use “transcrever uma gravação”, �
 
 A home será uma experiência cinematográfica controlada pela rolagem. Ao descer, o visitante avança por um filme que mostra arquivos se transformando em informação; ao subir, percorre os mesmos quadros em sentido inverso. Ao parar, a imagem permanece naquele ponto. O próprio produto fornece os elementos visuais da narrativa.
 
-Use fundo escuro em grafite, superfícies discretamente mais claras e texto em branco suave. Verde deve identificar ações principais e trabalhos concluídos; azul pode distinguir execução remota. Reserve âmbar para recursos em piloto. Valide o contraste de todos os textos e controles na implementação.
+Use fundo branco, superfícies brancas e transparentes, texto preto e detalhes em cinza. A referência de linguagem é a clareza geométrica de Vercel e Next.js, mantendo a identidade do Ingestify. Linhas finas em rainbow atravessam a composição e acompanham os dados; reflexos prismáticos discretos aparecem nas bordas do vidro líquido. O branco domina o quadro. Estados e destinos se distinguem por rótulos, ícones e formas, sem depender de uma cor. Valide o contraste na implementação.
 
 A tipografia principal deve ter boa leitura e títulos amplos, com pesos bem definidos. Use uma fonte monoespaçada apenas para nomes de arquivos, trechos de código, formatos e eventos de processamento. O espaçamento generoso e a hierarquia devem sustentar a composição.
 
 O elemento de maior destaque será um palco visual que permanece na tela durante os capítulos da narrativa. Arquivos, regiões de texto, ondas de áudio e unidades de execução se reorganizam dentro do mesmo espaço. A continuidade entre os objetos deve conectar as cenas. Títulos, explicações e botões ficam em uma camada HTML sobreposta, com áreas reservadas para leitura.
 
-A estética combina profundidade discreta, superfícies translúcidas, linhas finas e iluminação controlada. O movimento deve transmitir precisão: aproximação de câmera, separação de camadas, alinhamento de texto e passagem de dados entre destinos. O brilho acompanha ações específicas e preserva o contraste dos conteúdos.
+A estética combina profundidade discreta, vidro líquido incolor com bordas suaves, refração e sombras leves sobre branco. O movimento deve transmitir precisão: aproximação de câmera, separação de camadas, alinhamento de texto e passagem de dados entre destinos. O rainbow fica nas linhas em movimento e em reflexos localizados; evite preencher painéis ou o fundo com gradientes coloridos. A tipografia e os controles permanecem pretos.
 
 Evite imagens genéricas de robôs, cérebros e circuitos. Também dispense números decorativos, depoimentos fictícios, estrelas de GitHub e gráficos sem dados reais. Modelos e ferramentas podem ser citados como tecnologias utilizadas, sem sugerir parceria ou endosso.
 
@@ -51,11 +51,13 @@ As seções 1 a 6 se desenvolvem nos capítulos do filme descritos abaixo. Seu c
 
 ## Filme controlado pela rolagem
 
+Os [quadros de início e fim das oito cenas](landing/README.md) estão gerados na direção branca, preta e rainbow, com vidro líquido transparente. A galeria reúne as 16 imagens selecionadas; os [prompts e caminhos dos arquivos](landing/image-prompts.json) acompanham o material. A cópia local fica em `/data/tmp/ingestify/white-rainbow/`, e os arquivos versionados em `frontend/public/landing/storyboard/white-rainbow/`.
+
 ### Conceito e continuidade
 
-O fio condutor é um pequeno marcador verde que acompanha a transformação: começa na borda de um arquivo, percorre seu conteúdo, identifica um resultado e conduz a câmera ao próximo contexto. Seu papel é orientar o olhar. Os arquivos mantêm forma e identidade reconhecíveis durante cada transformação.
+O fio condutor é uma pequena esfera de vidro líquido que percorre uma linha espectral rainbow: começa na borda de um arquivo, percorre seu conteúdo, identifica um resultado e conduz a câmera ao próximo contexto. Seu papel é orientar o olhar. Os arquivos mantêm forma e identidade reconhecíveis durante cada transformação.
 
-O cenário é um espaço grafite contínuo, com profundidade e uma base quadriculada muito sutil. A câmera faz deslocamentos curtos e aproximações suaves. Cada cena termina com um elemento cuja posição, escala e direção de movimento já preparam o início da seguinte. O movimento inverso deve preservar essas mesmas correspondências.
+O cenário é um espaço branco contínuo, com profundidade, sombras suaves e chão branco. Os painéis são de vidro líquido transparente, com conteúdo preto e refração discreta. A câmera faz deslocamentos curtos e aproximações suaves. Cada cena termina com um elemento cuja posição, escala e direção de movimento já preparam o início da seguinte. O movimento inverso deve preservar essas mesmas correspondências.
 
 Todo o filme representa exemplos ilustrativos. Recuar a rolagem revisita a demonstração; não cancela jobs nem desfaz operações reais. O vídeo não tem áudio e não começa a tocar sozinho. Uma indicação inicial discreta informa: “Role para explorar”.
 
@@ -76,11 +78,11 @@ Os percentuais representam a posição ao longo do trecho cinematográfico, do i
 
 ### Cena 1 Entrada no universo dos arquivos
 
-**Início:** fundo grafite com o título principal e as ações já legíveis. À direita, um documento inclinado em perspectiva ocupa o primeiro plano. Uma forma de onda, um recibo e uma miniatura de vídeo aparecem ao fundo, separados por profundidade. O primeiro quadro precisa funcionar como imagem estática de apresentação.
+**Início:** fundo branco com o título principal e as ações já legíveis. À direita, um documento inclinado em perspectiva ocupa o primeiro plano. Uma forma de onda, um recibo e uma miniatura de vídeo aparecem ao fundo, separados por profundidade. O primeiro quadro precisa funcionar como imagem estática de apresentação.
 
-**Movimento:** conforme a pessoa rola, os quatro arquivos se aproximam e se alinham. O marcador verde toca a borda do PDF. A câmera acompanha esse arquivo e revela seu título, um parágrafo e uma tabela. Os outros formatos recuam para a periferia do palco.
+**Movimento:** conforme a pessoa rola, os quatro arquivos se aproximam e se alinham. A esfera de vidro líquido toca a borda do PDF. A câmera acompanha esse arquivo e revela seu título, um parágrafo e uma tabela. Os outros formatos recuam para a periferia do palco.
 
-**Fim:** o PDF está quase frontal, com conteúdo reconhecível, e ocupa a área visual principal. O marcador está no topo da página, pronto para percorrê-la.
+**Fim:** o PDF está quase frontal, com conteúdo reconhecível, e ocupa a área visual principal. A esfera está no topo da página, pronto para percorrê-la.
 
 **Transição:** a mesma página permanece na mesma posição quando começa a cena 2. A aproximação desacelera e dá lugar à leitura das camadas do documento.
 
@@ -118,13 +120,13 @@ Os percentuais representam a posição ao longo do trecho cinematográfico, do i
 
 **Fim:** imagem, regiões e texto extraído formam uma composição limpa. O visitante identifica claramente de onde saiu cada trecho.
 
-**Transição:** o painel se reduz e recebe uma moldura de trabalho concluído. A câmera se afasta para revelar uma fila com trabalhos de documento, imagem e áudio. O marcador passa para um novo trabalho de áudio, ainda aguardando execução, que será o protagonista da cena 5.
+**Transição:** o painel se reduz e recebe uma moldura de trabalho concluído. A câmera se afasta para revelar uma fila com trabalhos de documento, imagem e áudio. A esfera passa para um novo trabalho de áudio, ainda aguardando execução, que será o protagonista da cena 5.
 
 **Texto sobreposto:** “Da imagem à informação.” Complemento: “Extraia texto com suas regiões ou gere uma descrição pela API.”
 
 ### Cena 5 Escolha do local de execução
 
-**Início:** a fila ocupa o centro. À esquerda, um módulo discreto representa os workers locais. À direita, um módulo azul representa o Modal. O trabalho de áudio está pronto para ser encaminhado; resultados já concluídos ficam visualmente separados.
+**Início:** a fila ocupa o centro. À esquerda, um módulo discreto representa os workers locais. À direita, um módulo de vidro com símbolo de nuvem representa o Modal. O trabalho de áudio está pronto para ser encaminhado; resultados já concluídos ficam visualmente separados.
 
 **Movimento:** primeiro se ilumina o caminho local. Trabalhos de documento e imagem permanecem associados a esse destino. Em seguida, uma regra de espera aparece junto ao trabalho de áudio e o caminho até o Modal é revelado. O áudio percorre esse caminho como exemplo de uma rota configurada. Indicadores textuais de capacidade e orçamento acompanham o módulo remoto, sem valores inventados.
 
@@ -154,7 +156,7 @@ Não represente o mesmo job rodando nos dois destinos ao mesmo tempo. O trecho i
 
 **Movimento:** contornos de outras máquinas aparecem ao redor e se conectam por linhas pontilhadas. Em outra parte do mesmo quadro, módulos de operações se alinham em uma sequência, sugerindo futura composição de etapas. Mantenha poucos elementos grandes e compreensíveis, sem uma nuvem de partículas ou uma rede excessivamente complexa.
 
-**Fim:** a imagem apresenta um sistema que pode crescer a partir da base atual. Os componentes futuros mantêm tratamento de contorno e legendas “Conectar outras máquinas” e “Compor operações”. A condição planejada continua visível durante todo esse trecho.
+**Fim:** a imagem apresenta um sistema que pode crescer a partir da base atual. Os componentes futuros mantêm tratamento de contorno pontilhado e legendas “Conectar outras máquinas” e “Compor operações”. A condição planejada continua visível durante todo esse trecho.
 
 **Transição:** as linhas externas retornam em direção ao centro conforme a câmera se afasta. Os módulos se organizam ao redor de um plano central vazio, preparando a entrada da marca. O movimento pode lembrar a construção coletiva de uma plataforma, sem representar o GitHub como provedor de execução.
 
@@ -162,9 +164,9 @@ Não represente o mesmo job rodando nos dois destinos ao mesmo tempo. O trecho i
 
 ### Cena 8 Marca e próximo passo
 
-**Início:** os módulos estão organizados em torno do centro. O marcador verde completa seu percurso e se posiciona perto da marca.
+**Início:** os módulos estão organizados em torno do centro. A esfera de vidro líquido completa seu percurso e se posiciona perto da marca.
 
-**Movimento:** a câmera desacelera. As conexões perdem intensidade e os elementos se recolhem até restar uma composição simples com a marca Ingestify e pequenos símbolos dos formatos de entrada. A escala da marca permanece confortável, sem ocupar a tela inteira.
+**Movimento:** a câmera desacelera. As linhas rainbow perdem intensidade e os elementos se recolhem até restar uma composição simples com a marca Ingestify e pequenos símbolos dos formatos de entrada. A escala da marca permanece confortável, sem ocupar a tela inteira.
 
 **Fim:** quadro estável com espaço para “Comece pela transformação que você precisa.” O botão “Explorar a documentação” e o link do GitHub ficam disponíveis. Ao continuar descendo, o palco deixa de ficar fixo e sai normalmente da tela, abrindo as perguntas frequentes e a chamada final.
 
