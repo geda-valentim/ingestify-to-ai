@@ -599,8 +599,11 @@ const COPY = {
     ),
     wordsNote: (
       <>
-        Com <C>include_word_timestamps=true</C>, cada segmento ganha uma lista <C>words</C> com <C>word</C>,{" "}
-        <C>start</C>, <C>end</C> e <C>probability</C>.
+        No canário WhisperX, <C>diarize=true</C> identifica vozes com IDs locais ao job; limites opcionais
+        <C>min_speakers</C>/<C>max_speakers</C> vão de 1 a 20. O schema 2 acrescenta catálogo e turnos
+        de falantes; ausência ou ambiguidade permanece null. Providers legados não aceitam diarização.
+        {" "}Com <C>include_word_timestamps=true</C>, cada segmento ganha uma lista <C>words</C> com <C>word</C>,{" "}
+        <C>start</C>, <C>end</C> e <C>probability</C> quando disponível. No WhisperX, tempos podem ser null e <C>alignment_score</C> é um campo separado.
       </>
     ),
     errorsIntro: (
@@ -864,8 +867,11 @@ const COPY = {
     ),
     wordsNote: (
       <>
-        With <C>include_word_timestamps=true</C>, every segment gets a <C>words</C> list with <C>word</C>,{" "}
-        <C>start</C>, <C>end</C> and <C>probability</C>.
+        The WhisperX canary accepts <C>diarize=true</C> for speaker IDs local to the job; optional
+        <C>min_speakers</C>/<C>max_speakers</C> range from 1 to 20. Schema 2 adds the speaker catalog
+        and turns; missing or ambiguous attribution stays null. Legacy providers reject diarization.
+        {" "}With <C>include_word_timestamps=true</C>, every segment gets a <C>words</C> list with <C>word</C>,{" "}
+        <C>start</C>, <C>end</C> and <C>probability</C> when available. WhisperX timestamps may be null; <C>alignment_score</C> is a separate field.
       </>
     ),
     errorsIntro: (

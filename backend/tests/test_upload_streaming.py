@@ -76,7 +76,7 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr(routes, "prepare_upload_location", lambda *args: "plan")
     monkeypatch.setattr(routes, "resolve_upload_location", lambda *args: location)
     monkeypatch.setattr(routes, "find_duplicate_job",
-                        lambda db, user_id, checksum, loc: (db.query(None).filter().first(), None))
+                        lambda db, user_id, checksum, loc, transcription_profile_hash=None: (db.query(None).filter().first(), None))
     monkeypatch.setattr(routes, "existing_job_location", lambda db, job, loc: {})
     return SimpleNamespace(tmp=tmp_path, minio=minio, enqueued=enqueued)
 

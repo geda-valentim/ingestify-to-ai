@@ -1,5 +1,5 @@
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator
-from typing import Optional, Literal, List
+from typing import Optional, Literal, List, Any, Dict
 from datetime import datetime
 from uuid import UUID
 from enum import Enum
@@ -188,6 +188,7 @@ class JobStatusResponse(BaseModel):
     # Transcrições em andamento: quanto da mídia já foi transcrito, em segundos
     transcribed_seconds: Optional[float] = None
     media_duration: Optional[float] = None
+    phase: Optional[Literal["transcribing", "aligning", "diarizing", "saving"]] = None
 
     # Só com roteamento (spec 0003): onde o job roda e por que ainda espera.
     # Nada de orçamento ou de outros usuários; null sem rota.
@@ -219,6 +220,36 @@ class JobPagesResponse(BaseModel):
     pages: List[PageJobInfo]
 
 
+class TranscriptSpeaker(BaseModel):
+    id: str
+    label: str
+
+
+class DiarizationTurn(BaseModel):
+    start: float
+    end: float
+    speaker_id: str
+
+
+class DiarizationMetadata(BaseModel):
+    status: Literal['completed', 'disabled']
+    speaker_count: Optional[int] = None
+    engine: Optional[str] = None
+    model: Optional[str] = None
+    revision: Optional[Any] = None
+    turns: List[DiarizationTurn] = []
+    generation: Optional[int] = None
+    provenance: Optional[Dict[str, Any]] = None
+
+
+class AlignmentMetadata(BaseModel):
+    status: Literal['completed', 'unavailable']
+    model: Optional[str] = None
+    revision: Optional[str] = None
+    device: Optional[str] = None
+    reason: Optional[str] = None
+
+
 class DocumentMetadata(BaseModel):
     pages: Optional[int] = None
     words: Optional[int] = None
@@ -231,6 +262,11 @@ class DocumentMetadata(BaseModel):
     duration: Optional[float] = None
     device: Optional[str] = None  # "cuda", "cpu" or "remote"
     available_formats: Optional[List[str]] = None  # use GET /jobs/{id}/result?format=...
+    schema_version: Optional[int] = None
+    speakers: Optional[List[TranscriptSpeaker]] = None
+    diarization: Optional[DiarizationMetadata] = None
+    alignment: Optional[AlignmentMetadata] = None
+    provenance: Optional[Dict[str, Any]] = None
 
 
 class ConversionResult(BaseModel):

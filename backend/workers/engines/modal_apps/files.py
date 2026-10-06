@@ -17,6 +17,7 @@ WORKERS_DIR = MODAL_APPS_DIR.parent.parent
 BACKEND_DIR = WORKERS_DIR.parent
 REQUIREMENTS_IN = MODAL_APPS_DIR / "requirements-whisper-modal.in"
 LOCK_FILE = MODAL_APPS_DIR / "requirements-whisper-modal.lock"
+WHISPERX_LOCK = BACKEND_DIR / "requirements-whisperx-cuda.lock"
 
 # Shipped into the image under /root/<path relative to the backend>, in this order
 SOURCE_FILES: List[Path] = [
@@ -25,6 +26,8 @@ SOURCE_FILES: List[Path] = [
     WORKERS_DIR / "audio" / "feature_extractor.py",
     WORKERS_DIR / "engines" / "__init__.py",
     WORKERS_DIR / "engines" / "whisper_core.py",
+    WORKERS_DIR / "engines" / "whisperx_core.py",
+    WORKERS_DIR / "engines" / "transcript_schema.py",
     MODAL_APPS_DIR / "__init__.py",
     MODAL_APPS_DIR / "files.py",
     MODAL_APPS_DIR / "protocol.py",
