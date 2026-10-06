@@ -349,8 +349,11 @@ export function LandingPage() {
         <LandingSections signedIn={signedIn} />
       </main>
       <footer className="landing-footer">
-        <a href="#" className="landing-brand">
-          ingestify.
+        <a href="#" className="landing-brand" aria-label="Ingestify home">
+          <span className="landing-mark" aria-hidden="true">
+            <Layers size={20} strokeWidth={1.5} />
+          </span>
+          ingestify<span className="landing-brand-dot">.</span>
         </a>
         <p>From raw files to new possibilities.</p>
         <nav aria-label="Footer links">
