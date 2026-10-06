@@ -10,6 +10,8 @@ RUN --mount=type=cache,target=/root/.cache/pip \
        -r /tmp/locks/requirements-whisperx-worker-${AUDIO_TARGET}.lock && pip check
 COPY backend/shared ./shared
 COPY backend/workers ./workers
+# Hashing the remote deployment uses the same input on CPU and CUDA workers.
+COPY backend/requirements-whisperx-cuda.lock ./
 ENV HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 PYTHONPATH=/app \
     LD_LIBRARY_PATH=/usr/local/lib/python3.11/site-packages/nvidia/cublas/lib:/usr/local/lib/python3.11/site-packages/nvidia/cudnn/lib
 RUN useradd --create-home --uid 10001 --user-group app \

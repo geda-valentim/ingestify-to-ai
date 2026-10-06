@@ -12,6 +12,13 @@ x-whisperx-environment: &whisperx-environment
 services:
   api:
     environment: *whisperx-environment
+  worker-dispatch:
+    environment: *whisperx-environment
+  worker-remote:
+    environment:
+      WHISPERX_MODEL_DIR: /models/whisperx
+    volumes:
+      - ${WHISPERX_MODEL_DIR:-/var/lib/ingestify/whisperx}:/models/whisperx:ro
   worker-audio:
     build:
       context: .
