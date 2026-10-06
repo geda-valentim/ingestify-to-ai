@@ -196,6 +196,8 @@ anteriores `CONTROL_NOT_ENABLED`, `HOST_AGENT_NOT_READY`, `CLEANUP_WATCHDOG_NOT_
 
 Resultados e limites estão em
 [benchmarks/execution-profiles-validation.md](../benchmarks/execution-profiles-validation.md).
-A validação automatizada não habilitou a funcionalidade no ambiente dev nem
-iniciou infraestrutura paga. Um canário real de host/Modal e concessões em
-produção fazem parte do rollout descrito no runbook.
+A rodada automatizada não iniciou infraestrutura paga. Depois, o PR #45 foi
+mergeado e a funcionalidade foi ativada no dev com migração explícita, restart
+coordenado e verificação da API. A documentação web fica em `/docs/compute` e
+`/pt/docs/compute`. Um canário físico de host/Modal e concessões limitadas
+ainda precisam seguir o rollout descrito no runbook.

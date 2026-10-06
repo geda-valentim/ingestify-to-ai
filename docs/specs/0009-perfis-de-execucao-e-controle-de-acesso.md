@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Aprovada; implementação validada na branch, merge e rollout pendentes |
+| **Status** | Implementada; habilitada no dev, canário físico pendente |
 | **Autor** | Geda Valentim / Codex |
 | **Criada em** | 2026-10-06 |
 | **Atualizada em** | 2026-10-06 |
@@ -424,6 +424,7 @@ A implementação foi autorizada posteriormente pelo autor. Revisão de código 
 agentes de teste verificaram a biblioteca, o acesso e a execução em ambiente isolado.
 O [relatório de validação](../benchmarks/execution-profiles-validation.md) registra
 evidências e limites: os critérios acima são verificados com banco descartável e
-providers simulados; canário físico e ativação continuam pendentes.
+providers simulados; canário físico continua pendente. O PR #45 foi mergeado
+em 2026-10-06 e o acesso foi habilitado no dev após migração e restart coordenado.
 O [guia funcional](../features/execution-profiles.md) descreve o comportamento
 entregue; o [runbook](../runbooks/execution-profiles-access.md) cobre a migração.
