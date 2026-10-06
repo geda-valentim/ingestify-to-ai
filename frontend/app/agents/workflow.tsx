@@ -120,7 +120,9 @@ export function AgentWorkflow() {
       </div>
       <div className={styles.workflowBody} id="agent-workflow-panel">
         <div className={styles.workflowStory}>
+          <div className={styles.diagramFrame} role="group" aria-label="Select a workflow step">
           <svg
+            preserveAspectRatio="none"
             viewBox="0 0 620 180"
             className={styles.diagram}
             aria-hidden="true"
@@ -133,11 +135,6 @@ export function AgentWorkflow() {
                 <stop offset=".75" stopColor="#6e9fe9" />
                 <stop offset="1" stopColor="#b889df" />
               </linearGradient>
-              <radialGradient id={`${id}-glass`} cx=".32" cy=".2" r=".9">
-                <stop stopColor="white" />
-                <stop offset=".65" stopColor="#f2f2f2" />
-                <stop offset="1" stopColor="#bbb" />
-              </radialGradient>
             </defs>
             <path d="M70 90H550" stroke="#e5e5e5" fill="none" />
             <path
@@ -147,28 +144,22 @@ export function AgentWorkflow() {
               className={styles.signal}
               fill="none"
             />
-            {[70, 230, 390, 550].map((x, index) => (
-              <g key={x}>
-                <circle
-                  cx={x}
-                  cy="90"
-                  r={active === index ? 40 : 28}
-                  fill={active === index ? `url(#${id}-glass)` : "white"}
-                  stroke={active === index ? "#333" : "#ddd"}
-                />
-                <text
-                  x={x}
-                  y="96"
-                  textAnchor="middle"
-                  fontSize="17"
-                  fontFamily="monospace"
-                  fill="#111"
-                >
-                  0{index + 1}
-                </text>
-              </g>
-            ))}
           </svg>
+          {steps.map((item, index) => (
+            <button
+              key={item.name}
+              type="button"
+              className={styles.diagramStep}
+              style={{ left: `${(70 + index * 160) / 620 * 100}%` }}
+              aria-label={`Step ${index + 1}: ${item.name}`}
+              aria-pressed={active === index}
+              aria-controls="agent-workflow-panel"
+              onClick={() => { setActive(index); setCopied(null); }}
+            >
+              0{index + 1}
+            </button>
+          ))}
+          </div>
           <div aria-live="polite" aria-atomic="true">
             <span className={styles.eyebrow}>{step.label}</span>
             <h3>{step.title}</h3>

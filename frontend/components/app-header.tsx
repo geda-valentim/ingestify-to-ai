@@ -6,7 +6,7 @@ import { useEffect, useState } from "react";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import * as Dialog from "@radix-ui/react-dialog";
 import { useQuery } from "@tanstack/react-query";
-import { BookOpen, ChevronDown, Cpu, Key, Menu, Mic, LogIn, LogOut, Search, Upload as UploadIcon, UserRound, X } from "lucide-react";
+import { LayoutDashboard, BookOpen, ChevronDown, Cpu, Key, Menu, Mic, LogIn, LogOut, Search, Upload as UploadIcon, UserRound, X } from "lucide-react";
 import { authApi } from "@/lib/api";
 import { useAuthStore } from "@/lib/store/auth";
 import { Button } from "@/components/ui/button";
@@ -16,7 +16,8 @@ import { cn } from "@/lib/utils";
 type NavLink = { href: string; label: string; icon: typeof UploadIcon };
 
 const PRIMARY_LINKS: NavLink[] = [
-  { href: "/dashboard", label: "Upload", icon: UploadIcon },
+  { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
+  { href: "/convert", label: "Convert", icon: UploadIcon },
   { href: "/live", label: "Live", icon: Mic },
   { href: "/jobs", label: "My Jobs", icon: Search },
 ];
@@ -61,7 +62,7 @@ export function AppHeader({ className }: { className?: string }) {
 
   // A drawer opened on a phone must release its focus trap after resizing.
   useEffect(() => {
-    const desktop = window.matchMedia("(min-width: 1024px)");
+    const desktop = window.matchMedia("(min-width: 1280px)");
     const closeOnResize = () => {
       setMobileOpen(false);
       setAccountOpen(false);
@@ -103,12 +104,12 @@ export function AppHeader({ className }: { className?: string }) {
         </Link>
 
         {user && (
-          <nav aria-label="Main navigation" className="hidden items-center gap-1 lg:flex">
+          <nav aria-label="Main navigation" className="hidden items-center gap-1 xl:flex">
             {PRIMARY_LINKS.map((link) => renderLink(link))}
           </nav>
         )}
 
-        <div className="ml-auto hidden items-center gap-3 lg:flex">
+        <div className="ml-auto hidden items-center gap-3 xl:flex">
           {renderLink(DOCS_LINK)}
           {user ? (
             <DropdownMenu.Root open={accountOpen} onOpenChange={setAccountOpen}>
@@ -141,7 +142,7 @@ export function AppHeader({ className }: { className?: string }) {
 
         <Dialog.Root open={mobileOpen} onOpenChange={setMobileOpen}>
           <Dialog.Trigger asChild>
-            <Button variant="ghost" size="sm" className="ml-auto gap-2 lg:hidden"><Menu aria-hidden="true" className="h-5 w-5" />Menu</Button>
+            <Button variant="ghost" size="sm" className="ml-auto gap-2 xl:hidden"><Menu aria-hidden="true" className="h-5 w-5" />Menu</Button>
           </Dialog.Trigger>
           <Dialog.Portal>
             <Dialog.Overlay className="fixed inset-0 z-50 bg-black/50" />
