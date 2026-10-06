@@ -69,7 +69,7 @@ export function LandingPage() {
       : position.segment === 5
         ? { eyebrow: "NEXT INPUT · IMAGE", title: "Now, an image." }
         : closing
-          ? { eyebrow: current.eyebrow, title: "Make your next move." }
+          ? { eyebrow: current.eyebrow, title: "Build your data flow." }
           : null;
 
   useEffect(() => {
@@ -195,7 +195,9 @@ export function LandingPage() {
         </nav>
       </header>
       <main>
-        <h1 className="sr-only">Your files. AI-ready.</h1>
+        <h1 className="sr-only">
+          Self-hosted data conversion for AI engineering
+        </h1>
         <noscript>
           <style>{`.landing-story{height:calc(100svh - 72px)}.landing-story-bottom nav{display:none}`}</style>
         </noscript>
@@ -260,20 +262,28 @@ export function LandingPage() {
               >
                 <p className="landing-eyebrow">
                   {position.future
-                    ? "PLANNED EVOLUTION"
+                    ? "PLANNED / DATA LAKE DELIVERY"
                     : (transition?.eyebrow ?? current.eyebrow)}
                 </p>
                 <h2>{transition?.title ?? current.title}</h2>
                 {!compact && (
                   <>
                     <p className="landing-story-description">{current.body}</p>
-                    <a
-                      className={`landing-text-link ${position.chapter === 0 ? "hero-action" : ""}`}
-                      href={current.href}
-                    >
-                      {current.action}
-                      <ArrowUpRight size={16} />
-                    </a>
+                    <div className="landing-story-actions">
+                      <a
+                        className={`landing-text-link ${position.chapter === 0 ? "hero-action" : ""}`}
+                        href={current.href}
+                      >
+                        {current.action}
+                        <ArrowUpRight size={16} />
+                      </a>
+                      {position.chapter === 0 && (
+                        <a className="landing-text-link" href={GITHUB}>
+                          <Github size={16} />
+                          View source
+                        </a>
+                      )}
+                    </div>
                     {current.note && (
                       <p className="landing-note">{current.note}</p>
                     )}
@@ -343,7 +353,7 @@ export function LandingPage() {
         <a href="#" className="landing-brand" aria-label="Ingestify home">
           <Brand />
         </a>
-        <p>From raw files to new possibilities.</p>
+        <p>Data Engineering → AI Engineering.</p>
         <nav aria-label="Footer links">
           <Link href="/docs?lang=en">Docs</Link>
           <a href={GITHUB}>GitHub</a>
