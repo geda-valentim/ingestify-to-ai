@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { liveApi } from "@/lib/api";
+import { initialDiarization, reduceDiarization, diarizationDigest, type DiarizationState } from "./live-diarization";
 import type { UploadLocation, TranscriptSegment } from "@/types/api";
 
 export type CaptureState = "idle" | "starting" | "listening" | "finishing" | "completed" | "interrupted" | "cancelled";
@@ -10,7 +11,7 @@ type Resources = {
   socket?: WebSocket; stream?: MediaStream; context?: AudioContext; node?: AudioWorkletNode;
   seq: number; samples: number; eventSeq: number; jobId?: string; state: CaptureState;
   stopCapture?: () => Promise<void>; partialRevision: number;
-  timer?: number;
+  timer?: number; diarization?: DiarizationState; protocol?: 1 | 2;
 };
 
 export function useLiveCapture() {
@@ -19,6 +20,7 @@ export function useLiveCapture() {
   const [jobId, setJobId] = useState<string | null>(null);
   const [duration, setDuration] = useState(0);
   const [segments, setSegments] = useState<TranscriptSegment[]>([]);
+  const [diarization, setDiarization] = useState<DiarizationState | null>(null);
   const [partial, setPartial] = useState("");
   const resources = useRef<Resources>({ seq: 0, samples: 0, eventSeq: 0, state: "idle", partialRevision: 0 });
 
@@ -66,9 +68,10 @@ export function useLiveCapture() {
     }
   }, [releaseCapture, update]);
 
-  const start = useCallback(async (location: UploadLocation, name: string) => {
-    setError(null); setSegments([]); setPartial(""); setDuration(0); setJobId(null);
+  const start = useCallback(async (location: UploadLocation, name: string, diarize = false) => {
+    setDiarization(null); setError(null); setSegments([]); setPartial(""); setDuration(0); setJobId(null);
     const r: Resources = { seq: 0, samples: 0, eventSeq: 0, state: "starting", partialRevision: 0 };
+    r.protocol = diarize ? 2 : 1;
     resources.current = r;
     update("starting");
     const interrupt = (message: string) => {
@@ -88,7 +91,7 @@ export function useLiveCapture() {
       r.context = new AudioContext();
       await r.context.audioWorklet.addModule("/audio/live-pcm-worklet.js");
       if (resources.current !== r || r.state !== "starting") { await releaseCapture(r); return; }
-      const session = await liveApi.create({ ...location, name, language: "pt" });
+      const session = await liveApi.create({ ...location, name, language: "pt", protocol: r.protocol, diarize });
       r.jobId = session.job_id;
       if (resources.current !== r || r.state !== "starting") {
         await liveApi.cancel(session.job_id).catch(() => {}); await releaseCapture(r); return;
@@ -98,21 +101,27 @@ export function useLiveCapture() {
       const timer = window.setTimeout(() => interrupt("O serviço não ficou pronto a tempo."), 10000);
       r.timer = timer;
       socket.onopen = () => {
-        if (resources.current === r && r.state === "starting") socket.send(JSON.stringify({ type: "authenticate", protocol: 1, ticket: session.ticket }));
+        if (resources.current === r && r.state === "starting") socket.send(JSON.stringify({ type: "authenticate", protocol: r.protocol, ticket: session.ticket }));
         else socket.close();
       };
+      let eventQueue: Promise<void> = Promise.resolve();
       socket.onerror = () => interrupt("Não foi possível conectar ao serviço de transcrição.");
       socket.onclose = () => {
         window.clearTimeout(timer);
-        if (!["completed", "cancelled", "interrupted"].includes(r.state)) interrupt("A captura foi interrompida. Inicie uma nova sessão.");
+        void eventQueue.then(() => {
+          if (!["completed", "cancelled", "interrupted"].includes(r.state)) interrupt("A captura foi interrompida. Inicie uma nova sessão.");
+        });
       };
-      socket.onmessage = async ({ data }) => {
+      socket.onmessage = ({ data }) => {
+        eventQueue = eventQueue.then(async () => {
         if (resources.current !== r || ["completed", "cancelled", "interrupted"].includes(r.state)) return;
         try {
           const event = JSON.parse(data);
           if (event.event_seq !== r.eventSeq + 1) throw new Error("Sequência de eventos inválida.");
           r.eventSeq = event.event_seq;
           if (event.type === "session.ready") {
+            if ((event.protocol ?? 1) !== r.protocol) throw new Error("Versão de sessão incompatível.");
+            if (r.protocol === 2) { r.diarization = initialDiarization(event.generation); setDiarization(r.diarization); }
             window.clearTimeout(timer);
             const source = r.context!.createMediaStreamSource(r.stream!);
             const node = new AudioWorkletNode(r.context!, "live-pcm"); r.node = node;
@@ -149,7 +158,14 @@ export function useLiveCapture() {
               if (event.segment_id !== previous.length) { interrupt("Segmento de legenda fora de ordem."); return previous; }
               return [...previous, { start: event.start, end: event.end, text: event.text }];
             }); setPartial("");
+          } else if (event.type === "diarization.update") {
+            if (!r.diarization) throw new Error("Falantes não foram negociados nesta sessão.");
+            r.diarization = reduceDiarization(r.diarization, event, r.samples);
+            setDiarization(r.diarization);
           } else if (event.type === "session.completed") {
+            if (r.diarization && (r.diarization.stable_until_samples !== r.samples ||
+                await diarizationDigest(r.diarization) !== event.diarization_digest)) throw new Error("O resultado salvo não coincide com os falantes da captura.");
+            if (resources.current !== r || ["cancelled", "interrupted"].includes(r.state)) return;
             update("completed"); setPartial(""); await releaseCapture(r); socket.close();
           } else if (event.type === "session.error") {
             interrupt(`A sessão terminou: ${event.code}`);
@@ -157,6 +173,7 @@ export function useLiveCapture() {
             void finish();
           }
         } catch (err) { interrupt(err instanceof Error ? err.message : "Resposta inválida do servidor."); }
+        });
       };
     } catch (err) {
       interrupt(err instanceof Error ? err.message : "Não foi possível iniciar a captura.");
@@ -171,5 +188,5 @@ export function useLiveCapture() {
     if (r.jobId) void liveApi.cancel(r.jobId).catch(() => {});
   }, [releaseCapture]);
 
-  return { state, error, jobId, duration, segments, partial, start, finish, cancel };
+  return { state, error, jobId, duration, segments, partial, diarization, start, finish, cancel };
 }

@@ -2,8 +2,9 @@
 
 | | |
 |---|---|
-| **Status** | Aprovada para implementação pelo usuário; implementação e qualificação em andamento |
+| **Status** | Aprovada pelo usuário; implementação opt-in revisada, qualificação e migração global pendentes |
 | **Revisão técnica** | Subagent `review_whisperx_spec`, 2026-10-05: revisão inicial e nova revisão online concluídas; achados corrigidos e rechecados, sem bloqueios na proposta |
+| **Revisão da implementação** | Subagents `review_whisperx_core_implementation` e `review_whisperx_live_implementation`, 2026-10-05: nove achados corrigidos e rechecados; sem bloqueios para merge opt-in, gates reais ainda abertos |
 | **Autor** | Codex, a pedido de Geda Valentim |
 | **Criada em** | 2026-10-05 |
 | **Atualizada em** | 2026-10-05 |
@@ -631,15 +632,15 @@ a live atual continua disponível no protocolo 1 e a migração global fica pend
 ## 8. Plano de implementação
 
 - [ ] Qualificar pesos/acesso HF e fixture anotada; fixar revisões e locks CPU/CUDA.
-- [ ] Perfil durável/migration, opções/dedupe e leitores schema 2; testes de compatibilidade.
+- [x] Perfil durável/migration, opções/dedupe e leitores schema 2; testes de compatibilidade.
 - [ ] Provar adapter de lotes/progresso/cancelamento contra WhisperX real; core e
       adapter local, isolamento das opções, memória limitada, fallback e formatos.
-- [ ] Barreira de persistência para schema 2 e limpeza de tentativas; falhas injetadas.
+- [x] Barreira de persistência para schema 2 e limpeza de tentativas; falhas injetadas.
 - [ ] Modal protocolo 4, source list, fingerprint, capacidades, deploy e benchmark completo.
-- [ ] UI de falantes, downloads, documentação e snapshot OpenAPI.
+- [x] UI de falantes, downloads, documentação e snapshot OpenAPI.
 - [ ] Corpus PT-BR, canário local/Modal e alteração do default após gates.
 - [ ] Experimento isolado Diart: locks/pesos, replay 1×, qualidade/atraso e identidade online.
-- [ ] Adapter ASR + diarização incremental, lifecycle/capacidade, protocolo 2,
+- [x] Adapter ASR + diarização incremental, lifecycle/capacidade, protocolo 2,
       rótulos provisórios na UI e drenagem/persistência do estado congelado.
 - [ ] Qualificação live/concorrência, rollout e teste de rollback; encerrar uso legado por padrão.
 
@@ -662,4 +663,4 @@ a live atual continua disponível no protocolo 1 e a migração global fica pend
 Referências: [WhisperX](https://github.com/m-bain/whisperX),
 [Community-1](https://huggingface.co/pyannote/speaker-diarization-community-1),
 [Diart](https://github.com/juanmc2005/diart),
-[spec 0005](0005-transcricao-ao-vivo.md). A implementação está em andamento na branch `feat/whisperx-speaker-identification`. O default e a liberação global continuam condicionados aos gates acima; ver [guia do canário](../features/whisperx.md).
+[spec 0005](0005-transcricao-ao-vivo.md). Esta entrega contém a implementação opt-in revisada. Os itens que combinam código com qualificação real permanecem abertos até os respectivos testes; o default e a liberação global continuam condicionados aos gates acima. Ver [guia do canário](../features/whisperx.md) e [operação live v2](../features/live-transcription.md#falantes-durante-a-captura--protocolo-2-opt-in).

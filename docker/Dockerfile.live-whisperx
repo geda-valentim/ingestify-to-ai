@@ -1,0 +1,26 @@
+# Opt-in live v2: Python 3.11 CUDA parent and a separate NumPy 1.x Diart venv.
+# Dependency resolution is locked; an actual CUDA build/inference is a rollout
+# gate, not implied by this recipe. No model or HF credentials enter the image.
+FROM python:3.11-slim
+WORKDIR /app
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg libsndfile1 \
+    && rm -rf /var/lib/apt/lists/*
+COPY backend/requirements-live-whisperx-cuda.lock /tmp/locks/asr.lock
+COPY backend/requirements-diart-cuda.lock /tmp/locks/diart.lock
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --require-hashes --no-deps -r /tmp/locks/asr.lock && pip check \
+    && python -m venv /opt/diart \
+    && /opt/diart/bin/pip install --require-hashes --no-deps -r /tmp/locks/diart.lock \
+    && /opt/diart/bin/pip check
+COPY backend/shared ./shared
+COPY backend/workers ./workers
+ENV HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 PYTHONPATH=/app \
+    LIVE_DIARIZATION_PYTHON=/opt/diart/bin/python \
+    LIVE_DIARIZATION_MANIFEST=/models/diart/manifest.json \
+    WHISPERX_MODEL_DIR=/models/whisperx \
+    LD_LIBRARY_PATH=/usr/local/lib/python3.11/site-packages/nvidia/cublas/lib:/usr/local/lib/python3.11/site-packages/nvidia/cudnn/lib
+RUN python -c "import whisperx, fastapi, uvicorn, websockets; from workers.live.decoder import WhisperXOnlineASR" \
+    && /opt/diart/bin/python -c "import diart; from workers.live.diart_clustering import EvidenceClustering" \
+    && useradd --create-home --uid 10001 --user-group app
+USER app
+CMD ["uvicorn", "workers.live.server:app", "--host", "0.0.0.0", "--port", "8091", "--workers", "1", "--ws-max-size", "16384", "--ws-max-queue", "10", "--no-access-log"]
