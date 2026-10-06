@@ -177,7 +177,7 @@ export function LandingPage() {
             {motionPaused ? <Play size={15} /> : <Pause size={15} />}
           </button>
           <a href="#operacoes">Platform</a>
-          <Link href="/docs?lang=en">Docs</Link>
+          <Link href="/docs">Docs</Link>
           <a
             href={GITHUB}
             className="landing-github"
@@ -353,7 +353,7 @@ export function LandingPage() {
         </a>
         <p>Data Engineering + AI-ready conversion.</p>
         <nav aria-label="Footer links">
-          <Link href="/docs?lang=en">Docs</Link>
+          <Link href="/docs">Docs</Link>
           <a href={GITHUB}>GitHub</a>
           <Link href="/login">Sign in</Link>
         </nav>
