@@ -103,10 +103,12 @@ def test_without_a_route_transcribe_enqueues_exactly_as_today(world):
     assert call["queue"] == "ingestify-audio"
     assert set(call["kwargs"]) == {"job_id", "source_type", "source", "options"}
     assert call["kwargs"]["job_id"] == str(response.job_id) and call["kwargs"]["source_type"] == "file"
-    assert call["kwargs"]["options"] == {
+    expected = {
         "language": "pt", "include_timestamps": True, "include_word_timestamps": False, "output_format": "markdown",
         "media_kind": "audio", "is_audio": True, "purge_source": False,
     }
+    assert expected.items() <= call["kwargs"]["options"].items()
+    assert call["kwargs"]["options"]["transcription_profile"] == world.job(str(response.job_id)).transcription_profile
     assert world.count(JobDispatch) == 0 and world.count(EngineUsage) == 0
     assert world.celery.sent == []
 
@@ -115,7 +117,8 @@ def test_without_a_route_upload_and_convert_audio_run_in_the_worker_as_today(wor
     upload_endpoint(world)
     convert_endpoint(world, name="talk.wav")
     first, second = world.delayed
-    assert first["options"] == {"docling_preset": "fast"} and "usage_id" not in first
+    assert first["options"]["docling_preset"] == "fast" and "usage_id" not in first
+    assert first["options"]["transcription_profile"] == world.job(first["job_id"]).transcription_profile
     assert set(second) == {"job_id", "source_type", "source", "options"}
     assert world.count(JobDispatch) == 0 and world.count(EngineUsage) == 0 and world.celery.sent == []
 
@@ -226,7 +229,9 @@ def test_with_a_route_upload_and_convert_send_audio_to_the_backlog_and_documents
         rows = db.query(JobDispatch).all()
         assert len(rows) == 2
         for d in rows:
-            assert d.payload["kwargs"]["options"] == dispatch.DEFAULT_TRANSCRIPTION_OPTIONS
+            options = d.payload["kwargs"]["options"]
+            assert dispatch.DEFAULT_TRANSCRIPTION_OPTIONS.items() <= options.items()
+            assert options["transcription_profile"] == db.get(Job, d.job_id).transcription_profile
             assert d.payload["today_queue"] == "ingestify"
 
 

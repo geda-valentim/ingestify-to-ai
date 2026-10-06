@@ -39,7 +39,8 @@ from shared.utils import sanitize_upload_filename
 from shared.tags import set_job_tags
 from shared.admin import is_effective_admin
 from shared.engines import dispatch as engine_dispatch
-from shared.engines.media import is_audio_filename
+from shared.transcription import is_media_filename
+from api.transcription_options import admission as transcription_admission, media_input_kind
 from api.tag_routes import TAGS_FORM_DESCRIPTION, add_tags_to_existing_job, parse_tags_or_422
 from api.projects_api import (
     LocationFields,
@@ -83,6 +84,11 @@ async def upload_and_convert(
         "fast",
         description="Quality/speed preset for PDF conversion: 'fast' (~35s/MB, text-only), 'balanced' (~70-105s/MB, with images), 'quality' (~350s/MB, with OCR)"
     ),
+    diarize: Optional[bool] = Form(None, description="Identificar falantes; omitido usa o padrão do provider"),
+    min_speakers: Optional[int] = Form(None, ge=1, le=20),
+    max_speakers: Optional[int] = Form(None, ge=1, le=20),
+    language: Optional[str] = Form(None, description="Idioma para áudio/vídeo; omitido detecta automaticamente"),
+    include_word_timestamps: Optional[bool] = Form(None),
     request: Request = None,
     location: LocationFields = Depends(upload_location_form),
     current_user: User = Depends(get_current_active_user),
@@ -134,6 +140,12 @@ async def upload_and_convert(
 
     filename = sanitize_upload_filename(file.filename)
 
+    known_media = media_input_kind(filename, file.content_type)
+    options, transcription_profile, transcription_profile_hash = transcription_admission(
+        settings, known_media=known_media, base_options={"docling_preset": docling_preset},
+        language=language, diarize=diarize, min_speakers=min_speakers,
+        max_speakers=max_speakers, include_word_timestamps=include_word_timestamps)
+
     # Stream the upload to disk in chunks (size limit + checksum) instead of reading it into memory
     staging_path = _upload_staging_path(filename)
     try:
@@ -146,7 +158,9 @@ async def upload_and_convert(
         upload_location = resolve_upload_location(db, current_user, plan, _request_path(request))
 
         # Check if file already processed by this user in this project
-        existing_job, reprocess_note = find_duplicate_job(db, current_user.id, file_checksum, upload_location)
+        existing_job, reprocess_note = find_duplicate_job(
+            db, current_user.id, file_checksum, upload_location,
+            transcription_profile_hash=transcription_profile_hash)
 
         if existing_job:
             logger.info(f"Duplicate file detected! Returning existing job: {existing_job.id}")
@@ -198,6 +212,8 @@ async def upload_and_convert(
                 created_at=created_at,
                 project_id=upload_location.project_id,
                 folder_id=upload_location.folder_id,
+                transcription_profile=transcription_profile,
+                transcription_profile_hash=transcription_profile_hash,
             )
             db.add(db_job)
             set_job_tags(db_job, tag_list)
@@ -206,7 +222,8 @@ async def upload_and_convert(
         except Exception as e:
             logger.error(f"Error creating job in MySQL: {e}", exc_info=True)
             db.rollback()
-            # Continue - MySQL is for persistence, Redis is primary
+            _discard_uncommitted_job(redis_client, current_user.id, str(job_id))
+            raise HTTPException(503, detail={"code": "DATABASE_UNAVAILABLE"}) from None
 
         logger.info(f"MAIN JOB created: {job_id} | user: {current_user.username} | source_type: file")
 
@@ -247,10 +264,10 @@ async def upload_and_convert(
                     job_id=str(job_id),
                     source_type="file",
                     source=str(temp_file_path),
-                    options={"docling_preset": docling_preset},
+                    options=options,
                 )
 
-            _enqueue_maybe_routed(filename, job_id, temp_file_path, current_user, file_size_bytes, enqueue)
+            _enqueue_maybe_routed(filename, job_id, temp_file_path, current_user, file_size_bytes, enqueue, options=options, known_media=known_media)
             logger.info(f"MAIN JOB {job_id} enqueued to Celery successfully")
 
         except ImportError as e:
@@ -301,25 +318,50 @@ async def upload_and_convert(
         staging_path.unlink(missing_ok=True)
 
 
+def _discard_uncommitted_job(cache, user_id, job_id):
+    """No background task may refer to a job whose authoritative commit failed."""
+    try:
+        cache.delete_job(job_id)
+        cache.remove_job_from_user(user_id, job_id)
+        cache.client.delete(f"job:{job_id}:owner", f"job:{job_id}:output_format")
+    except Exception:
+        logger.warning("Could not clean cache for uncommitted job %s", job_id)
+
+
 def _engine_celery():
     """The Celery app routed work is published with (by task name, see shared/engines/dispatch.py)"""
     from workers.celery_app import celery_app
     return celery_app
 
 
-def _enqueue_maybe_routed(filename, job_id, file_path, user, file_size_bytes, enqueue) -> None:
+def _enqueue_maybe_routed(filename, job_id, file_path, user, file_size_bytes, enqueue,
+                          *, options=None, known_media=None) -> None:
     """
-    /upload and /convert: an audio file goes through the transcription route when
-    one exists (spec 0003, R5), with /transcribe's default options; anything else,
-    and audio without a route, is enqueued exactly as before.
+    Send known audio/video through Compute with the durable admission options.
+    Unknown sources are classified after download, using their stored snapshot.
     """
-    if not is_audio_filename(filename):
+    if known_media is not True and not is_media_filename(filename):
         enqueue()
         return
+    queue = settings.celery_task_default_queue
+    if (options or {}).get("transcriber_provider") == "whisperx":
+        # The general document image does not contain WhisperX. Preserve the
+        # same dedicated queue even when no Compute route has been configured.
+        from workers.tasks import process_conversion
+        queue = settings.transcription_queue
+
+        def enqueue():
+            process_conversion.apply_async(
+                kwargs={"job_id": str(job_id), "source_type": "file",
+                        "source": str(file_path), "options": options},
+                queue=queue,
+            )
+
     engine_dispatch.submit(
         feature="transcription", job_id=str(job_id), user_id=user.id, is_admin=is_effective_admin(user),
-        payload=engine_dispatch.transcription_payload(job_id, file_path, engine_dispatch.DEFAULT_TRANSCRIPTION_OPTIONS,
-                                                      settings.celery_task_default_queue),
+        payload=engine_dispatch.transcription_payload(job_id, file_path,
+                                                      {**engine_dispatch.DEFAULT_TRANSCRIPTION_OPTIONS, **(options or {})},
+                                                      queue),
         today=enqueue, celery=_engine_celery(), media_bytes=file_size_bytes, session_factory=SessionLocal,
     )
 
@@ -414,6 +456,9 @@ async def transcribe_audio(
         False,
         description="Apagar o áudio/vídeo enviado assim que a transcrição terminar (guarda só o texto)",
     ),
+    diarize: Optional[bool] = Form(None, description="Identificar falantes; omitido usa o padrão do provider"),
+    min_speakers: Optional[int] = Form(None, ge=1, le=20),
+    max_speakers: Optional[int] = Form(None, ge=1, le=20),
     request: Request = None,
     location: LocationFields = Depends(upload_location_form),
     current_user: User = Depends(get_current_active_user),
@@ -543,6 +588,12 @@ async def transcribe_audio(
         )
 
     media_kind = "video" if is_video else "audio"
+    options, transcription_profile, transcription_profile_hash = transcription_admission(
+        settings, known_media=True,
+        base_options={"language": language, "include_timestamps": include_timestamps,
+                      "include_word_timestamps": include_word_timestamps, "output_format": output_format,
+                      "media_kind": media_kind, "is_audio": True, "purge_source": purge_source},
+        diarize=diarize, min_speakers=min_speakers, max_speakers=max_speakers)
     max_size_mb = settings.max_video_file_size_mb if is_video else settings.max_audio_file_size_mb
 
     # Where the job goes, decided before anything is written (422/404 here leave no file behind)
@@ -561,7 +612,9 @@ async def transcribe_audio(
         upload_location = resolve_upload_location(db, current_user, plan, _request_path(request))
 
         # Check if file already processed by this user in this project
-        existing_job, reprocess_note = find_duplicate_job(db, current_user.id, file_checksum, upload_location)
+        existing_job, reprocess_note = find_duplicate_job(
+            db, current_user.id, file_checksum, upload_location,
+            transcription_profile_hash=transcription_profile_hash)
 
         if existing_job:
             logger.info(f"Duplicate audio file detected! Returning existing job: {existing_job.id}")
@@ -613,6 +666,8 @@ async def transcribe_audio(
                 created_at=created_at,
                 project_id=upload_location.project_id,
                 folder_id=upload_location.folder_id,
+                transcription_profile=transcription_profile,
+                transcription_profile_hash=transcription_profile_hash,
             )
             db.add(db_job)
             set_job_tags(db_job, tag_list)
@@ -621,6 +676,8 @@ async def transcribe_audio(
         except Exception as e:
             logger.error(f"Error creating audio job in MySQL: {e}", exc_info=True)
             db.rollback()
+            _discard_uncommitted_job(redis_client, current_user.id, str(job_id))
+            raise HTTPException(503, detail={"code": "DATABASE_UNAVAILABLE"}) from None
 
         logger.info(f"AUDIO TRANSCRIPTION JOB created: {job_id} | user: {current_user.username}")
 
@@ -657,17 +714,6 @@ async def transcribe_audio(
             except Exception as e:
                 logger.error(f"Failed to upload audio file to MinIO: {e}")
                 # Continue with filesystem fallback
-
-            # Build audio transcription options
-            options = {
-                "language": language,
-                "include_timestamps": include_timestamps,
-                "include_word_timestamps": include_word_timestamps,
-                "output_format": output_format,
-                "media_kind": media_kind,
-                "is_audio": True,  # Flag to indicate this is audio transcription
-                "purge_source": purge_source,
-            }
 
             # Enqueue task (use 'file' source type since audio is already saved locally)
             # on the transcription queue, served by the dedicated worker-audio service
@@ -773,6 +819,11 @@ async def convert_document(
         description="Token OAuth/acesso do provedor (obrigatório para gdrive e dropbox). "
                     "Não vai na mensagem do Celery: o worker o lê de uma chave Redis com TTL e a apaga após o download.",
     ),
+    diarize: Optional[bool] = Form(None, description="Identificar falantes; omitido usa o padrão do provider"),
+    min_speakers: Optional[int] = Form(None, ge=1, le=20),
+    max_speakers: Optional[int] = Form(None, ge=1, le=20),
+    language: Optional[str] = Form(None, description="Idioma para áudio/vídeo; omitido detecta automaticamente"),
+    include_word_timestamps: Optional[bool] = Form(None),
     request: Request = None,
     location: LocationFields = Depends(upload_location_form),
     current_user: User = Depends(get_current_active_user),
@@ -846,6 +897,12 @@ async def convert_document(
 
     tag_list = parse_tags_or_422(tags)
 
+    known_media = media_input_kind(file.filename, file.content_type) if file else None
+    options, transcription_profile, transcription_profile_hash = transcription_admission(
+        settings, known_media=known_media, language=language, diarize=diarize,
+        min_speakers=min_speakers, max_speakers=max_speakers,
+        include_word_timestamps=include_word_timestamps)
+
     # The provider's own token, in its own header (S-01: the Ingestify JWT in
     # Authorization authenticates here and is never forwarded anywhere)
     if source_type in ["gdrive", "dropbox"] and not source_token:
@@ -880,7 +937,9 @@ async def convert_document(
         if file_checksum:
             # Check if file already processed by this user in this project
             # (a failed job does not count: sending the file again is the retry)
-            existing_job, reprocess_note = find_duplicate_job(db, current_user.id, file_checksum, upload_location)
+            existing_job, reprocess_note = find_duplicate_job(
+                db, current_user.id, file_checksum, upload_location,
+                transcription_profile_hash=transcription_profile_hash)
 
             if existing_job:
                 logger.info(f"Duplicate file detected! Returning existing job: {existing_job.id}")
@@ -941,6 +1000,8 @@ async def convert_document(
                 created_at=created_at,
                 project_id=upload_location.project_id,
                 folder_id=upload_location.folder_id,
+                transcription_profile=transcription_profile,
+                transcription_profile_hash=transcription_profile_hash,
             )
             db.add(db_job)
             set_job_tags(db_job, tag_list)
@@ -950,7 +1011,8 @@ async def convert_document(
         except Exception as e:
             logger.error(f"Error creating job in MySQL: {e}", exc_info=True)
             db.rollback()
-            # Continue - MySQL is for persistence, Redis is primary
+            _discard_uncommitted_job(redis_client, current_user.id, str(job_id))
+            raise HTTPException(503, detail={"code": "DATABASE_UNAVAILABLE"}) from None
 
         logger.info(f"MAIN JOB created: {job_id} | user: {current_user.username} | source_type: {source_type}")
 
@@ -965,7 +1027,7 @@ async def convert_document(
                 "job_id": str(job_id),
                 "source_type": source_type,
                 "source": source,
-                "options": {},  # Default options for now
+                "options": options,
             }
 
             # The provider's token never travels in the task (broker, result backend,
@@ -1010,7 +1072,7 @@ async def convert_document(
 
             if staging_path:
                 _enqueue_maybe_routed(filename, job_id, task_kwargs["source"], current_user, file_size_bytes,
-                                      enqueue)
+                                      enqueue, options=options, known_media=known_media)
             else:
                 enqueue()  # URL / Drive / Dropbox: audio is only recognised once the worker downloads it
             logger.info(f"MAIN JOB {job_id} enqueued to Celery successfully")
@@ -1166,7 +1228,7 @@ async def get_job_status(
         response_data["page_number"] = status_data["page_number"]
 
     # Transcription progress in media time (set by the audio worker as it goes)
-    for field in ("transcribed_seconds", "media_duration"):
+    for field in ("transcribed_seconds", "media_duration", "phase"):
         if status_data.get(field) is not None:
             response_data[field] = status_data[field]
 
@@ -1501,7 +1563,19 @@ async def get_job_result(
     # A cancelled/stale generation may have written external objects, but is
     # never selected for publication here.
     live_generation = None
+    transcript_attempt_id = None
+    durable_transcription = False
     if owned_job is not None and owned_job.id == job_id:
+        profile = getattr(owned_job, "transcription_profile", None)
+        durable_transcription = isinstance(profile, dict)
+        if durable_transcription:
+            if owned_job.status != DBJobStatus.COMPLETED:
+                raise HTTPException(400, detail="Transcrição ainda não publicada")
+            transcript_attempt_id = getattr(owned_job, "transcript_attempt_id", None)
+            # Unknown downloaded sources can resolve to a document. Such jobs
+            # retain their admission profile without publishing a transcript.
+            if not isinstance(transcript_attempt_id, str) or not transcript_attempt_id:
+                transcript_attempt_id = None
         from shared.live.lifecycle import available
         from shared.models import LiveSession
         if available(db):
@@ -1513,7 +1587,7 @@ async def get_job_result(
 
     # Check job status first
     status_data = redis_client.get_job_status(job_id)
-    if live_generation is not None:
+    if live_generation is not None or (durable_transcription and owned_job.status == DBJobStatus.COMPLETED):
         status_data = {"type": "main", "status": "completed"}
 
     if not status_data:
@@ -1532,7 +1606,7 @@ async def get_job_result(
     # served straight from Redis/MinIO, even if Elasticsearch has no result
     requested_format = format_ or redis_client.get_job_output_format(job_id)
     if requested_format and requested_format != "markdown":
-        return _transcript_response(job_id, requested_format, redis_client, live_generation)
+        return _transcript_response(job_id, requested_format, redis_client, live_generation, transcript_attempt_id)
 
     # Get job type
     job_type = status_data.get("type", "main")
@@ -1560,7 +1634,7 @@ async def get_job_result(
     if not requested_format:
         default_format = (result_data.get("metadata") or {}).get("output_format") or "markdown"
         if default_format != "markdown":
-            return _transcript_response(job_id, default_format, redis_client, live_generation)
+            return _transcript_response(job_id, default_format, redis_client, live_generation, transcript_attempt_id)
 
     # Get completed_at timestamp
     completed_at = None
@@ -1590,16 +1664,18 @@ async def get_job_result(
     return JobResultResponse(**response_data)
 
 
-def _transcript_response(job_id: str, fmt: str, redis_client, generation=None) -> Response:
+def _transcript_response(job_id: str, fmt: str, redis_client, generation=None, attempt_id=None) -> Response:
     """Return one transcript format (from Redis, or MinIO once the Redis result expired)"""
-    content = ((redis_client.get_job_result(job_id) or {}).get("transcript") or {}).get(fmt)
+    # A schema-2 result is selected by its SQL publication fence, never by a
+    # cache payload left behind by a losing attempt.
+    content = None if attempt_id else ((redis_client.get_job_result(job_id) or {}).get("transcript") or {}).get(fmt)
 
     if content is None:
         try:
             minio_client = get_minio_client()
             data = minio_client.download_file(
                 bucket_name=minio_client.bucket_audio,
-                object_name=transcript_object_name(job_id, fmt, generation),
+                object_name=transcript_object_name(job_id, fmt, generation, attempt_id=attempt_id),
             )
             content = data.decode("utf-8") if data is not None else None
         except Exception as e:

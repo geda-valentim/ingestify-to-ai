@@ -3662,6 +3662,67 @@
         "title": "APIKeyResponse",
         "description": "Schema for API key response (after creation)"
       },
+      "AlignmentMetadata": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "completed",
+              "unavailable"
+            ],
+            "title": "Status"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "revision": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revision"
+          },
+          "device": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "title": "AlignmentMetadata"
+      },
       "AudioFormat": {
         "properties": {
           "encoding": {
@@ -3823,6 +3884,67 @@
             ],
             "title": "Tags",
             "description": "Tags separadas por vírgula (ex.: 'cliente-x, reunião'). Viram minúsculas; até 20 tags de até 50 caracteres. Enviar um arquivo repetido adiciona as tags ao job existente."
+          },
+          "diarize": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Diarize",
+            "description": "Identificar falantes; omitido usa o padrão do provider"
+          },
+          "min_speakers": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 20.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min Speakers"
+          },
+          "max_speakers": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 20.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Speakers"
+          },
+          "language": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Language",
+            "description": "Idioma para áudio/vídeo; omitido detecta automaticamente"
+          },
+          "include_word_timestamps": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Include Word Timestamps"
           },
           "project": {
             "anyOf": [
@@ -4121,6 +4243,44 @@
             "description": "Apagar o áudio/vídeo enviado assim que a transcrição terminar (guarda só o texto)",
             "default": false
           },
+          "diarize": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Diarize",
+            "description": "Identificar falantes; omitido usa o padrão do provider"
+          },
+          "min_speakers": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 20.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min Speakers"
+          },
+          "max_speakers": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 20.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Speakers"
+          },
           "project": {
             "anyOf": [
               {
@@ -4220,6 +4380,67 @@
             "title": "Docling Preset",
             "description": "Quality/speed preset for PDF conversion: 'fast' (~35s/MB, text-only), 'balanced' (~70-105s/MB, with images), 'quality' (~350s/MB, with OCR)",
             "default": "fast"
+          },
+          "diarize": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Diarize",
+            "description": "Identificar falantes; omitido usa o padrão do provider"
+          },
+          "min_speakers": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 20.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min Speakers"
+          },
+          "max_speakers": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 20.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Speakers"
+          },
+          "language": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Language",
+            "description": "Idioma para áudio/vídeo; omitido detecta automaticamente"
+          },
+          "include_word_timestamps": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Include Word Timestamps"
           },
           "project": {
             "anyOf": [
@@ -4494,6 +4715,20 @@
           },
           "audio": {
             "$ref": "#/components/schemas/AudioFormat"
+          },
+          "protocol": {
+            "type": "integer",
+            "enum": [
+              1,
+              2
+            ],
+            "title": "Protocol",
+            "default": 1
+          },
+          "diarize": {
+            "type": "boolean",
+            "title": "Diarize",
+            "default": false
           }
         },
         "additionalProperties": false,
@@ -4555,6 +4790,119 @@
           "current_password"
         ],
         "title": "CredentialsUpdate"
+      },
+      "DiarizationMetadata": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "completed",
+              "disabled"
+            ],
+            "title": "Status"
+          },
+          "speaker_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Speaker Count"
+          },
+          "engine": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Engine"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "revision": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revision"
+          },
+          "turns": {
+            "items": {
+              "$ref": "#/components/schemas/DiarizationTurn"
+            },
+            "type": "array",
+            "title": "Turns",
+            "default": []
+          },
+          "generation": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Generation"
+          },
+          "provenance": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provenance"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "title": "DiarizationMetadata"
+      },
+      "DiarizationTurn": {
+        "properties": {
+          "start": {
+            "type": "number",
+            "title": "Start"
+          },
+          "end": {
+            "type": "number",
+            "title": "End"
+          },
+          "speaker_id": {
+            "type": "string",
+            "title": "Speaker Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "start",
+          "end",
+          "speaker_id"
+        ],
+        "title": "DiarizationTurn"
       },
       "DocumentMetadata": {
         "properties": {
@@ -4656,6 +5004,63 @@
               }
             ],
             "title": "Available Formats"
+          },
+          "schema_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Schema Version"
+          },
+          "speakers": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/TranscriptSpeaker"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Speakers"
+          },
+          "diarization": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DiarizationMetadata"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "alignment": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AlignmentMetadata"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "provenance": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provenance"
           }
         },
         "type": "object",
@@ -5510,6 +5915,23 @@
             ],
             "title": "Media Duration"
           },
+          "phase": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "transcribing",
+                  "aligning",
+                  "diarizing",
+                  "saving"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Phase"
+          },
           "engine": {
             "anyOf": [
               {
@@ -6262,6 +6684,24 @@
         ],
         "title": "TranscriptSegment",
         "description": "Trecho transcrito, com início e fim em segundos da mídia"
+      },
+      "TranscriptSpeaker": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "label"
+        ],
+        "title": "TranscriptSpeaker"
       },
       "UploadFolderInfo": {
         "properties": {

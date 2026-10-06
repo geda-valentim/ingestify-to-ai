@@ -118,6 +118,12 @@ class Job(Base):
     mime_type = Column(String(100))
     file_checksum = Column(String(64), index=True)  # SHA256 hash for deduplication
 
+    # Immutable transcription decisions resolved at admission (spec 0006).
+    # Unknown remote sources keep a candidate snapshot until media detection.
+    transcription_profile = Column(JSON, nullable=True)
+    transcription_profile_hash = Column(String(64), nullable=True, index=True)
+    transcript_attempt_id = Column(String(36), nullable=True)
+
     # MinIO storage paths
     minio_upload_path = Column(String(500))  # Path to uploaded file in MinIO
     minio_result_path = Column(String(500))  # Path to result markdown in MinIO

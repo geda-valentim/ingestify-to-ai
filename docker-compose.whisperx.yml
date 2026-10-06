@@ -1,0 +1,30 @@
+# Opt-in after migration, offline provisioning and target qualification.
+# Use last, with the existing infra/GPU/Compute overlays; no new public service.
+x-whisperx-environment: &whisperx-environment
+  AUDIO_TRANSCRIBER_PROVIDER: whisperx
+  WHISPERX_MODEL_DIR: /models/whisperx
+  WHISPERX_DIARIZATION_DEFAULT: ${WHISPERX_DIARIZATION_DEFAULT:-false}
+  WHISPERX_DIARIZATION_READY: ${WHISPERX_DIARIZATION_READY:-false}
+  WHISPERX_ASR_REVISION: ${WHISPERX_ASR_REVISION:-0a363e9161cbc7ed1431c9597a8ceaf0c4f78fcf}
+  WHISPERX_DIARIZATION_REVISION: ${WHISPERX_DIARIZATION_REVISION:-}
+  WHISPERX_VAD_REVISION: ${WHISPERX_VAD_REVISION:-unqualified}
+  WHISPERX_ALIGNER_MANIFEST: ${WHISPERX_ALIGNER_MANIFEST:-{}}
+services:
+  api:
+    environment: *whisperx-environment
+  worker-dispatch:
+    environment: *whisperx-environment
+  worker-remote:
+    environment:
+      WHISPERX_MODEL_DIR: /models/whisperx
+    volumes:
+      - ${WHISPERX_MODEL_DIR:-/var/lib/ingestify/whisperx}:/models/whisperx:ro
+  worker-audio:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.audio
+      args:
+        AUDIO_TARGET: ${WHISPERX_BUILD_TARGET:-cpu}
+    environment: *whisperx-environment
+    volumes:
+      - ${WHISPERX_MODEL_DIR:-/var/lib/ingestify/whisperx}:/models/whisperx:ro
