@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Em revisão |
+| **Status** | Aprovada; implementação validada na branch, merge e rollout pendentes |
 | **Autor** | Geda Valentim / Codex |
 | **Criada em** | 2026-10-06 |
 | **Atualizada em** | 2026-10-06 |
@@ -60,33 +60,33 @@ permissões por papel e limites por recurso aplicados na API e nos executores.
 
 ## 3. Critérios de aceitação
 
-- [ ] CA1. Sem perfil desejado, a tela explica a configuração necessária e oferece
+- [x] CA1. Sem perfil desejado, a tela explica a configuração necessária e oferece
   “Escolher perfil” e, para quem tem permissão, “Criar perfil”. Não mostra apenas
   `RUNTIME_PROFILE_REQUIRED` nem indica que um agente saudável está indisponível.
-- [ ] CA2. Um perfil nomeado concentra modelo, host/provider, GPU, réplicas,
+- [x] CA2. Um perfil nomeado concentra modelo, host/provider, GPU, réplicas,
   concorrência, CPU/memória e política de warmup/cooldown já suportados pelo adapter.
-- [ ] CA3. Vincular uma revisão publicada cria uma revisão desejada por
+- [x] CA3. Vincular uma revisão publicada cria uma revisão desejada por
   engine/feature usando `save_profile`. Aplicado/observado continuam separados;
   nenhum container, deploy ou reserva paga é criado nessa ação.
-- [ ] CA4. Nova revisão da biblioteca não atualiza engines já vinculadas. Cada
+- [x] CA4. Nova revisão da biblioteca não atualiza engines já vinculadas. Cada
   uma mantém a revisão escolhida até nova vinculação explícita e autorizada.
-- [ ] CA5. Observador lê apenas seus recursos; editor edita apenas os perfis
+- [x] CA5. Observador lê apenas seus recursos; editor edita apenas os perfis
   permitidos; configurador vincula perfis; operador executa apenas ações concedidas.
   Esconder um botão sem proteger a rota correspondente não atende este critério.
-- [ ] CA6. Papel de operador limitado a uma engine de desenvolvimento não
+- [x] CA6. Papel de operador limitado a uma engine de desenvolvimento não
   opera outra engine, produção ou recurso canônico compartilhado fora do escopo.
-- [ ] CA7. Limites ABAC de modelo, host/GPU, feature, réplicas, concorrência,
+- [x] CA7. Limites ABAC de modelo, host/GPU, feature, réplicas, concorrência,
   memória, prazo aquecido e custo máximo são verificados no servidor; alterar
   JSON, IDs ou chamadas diretas aos endpoints legados não contorna esses limites.
-- [ ] CA8. Revogar um grant impede novas admissões de efeito. Um efeito admitido
+- [x] CA8. Revogar um grant impede novas admissões de efeito. Um efeito admitido
   antes da revogação pode já estar em voo: cancelar quando possível e tratar
   resultado desconhecido como incerto, mantendo gates/reservas até observação
   ou limpeza autorizada. Não prometer desfazer um RPC já aceito pelo provedor.
-- [ ] CA9. Listagens, histórico, logs e SSE respeitam o mesmo escopo; IDs adivinhados
+- [x] CA9. Listagens, histórico, logs e SSE respeitam o mesmo escopo; IDs adivinhados
   não revelam recurso, credencial, perfil, versão ou eventos de outro escopo.
-- [ ] CA10. Migração preserva perfis de runtime, revisões aplicadas, operações e
+- [x] CA10. Migração preserva perfis de runtime, revisões aplicadas, operações e
   auditoria. O admin atual continua com acesso de bootstrap e não há autoescalada.
-- [ ] CA11. Novo provider registrado reutiliza a biblioteca, autorização e UI;
+- [x] CA11. Novo provider registrado reutiliza a biblioteca, autorização e UI;
   não exige condicionais AWS/GCP/Vast nos componentes de perfil.
 
 ## 4. Solução proposta
@@ -167,6 +167,7 @@ não criam permissões arbitrárias vindas do browser. Os papéis iniciais são:
 | Editor de perfis | Lê, cria, revisa, publica e arquiva perfis em seu escopo |
 | Configurador de runtime | Lê perfis/engines e vincula uma revisão publicada ao desejado |
 | Operador de engines | Lê perfis/engines e cria planos/executa as ações explicitamente concedidas; cancelamento/recovery têm permissões próprias |
+| Gestor de conexão | Lê a engine e altera credenciais com senha atual e escopo; não recebe orçamento/configuração bruta |
 | Observador | Lê perfis, engines e operações/logs autorizados; nenhuma mutação |
 
 Permissões incluem `execution_profiles.read/create/update/publish/archive`,
@@ -294,19 +295,21 @@ limitadas; não herdam uma sessão humana ou permissão geral de operação.
 
 ### 4.6 API e dados
 
-Novos contratos propostos, sob `/admin`, com autorização granular:
+Contratos entregues, sob `/admin`, com autorização granular:
 
 | Método | Rota | Permissão/efeito |
 |---|---|---|
 | GET / POST | `/execution-profiles` | Listar filtrado / criar perfil |
-| GET / PATCH | `/execution-profiles/{id}` | Ler / editar metadados com versão |
+| GET / PUT | `/execution-profiles/{id}` | Ler / editar metadados com versão |
 | POST | `/execution-profiles/{id}/revisions` | Criar revisão sem alterar vínculos |
 | POST | `/execution-profiles/{id}/publish` | Publicar revisão explícita com versão |
 | POST | `/execution-profiles/{id}/archive` | Impedir novas vinculações |
-| PUT | `/engines/{id}/runtime-profile-binding` | Vincular revisão + feature + versão da engine |
+| POST | `/engines/{id}/runtime-profile/bind` | Vincular revisão + feature + versão da engine |
 | GET | `/access/roles` | Papéis/permissões concedíveis pelo solicitante |
-| GET / POST / PATCH | `/access/policies[/{id}]` | Ler/criar/revisar política autorizada |
-| GET / POST / DELETE | `/access/grants[/{id}]` | Listar/conceder/revogar com versão |
+| GET / POST | `/access/policies` | Ler/criar política autorizada |
+| POST | `/access/policies/{id}/revisions` | Revisar política com versão, sem migrar grants |
+| GET / POST | `/access/grants` | Listar/conceder com revisão fixa |
+| POST | `/access/grants/{id}/revoke` | Revogar com versão |
 
 Erros: `401` sessão inválida; `403` ação não permitida no recurso conhecido;
 `404` recurso fora de escopo, sem confirmar sua existência; `409` versão/plano
@@ -389,20 +392,22 @@ autorização, admissões de efeito e associações confiáveis de consumidores.
 
 ## 8. Plano de implementação
 
-- [ ] 1. Fechar semântica de perfis, papéis, políticas e plano de migração com revisão.
-- [ ] 2. Schema da biblioteca, revisões e referência opcional no runtime; import legado.
-- [ ] 3. API/formulário de biblioteca reutilizando adapters e `RuntimeSettings`;
+- [x] 1. Fechar semântica de perfis, papéis, políticas e plano de migração com revisão.
+- [x] 2. Schema da biblioteca, revisões e referência opcional no runtime; import legado.
+- [x] 3. API/formulário de biblioteca reutilizando adapters e `RuntimeSettings`;
   escolha/vinculação na engine, sem aplicação automática.
-- [ ] 4. Schema RBAC/ABAC e serviço de decisão; testes de grants/escopos/revogação.
-- [ ] 5. Enforcement completo de rotas/domínio/CLI/runner/agente e exposição segura
+- [x] 4. Schema RBAC/ABAC e serviço de decisão; testes de grants/escopos/revogação.
+- [x] 5. Enforcement completo de rotas/domínio/CLI/runner/agente e exposição segura
   de capabilities/navegação; ainda sem grants delegados em produção.
-- [ ] 6. UI de administração de acesso e rollout dos primeiros papéis limitados;
-  qualificação de matriz de ações, logs, cancelamento e cleanup.
+- [x] 6. UI de administração de acesso e qualificação isolada de ações, logs,
+  cancelamento e cleanup.
+- [ ] 7. Rollout opt-in dos primeiros papéis limitados no ambiente e canário físico
+  Local/Modal, após migração e qualificação de consumidores.
 
 ## 9. Questões em aberto
 
-- [ ] Confirmar intenção de “perfis”: biblioteca de execução com papéis/políticas
-  separados ou somente perfis de acesso dos usuários. Pergunta enviada ao autor.
+- [x] Intenção de “perfis”: biblioteca de execução com papéis/políticas separados.
+  Implementação autorizada pelo autor em 2026-10-06, seguida de revisão e testes.
 - [x] Criar um runtime paralelo? → **Decisão (2026-10-06):** não; a biblioteca
   origina revisões do runtime existente e usa o executor/ledger da 0007.
 - [x] Grants de projeto controlam worker global? → **Decisão (2026-10-06):** não;
@@ -415,4 +420,10 @@ autorização, admissões de efeito e associações confiáveis de consumidores.
 
 Revisões realizadas pelos agentes `review_runtime_profiles_architecture` e
 `review_runtime_profiles_authorization`, comparando com `main` em `3dc5bf2`.
-Essas revisões não declaram a funcionalidade implementada nem aprovada pelo autor.
+A implementação foi autorizada posteriormente pelo autor. Revisão de código e
+agentes de teste verificaram a biblioteca, o acesso e a execução em ambiente isolado.
+O [relatório de validação](../benchmarks/execution-profiles-validation.md) registra
+evidências e limites: os critérios acima são verificados com banco descartável e
+providers simulados; canário físico e ativação continuam pendentes.
+O [guia funcional](../features/execution-profiles.md) descreve o comportamento
+entregue; o [runbook](../runbooks/execution-profiles-access.md) cobre a migração.

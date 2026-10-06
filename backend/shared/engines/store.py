@@ -59,7 +59,9 @@ def set_binding(db: Session, engine: Engine, feature: str, binding: Optional[Bin
     """Set (or with None remove) how a feature runs on an engine; validated, versioned and audited"""
     get_feature(feature)
     from shared.engine_control.guards import before_write
-    before_write(db, engine, version, runtime=True)
+    before_write(
+        db, engine, version, runtime=True, actor=actor_user_id, auth_method=auth_method
+    )
     _check_version(engine, version)
     config = dict(engine.config or {})
     features = dict(config.get("features") or {})
@@ -108,7 +110,7 @@ def set_local_gpus(db: Session, engine: Engine, gpus: list, *, version: Optional
     if engine.adapter_type != "local":
         raise CapacityError("Only the local engine declares physical GPUs")
     from shared.engine_control.guards import before_write
-    before_write(db, engine, version)
+    before_write(db, engine, version, actor=actor_user_id, auth_method=auth_method)
     _check_version(engine, version)
     declared = [LocalGpu(**g).model_dump(exclude_none=True) for g in gpus]
     config = dict(engine.config or {})
@@ -254,7 +256,7 @@ def set_status(db: Session, engine: Engine, status: str, *, version: Optional[in
     if status not in ("active", "paused"):
         raise ValueError("status must be active or paused")
     from shared.engine_control.guards import before_write
-    before_write(db, engine, version)
+    before_write(db, engine, version, actor=actor_user_id, auth_method=auth_method)
     _check_version(engine, version)
     if status == "active":
         problems = activation_problems(engine, fingerprint_of, vision_model_id)
@@ -273,7 +275,7 @@ def set_status(db: Session, engine: Engine, status: str, *, version: Optional[in
 def reset_health(db: Session, engine: Engine, *, actor_user_id: Optional[str], auth_method: str,
                  ip: Optional[str] = None) -> Engine:
     from shared.engine_control.guards import before_write
-    before_write(db, engine)
+    before_write(db, engine, actor=actor_user_id, auth_method=auth_method)
     before = {"health": engine.health, "health_reason": engine.health_reason}
     engine.health, engine.health_reason, engine.health_until, engine.consecutive_failures = "unknown", None, None, 0
     _bump(engine)
@@ -294,7 +296,7 @@ def set_budget(db: Session, engine: Engine, *, limit_usd, min_remaining_usd=None
     from zoneinfo import ZoneInfo
 
     from shared.engine_control.guards import before_write
-    before_write(db, engine, version)
+    before_write(db, engine, version, actor=actor_user_id, auth_method=auth_method)
     _check_version(engine, version)
     limit = Decimal(str(limit_usd)) if limit_usd is not None else None
     if limit is not None and limit <= 0:
@@ -362,7 +364,14 @@ def set_credentials(db: Session, engine: Engine, fields: dict, *, public_key: st
     if not public_key:
         raise EngineStateError("ENGINE_SECRETS_PUBLIC_KEY is not set: credentials cannot be stored", 409)
     from shared.engine_control.guards import before_write
-    before_write(db, engine, version, credentials=True)
+    before_write(
+        db,
+        engine,
+        version,
+        credentials=True,
+        actor=actor_user_id,
+        auth_method=auth_method,
+    )
     _check_version(engine, version)
     clean = {}
     for name in schema:
@@ -397,7 +406,14 @@ def clear_credentials(db: Session, engine: Engine, *, version: Optional[int], ac
                       auth_method: str, ip: Optional[str] = None) -> Engine:
     """Forget the credentials; an active remote engine is paused (it could not run anyway)"""
     from shared.engine_control.guards import before_write
-    before_write(db, engine, version, credentials=True)
+    before_write(
+        db,
+        engine,
+        version,
+        credentials=True,
+        actor=actor_user_id,
+        auth_method=auth_method,
+    )
     _check_version(engine, version)
     before = {"status": engine.status, "credentials": "set" if engine.credentials_sealed else "unset"}
     engine.credentials_sealed = engine.credentials_key_id = None
@@ -420,7 +436,7 @@ def record_deployment(db: Session, engine: Engine, feature: str, entry: dict, *,
                       auth_method: str, ip: Optional[str] = None) -> Engine:
     """What a verified deploy put in the account: {fingerprint, protocol, binding, verified_at, ...}"""
     from shared.engine_control.guards import before_write
-    before_write(db, engine, runtime=True)
+    before_write(db, engine, runtime=True, actor=actor_user_id, auth_method=auth_method)
     deployments = dict(engine.deployments or {})
     before = deployments.get(feature)
     deployments[feature] = entry

@@ -1,7 +1,7 @@
 # Documentação do Ingestify
 
 Índice de `docs/`. Os documentos em [features/](features/) foram verificados contra o código
-em **2026-10-04** e são a referência atual; o código continua sendo a fonte da verdade.
+em **2026-10-04** (perfis de execução e acesso: **2026-10-06**) e são a referência atual; o código continua sendo a fonte da verdade.
 A especificação interativa da API fica em `http://<api>/docs` (Swagger) e `/redoc`.
 
 Legenda: **atual** = confere com o código · **parcial** = útil, mas com trechos antigos
@@ -22,6 +22,7 @@ referência · **planejado** = não implementado.
 | [features/storage-and-retention.md](features/storage-and-retention.md) | MySQL, Elasticsearch, MinIO, chaves Redis, disco temporário, tarefas agendadas e retenção. |
 | [features/monitoring-and-admin.md](features/monitoring-and-admin.md) | `/health`, rotas `/admin/*`, detecção de jobs travados e retry automático. |
 | [features/engines.md](features/engines.md) | **Guia Compute do operador**: execução CPU/GPU, provider × motor, telas admin, diagnóstico, chaves, capacidade/VRAM, deploy Modal, rotas, orçamentos, benchmark e legendas parciais de arquivos. |
+| [features/execution-profiles.md](features/execution-profiles.md) | Biblioteca de perfis versionados, vinculação ao runtime existente e RBAC/ABAC por engine/recurso. Implementado com ativação opt-in; [validação](benchmarks/execution-profiles-validation.md). |
 | [features/crawler.md](features/crawler.md) | **Planejado / não implementado**: o que existe de código dormente e onde está o plano. |
 | Transcrição de áudio/vídeo (`POST /transcribe`) | Documentada à parte. Dispositivo e GPU do Whisper: [GPU.md](GPU.md) e [spec 0002](specs/0002-dispositivo-unico-e-migracao-do-whisper.md). |
 | [features/whisperx.md](features/whisperx.md) | Canário WhisperX: perfis duráveis, falantes em arquivos, protocolo Modal 4, imagem isolada, gates e rollback. |
@@ -36,11 +37,13 @@ referência · **planejado** = não implementado.
 | [specs/0001-remover-clean-architecture-morta.md](specs/0001-remover-clean-architecture-morta.md) | atual (com ressalva) | Decisão de remover as camadas Clean Architecture. Ressalva: o merge `f1b5917` recolocou arquivos do crawler nessas pastas. |
 | [specs/0002-dispositivo-unico-e-migracao-do-whisper.md](specs/0002-dispositivo-unico-e-migracao-do-whisper.md) | atual | `DEVICE` único para Docling, Whisper e Florence-2. |
 | [specs/0003-motores-de-execucao-roteamento-e-orcamento.md](specs/0003-motores-de-execucao-roteamento-e-orcamento.md) | em implementação | Motores de execução, rotas por feature com orçamento (local + Modal). Fatias 0a–8 feitas, 4d pendente; operação em [features/engines.md](features/engines.md). |
+| [specs/0009-perfis-de-execucao-e-controle-de-acesso.md](specs/0009-perfis-de-execucao-e-controle-de-acesso.md) | implementado na branch, merge/rollout pendentes | Perfis publicados, papéis, escopos, delegação e autorização antes dos efeitos. |
 
 ## Operação e deploy
 
 | Doc | Estado | Conteúdo |
 |---|---|---|
+| [runbooks/execution-profiles-access.md](runbooks/execution-profiles-access.md) | atual | Migração 0009, ativação de acesso, qualificação de recursos, principal da CLI e rollback. |
 | [GPU.md](GPU.md) | atual | CPU vs GPU, pré-requisitos NVIDIA, VRAM, pesos de modelos, troubleshooting. (inglês) |
 | [SHARED_INFRASTRUCTURE.md](SHARED_INFRASTRUCTURE.md) | atual | Redis/MinIO/Elasticsearch compartilhados entre projetos (`start.sh`, `docker-compose.infra.yml`). (inglês) |
 | [DOCKER_OPTIMIZATION.md](DOCKER_OPTIMIZATION.md) | parcial | Otimização de build. As menções a `docker-compose.dev.yml` são históricas. |
@@ -55,6 +58,7 @@ referência · **planejado** = não implementado.
 | `docker-compose.yml` | Base: `api` (:8000), `worker` (5 réplicas, fila `ingestify`), `worker-audio` (fila `ingestify-audio`), `worker-vision` (fila `ingestify-vision`), `beat`, `frontend` (:3000). Redis, Elasticsearch e MinIO ficam no profile `infra` e publicam só em `127.0.0.1`. MySQL **não** está no compose (padrão: `host.docker.internal`). |
 | `docker-compose.gpu.yml` | Overlay opt-in de GPU (`make gpu`): `worker` vira 1 processo em CUDA, `worker-audio` com `AUDIO_WORKER_REPLICAS` (padrão 2) em CUDA, `worker-vision` em CUDA. Ver [GPU.md](GPU.md). |
 | `docker-compose.live.yml` | Overlay opt-in de live com worker GPU privado e profile `live`. Exige migração explícita e validação antes de ativar em produção; ver [guia live](features/live-transcription.md). |
+| `docker-compose.engine-control.yml` | Overlay opt-in de controle de engines e RBAC/ABAC. Migração explícita antes de ativar; [runbook](runbooks/execution-profiles-access.md). |
 | `docker-compose.prod.yml` | Produção (`make prod`): `ENVIRONMENT=production` em todos os serviços (o base usa `development`), `uvicorn --workers 4`, `worker` com `--concurrency=4`, frontend sem volumes de dev. |
 | `docker-compose.infra.yml` | Só a infraestrutura compartilhada (`make infra-start`). Ver [SHARED_INFRASTRUCTURE.md](SHARED_INFRASTRUCTURE.md). |
 | `docker-compose.override.yml` | Overlay **local, fora do git**, aplicado automaticamente pelo `docker compose` quando existe (ex.: remapear portas). Não é parte do produto. |

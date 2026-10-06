@@ -26,6 +26,8 @@ class RuntimeProfile(Base):
     feature = Column(String(40), nullable=False)
     revision = Column(Integer, nullable=False)
     profile = Column(JSON, nullable=False)
+    source_profile_revision_id = Column(String(36), index=True)
+    source_hash = Column(String(64))
     applied_at = Column(DateTime)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     __table_args__ = (
@@ -74,6 +76,8 @@ class EngineOperation(Base):
     holder = Column(String(128))
     lease_until = Column(DateTime)
     cancel_requested = Column(Boolean, nullable=False, default=False)
+    cancel_requested_by = Column(String(36))
+    recovery_requested_by = Column(String(36))
     effect_started = Column(Boolean, nullable=False, default=False)
     handles = Column(JSON, nullable=False, default=dict)
     result = Column(JSON, nullable=False, default=dict)

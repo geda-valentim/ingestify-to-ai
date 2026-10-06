@@ -1555,8 +1555,14 @@ const COMPUTE_COPY = {
     intro:
       "Compute reúne os motores que executam os jobs, sua capacidade e as rotas por funcionalidade. A instalação padrão usa os workers locais; contas Modal são opcionais e atendem transcrição de arquivos.",
     admin:
-      "As telas abaixo exigem usuário admin e são somente leitura. Elas mostram o estado e os comandos para o operador alterar a configuração. A API verifica a permissão de admin em cada operação.",
+      "As telas permitem configurar e operar motores. Com o acesso delegado habilitado, cada usuário vê somente engines, perfis e ações autorizados. GPU, routing e status globais continuam restritos ao administrador. Os comandos Docker permanecem disponíveis.",
     head: ["Tela", "O que mostra"],
+    profiles:
+      "Biblioteca: modelo, host/provider, GPU, réplicas, concorrência, memória e warmup em revisões publicadas.",
+    access:
+      "Papéis, políticas, grants, escopos e delegação. O admin qualifica ambientes e consumidores físicos.",
+    profileFlow:
+      "Crie um perfil e publique uma revisão. Na engine, abra Configuração e escolha essa revisão em Perfil de execução. Vincular muda apenas o desejado; revise e confirme Aplicar perfil para executar. Desejado, aplicado e observado permanecem separados. A biblioteca e o acesso são opt-in e exigem migração.",
     engines:
       "Motores local/Modal, saúde, status, capacidade, teste, deploy e orçamento.",
     gpus: "GPUs declaradas e detectadas, VRAM orçada e uso atual. Valor desconhecido não significa zero.",
@@ -1571,7 +1577,7 @@ const COMPUTE_COPY = {
     privacy:
       "Provider e motor são configurações distintas: faster-whisper/openai-whisper processam no worker; openai-api envia o áudio à OpenAI. O rótulo local informa qual executor atendeu. O orçamento Compute cobre contas Modal; cobranças de openai-api ficam fora dele. PDF e imagem têm rotas somente locais no adapter atual.",
     security:
-      "Leituras HTTP aceitam JWT ou API key de admin; alterações exigem sessão JWT de admin. Credenciais Modal são somente escrita, seladas na API e abertas pelo worker remoto. Pausar um motor impede novas colocações; os trabalhos em voo terminam.",
+      "Engines, perfis e controle exigem sessão JWT; o servidor valida papéis e escopos também antes dos efeitos. Credenciais Modal são somente escrita e exigem senha atual, com acesso explícito de bootstrap ou connection_manager. API keys não dão acesso ao controlador.",
     guide: "Setup, chaves, limites, deploy e benchmark no guia do operador",
     samples: "Leituras de diagnóstico (substitua o token JWT de admin)",
     fileCaptions:
@@ -1582,8 +1588,14 @@ const COMPUTE_COPY = {
     intro:
       "Compute brings together job execution engines, their capacity and per-feature routes. The default installation uses local workers; optional Modal accounts handle file transcription.",
     admin:
-      "The screens below require an admin user and are read-only. They show state and commands operators can run to change configuration. The API checks admin permission for each operation.",
+      "These screens let you configure and operate engines. When delegated access is enabled, users see only authorized engines, profiles and actions. Global GPU, routing and status remain administrator-only. Docker commands remain available.",
     head: ["Screen", "What it shows"],
+    profiles:
+      "Library: model, host/provider, GPU, replicas, concurrency, memory and warmup in published revisions.",
+    access:
+      "Roles, policies, grants, scopes and delegation. The administrator qualifies environments and physical consumers.",
+    profileFlow:
+      "Create a profile and publish a revision. Open the engine Configuration tab and select that revision under Execution profile. Binding changes desired state only; review and confirm Apply profile to execute. Desired, applied and observed states stay separate. The library and access are opt-in and require migration.",
     engines:
       "Local/Modal engines, health, status, capacity, tests, deployment and budget.",
     gpus: "Declared and detected GPUs, budgeted VRAM and current usage. An unknown value does not mean zero.",
@@ -1598,7 +1610,7 @@ const COMPUTE_COPY = {
     privacy:
       "Providers and engines are separate settings: faster-whisper/openai-whisper process on the worker; openai-api sends audio to OpenAI. The local label identifies the executor. Compute budgets cover Modal accounts; openai-api charges are outside those budgets. The current adapter supports only local routes for PDFs and images.",
     security:
-      "HTTP reads accept an admin JWT or API key; changes require an admin JWT session. Modal credentials are write-only, sealed by the API and opened by the remote worker. Pausing an engine blocks new placements; in-flight work finishes.",
+      "Engine, profile and control APIs require a JWT session; roles and scopes are checked again before effects. Modal credentials are write-only and require the current password plus bootstrap or connection_manager permission. API keys do not grant controller access.",
     guide:
       "Setup, keys, limits, deployment and benchmarks in the operator guide",
     samples: "Diagnostic reads (replace the admin JWT token)",
@@ -1624,6 +1636,18 @@ curl --fail "${API_URL}/admin/gpus" \\
         head={t.head}
         rows={[
           [
+            <A key="profiles" href="/admin/execution-profiles">
+              /admin/execution-profiles
+            </A>,
+            t.profiles,
+          ],
+          [
+            <A key="access" href="/admin/access">
+              /admin/access
+            </A>,
+            t.access,
+          ],
+          [
             <A key="engines" href="/admin/engines">
               /admin/engines
             </A>,
@@ -1648,6 +1672,12 @@ curl --fail "${API_URL}/admin/gpus" \\
             t.status,
           ],
         ]}
+      />
+      <P>{t.profileFlow}</P>
+      <Endpoint method="GET" path="/admin/execution-profiles" />
+      <Endpoint
+        method="PUT"
+        path="/admin/engines/{id}/runtime-profile-binding"
       />
       <P>{t.capacity}</P>
       <P>{t.health}</P>

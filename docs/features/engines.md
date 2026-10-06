@@ -24,6 +24,8 @@
 [Custos](#custos) · [API admin](#api-admin) · [Solução de problemas](#solução-de-problemas) ·
 [Pendências com as contas reais](#a-rodar-com-as-contas-reais)
 
+> Perfis, acesso e controle atualizados em **2026-10-06**; rollout da 0009 opt-in.
+
 ## Compute: o que configura
 
 Compute é o conjunto de telas admin e comandos para decidir **onde os trabalhos rodam**, quantos
@@ -75,13 +77,24 @@ ativação separados. Ela permanece desabilitada por padrão; os critérios de p
 
 ## Diagnóstico rápido
 
-A UI Compute é somente leitura: mostra estado e comandos para o operador executar. Leituras
-exigem usuário admin (JWT ou API key de admin); alterações HTTP exigem sessão JWT de admin.
-O header Compute só aparece para admins; o backend também verifica a permissão.
+A UI Compute permite configurar e operar engines pelo controlador, além de mostrar os
+comandos Docker/CLI existentes. As leituras de engines e o controle usam sessão JWT. Com
+`ENGINE_ACCESS_ENABLED=true`, usuários delegados veem apenas engines, perfis e ações
+permitidos por seus grants; o servidor revalida a autorização em cada etapa. Diagnósticos
+globais de GPU, routing e status continuam restritos ao administrador de bootstrap.
+
+Configure as opções de runtime em **Compute → Perfis de execução**
+(`/admin/execution-profiles`), publique uma revisão e selecione-a em
+**Engine → Configuração → Perfil de execução**. Vincular altera apenas o desejado;
+aplicar exige uma prévia e execução separadas. Administre papéis e escopos em
+**Compute → Acesso** (`/admin/access`). Veja o [guia de perfis e acesso](execution-profiles.md)
+e o [runbook de migração/ativação](../runbooks/execution-profiles-access.md).
 
 | Tela | O que interpretar |
 |---|---|
 | `/admin/engines` e `/admin/engines/{id}` | Status/saúde, bindings, em voo, orçamento, teste e deploy; `paused` barra novas colocações |
+| `/admin/execution-profiles` | Criar, revisar, publicar e vincular modelos de configuração de runtime |
+| `/admin/access` | Políticas, grants, delegação, ambientes e consumidores de recursos |
 | `/admin/gpus` | VRAM orçada × usada e GPUs detectadas sem declaração; valor desconhecido não é zero |
 | `/admin/routing` | Ordem dos motores e backlog de cada feature; sem rota vale a fila local habitual |
 | `/admin/status` | Lease do despachante, disponibilidade do worker remoto e workers configurados × vivos |
@@ -474,7 +487,10 @@ docker compose exec api python scripts/engines.py speed [--engine modal_1]
 
 ## API admin
 
-Leituras exigem admin; mudanças exigem sessão JWT (API key ⇒ 403), gravam `admin_audit` e nunca
+Listagem/detalhe de engines e descritores exigem JWT; com acesso habilitado, aplicam escopos
+de grants. Diagnósticos globais e alterações legadas exigem bootstrap; credenciais podem ser
+delegadas ao papel `connection_manager`. Mudanças exigem sessão JWT (API key ⇒ 403),
+gravam `admin_audit` e nunca
 ecoam valores de credenciais.
 
 | Método e caminho | O que faz |
@@ -491,8 +507,10 @@ ecoam valores de credenciais.
 | `GET /admin/routing` · `PUT` · `DELETE /admin/routing/{feature}` | rotas e backlog por feature |
 | `GET /admin/engines/status` | lease, em voo/capacidade por motor e feature, vivos × configurados, backlog |
 
-A UI somente leitura fica em `/admin/engines`, `/admin/gpus`, `/admin/routing` e
-`/admin/status` (item "Compute" do cabeçalho, só admins); cada tela mostra o comando que a muda.
+A UI fica em `/admin/engines`, `/admin/gpus`, `/admin/routing` e `/admin/status`.
+O item Compute e suas abas respeitam as permissões do usuário. Os comandos Docker
+continuam disponíveis; operações gerenciadas usam planos do controlador e autorização atual.
+APIs de biblioteca, IAM e vinculação estão em [perfis de execução](execution-profiles.md).
 
 ## Solução de problemas
 
