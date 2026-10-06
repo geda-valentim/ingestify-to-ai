@@ -15,7 +15,7 @@ export const chapters = [
     title: "Documents in.\nMarkdown out.",
     body: "Extract text and tables. Track each PDF page and retrieve the result for your downstream processing.",
     action: "Explore documents",
-    href: "/docs?lang=en#documentos",
+    href: "/docs/documents",
     note: "",
   },
   {
@@ -24,7 +24,7 @@ export const chapters = [
     title: "Recordings in.\nTranscripts out.",
     body: "Convert speech into text, timestamps and JSON segments. Transcribe audio files or the audio track of a video.",
     action: "Explore transcription",
-    href: "/docs?lang=en#transcribe",
+    href: "/docs/transcription",
     note: "",
   },
   {
@@ -33,7 +33,7 @@ export const chapters = [
     title: "Images in.\nText out.",
     body: "Extract text and image regions with OCR, or request image descriptions through the API.",
     action: "Explore image operations",
-    href: "/docs?lang=en#imagens",
+    href: "/docs/images",
     note: "",
   },
   {
@@ -42,7 +42,7 @@ export const chapters = [
     title: "Your compute.\nYour workflow.",
     body: "Run conversion workers locally. Add optional Modal transcription and configure execution around capacity and budget.",
     action: "Explore compute",
-    href: "/docs?lang=en#compute",
+    href: "/docs/compute",
     note: "",
   },
   {
@@ -69,7 +69,7 @@ export const chapters = [
     title: "Your data.\nYour next step.",
     body: "Convert a file into usable AI input, or connect the same operations to your Data Engineering workflow. Explore the code and API.",
     action: "Read the documentation",
-    href: "/docs?lang=en",
+    href: "/docs",
     note: "",
   },
 ];
