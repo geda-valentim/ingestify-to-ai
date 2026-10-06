@@ -9,9 +9,8 @@ import numpy as np
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, inspect
+from sqlalchemy import create_engine, inspect, event
 from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import StaticPool
 
 from shared.database import Base, get_db
 from shared.models import User, Job, JobStatus, LiveSession, Project
@@ -26,8 +25,16 @@ from shared.transcripts import transcript_object_name
 
 
 @pytest.fixture
-def world(monkeypatch):
-    engine = create_engine('sqlite://', connect_args={'check_same_thread': False}, poolclass=StaticPool)
+def world(monkeypatch, tmp_path):
+    # Concurrent lifecycle/persistence transactions need distinct DBAPI
+    # connections; StaticPool would share one unsafe connection across threads.
+    engine = create_engine(f"sqlite:///{tmp_path / 'live.sqlite'}",
+                           connect_args={'check_same_thread': False, 'timeout': 10})
+    @event.listens_for(engine, 'connect')
+    def sqlite_connection(dbapi_connection, _):
+        dbapi_connection.execute('PRAGMA busy_timeout=10000')
+    with engine.connect() as connection:
+        connection.exec_driver_sql('PRAGMA journal_mode=WAL')
     Base.metadata.create_all(engine)
     Session = sessionmaker(bind=engine)
     with Session() as db:
@@ -74,8 +81,11 @@ def world(monkeypatch):
             return db.get(User, 'u')
     app.dependency_overrides[get_db] = dbdep
     app.dependency_overrides[get_current_active_user] = auth
-    with TestClient(app) as client:
-        yield SimpleNamespace(client=client, db=Session, store=store, redis=redis, minio=minio, es=es, app=app)
+    try:
+        with TestClient(app) as client:
+            yield SimpleNamespace(client=client, db=Session, store=store, redis=redis, minio=minio, es=es, app=app)
+    finally:
+        engine.dispose()
 
 
 def frame(seq, offset, count=3200):
@@ -608,8 +618,10 @@ def test_heartbeat_keeps_renewing_after_active_state_race(world, monkeypatch):
         uploading.set()
         assert renewed_again.wait(5), 'active finalization must retain heartbeat renewal'
         return original_finish(*args, **kwargs)
+    ticks = []
     async def tick(delay, *args, **kwargs):
-        if delay == 5:
+        if delay == 5 and len(ticks) < 2:
+            ticks.append(True)
             assert await asyncio.to_thread(uploading.wait, 5)
             return
         return await original_sleep(delay, *args, **kwargs)
