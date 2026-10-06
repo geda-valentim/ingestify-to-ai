@@ -210,15 +210,42 @@ async def live_stream(ws: WebSocket, job_id: str):
     async def periodic():
         while True:
             await asyncio.sleep(5)
-            if not await asyncio.to_thread(store.renew, job_id, generation):
+            if completed:
+                return
+            renewed = await asyncio.to_thread(store.renew, job_id, generation)
+            if completed:
+                return
+            if not renewed:
                 raise LiveError('LIVE_LEASE_LOST', 1011)
             # Reload short-lived transaction; never hold a read view across WS awaits.
             with SessionLocal() as db:
                 live = db.get(LiveSession, job_id)
                 state = live.state if live else None
+            if state == 'completed' and live.generation == generation and persistence is not None:
+                # SQL commits before the persistence thread returns. Wait for
+                # its publication fence instead of treating completion as loss.
+                await asyncio.shield(persistence)
+                return
             if state not in ('streaming', 'finalizing'):
                 raise LiveError('LIVE_SESSION_GONE', 4404)
-            await asyncio.to_thread(transition, job_id, generation, [state], state, clock.samples)
+            try:
+                await asyncio.to_thread(transition, job_id, generation, [state], state, clock.samples)
+            except LiveError as exc:
+                if exc.code != 'LIVE_SESSION_GONE' or persistence is None:
+                    raise
+                # A state transition can also win before slow uploads finish;
+                # keep renewing unless this generation is durably completed.
+                with SessionLocal() as db:
+                    current = db.get(LiveSession, job_id)
+                    if not current or current.generation != generation:
+                        raise
+                    current_state = current.state
+                if current_state in ('streaming', 'finalizing'):
+                    continue
+                if current_state != 'completed':
+                    raise
+                await asyncio.shield(persistence)
+                return
 
     try:
         auth = control(await asyncio.wait_for(ws.receive_text(), 5))
@@ -343,6 +370,9 @@ async def live_stream(ws: WebSocket, job_id: str):
                         except Exception:
                             raise LiveError('LIVE_STORAGE_FAILED', 1011) from None
                         completed = True
+                        # The terminal event guarantees persisted results and
+                        # reclaimed live capacity, rather than racing finally.
+                        await asyncio.to_thread(store.release, job_id, generation)
                         await emit({'type': 'session.completed', 'result_url': f'/jobs/{job_id}/result',
                                     'inference_seconds': event['inference_seconds'],
                                     **({'diarization_digest': diarization_complete['digest']} if diarization_complete else {})})

@@ -352,6 +352,15 @@ class FakeWorkerSocket:
 def test_public_ws_streams_revisions_before_eof_and_persists_finals(world, monkeypatch):
     import websockets
     monkeypatch.setattr(websockets, 'connect', lambda *a, **k: FakeWorkerSocket())
+    from starlette.websockets import WebSocket
+    original_send = WebSocket.send_json
+    async def assert_terminal_cleanup(socket, event, *args, **kwargs):
+        if event.get('type') == 'session.completed':
+            # Assert ordering at publication, before the consumer or finally
+            # can run; this deterministically exposes the original race.
+            assert world.store.lease(event['job_id']) is None
+        return await original_send(socket, event, *args, **kwargs)
+    monkeypatch.setattr(WebSocket, 'send_json', assert_terminal_cleanup)
     data = world.client.post('/transcribe/live/sessions', json={'project_id': 'p'}).json()
     with world.client.websocket_connect(f"/transcribe/live/sessions/{data['job_id']}/stream") as ws:
         ws.send_json({'type': 'authenticate', 'protocol': 1, 'ticket': data['ticket']})
@@ -523,3 +532,112 @@ def test_search_publishes_only_completed_owned_matching_generation(world):
     with world.db() as db:
         db.get(Job, job_id).user_id = 'other'; db.commit()
     assert world.client.get('/search', params={'query': 'generation'}).json()['total'] == 0
+
+
+@pytest.mark.parametrize('stale_read', [False, True])
+def test_heartbeat_waits_for_committed_finalization_thread(world, monkeypatch, stale_read):
+    import asyncio
+    import threading
+    import websockets
+    committed, observed = threading.Event(), threading.Event()
+    stale_remaining = [stale_read]
+    original_finish = live_routes.finish_live
+    original_sleep = asyncio.sleep
+    original_transition = live_routes.transition
+    original_session = live_routes.SessionLocal
+    def finish(*args, **kwargs):
+        result = original_finish(*args, **kwargs)
+        committed.set()
+        assert observed.wait(5), 'heartbeat must observe the SQL/thread gap'
+        return result
+    async def heartbeat_tick(delay, *args, **kwargs):
+        if delay == 5:
+            assert await asyncio.to_thread(committed.wait, 5)
+            return
+        return await original_sleep(delay, *args, **kwargs)
+    class HeartbeatSession:
+        def __enter__(self):
+            self.db = original_session()
+            return self
+        def __exit__(self, *args):
+            self.db.close()
+        def __getattr__(self, name):
+            return getattr(self.db, name)
+        def get(self, model, key):
+            value = self.db.get(model, key)
+            if model is LiveSession and committed.is_set() and value.state == 'completed':
+                if stale_remaining[0]:
+                    stale_remaining[0] = False
+                    return SimpleNamespace(state='finalizing', generation=value.generation)
+                observed.set()
+            return value
+    def transition(*args, **kwargs):
+        if committed.is_set() and args[2:4] == (['finalizing'], 'finalizing'):
+            observed.set()
+            raise LiveError('LIVE_SESSION_GONE', 4404)
+        return original_transition(*args, **kwargs)
+    monkeypatch.setattr(live_routes, 'finish_live', finish)
+    monkeypatch.setattr(live_routes, 'SessionLocal', HeartbeatSession)
+    monkeypatch.setattr(live_routes, 'transition', transition)
+    monkeypatch.setattr(asyncio, 'sleep', heartbeat_tick)
+    monkeypatch.setattr(websockets, 'connect', lambda *a, **k: FakeWorkerSocket())
+    data = world.client.post('/transcribe/live/sessions', json={'project_id':'p'}).json()
+    with world.client.websocket_connect(f"/transcribe/live/sessions/{data['job_id']}/stream") as ws:
+        ws.send_json({'type':'authenticate', 'protocol':1, 'ticket':data['ticket']})
+        assert ws.receive_json()['type'] == 'session.ready'
+        ws.send_bytes(frame(0, 0))
+        ws.receive_json()
+        ws.receive_json()
+        ws.send_json({'type':'finish', 'last_seq':0})
+        assert ws.receive_json()['type'] == 'transcript.final'
+        assert ws.receive_json()['type'] == 'session.completed'
+        assert world.store.lease(data['job_id']) is None
+    assert observed.is_set()
+
+
+def test_heartbeat_keeps_renewing_after_active_state_race(world, monkeypatch):
+    import asyncio
+    import threading
+    import websockets
+    uploading, renewed_again = threading.Event(), threading.Event()
+    original_finish, original_transition = live_routes.finish_live, live_routes.transition
+    original_sleep, original_renew = asyncio.sleep, world.store.renew
+    renewals = []
+    raced = []
+    def finish(*args, **kwargs):
+        uploading.set()
+        assert renewed_again.wait(5), 'active finalization must retain heartbeat renewal'
+        return original_finish(*args, **kwargs)
+    async def tick(delay, *args, **kwargs):
+        if delay == 5:
+            assert await asyncio.to_thread(uploading.wait, 5)
+            return
+        return await original_sleep(delay, *args, **kwargs)
+    def renew(*args, **kwargs):
+        result = original_renew(*args, **kwargs)
+        if len(args) == 2 and uploading.is_set():
+            renewals.append(result)
+            if len(renewals) == 2:
+                renewed_again.set()
+        return result
+    def transition(*args, **kwargs):
+        if uploading.is_set() and args[3] in ('streaming', 'finalizing') and not raced:
+            raced.append(True)
+            raise LiveError('LIVE_SESSION_GONE', 4404)
+        return original_transition(*args, **kwargs)
+    monkeypatch.setattr(live_routes, 'finish_live', finish)
+    monkeypatch.setattr(live_routes, 'transition', transition)
+    monkeypatch.setattr(asyncio, 'sleep', tick)
+    monkeypatch.setattr(world.store, 'renew', renew)
+    monkeypatch.setattr(websockets, 'connect', lambda *a, **k: FakeWorkerSocket())
+    data = world.client.post('/transcribe/live/sessions', json={'project_id':'p'}).json()
+    with world.client.websocket_connect(f"/transcribe/live/sessions/{data['job_id']}/stream") as ws:
+        ws.send_json({'type':'authenticate', 'protocol':1, 'ticket':data['ticket']})
+        assert ws.receive_json()['type'] == 'session.ready'
+        ws.send_bytes(frame(0, 0))
+        ws.receive_json()
+        ws.receive_json()
+        ws.send_json({'type':'finish', 'last_seq':0})
+        assert ws.receive_json()['type'] == 'transcript.final'
+        assert ws.receive_json()['type'] == 'session.completed'
+    assert raced and renewed_again.is_set() and renewals[:2] == [True, True]

@@ -103,8 +103,13 @@ Os testes leves usam `backend/requirements-test.lock` com hashes; não substitue
 qualificação de modelos CPU/GPU. Containers de validação são descartáveis.
 A suíte backend completa passou: **1.384 testes, 7 skips, 27 avisos** em ambiente
 limpo Python 3.11 com dependências do lock. A mesma suíte passou também em
-Python 3.13: **1.378 testes, 7 skips** antes das seis regressões finais de
-exclusão; depois delas, 50 testes dirigidos passaram também em 3.13. Imports reais API/Dropbox/pydub/faster-whisper
+Python 3.13: **1.384 testes, 7 skips** no CI do PR. A execução adicional em CI
+expôs uma corrida live que não apareceu nas rodadas locais: o evento de conclusão
+podia preceder a liberação da reserva. O ajuste libera antes de publicar e
+preserva a renovação durante uploads, inclusive quando a finalização ganha o
+lock SQL. Três novas regressões forçam essas ordens; **33 testes live** passaram
+em ambas as versões Python. Consulte o CI do PR para a suíte completa do commit
+final. Imports reais API/Dropbox/pydub/faster-whisper
 passaram; `audioop-lts` condicional corrige a remoção de `audioop` no Python 3.13. Cinco skips correspondem aos testes
 MariaDB executados separadamente; dois exigem a infraestrutura externa de
 concorrência dos engines. Não há alegação de deploy ou de ambiente público seguro.
