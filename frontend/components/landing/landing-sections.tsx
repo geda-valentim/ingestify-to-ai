@@ -2,8 +2,13 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { ArrowUpRight, ArrowRight, Github, Check, Copy } from "lucide-react";
-import { GITHUB, example, faq } from "./content";
-import { OperationDiagram, ComputeDiagram, SpectralLines } from "./landing-svg";
+import { GITHUB, example, resultExample, faq } from "./content";
+import {
+  OperationDiagram,
+  ComputeDiagram,
+  SpectralLines,
+  LakeDeliveryDiagram,
+} from "./landing-svg";
 
 /** Progressive enhancement: content remains visible without JavaScript. */
 export function useLandingMotion() {
@@ -70,7 +75,9 @@ const operations = [
     headline: "Structure, extracted.",
     description:
       "Turn documents into Markdown. Keep the text and tables, follow each PDF page, and carry the result into your next process.",
-    format: "PDF / DOCUMENT → MARKDOWN",
+    format: "DOCUMENT → MARKDOWN + METADATA",
+    formats: "PDF · DOCX · HTML · PPTX · XLSX",
+    limits: "Default upload limit: 50 MB",
     href: "/docs?lang=en#documentos",
   },
   {
@@ -79,7 +86,9 @@ const operations = [
     headline: "Every word, reusable.",
     description:
       "Turn recordings into transcripts, timestamps and captions. Video transcription uses the audio track.",
-    format: "AUDIO / VIDEO → TXT · JSON · VTT",
+    format: "AUDIO / VIDEO → TXT · JSON · VTT · SRT",
+    formats: "MP3 · WAV · FLAC · M4A · MP4 · MOV · WEBM",
+    limits: "Default transcription limits: audio 50 MB · video 500 MB",
     href: "/docs?lang=en#transcribe",
   },
   {
@@ -89,18 +98,23 @@ const operations = [
     description:
       "Extract text and image regions with OCR, or generate image descriptions through the API.",
     format: "IMAGE → TEXT + REGIONS",
+    formats: "PNG · JPEG · WEBP · BMP · GIF · TIFF",
+    limits: "Defaults: 10 MB decoded image data · 50 million pixels",
     href: "/docs?lang=en#imagens",
   },
 ];
 export function LandingSections({ signedIn }: { signedIn: boolean }) {
   const [operation, setOperation] = useState(0);
   const [cloud, setCloud] = useState(false);
+  const [codeView, setCodeView] = useState<"request" | "response">("request");
   const [copied, setCopied] = useState(false);
   const [copyFailed, setCopyFailed] = useState(false);
   const active = operations[operation];
   async function copy() {
     try {
-      await navigator.clipboard.writeText(example);
+      await navigator.clipboard.writeText(
+        codeView === "request" ? example : resultExample,
+      );
       setCopied(true);
       setCopyFailed(false);
     } catch {
@@ -115,19 +129,18 @@ export function LandingSections({ signedIn }: { signedIn: boolean }) {
         data-reveal
       >
         <div className="section-index">
-          <span>01 / THE TRANSFORMATION LAYER</span>
-          <span>FILES → USEFUL INFORMATION</span>
+          <span>01 / THE INGESTION LAYER</span>
+          <span>UNSTRUCTURED INPUTS → USABLE DATA</span>
         </div>
         <div className="section-intro">
           <h2>
-            Different inputs.
+            Your source files.
             <br />
-            <span className="secondary-title">One direction.</span>
+            <span className="secondary-title">Pipeline inputs.</span>
           </h2>
           <p>
-            From the files you already have
-            <br />
-            to the information you need.
+            Prepare text and metadata for search, RAG preparation and your own
+            downstream data processing.
           </p>
         </div>
         <div className="operation-workspace">
@@ -174,6 +187,11 @@ export function LandingSections({ signedIn }: { signedIn: boolean }) {
               <div>
                 <h3>{active.headline}</h3>
                 <p>{active.description}</p>
+                <div className="operation-formats">
+                  <span>COMMON INPUT FORMATS</span>
+                  <p>{active.formats}</p>
+                  <small>{active.limits}</small>
+                </div>
               </div>
               <Link href={active.href} className="landing-text-link">
                 Explore
@@ -182,15 +200,10 @@ export function LandingSections({ signedIn }: { signedIn: boolean }) {
             </div>
           </div>
         </div>
-        <div className="pilot-strip">
-          <span className="status-dot" />
-          <strong>Live microphone / Pilot</strong>
-          <span>Requires operator activation and GPU capacity.</span>
-          <Link href="/docs?lang=en#microfone-live">
-            Explore the pilot
-            <ArrowUpRight size={14} />
-          </Link>
-        </div>
+        <p className="formats-docs">
+          See the <Link href="/docs?lang=en">documentation</Link> for the full
+          format matrix, engine compatibility and deployment limits.
+        </p>
       </section>
       <section
         id="execucao"
@@ -198,19 +211,20 @@ export function LandingSections({ signedIn }: { signedIn: boolean }) {
         data-reveal
       >
         <div className="section-index">
-          <span>02 / EXECUTION, ON YOUR TERMS</span>
+          <span>02 / MORE THAN A CONVERSION ENGINE</span>
           <span>LOCAL ↔ OPTIONAL CLOUD</span>
         </div>
         <div className="compute-layout">
           <div>
             <h2>
-              Your compute.
+              Conversions.
               <br />
-              <span className="secondary-title">Your call.</span>
+              <span className="secondary-title">With control.</span>
             </h2>
             <p>
-              Choose the resources behind the operation. Configure execution
-              around your capacity, priority and budget.
+              A conversion engine handles the file. Ingestify adds the
+              operational layer: jobs, projects, page-level recovery and an API
+              for your data workflows.
             </p>
             <div
               className="compute-toggle"
@@ -237,29 +251,48 @@ export function LandingSections({ signedIn }: { signedIn: boolean }) {
           </div>
           <ComputeDiagram cloud={cloud} />
         </div>
-        <div className="compute-footnote">
-          <span>Know where your data goes.</span>
-          <p>
-            Local workers do not guarantee local-only data handling. The engine
-            and provider you configure also determine the destination.
-          </p>
+        <div className="pipeline-features">
+          <div>
+            <span>01 / REUSE</span>
+            <h3>Document deduplication.</h3>
+            <p>
+              SHA-256 identifies repeat uploads within a project and reuses
+              existing non-failed jobs.
+            </p>
+          </div>
+          <div>
+            <span>02 / RECOVER</span>
+            <h3>Page-level recovery.</h3>
+            <p>
+              Track individual PDF pages and retry a failed page without
+              resending the document.
+            </p>
+          </div>
+          <div>
+            <span>03 / ORGANIZE</span>
+            <h3>Keep the context.</h3>
+            <p>
+              Projects, folders and tags keep conversion jobs connected to their
+              source workload.
+            </p>
+          </div>
         </div>
       </section>
       <section id="api" className="landing-section landing-api" data-reveal>
         <div className="section-index">
-          <span>03 / CONNECT THE DOTS</span>
+          <span>03 / CONNECT YOUR DATA PIPELINE</span>
           <span>ONE API. YOUR WORKFLOW.</span>
         </div>
         <div className="api-heading">
           <h2>
-            Build it into
+            Convert. Track.
             <br />
-            <span className="secondary-title">what comes next.</span>
+            <span className="secondary-title">Retrieve.</span>
           </h2>
           <p>
-            Upload a file. Track the job. Put the result to work.
-            <br />
-            The same operations, inside your application.
+            Use the conversion API from your orchestrator, script or
+            application. Retrieve Markdown and metadata for the next step of
+            your pipeline.
           </p>
         </div>
         <div className="api-workspace">
@@ -277,25 +310,62 @@ export function LandingSections({ signedIn }: { signedIn: boolean }) {
             <li>
               <span>03</span>
               <strong>Use.</strong>
-              <p>Bring the completed result into your application.</p>
+              <p>Retrieve the result and feed your downstream processing.</p>
             </li>
           </ol>
           <div className="landing-code">
+            <div
+              className="api-code-tabs"
+              role="group"
+              aria-label="API example"
+            >
+              <button
+                aria-pressed={codeView === "request"}
+                onClick={() => {
+                  setCodeView("request");
+                  setCopied(false);
+                  setCopyFailed(false);
+                }}
+              >
+                Upload request
+              </button>
+              <button
+                aria-pressed={codeView === "response"}
+                onClick={() => {
+                  setCodeView("response");
+                  setCopied(false);
+                  setCopyFailed(false);
+                }}
+              >
+                JSON result
+              </button>
+            </div>
             <div className="landing-code-bar">
               <span>
                 <span className="status-dot" />
-                POST /upload
+                {codeView === "request"
+                  ? "POST /api/upload"
+                  : "GET /api/jobs/{job_id}/result"}
               </span>
-              <button onClick={copy} aria-label="Copy upload example">
+              <button
+                onClick={copy}
+                aria-label={
+                  codeView === "request"
+                    ? "Copy upload example"
+                    : "Copy JSON example"
+                }
+              >
                 {copied ? <Check size={16} /> : <Copy size={16} />}{" "}
                 {copied ? "Copied" : "Copy"}
               </button>
             </div>
             <pre>
-              <code>{example}</code>
+              <code>{codeView === "request" ? example : resultExample}</code>
             </pre>
             <p>
-              Development environment. Requires a valid account and API key.
+              {codeView === "request"
+                ? "Authenticate with an API key, then poll the job until completed."
+                : "Example values using the current document-result response contract."}
             </p>
             <p role="status">
               {copyFailed
@@ -304,51 +374,79 @@ export function LandingSections({ signedIn }: { signedIn: boolean }) {
                   ? "Example copied."
                   : ""}
             </p>
-            <a href="/api/docs">
-              API reference
-              <ArrowUpRight size={16} />
-            </a>
+            <div className="api-reference-links">
+              <a href="/api/docs">
+                API reference
+                <ArrowUpRight size={16} />
+              </a>
+              <a href="/api/openapi.json">
+                OpenAPI JSON
+                <ArrowUpRight size={16} />
+              </a>
+            </div>
           </div>
         </div>
         <SpectralLines variant="rail" />
       </section>
       <section
-        id="codigo-aberto"
-        className="landing-section landing-community"
+        id="data-lake"
+        className="landing-section landing-lake"
         data-reveal
       >
-        <SpectralLines variant="orbit" />
         <div className="section-index">
-          <span>04 / AN OPEN DIRECTION</span>
-          <span>PLANNED EVOLUTION</span>
+          <span>04 / THE NEXT DESTINATION</span>
+          <span className="roadmap-label">PLANNED · DATA LAKE DELIVERY</span>
         </div>
-        <div className="community-copy">
-          <p className="landing-eyebrow">
-            START WITH AN OPERATION. BUILD A POSSIBILITY.
-          </p>
+        <div className="section-intro">
           <h2>
-            Made to connect.
+            From conversion.
             <br />
-            <span className="secondary-title">Built to evolve.</span>
+            <span className="secondary-title">To your data lake.</span>
           </h2>
           <p>
-            Our vision is an open source platform for everyday AI
-            transformations. More machines. Reusable operations. A project you
-            can help shape.
-          </p>
-          <a href={GITHUB} className="landing-button">
-            <Github size={18} />
-            Explore the code
-            <ArrowUpRight size={18} />
-          </a>
-          <p className="landing-note">
-            General distributed execution and operation composition are planned
-            capabilities.
+            The next step for Ingestify: deliver converted data directly to your
+            Data Lake, connecting ingestion to your data platform.
           </p>
         </div>
-        <div className="community-coordinates">
-          <span>LOCAL / DISTRIBUTED / OPEN</span>
-          <span>FOLLOW THE PROJECT ON GITHUB ↗</span>
+        <LakeDeliveryDiagram />
+        <div className="lake-detail">
+          <p>
+            <strong>Today:</strong> retrieve conversion results through the API.
+            <br />
+            <strong>Next:</strong> direct delivery to your Data Lake.
+          </p>
+          <p>
+            Build downstream processing, quality checks and AI datasets around
+            the data you ingest. Native Data Lake delivery is planned;
+            destinations and table formats will be defined as it develops.
+          </p>
+        </div>
+        <div id="codigo-aberto" className="open-project">
+          <div>
+            <span className="landing-eyebrow">
+              SELF-HOSTED. OPEN DEVELOPMENT.
+            </span>
+            <h3>
+              Built for data engineers.
+              <br />
+              Evolving with the community.
+            </h3>
+            <p>
+              Follow the code and roadmap for an open source conversion and
+              ingestion platform for AI Engineering.
+            </p>
+          </div>
+          <div>
+            <a href={GITHUB} className="landing-button">
+              <Github size={18} />
+              Explore the repository
+              <ArrowUpRight size={18} />
+            </a>
+            <a className="license-link" href={`${GITHUB}#-licença`}>
+              MIT license · declared in the README
+              <ArrowUpRight size={14} />
+            </a>
+          </div>
         </div>
       </section>
       <section
@@ -379,16 +477,16 @@ export function LandingSections({ signedIn }: { signedIn: boolean }) {
       <section className="landing-section landing-final" data-reveal>
         <div className="final-invitation">
           <h2>
-            The file is
+            Build your
             <br />
-            just the beginning.
+            input pipeline.
           </h2>
           <div>
             <Link
               className="landing-button"
               href={signedIn ? "/dashboard" : "/login"}
             >
-              Start building
+              Open workspace
               <ArrowRight size={18} />
             </Link>
             <Link className="landing-text-link" href="/docs?lang=en">
