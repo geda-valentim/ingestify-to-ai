@@ -16,6 +16,7 @@ class ElasticsearchClient:
             basic_auth=(settings.elasticsearch_user, settings.elasticsearch_password)
                 if settings.elasticsearch_user else None,
             verify_certs=settings.elasticsearch_verify_certs,
+            ca_certs=settings.elasticsearch_ca_certs or None,
         )
         self._create_indices()
 

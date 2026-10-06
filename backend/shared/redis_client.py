@@ -63,6 +63,10 @@ class RedisClient:
                 db=settings.redis_db,
                 password=settings.redis_password if settings.redis_password else None,
                 decode_responses=True,
+                **({"ssl": True, "ssl_cert_reqs": "required",
+                    "ssl_check_hostname": True,
+                    "ssl_ca_certs": settings.redis_ssl_ca_certs or None}
+                   if settings.redis_ssl else {}),
             )
 
         self.result_ttl = settings.result_ttl_seconds

@@ -9,8 +9,23 @@ import httpx
 import logging
 
 from shared.config import get_settings
+from shared.utils import sanitize_upload_filename
 
 logger = logging.getLogger(__name__)
+
+
+class _BoundedDownloadWriter:
+    """File sink that rejects a provider chunk before exceeding input budget."""
+    def __init__(self, handle):
+        self.handle = handle
+        self.limit = get_settings().max_file_size_mb * 1024 * 1024
+        self.size = 0
+
+    def write(self, chunk):
+        if self.size + len(chunk) > self.limit:
+            raise ValueError('SOURCE_FILE_SIZE_LIMIT_EXCEEDED')
+        self.size += len(chunk)
+        return self.handle.write(chunk)
 
 
 class SourceHandler(ABC):
@@ -219,13 +234,12 @@ class GoogleDriveHandler(SourceHandler):
 
         # Create temp directory
         temp_path.mkdir(parents=True, exist_ok=True)
-        file_path = temp_path / f"gdrive_{source}"
+        file_path = temp_path / sanitize_upload_filename(f"gdrive_{source}")
 
         try:
             from google.oauth2.credentials import Credentials
             from googleapiclient.discovery import build
             from googleapiclient.http import MediaIoBaseDownload
-            import io
 
             # Create credentials from token
             creds = Credentials(token=auth_token)
@@ -235,23 +249,20 @@ class GoogleDriveHandler(SourceHandler):
 
             # Download file
             request = service.files().get_media(fileId=source)
-            fh = io.BytesIO()
-            downloader = MediaIoBaseDownload(fh, request)
-
-            done = False
-            while not done:
-                status, done = downloader.next_chunk()
-                if status:
-                    logger.info(f"Download progress: {int(status.progress() * 100)}%")
-
-            # Write to file
-            with open(file_path, 'wb') as f:
-                f.write(fh.getvalue())
+            with open(file_path, 'wb') as handle:
+                fh = _BoundedDownloadWriter(handle)
+                downloader = MediaIoBaseDownload(fh, request, chunksize=1024 * 1024)
+                done = False
+                while not done:
+                    status, done = downloader.next_chunk()
+                    if status:
+                        logger.info(f"Download progress: {int(status.progress() * 100)}%")
 
             logger.info(f"Downloaded from Google Drive to {file_path}")
             return file_path
 
         except Exception as e:
+            file_path.unlink(missing_ok=True)
             logger.error(f"Google Drive download failed: {e}")
             raise Exception(f"Failed to download from Google Drive: {str(e)}")
 
@@ -281,7 +292,7 @@ class DropboxHandler(SourceHandler):
 
         # Create temp directory
         temp_path.mkdir(parents=True, exist_ok=True)
-        filename = source.split('/')[-1] or 'dropbox_file'
+        filename = sanitize_upload_filename(source.split('/')[-1] or 'dropbox_file')
         file_path = temp_path / filename
 
         try:
@@ -294,13 +305,19 @@ class DropboxHandler(SourceHandler):
             metadata, response = dbx.files_download(source)
 
             # Write to file
-            with open(file_path, 'wb') as f:
-                f.write(response.content)
+            try:
+                with open(file_path, 'wb') as handle:
+                    writer = _BoundedDownloadWriter(handle)
+                    for chunk in response.iter_content(chunk_size=1024 * 1024):
+                        writer.write(chunk)
+            finally:
+                response.close()
 
             logger.info(f"Downloaded from Dropbox to {file_path}")
             return file_path
 
         except Exception as e:
+            file_path.unlink(missing_ok=True)
             logger.error(f"Dropbox download failed: {e}")
             raise Exception(f"Failed to download from Dropbox: {str(e)}")
 

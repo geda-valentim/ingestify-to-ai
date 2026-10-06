@@ -259,15 +259,20 @@ docker compose down
 ```
 
 **Modo Produção:**
+
+Provisione `.env.production`, certificados e ingress conforme o
+[runbook de produção](docs/runbooks/production-infrastructure.md).
+O overlay de produção deve ser o último; infraestrutura compartilhada é para dev.
+
 ```bash
-# Iniciar em modo produção (sem hot reload, otimizado)
-docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+# Valida configuração e inicia com TLS/autenticação obrigatórios
+scripts/start-production.sh
 
 # Escalar workers em produção
-docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --scale worker=5
+docker compose --env-file .env.production -f docker-compose.yml -f docker-compose.prod.yml up -d --scale worker=5
 
 # Parar serviços
-docker compose -f docker-compose.yml -f docker-compose.prod.yml down
+docker compose --env-file .env.production -f docker-compose.yml -f docker-compose.prod.yml down
 ```
 
 **Hot Reload:**

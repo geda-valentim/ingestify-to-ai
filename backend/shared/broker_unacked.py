@@ -129,7 +129,12 @@ def broker_client() -> redis.Redis:
     from shared.config import get_settings, redis_url_with_password
 
     settings = get_settings()
-    return redis.Redis.from_url(redis_url_with_password(settings.celery_broker_url, settings.redis_password))
+    return redis.Redis.from_url(
+        redis_url_with_password(settings.celery_broker_url, settings.redis_password),
+        **({"ssl_cert_reqs": "required", "ssl_check_hostname": True,
+            "ssl_ca_certs": settings.redis_ssl_ca_certs or None}
+           if settings.celery_broker_url.startswith("rediss://") else {}),
+    )
 
 
 def live_task_ids(inspect) -> Optional[set]:

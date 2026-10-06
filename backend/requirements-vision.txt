@@ -15,8 +15,8 @@
 # That native class is what lets us load the sha-pinned, weights-only
 # florence-community repos with trust_remote_code=False, so no Hub-supplied
 # Python is executed inside the worker process.
-transformers>=4.56.0,<6.0.0
-pillow>=10.4.0,<12.0.0
+transformers>=5.10.0,<6.0.0
+pillow>=12.3.0,<13.0.0
 
 # Only needed if you set VISION_TRUST_REMOTE_CODE=true to load an original
 # microsoft/Florence-2-* repo. The default model does not need them.

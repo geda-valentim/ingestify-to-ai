@@ -1,3 +1,4 @@
+import ssl
 from celery import Celery
 from celery.schedules import crontab
 from shared.config import get_settings, redis_url_with_password
@@ -15,6 +16,15 @@ celery_app = Celery(
     broker=redis_url_with_password(settings.celery_broker_url, settings.redis_password),
     backend=redis_url_with_password(settings.celery_result_backend, settings.redis_password),
 )
+
+# Certificate validation is mandatory for every TLS broker/backend connection.
+redis_tls = {"ssl_cert_reqs": ssl.CERT_REQUIRED, "ssl_check_hostname": True}
+if settings.redis_ssl_ca_certs:
+    redis_tls["ssl_ca_certs"] = settings.redis_ssl_ca_certs
+if settings.celery_broker_url.startswith("rediss://"):
+    celery_app.conf.broker_use_ssl = redis_tls.copy()
+if settings.celery_result_backend.startswith("rediss://"):
+    celery_app.conf.redis_backend_use_ssl = redis_tls.copy()
 
 # Configure Celery
 celery_app.conf.update(
