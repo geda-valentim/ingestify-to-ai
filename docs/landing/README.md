@@ -26,6 +26,6 @@ As imagens são referências de composição para a produção do filme. Texto d
 - [Prompts completos e referências](image-prompts.json).
 - O quadro final da cena 5 usa `scene-05-end-v2.png`, com o caminho de áudio exclusivamente ligado ao destino remoto.
 
-Preserve a leitura de origem e resultado ao animar. A ligação entre cenas exige os movimentos de câmera e as transições descritos no roteiro; não faça apenas cortes secos entre estes quadros. A cena 7 precisa do rótulo HTML “Visão de evolução”, e o encerramento precisa do estado “GitHub · Repositório privado”.
+Preserve a leitura de origem e resultado ao animar. A ligação entre cenas exige os movimentos de câmera e as transições descritos no roteiro; não faça apenas cortes secos entre estes quadros. A cena 7 precisa do rótulo HTML “Visão de evolução”, e o encerramento precisa do estado “Ver no GitHub”.
 
 A versão horizontal desta galeria não substitui a futura composição vertical nem constitui um vídeo pronto. Os estudos escuros anteriores e a primeira versão do fim da cena 5 continuam na pasta local de trabalho, fora da seleção versionada.

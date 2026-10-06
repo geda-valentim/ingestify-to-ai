@@ -1,24 +1,7 @@
-"use client";
-
-import { useEffect } from "react";
-import { useRouter } from "next/navigation";
-import { useAuthStore } from "@/lib/store/auth";
-
-export default function Home() {
-  const router = useRouter();
-  const isAuthenticated = useAuthStore((state) => state.token !== null && state.user !== null);
-
-  useEffect(() => {
-    if (isAuthenticated) {
-      router.push("/dashboard");
-    } else {
-      router.push("/login");
-    }
-  }, [isAuthenticated, router]);
-
-  return (
-    <div className="flex min-h-screen items-center justify-center">
-      <div className="text-muted-foreground">Loading...</div>
-    </div>
-  );
-}
+import type { Metadata } from "next";
+import { LandingPage } from "@/components/landing/landing-page";
+export const metadata: Metadata = {
+  title: "Ingestify — Seus arquivos, prontos para IA",
+  description: "Transforme documentos, imagens, áudio e vídeo em informação para suas aplicações. Explore as operações, a API e o controle sobre a execução do Ingestify.",
+};
+export default function Home() { return <LandingPage />; }
