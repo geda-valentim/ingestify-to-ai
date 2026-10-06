@@ -36,7 +36,7 @@ async def main():
         for segment in [11.1, 12.5, 13.8]:
             await page.evaluate('(s)=>{let e=document.querySelector(".landing-story");scrollTo(0,scrollY+e.getBoundingClientRect().top-72+s/15*(e.offsetHeight-(innerHeight-72)))}', segment)
             await page.wait_for_timeout(150)
-            assert await page.locator('.landing-story-copy .landing-eyebrow').inner_text() == 'PLANNED EVOLUTION'
+            assert await page.locator('.landing-story-copy .landing-eyebrow').inner_text() == 'PLANNED / DATA LAKE DELIVERY'
         await page.get_by_role('link', name='Skip the introduction').focus()
         await page.keyboard.press('Enter')
         await page.wait_for_timeout(150)
@@ -59,6 +59,16 @@ async def main():
         await context.grant_permissions(['clipboard-read', 'clipboard-write'])
         await page.get_by_role('button', name='Copy upload example').click()
         assert 'X-API-Key: YOUR_API_KEY' in await page.evaluate('navigator.clipboard.readText()')
+        assert 'docling_preset' not in await page.evaluate('navigator.clipboard.readText()')
+        await page.get_by_role('button', name='JSON result', exact=True).click()
+        await page.get_by_role('button', name='Copy JSON example', exact=True).click()
+        import json
+        payload = json.loads(await page.evaluate('navigator.clipboard.readText()'))
+        assert payload['status'] == 'completed' and payload['result']['metadata']['format'] == 'pdf'
+        assert payload['result']['markdown'].startswith('# Report')
+        assert 'PLANNED' in await page.locator('#data-lake .roadmap-label').inner_text()
+        assert await page.locator('.lake-planned').get_by_text('PLANNED DELIVERY').is_visible()
+        await page.get_by_role('button', name='Upload request', exact=True).click()
         await page.locator('summary').filter(has_text='What can I transform?').click()
         assert await page.locator('details[open]').count() == 1
         for width, height in [(1920,1080), (1920,650), (320,640), (390,844), (390,667), (768,1024), (844,390)]:
