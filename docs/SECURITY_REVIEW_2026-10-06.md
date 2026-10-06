@@ -101,18 +101,29 @@ ficam em [security-history-review.md](security-history-review.md).
 
 Os testes leves usam `backend/requirements-test.lock` com hashes; não substituem
 qualificação de modelos CPU/GPU. Containers de validação são descartáveis.
-A suíte backend completa passou: **1.384 testes, 7 skips, 27 avisos** em ambiente
-limpo Python 3.11 com dependências do lock. A mesma suíte passou também em
-Python 3.13: **1.384 testes, 7 skips** no CI do PR. A execução adicional em CI
-expôs uma corrida live que não apareceu nas rodadas locais: o evento de conclusão
-podia preceder a liberação da reserva. O ajuste libera antes de publicar e
-preserva a renovação durante uploads, inclusive quando a finalização ganha o
-lock SQL. Três novas regressões forçam essas ordens; **33 testes live** passaram
-em ambas as versões Python. Consulte o CI do PR para a suíte completa do commit
-final. Imports reais API/Dropbox/pydub/faster-whisper
-passaram; `audioop-lts` condicional corrige a remoção de `audioop` no Python 3.13. Cinco skips correspondem aos testes
-MariaDB executados separadamente; dois exigem a infraestrutura externa de
-concorrência dos engines. Não há alegação de deploy ou de ambiente público seguro.
+O commit de código `21b7612` passou no [CI completo](https://github.com/geda-valentim/ingestify-to-ai/actions/runs/37409884824):
+**1.387 testes passaram, com 7 skips, em cada versão Python, 3.11 e 3.13**.
+O [CI do PR](https://github.com/geda-valentim/ingestify-to-ai/actions/runs/37409889575)
+também passou em todos os jobs: segredos, auditoria Python, frontend e ambas as
+versões da suíte backend.
+
+Uma execução anterior expôs uma corrida live: o evento de conclusão podia
+preceder a liberação da reserva. O ajuste libera antes de publicar e preserva a
+renovação durante uploads, inclusive quando a finalização ganha o lock SQL.
+Três regressões determinísticas cobrem essas ordens; estão incluídas nos totais
+finais acima. Imports reais API/Dropbox/pydub/faster-whisper passaram;
+`audioop-lts` condicional corrige a remoção de `audioop` no Python 3.13.
+Cinco skips correspondem aos testes MariaDB executados separadamente; dois
+exigem a infraestrutura externa de concorrência dos engines.
+
+## Estado da entrega
+
+As correções e a revisão independente estão no [PR #27](https://github.com/geda-valentim/ingestify-to-ai/pull/27),
+em draft. O código tem CI aprovado; merge e deploy não foram realizados.
+A contenção do histórico público permanece pendente da confirmação sobre outras
+instalações e da invalidação de usos remanescentes. Os checks normais aprovados
+não resolvem essa pendência nem os advisories dos runtimes opcionais bloqueados.
+Por isso, esta revisão não declara prontidão geral para produção/publicação.
 
 Operação de produção: [runbook](runbooks/production-infrastructure.md) e
 [contrato de autenticação/ingress](security-auth-ingress.md). Imagens de base
