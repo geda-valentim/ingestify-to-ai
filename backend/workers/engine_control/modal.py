@@ -119,14 +119,29 @@ class ModalControlAdapter:
             db.expunge(engine)
         action = plan["type"]
         if action == "test":
+            ctx.admit_effect("test:connection")
             result = remote_tasks.test_engine_now(
-                engine.id, session_factory=ctx.Session
+                engine.id,
+                session_factory=ctx.Session,
+                authorization={"operation_id": ctx.op_id, "generation": ctx.generation},
             )
             if not result.get("ok"):
                 raise RuntimeError(result.get("code") or "TEST_FAILED")
+            ctx.admit_effect("test:identity")
             adapter = self._adapter(engine)
             identity = adapter._state().hydrate(client=adapter.client()).object_id
             with ctx.Session() as db:
+                from shared.access import policy
+                from workers.engine_control.runner import Cancelled
+
+                if policy.enabled():
+                    policy.epoch(db, True)
+                op = service.fenced(db, ctx.op_id, ctx.generation)
+                policy.operation_authority(db, op, effect=policy.enabled())
+                if op.cancel_requested:
+                    raise Cancelled()
+                if op.deadline <= service.now():
+                    raise TimeoutError("OPERATION_DEADLINE")
                 e = service.locked_engine(db, engine.id)
                 config = dict(e.config or {})
                 config["control_identity"] = identity
@@ -136,7 +151,10 @@ class ModalControlAdapter:
             return {"connection": result, "identity_verified": True}
         if action == "reconcile":
             return remote_tasks.reconcile_now(
-                only=engine.id, session_factory=ctx.Session
+                only=engine.id,
+                session_factory=ctx.Session,
+                authorization={"operation_id": ctx.op_id, "generation": ctx.generation},
+                human=True,
             )
         p = plan["profile"]
         adapter = self._adapter(engine)
@@ -151,6 +169,7 @@ class ModalControlAdapter:
                 out=ctx.log,
                 control_profile=p,
                 operation_id=ctx.op_id,
+                effect_admission=ctx.admit_effect,
             )
             ctx.handles({"deployment": entry})
             engine.deployments = dict(
@@ -187,6 +206,7 @@ class ModalControlAdapter:
             ):
                 resource.maintenance_operation_id = ctx.op_id
             db.commit()
+        ctx.admit_effect("autoscaler")
         obj.update_autoscaler(
             min_containers=minimum,
             max_containers=maximum,
@@ -210,6 +230,7 @@ class ModalControlAdapter:
             probes = []
             for _ in range(minimum):
                 ctx.check()
+                ctx.admit_effect("warm_probe")
                 probes.append(obj.control_probe.spawn())
             found = {}
             for call in probes:

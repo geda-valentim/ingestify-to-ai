@@ -12,6 +12,9 @@ import {
   createIdempotencyKey,
 } from "@/lib/engine-control-api";
 import { computeApi } from "@/lib/api";
+import { RuntimeSettingsFields } from "./runtime-settings-fields";
+import { ExecutionProfileBinding } from "./execution-profile-binding";
+import { useAuthStore } from "@/lib/store/auth";
 import type { Engine, Feature } from "@/types/compute";
 import type {
   RuntimeProfile,
@@ -55,6 +58,8 @@ export function EngineControl({
   onChanged: () => void;
 }) {
   const client = useQueryClient();
+  const user = useAuthStore((s) => s.user);
+  const libraryEnabled = user?.engine_access_enabled;
   const [tab, setTab] = useState("overview");
   const [feature, setFeature] = useState("transcription");
   const [form, setForm] = useState<RuntimeProfile | null>(null);
@@ -64,9 +69,20 @@ export function EngineControl({
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const key = useRef<string | null>(null);
+  const discovered = useQuery({
+    queryKey: ["control", "discover", engine.id],
+    queryFn: () => api.capabilities(engine.id),
+  });
+  useEffect(() => {
+    const fs = discovered.data?.features;
+    if (fs?.length && !fs.includes(feature)) setFeature(fs[0]);
+  }, [discovered.data, feature]);
+  const featureReady =
+    !libraryEnabled || !!discovered.data?.features.includes(feature);
   const caps = useQuery({
     queryKey: ["control", "caps", engine.id, feature],
     queryFn: () => api.capabilities(engine.id, feature),
+    enabled: featureReady,
     refetchInterval: 10000,
   });
   const models = useQuery({
@@ -76,6 +92,7 @@ export function EngineControl({
   const profile = useQuery({
     queryKey: ["control", "profile", engine.id, feature],
     queryFn: () => api.profile(engine.id, feature),
+    enabled: featureReady,
   });
   const runtime = useQuery({
     queryKey: ["control", "runtime", engine.id],
@@ -92,12 +109,13 @@ export function EngineControl({
     queryFn: computeApi.adapters,
   });
   const d = caps.data;
+  const selectableFeatures = discovered.data?.features || d?.features || [];
   const dependency = d?.actions.find((a) => a.reason)?.reason;
   const availableModels = models.data?.filter(
     (p) => p.feature === feature && p.adapters.includes(engine.adapter_type),
   );
   useEffect(() => {
-    if (!models.data || profile.isLoading) return;
+    if (!featureReady || !models.data || profile.isLoading) return;
     const saved = profile.data?.profile;
     const binding = saved?.binding ||
       engine.features[feature as Feature]?.binding || {
@@ -124,7 +142,13 @@ export function EngineControl({
     setPlan(null);
     // Reset on the selected saved revision, not every background engine poll.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [feature, profile.data?.revision, profile.isLoading, models.data]);
+  }, [
+    feature,
+    featureReady,
+    profile.data?.revision,
+    profile.isLoading,
+    models.data,
+  ]);
   useEffect(() => {
     if (!operation && history.data?.operations[0])
       setOperation(history.data.operations[0].operation_id);
@@ -229,7 +253,7 @@ export function EngineControl({
               <div className="space-y-2 text-sm text-muted-foreground">
                 <p>
                   {dependency === "RUNTIME_PROFILE_REQUIRED"
-                    ? "Salve a configuração desejada desta funcionalidade e selecione o host registrado antes de operar."
+                    ? "Escolha uma revisão publicada de um perfil de execução e vincule ao desejado antes de operar."
                     : dependency === "HOST_AGENT_NOT_READY"
                       ? "O agente do host selecionado está indisponível. Verifique o host na configuração desejada."
                       : `Dependência: ${dependency}`}
@@ -239,323 +263,120 @@ export function EngineControl({
                     variant="outline"
                     onClick={() => setTab("configuration")}
                   >
-                    Configurar perfil
+                    {libraryEnabled ? "Escolher perfil" : "Configurar perfil"}
                   </Button>
                 )}
               </div>
             )}
-            {!!d?.credential_fields.length && (
-              <Button
-                variant="outline"
-                disabled={busy}
-                onClick={() =>
-                  perform(async () => {
-                    await api.quick(
-                      engine.id,
-                      engine.status === "active" ? "pause" : "activate",
-                      engine.version,
-                    );
-                    await refresh();
-                  })
-                }
-              >
-                {engine.status === "active"
-                  ? "Pausar novas colocações"
-                  : "Ativar colocações"}
-              </Button>
-            )}
+            {(!libraryEnabled || user?.is_admin) &&
+              !!d?.credential_fields.length && (
+                <Button
+                  variant="outline"
+                  disabled={busy}
+                  onClick={() =>
+                    perform(async () => {
+                      await api.quick(
+                        engine.id,
+                        engine.status === "active" ? "pause" : "activate",
+                        engine.version,
+                      );
+                      await refresh();
+                    })
+                  }
+                >
+                  {engine.status === "active"
+                    ? "Pausar novas colocações"
+                    : "Ativar colocações"}
+                </Button>
+              )}
           </TabsContent>
           <TabsContent value="configuration" className="space-y-4">
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div>
-                <Label htmlFor="control-feature">Feature</Label>
-                <select
-                  id="control-feature"
-                  className={selectClass}
-                  value={feature}
-                  onChange={(e) => setFeature(e.target.value)}
-                >
-                  {d?.features.map((f) => (
-                    <option key={f} value={f}>
-                      {f}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <Label htmlFor="control-model">Modelo</Label>
-                <select
-                  id="control-model"
-                  className={selectClass}
-                  value={form?.model_profile_id || ""}
-                  onChange={(e) =>
-                    form &&
-                    setForm({ ...form, model_profile_id: e.target.value })
-                  }
-                >
-                  <option value="">Selecione</option>
-                  {availableModels?.map((p) => (
-                    <option key={p.id} value={p.id} disabled={!p.approved}>
-                      {p.title}
-                      {!p.approved ? " (indisponível)" : ""}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              {d?.fields.map((f) => (
-                <div key={f.name}>
-                  <Label htmlFor={`control-${f.name}`}>{f.label}</Label>
-                  <Input
-                    id={`control-${f.name}`}
-                    type={f.type === "number" ? "number" : "text"}
-                    min={f.min}
-                    max={f.max}
-                    value={String(form?.[f.name as keyof RuntimeProfile] ?? "")}
-                    onChange={(e) => {
-                      if (!form) return;
-                      const next = {
-                        ...form,
-                        [f.name]:
-                          f.type === "number"
-                            ? Number(e.target.value)
-                            : e.target.value,
-                      };
-                      if (f.name === "max_replicas")
-                        next.binding = {
-                          ...form.binding,
-                          workers: Number(e.target.value),
-                        };
-                      setForm(next);
+            {libraryEnabled && featureReady && (
+              <ExecutionProfileBinding
+                engine={engine}
+                feature={feature}
+                onChanged={() => {
+                  onChanged();
+                  client.invalidateQueries({ queryKey: ["control"] });
+                }}
+              />
+            )}
+            <div>
+              <Label htmlFor="control-feature">Feature</Label>
+              <select
+                id="control-feature"
+                className={selectClass}
+                value={feature}
+                onChange={(e) => setFeature(e.target.value)}
+              >
+                {selectableFeatures.map((f) => (
+                  <option key={f}>{f}</option>
+                ))}
+              </select>
+            </div>
+            {(!libraryEnabled || user?.is_admin) && (
+              <>
+                <p className="text-sm text-muted-foreground">
+                  Configuração manual de bootstrap. Use a biblioteca para
+                  compartilhar revisões publicadas.
+                </p>
+                {form && (
+                  <RuntimeSettingsFields
+                    value={form}
+                    onChange={(v) => {
+                      setForm(v);
                       setPlan(null);
                     }}
+                    descriptor={d}
+                    models={availableModels || []}
+                    hosts={d?.hosts || []}
+                    gpuOptions={(() => {
+                      const opts = adapters.data?.find(
+                        (a) => a.type === engine.adapter_type,
+                      )?.gpu_options;
+                      return Array.isArray(opts) ? opts : [];
+                    })()}
+                    localGpus={engine.config.gpus || []}
+                  />
+                )}
+                <div>
+                  <Label htmlFor="control-until">Manter aquecido até</Label>
+                  <Input
+                    id="control-until"
+                    type="datetime-local"
+                    value={
+                      form?.warm_until ? localDatetime(form.warm_until) : ""
+                    }
+                    onChange={(e) =>
+                      form &&
+                      setForm({
+                        ...form,
+                        warm_until: e.target.value
+                          ? new Date(e.target.value).toISOString()
+                          : null,
+                      })
+                    }
                   />
                 </div>
-              ))}
-              {d?.provider_fields.map((f) => (
-                <div key={f.name}>
-                  <Label htmlFor={`provider-${f.name}`}>{f.label}</Label>
-                  {f.name === "host_id" ? (
-                    <select
-                      id={`provider-${f.name}`}
-                      className={selectClass}
-                      value={String(form?.provider_settings[f.name] ?? "")}
-                      onChange={(e) =>
-                        form &&
-                        setForm({
-                          ...form,
-                          provider_settings: {
-                            ...form.provider_settings,
-                            [f.name]: e.target.value,
-                          },
-                        })
-                      }
-                    >
-                      <option value="">Selecione o host registrado</option>
-                      {d.hosts.map((h) => (
-                        <option key={h.id} value={h.id}>
-                          {h.id}
-                        </option>
-                      ))}
-                    </select>
-                  ) : f.type === "select" ? (
-                    <select
-                      id={`provider-${f.name}`}
-                      className={selectClass}
-                      value={String(form?.provider_settings[f.name] ?? "")}
-                      onChange={(e) =>
-                        form &&
-                        setForm({
-                          ...form,
-                          provider_settings: {
-                            ...form.provider_settings,
-                            [f.name]: e.target.value,
-                          },
-                        })
-                      }
-                    >
-                      <option value="">Selecione</option>
-                      {f.options?.map((o) => (
-                        <option key={o.value} value={o.value}>
-                          {o.label}
-                        </option>
-                      ))}
-                    </select>
-                  ) : (
-                    <Input
-                      id={`provider-${f.name}`}
-                      type={f.type === "number" ? "number" : "text"}
-                      min={f.min}
-                      max={f.max}
-                      value={String(form?.provider_settings[f.name] ?? "")}
-                      onChange={(e) =>
-                        form &&
-                        setForm({
-                          ...form,
-                          provider_settings: {
-                            ...form.provider_settings,
-                            [f.name]:
-                              f.type === "number"
-                                ? Number(e.target.value)
-                                : e.target.value,
-                          },
-                        })
-                      }
-                    />
-                  )}
-                </div>
-              ))}
-              <div>
-                <Label htmlFor="control-cpu">CPU por worker (opcional)</Label>
-                <Input
-                  id="control-cpu"
-                  type="number"
-                  min="0.25"
-                  max="64"
-                  step="0.25"
-                  value={form?.binding.cpu ?? ""}
-                  onChange={(e) =>
-                    form &&
-                    setForm({
-                      ...form,
-                      binding: {
-                        ...form.binding,
-                        cpu: e.target.value
-                          ? Number(e.target.value)
-                          : undefined,
-                      },
-                    })
-                  }
-                />
-              </div>
-              <div>
-                <Label htmlFor="control-memory">
-                  Memória por worker em MiB (opcional)
-                </Label>
-                <Input
-                  id="control-memory"
-                  type="number"
-                  min="256"
-                  max="262144"
-                  value={form?.memory_mb ?? ""}
-                  onChange={(e) =>
-                    form &&
-                    setForm({
-                      ...form,
-                      memory_mb: e.target.value ? Number(e.target.value) : null,
-                    })
-                  }
-                />
-              </div>
-              <div>
-                <Label htmlFor="control-concurrency">
-                  Execuções por worker
-                </Label>
-                <Input
-                  id="control-concurrency"
-                  type="number"
-                  min="1"
-                  max="64"
-                  value={form?.binding.executions_per_worker ?? 1}
-                  onChange={(e) =>
-                    form &&
-                    setForm({
-                      ...form,
-                      binding: {
-                        ...form.binding,
-                        executions_per_worker: Number(e.target.value),
-                      },
-                    })
-                  }
-                />
-              </div>
-              <div>
-                <Label htmlFor="control-gpu">GPU</Label>
-                <select
-                  id="control-gpu"
-                  className={selectClass}
-                  value={form?.binding.gpu_type || form?.binding.gpu_ref || ""}
-                  onChange={(e) => {
-                    if (!form) return;
-                    const selected = e.target.value;
-                    const remoteOptions = adapters.data?.find(
-                      (a) => a.type === engine.adapter_type,
-                    )?.gpu_options;
-                    setForm({
-                      ...form,
-                      binding: {
-                        ...form.binding,
-                        gpu_type: Array.isArray(remoteOptions)
-                          ? selected || undefined
-                          : undefined,
-                        gpu_ref: Array.isArray(remoteOptions)
-                          ? undefined
-                          : selected || undefined,
-                      },
-                    });
-                  }}
+                <Button
+                  disabled={busy || !form?.model_profile_id}
+                  onClick={() => perform(save)}
                 >
-                  <option value="">CPU / padrão do adapter</option>
-                  {(() => {
-                    const opts = adapters.data?.find(
-                      (a) => a.type === engine.adapter_type,
-                    )?.gpu_options;
-                    return Array.isArray(opts)
-                      ? opts.map((g) => (
-                          <option key={g.gpu_type}>{g.gpu_type}</option>
-                        ))
-                      : engine.config.gpus?.map((g) => (
-                          <option key={g.ref} value={g.ref}>
-                            {g.name || g.ref} · {g.vram_gb} GB
-                          </option>
-                        ));
-                  })()}
-                </select>
-              </div>
-              <div>
-                <Label htmlFor="control-until">Manter aquecido até</Label>
-                <Input
-                  id="control-until"
-                  type="datetime-local"
-                  value={form?.warm_until ? localDatetime(form.warm_until) : ""}
-                  onChange={(e) =>
-                    form &&
-                    setForm({
-                      ...form,
-                      warm_until: e.target.value
-                        ? new Date(e.target.value).toISOString()
-                        : null,
-                    })
-                  }
-                />
-              </div>
-              <div>
-                <Label htmlFor="control-max-usd">
-                  Teto reservado por operação (US$)
-                </Label>
-                <Input
-                  id="control-max-usd"
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  value={maxUsd}
-                  onChange={(e) => {
-                    setMaxUsd(e.target.value);
-                    setPlan(null);
-                  }}
-                />
-              </div>
-            </div>
-            <Button
-              disabled={busy || !form?.model_profile_id}
-              onClick={() => perform(save)}
-            >
-              Salvar configuração desejada
-            </Button>
-            <p className="text-xs text-muted-foreground">
-              Salvar cria uma revisão. Revise e aplique uma operação para
-              alterar o runtime.
-            </p>
-            {d && (d.requires_budget || d.credential_fields.length) ? (
+                  Salvar configuração desejada
+                </Button>
+                <p className="text-xs text-muted-foreground">
+                  Salvar cria uma revisão. Revise e aplique uma operação para
+                  alterar o runtime.
+                </p>
+              </>
+            )}
+            {d &&
+            (user?.is_admin ||
+              !libraryEnabled ||
+              user?.permissions?.includes(
+                "engine_connections.credentials.manage",
+              )) &&
+            (d.requires_budget || d.credential_fields.length) ? (
               <QuickConfiguration
                 engine={engine}
                 fields={d.credential_fields.map((f) => ({
@@ -563,6 +384,7 @@ export function EngineControl({
                   label: f.label,
                 }))}
                 onChanged={refresh}
+                canBudget={!!user?.is_admin || !libraryEnabled}
               />
             ) : null}
           </TabsContent>
@@ -582,6 +404,22 @@ export function EngineControl({
             </div>
           </TabsContent>
           <TabsContent value="operations">
+            <div>
+              <Label htmlFor="control-max-usd">
+                Teto reservado por operação (US$)
+              </Label>
+              <Input
+                id="control-max-usd"
+                type="number"
+                min="0"
+                step="0.01"
+                value={maxUsd}
+                onChange={(e) => {
+                  setMaxUsd(e.target.value);
+                  setPlan(null);
+                }}
+              />
+            </div>
             <div className="space-y-2">
               {history.error && (
                 <p role="alert">{(history.error as Error).message}</p>
@@ -793,8 +631,10 @@ function QuickConfiguration({
   engine,
   fields,
   onChanged,
+  canBudget = true,
 }: {
   engine: Engine;
+  canBudget?: boolean;
   fields: { name: string; label: string }[];
   onChanged: () => Promise<void>;
 }) {
@@ -821,21 +661,25 @@ function QuickConfiguration({
     <div className="space-y-3 border-t pt-4">
       <h3 className="font-medium">Orçamento e credenciais</h3>
       {error && <p role="alert">{error}</p>}
-      <Label htmlFor="engine-budget">Limite por período (US$)</Label>
-      <Input
-        id="engine-budget"
-        type="number"
-        min="0"
-        value={budget}
-        onChange={(e) => setBudget(e.target.value)}
-      />
-      <Button
-        variant="outline"
-        disabled={busy}
-        onClick={() => submit("budget", { limit_usd: budget })}
-      >
-        Salvar orçamento
-      </Button>
+      {canBudget && (
+        <>
+          <Label htmlFor="engine-budget">Limite por período (US$)</Label>
+          <Input
+            id="engine-budget"
+            type="number"
+            min="0"
+            value={budget}
+            onChange={(e) => setBudget(e.target.value)}
+          />
+          <Button
+            variant="outline"
+            disabled={busy}
+            onClick={() => submit("budget", { limit_usd: budget })}
+          >
+            Salvar orçamento
+          </Button>
+        </>
+      )}
       <div className="grid gap-3 sm:grid-cols-2">
         {fields.map((f) => (
           <div key={f.name}>

@@ -327,8 +327,8 @@ def test_activation_needs_a_test_a_budget_and_a_deploy(world, monkeypatch):
     assert "connection test" in problems and "budget" in problems and "not_deployed" in problems
 
     monkeypatch.setattr(engines_api, "_remote_worker_alive", lambda: True)
-    monkeypatch.setattr(engines_api, "_send_test", lambda engine_id: remote_tasks.test_engine_now(
-        engine_id, session_factory=world.Session))
+    monkeypatch.setattr(engines_api, "_send_test", lambda engine_id, timeout=30.0, authorization=None: remote_tasks.test_engine_now(
+        engine_id, session_factory=world.Session, authorization=authorization))
     report = call(world, engines_api.test_engine, "modal_1", _request())
     assert report["ok"] and report["deployed"] is True
 

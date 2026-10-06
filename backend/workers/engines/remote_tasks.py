@@ -85,7 +85,9 @@ def cancel_usage(usage_id: int, session_factory=None) -> str:
 # --- control ---------------------------------------------------------------------------------
 
 
-def test_engine_now(engine_id: str, *, session_factory=None) -> Dict[str, Any]:
+def test_engine_now(
+    engine_id: str, *, session_factory=None, authorization=None
+) -> Dict[str, Any]:
     """
     Open the engine's credentials and check them against the provider (auth,
     workspace, deployment) without starting a container. The outcome is
@@ -97,6 +99,11 @@ def test_engine_now(engine_id: str, *, session_factory=None) -> Dict[str, Any]:
         engine = db.query(Engine).filter((Engine.id == engine_id) | (Engine.slug == engine_id)).first()
         if engine is None:
             return HealthReport(False, "NOT_FOUND", f"no engine {engine_id!r}").as_dict()
+        from shared.access import legacy
+
+        legacy.authorize(db, engine, "test", authorization)
+        db.commit()
+        db.refresh(engine)
         db.expunge(engine)
     finally:
         db.close()
@@ -112,6 +119,10 @@ def test_engine_now(engine_id: str, *, session_factory=None) -> Dict[str, Any]:
     result = report.as_dict()
 
     def record(db):
+        from shared.access import legacy
+
+        current = db.get(Engine, engine.id)
+        legacy.authorize(db, current, "test", authorization)
         row = db.query(Engine).filter(Engine.id == engine.id).with_for_update().one()
         config = dict(row.config or {})
         config["last_test"] = {"ok": report.ok, "code": report.code, "at": report.checked_at,
@@ -128,8 +139,8 @@ def test_engine_now(engine_id: str, *, session_factory=None) -> Dict[str, Any]:
 
 
 @celery_app.task(name="workers.engines.remote_tasks.test_engine", soft_time_limit=25, time_limit=40)
-def test_engine(engine_id: str):
-    return test_engine_now(engine_id)
+def test_engine(engine_id: str, authorization=None):
+    return test_engine_now(engine_id, authorization=authorization)
 
 
 def _next_period(engine: Engine, start: date) -> date:
@@ -158,7 +169,14 @@ def _remote_engines(session_factory, only: Optional[str] = None) -> List[Engine]
         db.close()
 
 
-def reconcile_now(*, session_factory=None, now: Optional[datetime] = None, only: Optional[str] = None) -> Dict[str, Any]:
+def reconcile_now(
+    *,
+    session_factory=None,
+    now: Optional[datetime] = None,
+    only: Optional[str] = None,
+    authorization=None,
+    human=False,
+) -> Dict[str, Any]:
     """
     Pull each remote engine's spend for its current period from the provider and
     keep the larger of what was known and what is reported (never decreases). A
@@ -171,6 +189,12 @@ def reconcile_now(*, session_factory=None, now: Optional[datetime] = None, only:
     now = now or datetime.utcnow()
     out: Dict[str, Any] = {}
     for engine in _remote_engines(session_factory, only):
+        if human:
+            with _session(session_factory) as db:
+                from shared.access import legacy
+
+                legacy.authorize(db, engine, "reconcile", authorization)
+                db.commit()
         start = budget.period_start(engine, now)
         try:
             adapter = remote.adapter_factory(engine, remote.open_credentials(engine))
@@ -182,6 +206,12 @@ def reconcile_now(*, session_factory=None, now: Optional[datetime] = None, only:
             continue
 
         def store(db, engine_id=engine.id, spent=spent, start=start):
+            if human:
+                from shared.access import legacy
+
+                legacy.authorize(
+                    db, db.get(Engine, engine_id), "reconcile", authorization
+                )
             row = db.query(Engine).filter(Engine.id == engine_id).with_for_update().one()
             previous = row.provider_reported_usd if row.provider_reported_period == start else None
             row.provider_reported_usd = max(spent, previous) if previous is not None else spent
@@ -238,8 +268,8 @@ def reconcile_spend():
 
 
 @celery_app.task(name="workers.engines.remote_tasks.reconcile_one", soft_time_limit=75, time_limit=90)
-def reconcile_one(engine_id: str):
-    return reconcile_now(only=engine_id)
+def reconcile_one(engine_id: str, authorization=None):
+    return reconcile_now(only=engine_id, authorization=authorization, human=True)
 
 
 # --- cheap health probes and testing every account (slice 4c) ----------------------------------
@@ -316,20 +346,38 @@ def probe_engines():
     return probe_engines_now()
 
 
-def test_all_now(*, session_factory=None) -> Dict[str, Any]:
+def test_all_now(
+    *, session_factory=None, engine_ids=None, authorization=None
+) -> Dict[str, Any]:
     """test_engine_now() on every remote engine with credentials, one after the other (paused ones too)"""
     db = _session(session_factory)
     try:
-        slugs = [e.slug for e in db.query(Engine).filter(Engine.adapter_type != "local").order_by(Engine.slug)
-                 if e.credentials_sealed]
+        from shared.access import policy
+
+        if policy.enabled() and engine_ids is None:
+            from shared.access.legacy import installation
+
+            installation(db)
+        slugs = [
+            (e.id, e.slug)
+            for e in db.query(Engine)
+            .filter(Engine.adapter_type != "local")
+            .order_by(Engine.slug)
+            if e.credentials_sealed and (engine_ids is None or e.id in engine_ids)
+        ]
     finally:
         db.close()
-    return {slug: test_engine_now(slug, session_factory=session_factory) for slug in slugs}
+    return {
+        slug: test_engine_now(
+            engine_id, session_factory=session_factory, authorization=authorization
+        )
+        for engine_id, slug in slugs
+    }
 
 
 @celery_app.task(name="workers.engines.remote_tasks.test_all_engines", soft_time_limit=170, time_limit=200)
-def test_all_engines():
-    return test_all_now()
+def test_all_engines(engine_ids=None, authorization=None):
+    return test_all_now(engine_ids=engine_ids, authorization=authorization)
 
 
 # --- worker-remote heartbeat -----------------------------------------------------------------

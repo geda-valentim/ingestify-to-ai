@@ -197,7 +197,9 @@ async def refresh_token(
 
 
 @router.get("/me", response_model=UserResponse)
-async def get_current_user_info(current_user: User = Depends(get_current_active_user)):
+async def get_current_user_info(
+    current_user: User = Depends(get_current_active_user), db: Session = Depends(get_db)
+):
     """
     Get information about the currently authenticated user
 
@@ -216,4 +218,12 @@ async def get_current_user_info(current_user: User = Depends(get_current_active_
     ## Errors:
     - 401: Not authenticated or invalid token/API key
     """
-    return UserResponse.for_user(current_user)
+    from shared.access.policy import navigation
+
+    access = navigation(db, current_user)
+    return UserResponse.for_user(current_user).model_copy(
+        update={
+            "permissions": access["permissions"],
+            "engine_access_enabled": access["enabled"],
+        }
+    )

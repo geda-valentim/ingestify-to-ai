@@ -613,3 +613,16 @@ class LiveSession(Base):
 # Spec 0007: explicit migration; SDK-free control models share this metadata.
 from shared.engine_control.models import (RuntimeProfile, ControlResource, OperationPlan,
     EngineOperation, OperationEvent, OperationOutbox, ControlAdmission, ControlHost)  # noqa: E402,F401
+from shared.access.models import (
+    ExecutionProfile,
+    ExecutionRevision,
+    AccessPolicy,
+    PolicyRevision,
+    RoleGrant,
+    AuthorizationEpoch,
+    EngineAttributes,
+    ResourceScope,
+    EffectAdmission,
+    LegacyRequest,
+    ServicePrincipal,
+)  # noqa: E402,F401

@@ -331,7 +331,11 @@ def _remote(args) -> int:
         import json
 
         from workers.engines.remote_tasks import reconcile_now
-        print(json.dumps(reconcile_now(only=args.engine), indent=1, default=str))
+        print(
+            json.dumps(
+                reconcile_now(only=args.engine, human=True), indent=1, default=str
+            )
+        )
         return 0
 
     # test
@@ -505,7 +509,33 @@ def main(argv=None) -> int:
     speed_p.add_argument("--engine", help="one engine (default all)")
     speed_p.add_argument("--json", action="store_true")
 
+    parser.add_argument(
+        "--installation-principal",
+        help="explicit registered installation CLI principal (before the command)",
+    )
     args = parser.parse_args(argv)
+    from shared.access import policy
+
+    if policy.enabled() and args.command not in ("keygen", "modal-lock"):
+        from shared.access import legacy
+        from shared.database import SessionLocal
+
+        with SessionLocal() as db:
+            policy.epoch(db, True)
+            legacy.installation(db, args.installation_principal)
+            from shared.models import AdminAudit
+
+            db.add(
+                AdminAudit(
+                    actor_user_id=args.installation_principal,
+                    auth_method="cli",
+                    action="engine.cli_command",
+                    target_type="installation",
+                    target_id=args.command,
+                )
+            )
+            db.commit()
+        legacy.installation_context.set(args.installation_principal)
 
     if args.command == "keygen":
         public, private = generate_keypair()

@@ -335,6 +335,9 @@ app.include_router(tag_router)  # GET /tags, PUT /jobs/{job_id}/tags
 # Before engine_admin_router: /admin/engines/status must not match /admin/engines/{engine_id}
 app.include_router(routing_admin_router)  # /admin/routing, /admin/engines/status (spec 0003)
 app.include_router(engine_admin_router)  # /admin/engines, /admin/gpus (spec 0003)
+from api.access_routes import router as access_router
+
+app.include_router(access_router)
 app.include_router(engine_control_router)
 app.include_router(engine_host_router)
 app.include_router(projects_router)  # GET /projects, /projects/resolve, /projects/{id}/folders/resolve

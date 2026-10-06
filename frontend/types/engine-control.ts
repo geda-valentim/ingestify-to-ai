@@ -55,6 +55,8 @@ export interface ProfileRevision {
   revision: number;
   profile: RuntimeProfile;
   applied_at: string | null;
+  source_profile_revision_id?: string | null;
+  source_hash?: string | null;
 }
 export interface ControlPlan {
   plan_id: string;

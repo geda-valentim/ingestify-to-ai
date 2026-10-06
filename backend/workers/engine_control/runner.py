@@ -28,6 +28,7 @@ class Context:
         self.lost = False
         self.last_log = 0.0
         self.omitted_logs = 0
+        self.effect_sequence = 0
         self.thread = threading.Thread(target=self._renew, daemon=True)
         self.thread.start()
 
@@ -44,7 +45,12 @@ class Context:
         if self.lost:
             raise service.ControlError("LEASE_LOST")
         with self.Session() as db:
+            from shared.access import policy
+
+            if policy.enabled():
+                policy.epoch(db, True)
             op = service.fenced(db, self.op_id, self.generation)
+            policy.operation_authority(db, op, effect=policy.enabled())
             if op.cancel_requested:
                 raise Cancelled()
             if op.deadline <= service.now():
@@ -82,6 +88,15 @@ class Context:
         self.last_log = stamp
         self.event("applying", message, "log")
 
+    def admit_effect(self, step):
+        self.check()
+        self.effect_sequence += 1
+        with self.Session() as db:
+            service.admit_effect(
+                db, self.op_id, self.generation, f"{self.effect_sequence}:{step}"
+            )
+            db.commit()
+
     def handles(self, value):
         with self.Session() as db:
             op = service.fenced(db, self.op_id, self.generation)
@@ -110,6 +125,12 @@ class Context:
             "draining", "Bloqueando novas admissões e aguardando trabalho em voo"
         )
         with self.Session() as db:
+            from shared.access import policy
+
+            if policy.enabled():
+                policy.epoch(db, True)
+            op = db.get(EngineOperation, self.op_id)
+            policy.operation_authority(db, op, effect=policy.enabled())
             e = service.locked_engine(db, plan["engine_id"])
             service.fenced(db, self.op_id, self.generation)
             rows = (

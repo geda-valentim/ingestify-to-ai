@@ -19,15 +19,27 @@ import {
 import { ApiError } from "@/lib/api";
 import { cn, parseApiDate } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import type { DeployState, EngineHealth, EngineStatus, Feature } from "@/types/compute";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import type {
+  DeployState,
+  EngineHealth,
+  EngineStatus,
+  Feature,
+} from "@/types/compute";
 import { FEATURE_TITLES } from "@/types/compute";
 import { formatDistanceToNow } from "date-fns";
 
 /** Where the engines CLI runs (backend/scripts/engines.py is baked into the api image). */
 export const ENGINES_CLI = "docker compose exec api python scripts/engines.py";
 /** The CLI commands that need the private key (test, modal-deploy) run in worker-remote. */
-export const ENGINES_CLI_REMOTE = "docker compose --profile engines run --rm worker-remote python scripts/engines.py";
+export const ENGINES_CLI_REMOTE =
+  "docker compose --profile engines run --rm worker-remote python scripts/engines.py";
 
 type Tone = "ok" | "info" | "warn" | "bad" | "muted";
 
@@ -56,7 +68,7 @@ export function Pill({
       title={title}
       className={cn(
         "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-medium whitespace-nowrap",
-        TONE_CLASSES[tone]
+        TONE_CLASSES[tone],
       )}
     >
       {Icon && <Icon className="h-3 w-3 shrink-0" aria-hidden />}
@@ -65,7 +77,14 @@ export function Pill({
   );
 }
 
-const HEALTH: Record<EngineHealth, { tone: Tone; label: string; icon: React.ComponentType<{ className?: string }> }> = {
+const HEALTH: Record<
+  EngineHealth,
+  {
+    tone: Tone;
+    label: string;
+    icon: React.ComponentType<{ className?: string }>;
+  }
+> = {
   healthy: { tone: "ok", label: "Healthy", icon: CheckCircle2 },
   unknown: { tone: "muted", label: "Not checked yet", icon: HelpCircle },
   degraded: { tone: "warn", label: "Degraded", icon: AlertTriangle },
@@ -73,7 +92,13 @@ const HEALTH: Record<EngineHealth, { tone: Tone; label: string; icon: React.Comp
   exhausted: { tone: "bad", label: "Budget reached", icon: CircleDollarSign },
 };
 
-export function HealthBadge({ health, reason }: { health: EngineHealth; reason?: string | null }) {
+export function HealthBadge({
+  health,
+  reason,
+}: {
+  health: EngineHealth;
+  reason?: string | null;
+}) {
   const h = HEALTH[health] ?? HEALTH.unknown;
   return (
     <Pill tone={h.tone} icon={h.icon} title={reason ?? undefined}>
@@ -84,16 +109,44 @@ export function HealthBadge({ health, reason }: { health: EngineHealth; reason?:
 }
 
 export function StatusBadge({ status }: { status: EngineStatus }) {
-  if (status === "active") return <Pill tone="info" icon={CheckCircle2}>Active</Pill>;
-  if (status === "paused") return <Pill tone="muted" icon={PauseCircle}>Paused</Pill>;
-  return <Pill tone="muted" icon={Ban}>Disabled</Pill>;
+  if (status === "active")
+    return (
+      <Pill tone="info" icon={CheckCircle2}>
+        Active
+      </Pill>
+    );
+  if (status === "paused")
+    return (
+      <Pill tone="muted" icon={PauseCircle}>
+        Paused
+      </Pill>
+    );
+  return (
+    <Pill tone="muted" icon={Ban}>
+      Disabled
+    </Pill>
+  );
 }
 
 export function DeployStateBadge({ state }: { state: DeployState }) {
   if (state === "local") return null;
-  if (state === "deployed") return <Pill tone="ok" icon={CheckCircle2}>Deployed</Pill>;
-  if (state === "needs_redeploy") return <Pill tone="warn" icon={AlertTriangle}>Needs redeploy</Pill>;
-  return <Pill tone="muted" icon={AlertCircle}>Not deployed</Pill>;
+  if (state === "deployed")
+    return (
+      <Pill tone="ok" icon={CheckCircle2}>
+        Deployed
+      </Pill>
+    );
+  if (state === "needs_redeploy")
+    return (
+      <Pill tone="warn" icon={AlertTriangle}>
+        Needs redeploy
+      </Pill>
+    );
+  return (
+    <Pill tone="muted" icon={AlertCircle}>
+      Not deployed
+    </Pill>
+  );
 }
 
 export function featureTitle(feature: string): string {
@@ -147,7 +200,8 @@ export function Meter({
 }) {
   const pct = max > 0 ? Math.min(100, Math.max(0, (value / max) * 100)) : 0;
   const ratio = max > 0 ? value / max : 0;
-  const bar = ratio > 1 ? "bg-red-500" : ratio >= 0.85 ? "bg-amber-500" : "bg-primary";
+  const bar =
+    ratio > 1 ? "bg-red-500" : ratio >= 0.85 ? "bg-amber-500" : "bg-primary";
   return (
     <div className={cn("space-y-1", className)}>
       <div className="flex justify-between gap-2 text-xs">
@@ -163,7 +217,10 @@ export function Meter({
         aria-valuetext={valueText}
         className="h-2 w-full overflow-hidden rounded-full bg-secondary"
       >
-        <div className={cn("h-full rounded-full transition-all", bar)} style={{ width: `${pct}%` }} />
+        <div
+          className={cn("h-full rounded-full transition-all", bar)}
+          style={{ width: `${pct}%` }}
+        />
       </div>
     </div>
   );
@@ -182,7 +239,9 @@ export function CommandHint({
   className?: string;
 }) {
   return (
-    <div className={cn("rounded-md border bg-muted/40 p-3 space-y-2", className)}>
+    <div
+      className={cn("rounded-md border bg-muted/40 p-3 space-y-2", className)}
+    >
       <p className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
         <Terminal className="h-3.5 w-3.5" aria-hidden />
         {title}
@@ -219,7 +278,11 @@ function CommandLine({ command }: { command: string }) {
         onClick={copy}
         aria-label={copied ? "Copied" : "Copy command"}
       >
-        {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+        {copied ? (
+          <Check className="h-3.5 w-3.5" />
+        ) : (
+          <Copy className="h-3.5 w-3.5" />
+        )}
       </Button>
     </div>
   );
@@ -231,26 +294,37 @@ export function ForbiddenCard() {
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
           <ShieldAlert className="h-5 w-5 text-muted-foreground" aria-hidden />
-          Administrators only
+          Acesso não autorizado
         </CardTitle>
         <CardDescription>
-          The Compute area shows where heavy work runs and what it costs. Ask the person who installed
-          Ingestify to make you an administrator:
+          Solicite ao administrador de acesso um papel e uma política que
+          permitam esta seção. As permissões são verificadas pela API.
         </CardDescription>
       </CardHeader>
       <CardContent>
-        <CommandHint title="On the server" commands={["docker compose exec api python scripts/make_admin.py --email <their email>"]} />
+        <p className="text-sm text-muted-foreground">
+          Acesso de bootstrap é administrado separadamente pela instalação.
+        </p>
       </CardContent>
     </Card>
   );
 }
 
-export function LoadingCards({ count = 2, label = "Loading" }: { count?: number; label?: string }) {
+export function LoadingCards({
+  count = 2,
+  label = "Loading",
+}: {
+  count?: number;
+  label?: string;
+}) {
   return (
     <div className="space-y-4" aria-busy="true" aria-live="polite">
       <span className="sr-only">{label}…</span>
       {Array.from({ length: count }).map((_, i) => (
-        <div key={i} className="h-32 rounded-lg border bg-card motion-safe:animate-pulse" />
+        <div
+          key={i}
+          className="h-32 rounded-lg border bg-card motion-safe:animate-pulse"
+        />
       ))}
     </div>
   );
@@ -266,11 +340,18 @@ export function QueryError({
   onRetry?: () => void;
   what: string;
 }) {
-  if (error instanceof ApiError && error.status === 403) return <ForbiddenCard />;
+  if (error instanceof ApiError && error.status === 403)
+    return <ForbiddenCard />;
   const message = error instanceof Error ? error.message : "Unknown error";
   return (
-    <div role="alert" className="rounded-lg border border-destructive/50 bg-destructive/5 p-4 flex items-start gap-3">
-      <AlertCircle className="h-5 w-5 text-destructive shrink-0 mt-0.5" aria-hidden />
+    <div
+      role="alert"
+      className="rounded-lg border border-destructive/50 bg-destructive/5 p-4 flex items-start gap-3"
+    >
+      <AlertCircle
+        className="h-5 w-5 text-destructive shrink-0 mt-0.5"
+        aria-hidden
+      />
       <div className="flex-1 min-w-0">
         <p className="font-medium">Couldn&apos;t load {what}</p>
         <p className="text-sm text-muted-foreground break-words">{message}</p>
@@ -286,11 +367,22 @@ export function QueryError({
 }
 
 /** "Updated 5 s ago" + a spinner while a background refetch runs. */
-export function Freshness({ updatedAt, fetching }: { updatedAt: number; fetching: boolean }) {
+export function Freshness({
+  updatedAt,
+  fetching,
+}: {
+  updatedAt: number;
+  fetching: boolean;
+}) {
   if (!updatedAt) return null;
   return (
-    <span className="inline-flex items-center gap-1 text-xs text-muted-foreground" aria-live="off">
-      {fetching && <Loader2 className="h-3 w-3 motion-safe:animate-spin" aria-hidden />}
+    <span
+      className="inline-flex items-center gap-1 text-xs text-muted-foreground"
+      aria-live="off"
+    >
+      {fetching && (
+        <Loader2 className="h-3 w-3 motion-safe:animate-spin" aria-hidden />
+      )}
       Updated {formatDistanceToNow(new Date(updatedAt), { addSuffix: true })}
     </span>
   );

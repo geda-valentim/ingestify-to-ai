@@ -11,6 +11,9 @@ def stream_run(
     argv, *, env, cwd, capture_output=True, text=True, timeout=3600, context=None
 ):
     # Keep the existing deploy helper's injected `run` signature for regression tests.
+    if context:
+        context.check()
+        context.admit_effect("subprocess")
     proc = subprocess.Popen(
         argv,
         env=env,
