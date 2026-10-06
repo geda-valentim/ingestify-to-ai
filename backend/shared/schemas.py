@@ -324,6 +324,8 @@ class UserResponse(BaseModel):
     # Effective admin rule (users.is_admin OR ADMIN_USER_IDS); the API fills it in,
     # so the frontend can show admin-only screens
     is_admin: bool = False
+    permissions: list[str] = []
+    engine_access_enabled: bool = False
 
     class Config:
         from_attributes = True

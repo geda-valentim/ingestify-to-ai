@@ -96,6 +96,8 @@ def profile_view(p):
             feature=p.feature,
             revision=p.revision,
             profile=p.profile,
+            source_profile_revision_id=p.source_profile_revision_id,
+            source_hash=p.source_hash,
             applied_at=p.applied_at,
             created_at=p.created_at,
         )
@@ -182,7 +184,25 @@ def capabilities(db, engine, feature=None):
     )
 
 
-def save_profile(db, engine, feature, raw, version, actor):
+def save_profile(
+    db,
+    engine,
+    feature,
+    raw,
+    version,
+    actor,
+    *,
+    source_profile_revision_id=None,
+    source_hash=None,
+):
+    from shared.access import policy
+
+    if policy.enabled():
+        policy.epoch(db, True)
+        if not source_profile_revision_id:
+            from shared.access.service import bootstrap
+
+            bootstrap(db, actor)
     engine = locked_engine(db, engine.id)
     if engine.version != version:
         raise ControlError("VERSION_CONFLICT")
@@ -196,14 +216,85 @@ def save_profile(db, engine, feature, raw, version, actor):
     ):
         raise ControlError("RESOURCE_LOCKED")
     p = RuntimeSettings.model_validate(raw).model_dump(mode="json")
+    origin = (
+        source_profile(db, source_profile_revision_id)
+        if source_profile_revision_id
+        else None
+    )
+    if source_profile_revision_id:
+        from shared.access.models import ExecutionRevision, EngineAttributes
+
+        revision = db.get(ExecutionRevision, source_profile_revision_id)
+        attributes = db.get(EngineAttributes, engine.id)
+        if (
+            not origin
+            or not revision.published_at
+            or origin.status == "archived"
+            or revision.content_hash != source_hash
+        ):
+            raise ControlError("PUBLISHED_REVISION_REQUIRED", 422)
+        if (
+            origin.adapter_type != engine.adapter_type
+            or origin.feature != feature
+            or not attributes
+            or attributes.environment != origin.environment
+        ):
+            raise ControlError("PROFILE_INCOMPATIBLE", 422)
+        template = dict(p, warm_until=None)
+        if template != revision.settings:
+            raise ControlError("PROFILE_CONTENT_MISMATCH", 422)
+        if (
+            digest(catalog.get(p["model_profile_id"], engine.adapter_type, feature))
+            != revision.model_fingerprint
+        ):
+            raise ControlError("MODEL_METADATA_CHANGED")
+        if revision.warm_for_seconds:
+            from shared.engine_control.contracts import utc_deadline
+
+            remaining = (
+                (utc_deadline(p["warm_until"]) - now()).total_seconds()
+                if p["warm_until"]
+                else 0
+            )
+            if not 0 < remaining <= revision.warm_for_seconds:
+                raise ControlError("INVALID_WARM_DEADLINE", 422)
+        elif p["warm_until"]:
+            raise ControlError("INVALID_WARM_DEADLINE", 422)
     driver = registry.create(engine.adapter_type, p["adapter_version"])
     p = driver.validate(engine, feature, p, db)
+    affected = set(driver.resource_keys(engine, feature, p))
+    previous = latest_profile(db, engine.id, feature)
+    applied = (
+        db.query(RuntimeProfile)
+        .filter_by(engine_id=engine.id, feature=feature)
+        .filter(RuntimeProfile.applied_at.isnot(None))
+        .order_by(RuntimeProfile.applied_at.desc())
+        .first()
+    )
+    for before in (previous, applied):
+        if before:
+            affected.update(driver.resource_keys(engine, feature, before.profile))
+    if policy.enabled():
+        # The same grant covers binding, the resolved runtime and every consumer.
+        policy.authorize(
+            db,
+            actor,
+            "engine_runtime.bind",
+            engine=engine,
+            feature=feature,
+            profile=origin,
+            runtime=p,
+            resources=sorted(affected),
+            lock=True,
+        )
     old = latest_profile(db, engine.id, feature)
     row = RuntimeProfile(
         engine_id=engine.id,
         feature=feature,
         revision=(old.revision if old else 0) + 1,
         profile=p,
+        source_profile_revision_id=source_profile_revision_id,
+        source_hash=source_hash,
     )
     db.add(row)
     # Establish canonical ownership before management is enabled. Aliases cannot diverge.
@@ -230,6 +321,10 @@ def save_profile(db, engine, feature, raw, version, actor):
 
 
 def create_plan(db, engine, req, actor):
+    from shared.access import policy
+
+    if policy.enabled():
+        policy.epoch(db, True)
     engine = locked_engine(db, engine.id)
     if engine.version != req.engine_version:
         raise ControlError("VERSION_CONFLICT")
@@ -249,6 +344,8 @@ def create_plan(db, engine, req, actor):
     if not p and req.type not in ("test", "reconcile"):
         raise ControlError("RUNTIME_PROFILE_REQUIRED", 422)
     driver = registry.create(engine.adapter_type)
+    if p:
+        validate_source_model(db, p.source_profile_revision_id)
     profile = p.profile if p else {}
     try:
         body = driver.plan(engine, req, profile, db)
@@ -262,6 +359,7 @@ def create_plan(db, engine, req, actor):
         type=req.type,
         profile=profile,
         profile_revision=p.revision if p else None,
+        source_profile_revision_id=p.source_profile_revision_id if p else None,
         drain_timeout_seconds=req.drain_timeout_seconds,
         max_usd=str(req.max_usd),
     )
@@ -279,6 +377,19 @@ def create_plan(db, engine, req, actor):
             | set(driver.resource_keys(engine, req.feature, applied.profile))
         )
     body["credentials_revision"] = str(engine.credentials_updated_at)
+    if policy.enabled():
+        body["authorization"] = policy.authorize(
+            db,
+            actor,
+            {"engine_operations.plan", "engine_operations.execute." + req.type},
+            engine=engine,
+            feature=req.feature,
+            runtime=profile,
+            profile=source_profile(db, p.source_profile_revision_id) if p else None,
+            max_usd=req.max_usd,
+            resources=body["resources"],
+            lock=True,
+        )
     body["engine_config_hash"] = digest(
         {"config": engine.config, "deployments": engine.deployments}
     )
@@ -300,6 +411,27 @@ def create_plan(db, engine, req, actor):
 
 
 def enqueue(db, plan_id, plan_hash, key, actor, confirm_paid=False):
+    from shared.access import policy
+
+    if policy.enabled():
+        policy.epoch(db, True)
+        authority_plan = db.get(OperationPlan, plan_id)
+        if not authority_plan or authority_plan.actor_id != actor:
+            raise ControlError("PLAN_NOT_FOUND", 404)
+        b = authority_plan.body
+        validate_source_model(db, b.get("source_profile_revision_id"))
+        policy.authorize(
+            db,
+            actor,
+            "engine_operations.execute." + b["type"],
+            engine=db.get(Engine, authority_plan.engine_id),
+            feature=b["feature"],
+            profile=source_profile(db, b.get("source_profile_revision_id")),
+            runtime=b.get("profile"),
+            resources=b.get("resources"),
+            max_usd=b.get("max_usd"),
+            lock=True,
+        )
     if not key or len(key) > 128:
         raise ControlError("IDEMPOTENCY_KEY_REQUIRED", 422)
     request_hash = digest(
@@ -495,6 +627,8 @@ def heartbeat(db, op_id, generation):
 def event(
     db, op_id, generation, stage, payload=None, kind="stage.changed", effect=False
 ):
+    if effect:
+        admit_effect(db, op_id, generation, "stage:" + stage)
     op = fenced(db, op_id, generation)
     op.stage = stage
     if effect:
@@ -512,6 +646,14 @@ def finish(db, op_id, generation, state, result=None, error=None, safe=False):
     op.error = clean(error)
     op.finished_at = now()
     if safe:
+        from shared.access import policy
+
+        if policy.enabled() and state == "succeeded":
+            from shared.access.models import EffectAdmission
+
+            db.query(EffectAdmission).filter_by(
+                operation_id=op_id, generation=generation
+            ).update({"state": "confirmed"})
         for r in (
             db.query(ControlResource)
             .filter_by(operation_id=op_id)
@@ -535,12 +677,18 @@ def finish(db, op_id, generation, state, result=None, error=None, safe=False):
     return operation_view(op)
 
 
-def request_cancel(db, op_id):
+def request_cancel(db, op_id, actor=None):
+    authorize_operation(db, op_id, actor, "engine_operations.cancel", lock=True)
     op = db.query(EngineOperation).filter_by(id=op_id).with_for_update().first()
     if not op:
         raise ControlError("OPERATION_NOT_FOUND", 404)
     if op.state not in TERMINAL:
         op.cancel_requested = True
+        op.cancel_requested_by = actor
+        if actor:
+            from shared.access.policy import audit
+
+            audit(db, actor, "engine.cancel_requested", op.id)
         append_event(db, op, "cancel.requested", {"message": "Cancelamento solicitado"})
         db.commit()
     return operation_view(op)
@@ -657,13 +805,19 @@ def runtime_status(db, engine):
     )
 
 
-def request_recovery(db, op_id):
+def request_recovery(db, op_id, actor=None):
+    authorize_operation(db, op_id, actor, "engine_operations.recover", lock=True)
     op = db.query(EngineOperation).filter_by(id=op_id).with_for_update().first()
     if not op or op.state != "needs_attention":
         raise ControlError("RECOVERY_NOT_REQUIRED")
     if not (op.handles or {}).get("executor_exited"):
         raise ControlError("EXECUTOR_NOT_NEUTRALIZED")
     op.handles = dict(op.handles or {}, recovery_mode=True)
+    op.recovery_requested_by = actor
+    if actor:
+        from shared.access.policy import audit
+
+        audit(db, actor, "engine.recovery_requested", op.id)
     op.state = "queued"
     op.cancel_requested = False
     op.deadline = now() + timedelta(minutes=5)
@@ -678,3 +832,115 @@ def request_recovery(db, op_id):
     )
     db.commit()
     return operation_view(op)
+
+
+def authorize_operation(
+    db, op_id, actor, permission="engine_operations.read", lock=False
+):
+    from shared.access import policy
+
+    if not policy.enabled():
+        return db.get(EngineOperation, op_id)
+    if lock:
+        policy.epoch(db, True)
+    op = db.query(EngineOperation).filter_by(id=op_id).populate_existing().first()
+    if not op:
+        raise ControlError("OPERATION_NOT_FOUND", 404)
+    plan = db.get(OperationPlan, op.plan_id)
+    try:
+        reading = permission == "engine_operations.read"
+        policy.authorize(
+            db,
+            actor,
+            permission,
+            engine=db.get(Engine, op.engine_id),
+            profile=(
+                source_profile(db, plan.body.get("source_profile_revision_id"))
+                if reading
+                else None
+            ),
+            runtime=plan.body.get("profile") if reading else None,
+            feature=plan.body["feature"],
+            resources=plan.body.get("resources"),
+            lock=lock,
+        )
+    except ControlError as exc:
+        if permission == "engine_operations.read":
+            raise ControlError("OPERATION_NOT_FOUND", 404) from None
+        raise exc
+    return op
+
+
+def admit_effect(db, op_id, generation, step, executor="control"):
+    """Serialize a durable admission with revocation; release SQL before the SDK call.
+
+    An admitted call may already be in flight when permission is revoked. A crash
+    leaves this record uncertain and the existing operation fencing prevents replay.
+    """
+    from shared.access import policy
+    from shared.access.models import EffectAdmission
+
+    if not policy.enabled():
+        return
+    policy.epoch(db, True)
+    op = db.query(EngineOperation).filter_by(id=op_id).populate_existing().first()
+    if not op:
+        raise ControlError("OPERATION_NOT_FOUND", 404)
+    decision = policy.operation_authority(db, op, effect=True)
+    op = fenced(db, op_id, generation)
+    if op.cancel_requested or op.deadline <= now():
+        raise ControlError("OPERATION_ABORTED")
+    if (
+        db.query(EffectAdmission)
+        .filter_by(operation_id=op_id, generation=generation, step=step)
+        .first()
+    ):
+        raise ControlError("EFFECT_ALREADY_ADMITTED")
+    actor = (
+        op.recovery_requested_by
+        if (op.handles or {}).get("recovery_mode")
+        else op.actor_id
+    )
+    db.add(
+        EffectAdmission(
+            operation_id=op_id,
+            generation=generation,
+            step=step,
+            actor_id=actor,
+            executor=(op.handles or {}).get("host_id") or op.holder or executor,
+            epoch=decision["epoch"],
+            state="uncertain",
+            action=db.get(OperationPlan, op.plan_id).body["type"],
+            targets=db.get(OperationPlan, op.plan_id).body.get("resources", []),
+            decision=decision,
+            valid_until=op.deadline,
+        )
+    )
+    op.effect_started = True
+    db.flush()
+
+
+def source_profile(db, revision_id):
+    if not revision_id:
+        return None
+    from shared.access.models import ExecutionRevision, ExecutionProfile
+
+    r = db.get(ExecutionRevision, revision_id)
+    return db.get(ExecutionProfile, r.profile_id) if r else None
+
+
+def validate_source_model(db, revision_id):
+    if not revision_id:
+        return
+    from shared.access.models import ExecutionRevision
+
+    r = db.get(ExecutionRevision, revision_id)
+    p = source_profile(db, revision_id)
+    if not r or not p:
+        raise ControlError("SOURCE_PROFILE_NOT_FOUND")
+    try:
+        current = catalog.get(r.settings["model_profile_id"], p.adapter_type, p.feature)
+    except ValueError as exc:
+        raise ControlError("MODEL_METADATA_CHANGED") from exc
+    if digest(current) != r.model_fingerprint:
+        raise ControlError("MODEL_METADATA_CHANGED")

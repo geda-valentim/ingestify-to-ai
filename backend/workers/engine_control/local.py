@@ -30,8 +30,9 @@ class LocalControlAdapter:
                 ),
                 None,
             )
-            if gpu:
-                keys.append(f'local:{host}:gpu:{gpu.get("uuid") or gpu["ref"]}')
+            uuid = p.get("gpu_uuid") or (gpu.get("uuid") or gpu["ref"] if gpu else None)
+            if uuid:
+                keys.append(f"local:{host}:gpu:{uuid}")
         return sorted(keys)
 
     def validate(self, engine, feature, p, db):
@@ -69,7 +70,7 @@ class LocalControlAdapter:
     def plan(self, engine, req, p, db):
         if not p:
             raise ValueError("RUNTIME_PROFILE_REQUIRED")
-        self.validate(
+        resolved = self.validate(
             engine,
             req.feature,
             {
@@ -79,6 +80,10 @@ class LocalControlAdapter:
             },
             db,
         )
+        if p.get("gpu_uuid") != resolved.get("gpu_uuid") or p.get(
+            "manifest_hash"
+        ) != resolved.get("manifest_hash"):
+            raise ValueError("PROFILE_INVENTORY_CHANGED: rebind the desired profile")
         return dict(
             common.plan(engine, req, p, db),
             host_id=p["provider_settings"]["host_id"],
