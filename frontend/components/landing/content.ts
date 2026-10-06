@@ -2,9 +2,9 @@ export const GITHUB = "https://github.com/geda-valentim/ingestify-to-ai";
 export const chapters = [
   {
     name: "Files",
-    eyebrow: "DATA ENGINEERING → AI ENGINEERING",
-    title: "Files in.\nData out.",
-    body: "Self-hosted conversion of documents, images and recordings into Markdown, text and transcripts. Build the input layer for your AI pipelines.",
+    eyebrow: "DATA ENGINEERING + AI-READY CONVERSION",
+    title: "Your files.\nAI-ready data.",
+    body: "Self-hosted conversion into Markdown, text and transcripts for AI. Use a single operation or build it into your Data Engineering pipelines.",
     action: "Explore conversions",
     href: "#operacoes",
     note: "",
@@ -39,7 +39,7 @@ export const chapters = [
   {
     name: "Compute",
     eyebrow: "04 / RUN ON YOUR INFRASTRUCTURE",
-    title: "Your compute.\nYour pipeline.",
+    title: "Your compute.\nYour workflow.",
     body: "Run conversion workers locally. Add optional Modal transcription and configure execution around capacity and budget.",
     action: "Explore compute",
     href: "/docs?lang=en#compute",
@@ -49,7 +49,7 @@ export const chapters = [
     name: "Connect",
     eyebrow: "05 / CONNECT THE DATA FLOW",
     title: "One API.\nYour workflow.",
-    body: "Group inputs by project, folder and tags. Follow jobs and retrieve conversion results from your data pipeline.",
+    body: "Group inputs by project, folder and tags. Use conversion results in an AI application or retrieve them from your data pipeline.",
     action: "See the API in action",
     href: "#api",
     note: "",
@@ -65,9 +65,9 @@ export const chapters = [
   },
   {
     name: "Build",
-    eyebrow: "BUILD THE INPUT LAYER",
+    eyebrow: "ONE CONVERSION. OR A WHOLE PIPELINE.",
     title: "Your data.\nYour next step.",
-    body: "Explore the code and API. Bring unstructured inputs into your Data Engineering and AI Engineering workflows.",
+    body: "Convert a file into usable AI input, or connect the same operations to your Data Engineering workflow. Explore the code and API.",
     action: "Read the documentation",
     href: "/docs?lang=en",
     note: "",
@@ -96,6 +96,10 @@ export const resultExample = JSON.stringify(
   2,
 );
 export const faq = [
+  [
+    "Do I need a data pipeline to use Ingestify?",
+    "No. Convert individual files in the workspace or through the API, then use the Markdown, text or transcripts in your AI workflow. The same operations can also become steps in a Data Engineering pipeline.",
+  ],
   [
     "What can I transform?",
     "Documents such as PDF, DOCX, HTML, PPTX and XLSX into Markdown; recordings into transcripts and captions; images into OCR text or descriptions. The operation selector lists common formats and default size limits. See the docs for engine compatibility and deployment settings.",

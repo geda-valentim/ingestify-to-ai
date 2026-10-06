@@ -1,9 +1,9 @@
 import type { Metadata } from "next";
 import { LandingPage } from "@/components/landing/landing-page";
 export const metadata: Metadata = {
-  title: "Ingestify — Data conversion for AI engineering",
+  title: "Ingestify — Data Engineering & AI-ready conversion",
   description:
-    "Self-hosted data conversion for Data Engineering and AI Engineering. Turn documents, images and recordings into pipeline inputs. Direct Data Lake delivery is next.",
+    "Convert documents, images and recordings into AI-ready text and metadata. Use standalone conversions or build self-hosted Data Engineering pipelines.",
 };
 export default function Home() {
   return <LandingPage />;

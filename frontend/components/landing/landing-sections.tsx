@@ -129,19 +129,35 @@ export function LandingSections({ signedIn }: { signedIn: boolean }) {
         data-reveal
       >
         <div className="section-index">
-          <span>01 / THE INGESTION LAYER</span>
-          <span>UNSTRUCTURED INPUTS → USABLE DATA</span>
+          <span>01 / CONVERT FOR AI. CONNECT YOUR DATA.</span>
+          <span>ONE FILE OR A DATA PIPELINE</span>
         </div>
         <div className="section-intro">
           <h2>
-            Your source files.
+            Convert for AI.
             <br />
-            <span className="secondary-title">Pipeline inputs.</span>
+            <span className="secondary-title">Connect your data.</span>
           </h2>
           <p>
-            Prepare text and metadata for search, RAG preparation and your own
-            downstream data processing.
+            Start with a single conversion, or make it a step in your data
+            pipeline. The same operations support both.
           </p>
+        </div>
+        <div className="landing-perspectives">
+          <div>
+            <h3>AI-ready conversion.</h3>
+            <p>
+              Turn documents, images and recordings into text your AI tools can
+              use: Markdown, OCR results, transcripts and timestamps.
+            </p>
+          </div>
+          <div>
+            <h3>Data Engineering.</h3>
+            <p>
+              Build repeatable workflows around those conversions with API jobs,
+              project context, document deduplication and page-level recovery.
+            </p>
+          </div>
         </div>
         <div className="operation-workspace">
           <div
@@ -427,7 +443,7 @@ export function LandingSections({ signedIn }: { signedIn: boolean }) {
               SELF-HOSTED. OPEN DEVELOPMENT.
             </span>
             <h3>
-              Built for data engineers.
+              Built for data and AI engineers.
               <br />
               Evolving with the community.
             </h3>
@@ -477,9 +493,9 @@ export function LandingSections({ signedIn }: { signedIn: boolean }) {
       <section className="landing-section landing-final" data-reveal>
         <div className="final-invitation">
           <h2>
-            Build your
+            Convert a file.
             <br />
-            input pipeline.
+            Build a pipeline.
           </h2>
           <div>
             <Link
