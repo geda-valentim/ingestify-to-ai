@@ -1830,3 +1830,97 @@
     font-size: 25px;
   }
 }
+
+/* One scroll position drives both the selected input and its SVG diagram. */
+.operation-scroll {
+  position: relative;
+  --operation-travel: 0px;
+  --operation-progress: 0;
+}
+.operation-scroll .operation-workspace {
+  row-gap: 60px;
+}
+.operation-scroll .operation-picker {
+  grid-column: 1;
+  grid-row: 1 / span 3;
+  position: sticky;
+  top: 92px;
+  align-self: start;
+  z-index: 5;
+  background: #fff;
+}
+.operation-scroll .operation-canvas {
+  grid-column: 2;
+}
+.operation-scroll .operation-svg {
+  max-height: clamp(220px, 34svh, 360px);
+  object-fit: contain;
+}
+.operation-scroll[data-mode="pinned"] {
+  min-height: calc(var(--operation-panel-height) + var(--operation-travel));
+}
+.operation-scroll[data-mode="pinned"] .operation-workspace {
+  position: sticky;
+  top: 92px;
+  row-gap: 0;
+}
+.operation-scroll[data-mode="pinned"] .operation-picker {
+  position: relative;
+  top: auto;
+  grid-row: 1;
+}
+.operation-scroll[data-mode="pinned"] .operation-canvas {
+  grid-row: 1;
+  visibility: hidden;
+  pointer-events: none;
+  animation: none;
+}
+.operation-scroll[data-mode="pinned"] .operation-canvas.is-active {
+  visibility: visible;
+  pointer-events: auto;
+  animation: canvas-enter 0.35s ease both;
+}
+.operation-scroll-progress {
+  display: none;
+}
+.operation-scroll[data-mode="pinned"] .operation-scroll-progress {
+  display: block;
+  height: 2px;
+  margin-top: 24px;
+  background: #eee;
+  overflow: hidden;
+}
+.operation-scroll-progress span {
+  display: block;
+  width: 100%;
+  height: 100%;
+  transform: scaleX(var(--operation-progress));
+  transform-origin: left;
+  background: linear-gradient(
+    90deg,
+    #f06b91,
+    #eeb94a,
+    #6dc7ad,
+    #6e9fe9,
+    #b889df
+  );
+}
+.landing[data-motion="paused"] .operation-canvas.is-active {
+  animation: none !important;
+}
+@media (max-width: 767px) {
+  .operation-scroll .operation-workspace {
+    gap: 40px;
+  }
+  .operation-scroll .operation-picker {
+    top: 72px;
+    padding: 12px 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .operation-scroll .operation-canvas {
+    scroll-margin-top: 155px;
+  }
+  .operation-scroll .operation-svg {
+    max-height: none;
+  }
+}

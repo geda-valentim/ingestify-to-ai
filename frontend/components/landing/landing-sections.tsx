@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { ArrowUpRight, ArrowRight, Github, Check, Copy } from "lucide-react";
 import { GITHUB, example, resultExample, faq } from "./content";
+import { useOperationScroll } from "./use-operation-scroll";
 import {
   OperationDiagram,
   ComputeDiagram,
@@ -104,12 +105,12 @@ const operations = [
   },
 ];
 export function LandingSections({ signedIn }: { signedIn: boolean }) {
-  const [operation, setOperation] = useState(0);
+  const { containerRef, pickerRef, operation, mode, selectOperation } =
+    useOperationScroll(operations.length);
   const [cloud, setCloud] = useState(false);
   const [codeView, setCodeView] = useState<"request" | "response">("request");
   const [copied, setCopied] = useState(false);
   const [copyFailed, setCopyFailed] = useState(false);
-  const active = operations[operation];
   async function copy() {
     try {
       await navigator.clipboard.writeText(
@@ -159,61 +160,82 @@ export function LandingSections({ signedIn }: { signedIn: boolean }) {
             </p>
           </div>
         </div>
-        <div className="operation-workspace">
-          <div
-            className="operation-picker"
-            role="group"
-            aria-label="Choose an operation"
-          >
-            {operations.map((item, i) => (
-              <button
-                key={item.name}
-                aria-label={item.name}
-                aria-pressed={operation === i}
-                onClick={() => setOperation(i)}
-              >
-                <span>{item.index}</span>
-                {item.name}
-                <ArrowUpRight size={22} />
-              </button>
-            ))}
-            <p>
-              Choose an input.
-              <br />
-              Follow the transformation.
-            </p>
-          </div>
-          <div className="operation-canvas" key={operation}>
-            <div className="diagram-label">
-              <span>{active.format}</span>
-              <span>ILLUSTRATIVE WORKFLOW</span>
+        <div
+          className="operation-scroll"
+          ref={containerRef}
+          data-mode={mode}
+          data-operation={operation}
+        >
+          <div className="operation-workspace">
+            <div
+              ref={pickerRef}
+              className="operation-picker"
+              role="group"
+              aria-label="Choose an operation"
+            >
+              {operations.map((item, i) => (
+                <button
+                  key={item.name}
+                  aria-label={item.name}
+                  aria-pressed={operation === i}
+                  onClick={() => selectOperation(i)}
+                  aria-controls={`operation-panel-${i}`}
+                >
+                  <span>{item.index}</span>
+                  {item.name}
+                  <ArrowUpRight size={22} />
+                </button>
+              ))}
+              <p>
+                Scroll to explore.
+                <br />
+                Or choose an input.
+              </p>
+              <div className="operation-scroll-progress" aria-hidden="true">
+                <span />
+              </div>
             </div>
-            <OperationDiagram mode={operation} />
-            <pre className="operation-mobile-result">
-              <span>ILLUSTRATIVE OUTPUT</span>
-              {
-                [
-                  "# Report\n| Item | Value |\n| Total | 42.00 |",
-                  "00:00 → 00:03\nStart with the file.\n00:03 → 00:06\nBuild something new.",
-                  "TOTAL 42.00\nExtracted text + image regions",
-                ][operation]
-              }
-            </pre>
-            <div className="operation-caption">
-              <div>
-                <h3>{active.headline}</h3>
-                <p>{active.description}</p>
-                <div className="operation-formats">
-                  <span>COMMON INPUT FORMATS</span>
-                  <p>{active.formats}</p>
-                  <small>{active.limits}</small>
+            {operations.map((active, index) => (
+              <div
+                className={`operation-canvas ${operation === index ? "is-active" : ""}`}
+                key={active.name}
+                id={`operation-panel-${index}`}
+                aria-hidden={
+                  mode === "pinned" && operation !== index ? true : undefined
+                }
+              >
+                <div className="diagram-label">
+                  <span>{active.format}</span>
+                  <span>ILLUSTRATIVE WORKFLOW</span>
+                </div>
+                <OperationDiagram mode={index} />
+                <pre className="operation-mobile-result">
+                  <span>ILLUSTRATIVE OUTPUT</span>
+                  {
+                    [
+                      "# Report\n| Item | Value |\n| Total | 42.00 |",
+                      "00:00 → 00:03\nStart with the file.\n00:03 → 00:06\nBuild something new.",
+                      "TOTAL 42.00\nExtracted text + image regions",
+                    ][index]
+                  }
+                </pre>
+                <div className="operation-caption">
+                  <div>
+                    <h3>{active.headline}</h3>
+                    <p>{active.description}</p>
+                    <div className="operation-formats">
+                      <span>COMMON INPUT FORMATS</span>
+                      <p>{active.formats}</p>
+                      <small>{active.limits}</small>
+                    </div>
+                  </div>
+                  <Link href={active.href} className="landing-text-link">
+                    Explore
+                    <ArrowUpRight size={18} />
+                  </Link>
                 </div>
               </div>
-              <Link href={active.href} className="landing-text-link">
-                Explore
-                <ArrowUpRight size={18} />
-              </Link>
-            </div>
+            ))}
           </div>
         </div>
         <p className="formats-docs">
