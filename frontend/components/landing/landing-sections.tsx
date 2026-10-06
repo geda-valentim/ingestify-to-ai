@@ -443,7 +443,8 @@ export function LandingSections({ signedIn }: { signedIn: boolean }) {
           </h2>
           <p>
             The next step for Ingestify: deliver converted data directly to your
-            Data Lake, connecting ingestion to your data platform.
+            Data Lake. Choose a delivery adapter for MinIO, Amazon S3, Google
+            Cloud Storage or Azure Blob.
           </p>
         </div>
         <LakeDeliveryDiagram />
@@ -451,12 +452,14 @@ export function LandingSections({ signedIn }: { signedIn: boolean }) {
           <p>
             <strong>Today:</strong> retrieve conversion results through the API.
             <br />
-            <strong>Next:</strong> direct delivery to your Data Lake.
+            <strong>Next:</strong> choose an adapter and deliver directly to
+            your storage destination.
           </p>
           <p>
             Build downstream processing, quality checks and AI datasets around
-            the data you ingest. Native Data Lake delivery is planned;
-            destinations and table formats will be defined as it develops.
+            the data you ingest. Four planned adapters connect conversion to
+            your storage: MinIO, Amazon S3, Google Cloud Storage (GCP) and Azure
+            Blob.
           </p>
         </div>
         <div id="codigo-aberto" className="open-project">
