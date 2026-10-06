@@ -58,3 +58,13 @@ O GitHub foi conferido nesta preparação: o repositório está público. A cham
 - [Modelo Kling O3](https://open.higgsfield.ai/models/kling-video/o3/first-last-frame/api-reference).
 - [Estimativa e cobrança](https://docs.higgsfield.ai/docs/concepts/billing-and-retention).
 - [Ciclo de vida e identificador da requisição](https://docs.higgsfield.ai/docs/concepts/requests).
+
+## Ajustes após inspeção dos vídeos
+
+A ponte de documento para áudio reaproveitou o painel de vidro durante o movimento. Para deixar explícita a troca de fonte, o HTML dessa ponte informa “PRÓXIMO EXEMPLO · ÁUDIO” e “Agora, uma gravação enviada.” A ponte seguinte identifica também o novo exemplo de imagem. Não se apresenta conversão de PDF em fala ou de fala em recibo.
+
+O provedor devolveu trechos com 3,041667 segundos. A montagem normaliza cada trecho para três segundos antes de concatenar, mantendo o mapa de 45 segundos e evitando deslocamento acumulado dos textos. A versão web usa H.264 sem áudio, 24 fps e quadro-chave a cada seis frames para facilitar a busca nos dois sentidos.
+
+Na revisão final, os movimentos reais pediram mais duas áreas de respiro no desktop: o título sobe durante a ponte para a visão de evolução, enquanto o painel anterior sai pela esquerda; no início do encerramento, “Seu próximo passo.” ocupa essa área superior. A chamada completa só entra depois do recolhimento dos objetos.
+
+A montagem publicada tem 45 segundos exatos e 1.080 frames. Há uma versão de 11,18 MB para desktop e outra de 3,51 MB para celular. As imagens estáticas passam pela otimização do Next.js. A comparação das 14 emendas foi registrada em `film-joins.json`; a validação visual e funcional consta na revisão da home.

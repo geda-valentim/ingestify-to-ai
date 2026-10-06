@@ -29,3 +29,13 @@ As imagens são referências de composição para a produção do filme. Texto d
 Preserve a leitura de origem e resultado ao animar. A ligação entre cenas exige os movimentos de câmera e as transições descritos no roteiro; não faça apenas cortes secos entre estes quadros. A cena 7 precisa do rótulo HTML “Visão de evolução”, e o encerramento precisa do estado “Ver no GitHub”.
 
 A versão horizontal desta galeria não substitui a futura composição vertical nem constitui um vídeo pronto. Os estudos escuros anteriores e a primeira versão do fim da cena 5 continuam na pasta local de trabalho, fora da seleção versionada.
+
+## Filme da home
+
+- [Versão desktop, 45 segundos](../../frontend/public/landing/film/ingestify-scroll.mp4): 1440×812, 24 fps, 11,18 MB.
+- [Versão celular, 45 segundos](../../frontend/public/landing/film/ingestify-scroll-mobile.mp4): 768 pixels de largura, 3,51 MB.
+- [Manifesto e prompts](film-manifest.json), [proveniência das gerações](film-provenance.json) e [revisão da home](REVIEW_HOME.md).
+
+Os quinze trechos foram gerados pela API Higgsfield com Kling O3, usando os dezesseis quadros selecionados acima. As sete pontes completam as oito cenas. A montagem normaliza a duração e usa quadros-chave frequentes para permitir rolagem nos dois sentidos. Os arquivos originais e as cópias de revisão ficam em `/data/tmp/ingestify/film-production/`.
+
+Para reproduzir a produção, consulte [PRODUCTION_PLAN.md](PRODUCTION_PLAN.md), `scripts/landing/generate-film.py` e `scripts/landing/assemble-film.py`. A chave é lida fora do repositório. O filme publicado não depende de acesso à API Higgsfield.

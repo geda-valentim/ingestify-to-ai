@@ -22,7 +22,7 @@ for clip in manifest['clips']:
     # against the exact 45-second HTML timeline while retaining the endpoint.
     subprocess.run(['ffmpeg', '-y', '-hide_banner', '-loglevel', 'error', '-i', str(source),
         '-vf', f'setpts=(PTS-STARTPTS)*3/{duration},scale=1440:-2,fps=24',
-        '-t', '3', '-an', '-c:v', 'libx264', '-preset', 'slow', '-crf', '20',
+        '-t', '3', '-an', '-c:v', 'libx264', '-preset', 'slow', '-threads', '4', '-crf', '20',
         '-g', '6', '-keyint_min', '6', '-sc_threshold', '0', '-pix_fmt', 'yuv420p',
         '-movflags', '+faststart', str(target)], check=True)
     record = json.loads((SOURCE / (clip['id'] + '.json')).read_text())
@@ -34,7 +34,13 @@ concat.write_text(''.join("file '" + str(normalized / (c['id'] + '.mp4')) + "'\n
 output = DEST / 'ingestify-scroll.mp4'
 subprocess.run(['ffmpeg', '-y', '-hide_banner', '-loglevel', 'error', '-f', 'concat', '-safe', '0',
     '-i', str(concat), '-c', 'copy', '-movflags', '+faststart', str(output)], check=True)
+mobile = DEST / 'ingestify-scroll-mobile.mp4'
+subprocess.run(['ffmpeg', '-y', '-hide_banner', '-loglevel', 'error', '-i', str(output),
+    '-vf', 'scale=768:-2', '-an', '-c:v', 'libx264', '-preset', 'slow', '-threads', '4', '-crf', '22',
+    '-g', '6', '-keyint_min', '6', '-sc_threshold', '0', '-pix_fmt', 'yuv420p',
+    '-movflags', '+faststart', str(mobile)], check=True)
 (ROOT / 'docs/landing/film-provenance.json').write_text(json.dumps({'model':manifest['model'],
     'duration':45, 'fps':24, 'keyframe_interval':6, 'sha256':hashlib.sha256(output.read_bytes()).hexdigest(),
-    'bytes':output.stat().st_size, 'clips':provenance}, indent=2) + '\n')
+    'bytes':output.stat().st_size, 'mobile_bytes':mobile.stat().st_size,
+    'mobile_sha256':hashlib.sha256(mobile.read_bytes()).hexdigest(), 'clips':provenance}, indent=2) + '\n')
 print('Film assembled:', output, output.stat().st_size, 'bytes')
