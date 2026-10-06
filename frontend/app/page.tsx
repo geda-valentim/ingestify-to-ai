@@ -1,9 +1,9 @@
 import type { Metadata } from "next";
 import { LandingPage } from "@/components/landing/landing-page";
 export const metadata: Metadata = {
-  title: "Ingestify — Seus arquivos, prontos para IA",
+  title: "Ingestify — Your files, AI-ready",
   description:
-    "Transforme documentos, imagens, áudio e vídeo em informação para suas aplicações. Explore as operações, a API e o controle sobre a execução do Ingestify.",
+    "Turn documents, images and recordings into information your applications can use. Explore operations, the API and local or optional cloud transcription.",
 };
 export default function Home() {
   return <LandingPage />;
