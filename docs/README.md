@@ -24,6 +24,7 @@ referência · **planejado** = não implementado.
 | [features/engines.md](features/engines.md) | **Guia Compute do operador**: execução CPU/GPU, provider × motor, telas admin, diagnóstico, chaves, capacidade/VRAM, deploy Modal, rotas, orçamentos, benchmark e legendas parciais de arquivos. |
 | [features/crawler.md](features/crawler.md) | **Planejado / não implementado**: o que existe de código dormente e onde está o plano. |
 | Transcrição de áudio/vídeo (`POST /transcribe`) | Documentada à parte. Dispositivo e GPU do Whisper: [GPU.md](GPU.md) e [spec 0002](specs/0002-dispositivo-unico-e-migracao-do-whisper.md). |
+| [features/whisperx.md](features/whisperx.md) | Canário WhisperX: perfis duráveis, falantes em arquivos, protocolo Modal 4, imagem isolada, gates e rollback. |
 | [features/live-transcription.md](features/live-transcription.md) | Piloto opt-in de microfone: protocolo WebSocket, legendas provisórias/confirmadas, persistência, ativação e rollback. Desabilitado por padrão; [resultados e limites do piloto](benchmarks/live-transcribe-pilot.md). |
 
 ## Arquitetura

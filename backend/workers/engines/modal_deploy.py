@@ -97,6 +97,9 @@ def deploy(slug: str, feature: str = "transcription", *, dry_run: bool = False, 
 
         adapter = remote.adapter_factory(engine, remote.open_credentials(engine))
         extra = {DEPLOY_ENV: json.dumps(spec, sort_keys=True), "PYTHONPATH": str(BACKEND_DIR)}
+        if spec.get('whisperx_manifest'):
+            from shared.config import get_settings
+            extra['WHISPERX_MODEL_DIR'] = get_settings().whisperx_model_dir
         if allow_unhashed:
             extra[ALLOW_UNHASHED_ENV] = "1"
         with tempfile.TemporaryDirectory(prefix="modal-deploy-home-") as home:
@@ -116,9 +119,9 @@ def deploy(slug: str, feature: str = "transcription", *, dry_run: bool = False, 
         verified_at = datetime.utcnow().isoformat()
         entry = {"fingerprint": spec["fingerprint"], "protocol": protocol.PROTOCOL_VERSION,
                  "binding": p["binding"], "verified_at": verified_at, "app": protocol.APP_NAME,
-                 "decorator": spec["decorator"], "hashed": p["hashed"]}
+                 "decorator": spec["decorator"], "hashed": p["hashed"], "capabilities": meta.get("capabilities", [])}
         adapter.record_deployment({"fingerprint": spec["fingerprint"], "protocol": protocol.PROTOCOL_VERSION,
-                                   "verified_at": verified_at})
+                                   "verified_at": verified_at, "capabilities": meta.get("capabilities", [])})
         store.record_deployment(db, engine, feature, entry, actor_user_id=None, auth_method="cli")
         out(f"Deployed and verified: {slug} {feature} serves fingerprint {spec['fingerprint'][:16]}...")
         return entry

@@ -598,14 +598,18 @@ def local_vram_guard(engine: Engine, feature: str, gpu_ref: str, e: int, used_gb
 
 def _local_process(samples: List[Tuple[str, float]], model_name: str, compute_type: str, out) -> None:
     """One local execution: its own model and CUDA context, like one replica"""
-    from workers.engines import whisper_core
-
+    from shared.config import get_settings
+    from workers.audio.factory import get_audio_transcriber
+    from shared.transcription import normalize_options, make_profile, options_from_profile
+    settings = get_settings()
     started = time.time()
-    model = whisper_core.load_model(model_name, "cuda", compute_type)
+    transcriber = get_audio_transcriber()
     cold = time.time() - started
+    options = normalize_options(settings)
+    options = options_from_profile(make_profile(settings, options), options)
     for path, seconds in samples:
         t0 = time.time()
-        whisper_core.transcribe(model, Path(path), {}, model_name=model_name)
+        transcriber.transcribe(Path(path), options)
         t1 = time.time()
         out.put({"media_seconds": seconds, "exec_seconds": t1 - t0, "cold_start_seconds": cold,
                  "wall_seconds": t1 - t0, "start": t0, "end": t1})

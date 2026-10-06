@@ -55,8 +55,8 @@ def handle(request, queue, transcribe, clock):
 # --- the wire ------------------------------------------------------------------------------------
 
 
-def test_protocol_3_carries_the_live_flag_and_validates_batches():
-    assert protocol.PROTOCOL_VERSION == 3
+def test_protocol_4_carries_the_live_flag_and_validates_batches():
+    assert protocol.PROTOCOL_VERSION == 4
     request = protocol.build_request(attempt_key="k", media=b"m", suffix=".mp3", options={}, deadline_unix=1e9,
                                      live=True)
     assert protocol.parse_request(request)["live"] is True
@@ -66,10 +66,10 @@ def test_protocol_3_carries_the_live_flag_and_validates_batches():
 
     batch = protocol.live_batch([{"start": 0, "end": 1.5, "text": "olá"}])
     assert protocol.parse_live_batch(batch) == [{"start": 0.0, "end": 1.5, "text": "olá"}]
-    for bad in ({"protocol": 2, "segments": []}, {"protocol": 3, "segments": "x"},
-                {"protocol": 3, "segments": [{"start": "0", "end": 1, "text": "a"}]},
-                {"protocol": 3, "segments": [{"start": 0, "end": 1, "text": "a" * 20_001}]},
-                {"protocol": 3, "segments": [{"start": 0, "end": 1}] * (protocol.LIVE_MAX_SEGMENTS_PER_BATCH + 1)}):
+    for bad in ({"protocol": 2, "segments": []}, {"protocol": protocol.PROTOCOL_VERSION, "segments": "x"},
+                {"protocol": protocol.PROTOCOL_VERSION, "segments": [{"start": "0", "end": 1, "text": "a"}]},
+                {"protocol": protocol.PROTOCOL_VERSION, "segments": [{"start": 0, "end": 1, "text": "a" * 20_001}]},
+                {"protocol": protocol.PROTOCOL_VERSION, "segments": [{"start": 0, "end": 1}] * (protocol.LIVE_MAX_SEGMENTS_PER_BATCH + 1)}):
         with pytest.raises(protocol.ProtocolError):
             protocol.parse_live_batch(bad)
 
@@ -131,7 +131,7 @@ def test_the_adapter_drains_validated_segments_while_it_waits_and_keeps_the_hear
         account.queues.setdefault(partition, []).append(
             protocol.live_batch([{"start": polls["n"], "end": polls["n"] + 1, "text": f"p{polls['n']}"}]))
         if polls["n"] == 3:
-            account.queues[partition].append({"protocol": 3, "segments": "garbage"})  # dropped, not raised
+            account.queues[partition].append({"protocol": protocol.PROTOCOL_VERSION, "segments": "garbage"})  # dropped, not raised
 
     account.on_poll = push
     received = []

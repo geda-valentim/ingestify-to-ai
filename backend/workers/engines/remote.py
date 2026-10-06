@@ -106,7 +106,8 @@ class RemoteExecutor:
 
     def estimate(self, engine: Engine, binding: Binding, item: JobDispatch, db=None) -> Decimal:
         stats = None
-        if db is not None:
+        profile = ((((item.payload or {}).get('kwargs') or {}).get('options') or {}).get('transcription_profile') or {})
+        if db is not None and profile.get('provider') != 'whisperx':
             try:
                 stats = speed.get_stats(db, engine.id, item.feature, binding.gpu_type, binding.executions_per_worker)
             except Exception as e:  # never block placement on the cache: the defaults are the worst case
@@ -387,6 +388,15 @@ def _execute(usage: EngineUsage, engine: Engine, d: Optional[JobDispatch], holde
         job_row = ledger.run_txn(session_factory, lambda db: _detached(db, Job, job_id))
         if job_row is None:
             raise EngineError(ErrorCode.INTERNAL, "the job is gone")
+        if isinstance(getattr(job_row, 'transcription_profile', None), dict):
+            from shared.transcription import options_from_profile
+            options = options_from_profile(job_row.transcription_profile, options)
+        if options.get('transcriber_provider') == 'whisperx':
+            from workers.engines.pipeline import begin_transcription_attempt
+            options = dict(options, _usage_id=usage_id, _usage_holder=holder)
+            # The provider attempt key persists across worker takeover/resume.
+            begin_transcription_attempt(job_id, options, session_factory=session_factory,
+                                        attempt_id=usage.attempt_key[:36])
         file_path = _resolve_media(job_row, kwargs.get("source"))
         _set_processing(session_factory, redis_client, job_id)
 

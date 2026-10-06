@@ -156,6 +156,13 @@ def _transcribe_audio(job_id: str, file_path: Path, options: dict, redis_client,
     """
     from workers.audio import transcribe_with_gpu_fallback
 
+    # Durable SQL snapshot is authoritative, including late-discovered media.
+    from shared.transcription import options_from_profile
+    with SessionLocal() as profile_db:
+        profile_job = profile_db.query(Job).filter(Job.id == job_id).first()
+        durable_profile = getattr(profile_job, 'transcription_profile', None)
+    if isinstance(durable_profile, dict):
+        options = options_from_profile(durable_profile, options)
     provider_override = options.get('transcriber_provider')
 
     # Update progress
@@ -166,9 +173,17 @@ def _transcribe_audio(job_id: str, file_path: Path, options: dict, redis_client,
         'language': options.get('audio_language') or options.get('language'),
         'include_word_timestamps': options.get('include_word_timestamps', False),
         'temperature': options.get('temperature', 0.0),
-        'beam_size': options.get('beam_size', 5)
+        'beam_size': options.get('beam_size', 5),
+        **{key: options[key] for key in ('diarize', 'min_speakers', 'max_speakers', 'transcription_profile') if key in options},
     }
 
+    if provider_override == 'whisperx' or (provider_override is None and settings.audio_transcriber_provider == 'whisperx'):
+        transcription_options['_should_cancel'] = lambda: not _job_still_open(job_id) or (guard is not None and not guard())
+        transcription_options['_reset_progress'] = lambda: redis_client.delete_partial_transcript(job_id)
+        transcription_options['_on_phase'] = lambda phase: redis_client.update_job_progress(
+            job_id, TRANSCRIPTION_PROGRESS_START, phase=phase)
+        from workers.engines.pipeline import begin_transcription_attempt
+        begin_transcription_attempt(job_id, options)
     # Uses the GPU when available (detected once per worker) and falls back to CPU
     transcription_started = time.monotonic()
     result, transcriber = transcribe_with_gpu_fallback(
@@ -214,6 +229,17 @@ def _divert_audio_to_backlog(job_id: str, file_path: Path, options: dict, redis_
 
     route = routing.get_route("transcription", session_factory=SessionLocal)
     if route is None or not route.active:
+        # URL/download discovery can happen on the document worker. Keep the
+        # durable snapshot and send WhisperX to its isolated audio image.
+        from celery import current_task
+        delivery = getattr(getattr(current_task, 'request', None), 'delivery_info', None) or {}
+        queue = delivery.get('routing_key')
+        profile = options.get('transcription_profile') or {}
+        if profile.get('provider') == 'whisperx' and queue and queue != settings.transcription_queue:
+            celery_app.send_task(engine_dispatch.PROCESS_CONVERSION, kwargs={
+                'job_id': job_id, 'source_type': 'file', 'source': str(file_path),
+                'options': dict(options, is_audio=True)}, queue=settings.transcription_queue)
+            return True, file_path
         return False, file_path
 
     audio_dir = Path(settings.temp_storage_path) / "audio" / job_id
@@ -308,7 +334,8 @@ def _run_routed_transcription(job_id: str, source: str, options: dict, usage_id:
                                     started_at=datetime.utcnow())
         file_path = _resolve_uploaded_file(source, job_id)
         redis_client.update_job_progress(job_id, 20)
-        _transcribe_audio(job_id, file_path, options, redis_client, es_client, guard=lambda: _job_still_open(job_id))
+        routed_options = dict(options, _usage_id=usage_id, _usage_holder=holder)
+        _transcribe_audio(job_id, file_path, routed_options, redis_client, es_client, guard=lambda: _job_still_open(job_id))
     except _AttemptNoLongerWanted:
         heartbeat.stop()
         logger.warning(f"[MAIN JOB {job_id}] The job is no longer open; its transcript is discarded")
@@ -441,7 +468,10 @@ def process_conversion(
         audio_extensions = AUDIO_EXTENSIONS
         file_ext = file_path.suffix.lower()
 
-        if is_audio or file_ext in audio_extensions:
+        from shared.transcription import is_media_filename
+        if not (is_audio or file_ext in audio_extensions or is_media_filename(file_path.name)) and options.get('diarization_explicit'):
+            raise ValueError('DIARIZATION_MEDIA_REQUIRED')
+        if is_audio or file_ext in audio_extensions or is_media_filename(file_path.name):
             # With a transcription route, audio that only revealed itself here (URL,
             # Drive, Dropbox, or a route created after the upload) joins the backlog
             # instead of transcribing in this worker. No route: nothing changes.

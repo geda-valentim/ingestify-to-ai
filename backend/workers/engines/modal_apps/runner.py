@@ -111,8 +111,17 @@ def handle(request_raw: Any, *, model, state, container_id: str, call_id: Option
         return False
 
     if transcribe is None:
-        from workers.engines import whisper_core
-        transcribe = whisper_core.transcribe
+        if request['options'].get('transcriber_provider') == 'whisperx':
+            from workers.engines import whisperx_core
+            transcribe = whisperx_core.transcribe
+        else:
+            from workers.engines import whisper_core
+            transcribe = whisper_core.transcribe
+        if isinstance(model, dict):
+            provider = request['options'].get('transcriber_provider', 'faster-whisper')
+            if provider not in model:
+                raise protocol.ProtocolError('DIARIZATION_NOT_READY: deployment capability unavailable')
+            model = model[provider]
 
     captions = LiveCaptions(live, key, clock) if request["live"] and live is not None else None
 
