@@ -4,7 +4,7 @@ import { useEffect } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
-import { Activity, Cpu, MemoryStick, Route, Server } from "lucide-react";
+import { Activity, Cpu, Home, MemoryStick, Route, Server } from "lucide-react";
 import { authApi } from "@/lib/api";
 import { useAuthStore } from "@/lib/store/auth";
 import { loginUrl } from "@/lib/session";
@@ -13,6 +13,7 @@ import { AppHeader } from "@/components/app-header";
 import { ForbiddenCard, LoadingCards } from "@/components/admin/compute-ui";
 
 const TABS = [
+  { href: "/", label: "Home", icon: Home },
   { href: "/admin/engines", label: "Engines", icon: Server },
   { href: "/admin/gpus", label: "GPUs", icon: MemoryStick },
   { href: "/admin/routing", label: "Routing", icon: Route },

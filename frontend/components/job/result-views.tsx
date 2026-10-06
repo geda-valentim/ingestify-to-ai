@@ -172,6 +172,9 @@ export function TranscriptView({
         ))}
       </div>
 
+      {transcript.data?.diarization?.status === "completed" && (
+        <p className="text-sm text-muted-foreground">{transcript.data.diarization.speaker_count} falantes identificados nesta gravação</p>
+      )}
       <Tabs defaultValue="transcript">
         <TabsList className="w-fit">
           <TabsTrigger value="transcript">Transcript</TabsTrigger>
@@ -213,7 +216,14 @@ export function TranscriptView({
                       <span className="shrink-0 w-14 pt-0.5 font-mono text-xs text-muted-foreground tabular-nums">
                         {formatDuration(segment.start)}
                       </span>
-                      <span className="text-sm leading-relaxed">{segment.text}</span>
+                      <span className="text-sm leading-relaxed">
+                        {transcript.data?.schema_version === 2 && transcript.data.diarization?.status === "completed" && (
+                          <span className={`mr-2 inline-flex rounded px-2 py-0.5 text-xs font-medium ${segment.speaker_id && Number(segment.speaker_id.slice(-2)) % 2 ? "bg-violet-100 text-violet-900" : "bg-blue-100 text-blue-900"}`}>
+                            {transcript.data.speakers?.find(s => s.id === segment.speaker_id)?.label ?? "Falante não identificado"}
+                          </span>
+                        )}
+                        {segment.text}
+                      </span>
                     </li>
                   ))}
                 </ol>

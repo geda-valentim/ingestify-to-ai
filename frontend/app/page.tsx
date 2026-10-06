@@ -1,24 +1,10 @@
-"use client";
-
-import { useEffect } from "react";
-import { useRouter } from "next/navigation";
-import { useAuthStore } from "@/lib/store/auth";
-
+import type { Metadata } from "next";
+import { LandingPage } from "@/components/landing/landing-page";
+export const metadata: Metadata = {
+  title: "Ingestify — Data Engineering & AI-ready conversion",
+  description:
+    "Convert documents, images and recordings into AI-ready text and metadata. Use standalone conversions or build self-hosted Data Engineering pipelines.",
+};
 export default function Home() {
-  const router = useRouter();
-  const isAuthenticated = useAuthStore((state) => state.token !== null && state.user !== null);
-
-  useEffect(() => {
-    if (isAuthenticated) {
-      router.push("/dashboard");
-    } else {
-      router.push("/login");
-    }
-  }, [isAuthenticated, router]);
-
-  return (
-    <div className="flex min-h-screen items-center justify-center">
-      <div className="text-muted-foreground">Loading...</div>
-    </div>
-  );
+  return <LandingPage />;
 }

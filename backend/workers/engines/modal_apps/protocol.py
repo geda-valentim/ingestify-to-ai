@@ -27,7 +27,7 @@ anything but display.
 
 from typing import Any, Dict, Optional, Tuple
 
-PROTOCOL_VERSION = 3
+PROTOCOL_VERSION = 4
 
 APP_NAME = "ingestify-whisper"
 CLS_NAME = "WhisperRunner"
@@ -65,6 +65,11 @@ _OPTIONS = {
     "include_word_timestamps": (bool,),
     "temperature": (int, float),
     "beam_size": (int,),
+    "diarize": (bool,),
+    "min_speakers": (int,),
+    "max_speakers": (int,),
+    "transcriber_provider": (str,),
+    "transcription_profile": (dict,),
 }
 
 INPUT_REJECTED_PREFIX = "INPUT_REJECTED:"
@@ -116,7 +121,7 @@ def clean_options(options: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         value = (options or {}).get(name)
         if value is None:
             continue
-        _check(isinstance(value, types) and not (name != "include_word_timestamps" and isinstance(value, bool)),
+        _check(isinstance(value, types) and not (name not in ("include_word_timestamps", "diarize") and isinstance(value, bool)),
                f"option {name} has the wrong type")
         clean[name] = value
     if "language" in clean:
@@ -125,6 +130,21 @@ def clean_options(options: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         _number(clean["temperature"], "temperature", 0, 1)
     if "beam_size" in clean:
         _number(clean["beam_size"], "beam_size", 1, 10)
+    for name in ('min_speakers', 'max_speakers'):
+        if name in clean:
+            _number(clean[name], name, 1, 20)
+            _check(clean.get('diarize') is True, f'{name} requires diarize')
+    if 'min_speakers' in clean and 'max_speakers' in clean:
+        _check(clean['min_speakers'] <= clean['max_speakers'], 'speaker limits inverted')
+    if 'transcriber_provider' in clean:
+        _check(clean['transcriber_provider'] in ('whisperx', 'faster-whisper'), 'unsupported provider')
+    if 'transcription_profile' in clean:
+        import json
+        profile = clean['transcription_profile']
+        _check(set(profile) <= {'schema', 'provider', 'models', 'pipeline_version', 'language', 'beam_size',
+            'temperature', 'diarize', 'min_speakers', 'max_speakers', 'include_word_timestamps', 'vad'}, 'profile fields')
+        _check(len(json.dumps(profile, allow_nan=False)) <= 16384, 'profile too large')
+        _check(profile.get('provider') == clean.get('transcriber_provider'), 'profile provider mismatch')
     return clean
 
 
@@ -218,6 +238,8 @@ def _segment(raw: Any, index: int) -> Dict[str, Any]:
         "end": _number(raw.get("end"), f"segment {index} end"),
         "text": _text(raw.get("text"), f"segment {index} text", MAX_SEGMENT_TEXT_CHARS),
     }
+    if "speaker_id" in raw:
+        segment["speaker_id"] = _text(raw["speaker_id"], "speaker_id", 16, optional=True)
     words = raw.get("words")
     if words is not None:
         _check(isinstance(words, list) and len(words) <= MAX_WORDS_PER_SEGMENT, f"segment {index} words")
@@ -227,12 +249,15 @@ def _segment(raw: Any, index: int) -> Dict[str, Any]:
 
 def _word(raw: Any) -> Dict[str, Any]:
     _check(isinstance(raw, dict), "a word must be a dict")
-    return {
-        "word": _text(raw.get("word"), "word", 512),
-        "start": _number(raw.get("start"), "word start"),
-        "end": _number(raw.get("end"), "word end"),
-        "probability": _number(raw.get("probability"), "word probability", 0, 1),
-    }
+    result = {"word": _text(raw.get("word"), "word", 512),
+        "start": _number(raw['start'], "word start") if raw.get('start') is not None else None,
+        "end": _number(raw['end'], "word end") if raw.get('end') is not None else None}
+    for field in ('probability', 'alignment_score'):
+        if raw.get(field) is not None:
+            result[field] = _number(raw[field], field, 0, 1)
+    if 'speaker_id' in raw:
+        result['speaker_id'] = _text(raw['speaker_id'], 'speaker_id', 16, optional=True)
+    return result
 
 
 def parse_response(raw: Any) -> Tuple[Dict[str, Any], Dict[str, Any]]:
@@ -249,13 +274,22 @@ def parse_response(raw: Any) -> Tuple[Dict[str, Any], Dict[str, Any]]:
         "text": text,
         "segments": [_segment(s, i) for i, s in enumerate(segments)],
         "language": _text(result.get("language"), "language", 16, optional=True),
-        "language_probability": _number(result.get("language_probability") or 0, "language_probability", 0, 1),
+        "language_probability": _number(result["language_probability"], "language_probability", 0, 1) if result.get("language_probability") is not None else None,
         "duration": _number(result.get("duration"), "duration"),
         "word_count": int(_number(result.get("word_count"), "word_count")),
         "char_count": int(_number(result.get("char_count"), "char_count")),
         "model": _text(result.get("model"), "model", 64),
         "provider": _text(result.get("provider"), "provider", 64),
     }
+
+    if result.get('schema_version') == 2:
+        from workers.engines.transcript_schema import validate_result
+        for field in ('schema_version', 'speakers', 'diarization', 'alignment', 'provenance'):
+            clean_result[field] = result.get(field)
+        try:
+            clean_result = validate_result(clean_result)
+        except (ValueError, TypeError, KeyError) as exc:
+            raise ProtocolError(str(exc)) from exc
 
     clean_usage: Dict[str, Any] = {name: _number(usage.get(name), name, 0, 10 ** 11) for name in _USAGE_NUMBERS}
     _check(clean_usage["exec_ended_unix"] >= clean_usage["exec_started_unix"], "exec_ended before exec_started")

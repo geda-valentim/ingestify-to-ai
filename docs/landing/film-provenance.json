@@ -1,0 +1,132 @@
+{
+  "model": "kling-video/o3/first-last-frame",
+  "duration": 45,
+  "fps": 24,
+  "keyframe_interval": 6,
+  "sha256": "ca95168ee54e08402d07537cd78d87449ab887507fe6439e314b57f8b43cf444",
+  "bytes": 11176064,
+  "mobile_bytes": 3506796,
+  "mobile_sha256": "aa1607902652162ba73c04d88e6bb9731ece137074a7af47b13cbe3014fe59f8",
+  "clips": [
+    {
+      "id": "scene-01",
+      "request_id": "c2cec383-5946-4190-86d7-a22bd33ca037",
+      "source_duration": 3.041667,
+      "duration": 3,
+      "quote_usd": "0.286",
+      "sha256": "706481601b86fa6a068ba908a6fa47a112749123d894d74a3629fbb7f0687c6f"
+    },
+    {
+      "id": "bridge-01-02",
+      "request_id": "aea0c247-8760-4b1e-8594-ba5e5223f169",
+      "source_duration": 3.041667,
+      "duration": 3,
+      "quote_usd": "0.286",
+      "sha256": "9cefb62be285816b522da3bf1ba64628097d661758590031202a2670cdb4a4e0"
+    },
+    {
+      "id": "scene-02",
+      "request_id": "ea4e2618-bc86-49b9-933b-0a84ca32f90c",
+      "source_duration": 3.041667,
+      "duration": 3,
+      "quote_usd": "0.286",
+      "sha256": "bb93dfa3b9ccd7cb6819a9c267cc6b093441529117791f2314bc0ebc1021dbc2"
+    },
+    {
+      "id": "bridge-02-03",
+      "request_id": "ef5188e3-e665-487f-9427-3a48859bccdf",
+      "source_duration": 3.041667,
+      "duration": 3,
+      "quote_usd": "0.286",
+      "sha256": "cc48e48f4bff97b8ee91496f4d0e0fe6d5e2b6cb57ddf29753120450276b7cb6"
+    },
+    {
+      "id": "scene-03",
+      "request_id": "e999b45a-63e4-4c45-a4b8-7574d6da8fb3",
+      "source_duration": 3.041667,
+      "duration": 3,
+      "quote_usd": "0.286",
+      "sha256": "6f99d14dda67c8bb0ccdf3c106032e93f96d8ff1441db7ddcf3dbe0288deecf4"
+    },
+    {
+      "id": "bridge-03-04",
+      "request_id": "5d771f39-0d70-4a78-a4f7-6a74f58e0ac4",
+      "source_duration": 3.041667,
+      "duration": 3,
+      "quote_usd": "0.286",
+      "sha256": "39b32383c52449d5e5d9a43dee32e4095c8b6feac8231821ee79b24f78b22ee1"
+    },
+    {
+      "id": "scene-04",
+      "request_id": "4ff4a7cd-1aca-45bc-a112-be5328948fff",
+      "source_duration": 3.041667,
+      "duration": 3,
+      "quote_usd": "0.286",
+      "sha256": "2a3a263fd18663518067ca558335a16000554961222abb6ce1c1de0e4f784daa"
+    },
+    {
+      "id": "bridge-04-05",
+      "request_id": "49b020ae-dfc4-4d33-8ed3-dbbdc4bf0e88",
+      "source_duration": 3.041667,
+      "duration": 3,
+      "quote_usd": "0.286",
+      "sha256": "fe68716cdebfa77bfbe1e958b7119a6d47c5932fe1dd4a1e1d27a8a08f839569"
+    },
+    {
+      "id": "scene-05",
+      "request_id": "470ba32c-2008-4cfb-9cc4-81f59084afea",
+      "source_duration": 3.041667,
+      "duration": 3,
+      "quote_usd": "0.286",
+      "sha256": "25b07cebbb46d860f221dd88e235eb2bef504ab70dd9dd306422b23059c2c6cd"
+    },
+    {
+      "id": "bridge-05-06",
+      "request_id": "2af8fdac-af37-41be-8745-8c773f240584",
+      "source_duration": 3.041667,
+      "duration": 3,
+      "quote_usd": "0.286",
+      "sha256": "f19daa5e002687229c05847da94f9e501b2231c8f72031a7f0415ed28166a036"
+    },
+    {
+      "id": "scene-06",
+      "request_id": "4fa5751c-8cf4-47dc-8004-4a54bb1c00b8",
+      "source_duration": 3.041667,
+      "duration": 3,
+      "quote_usd": "0.286",
+      "sha256": "598c5d949f07edc3285136ddda1576dc9e612f7816a2481a60c7040f7f0980b7"
+    },
+    {
+      "id": "bridge-06-07",
+      "request_id": "57d3c6a1-2774-4751-ab9d-c35b91ff0d99",
+      "source_duration": 3.041667,
+      "duration": 3,
+      "quote_usd": "0.286",
+      "sha256": "06abe2eea42fe30013471d21510194728291aa1415c45c2eaffd7e2285871dc0"
+    },
+    {
+      "id": "scene-07",
+      "request_id": "3c67e820-40be-4cd6-886d-631be428a061",
+      "source_duration": 3.041667,
+      "duration": 3,
+      "quote_usd": "0.286",
+      "sha256": "01a7edc7cf7773a1f9db19ec495dafa6fbb8a2d4a39d7c5ac040267ea87c14f1"
+    },
+    {
+      "id": "bridge-07-08",
+      "request_id": "bf91ae8c-a936-4209-ac85-3cd2c5b13bfb",
+      "source_duration": 3.041667,
+      "duration": 3,
+      "quote_usd": "0.286",
+      "sha256": "56b5916b653e6777d0f44af4c1a4a52afa81f3caff762afd91c5e262e9c16574"
+    },
+    {
+      "id": "scene-08",
+      "request_id": "0bc853ef-e88b-4ffd-b773-81104786876d",
+      "source_duration": 3.041667,
+      "duration": 3,
+      "quote_usd": "0.286",
+      "sha256": "19147d584d39aa1485724803df1c05ddf03fe55db31ccadae72c8da8dd344bab"
+    }
+  ]
+}

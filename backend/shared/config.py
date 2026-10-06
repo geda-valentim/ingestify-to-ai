@@ -123,6 +123,22 @@ class Settings(BaseSettings):
     live_vram_reserve_gb: float = Field(3.2, ge=0)
 
     audio_transcriber_provider: str = "faster-whisper"  # faster-whisper, openai-whisper, openai-api
+    # Canary only: enable readiness after offline weights and target gates pass.
+    live_diarization_enabled: bool = False
+    live_diarization_qualified: bool = False
+    live_diarization_python: str = ""
+    live_diarization_manifest: str = ""
+    live_diarization_gpu_gb: float = 3.0
+    whisperx_diarization_default: bool = False
+    whisperx_diarization_ready: bool = False
+    whisperx_batch_size: int = 1
+    whisperx_model_dir: str = "/models/whisperx"
+    whisperx_diarization_model: str = "pyannote/speaker-diarization-community-1"
+    whisperx_diarization_revision: str = ""
+    whisperx_asr_revision: str = "0a363e9161cbc7ed1431c9597a8ceaf0c4f78fcf"
+    whisperx_vad_revision: str = "unqualified"
+    whisperx_aligner_manifest: str = "{}"
+    whisperx_max_audio_seconds: int = 7200
     whisper_model: str = "turbo"  # tiny, base, small, medium, large, turbo
     # CHANGED (was "cpu"): empty means "inherit DEVICE". Any non-empty value is
     # a per-component override that wins over DEVICE and is logged on every boot.

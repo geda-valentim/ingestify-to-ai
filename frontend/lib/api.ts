@@ -617,8 +617,8 @@ export const liveApi = {
     if (!response.ok) await throwApiError(response, "Não foi possível consultar a sessão");
     return response.json();
   },
-  async create(body: UploadLocation & { name: string; language: "pt" }): Promise<{
-    job_id: string; ws_url: string; ticket: string; max_duration_seconds: number;
+  async create(body: UploadLocation & { name: string; language: "pt"; protocol?: 1 | 2; diarize?: boolean }): Promise<{
+    job_id: string; ws_url: string; ticket: string; max_duration_seconds: number; protocol?: 1 | 2;
   }> {
     const response = await apiFetch(`${API_URL}/transcribe/live/sessions`, {
       method: "POST", headers: { ...getHeaders(true), "Content-Type": "application/json" },

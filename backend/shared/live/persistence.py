@@ -17,7 +17,7 @@ from workers.engines.pipeline import build_transcription_outputs
 def finish_live(job_id, generation, result, store, redis_client, es_client, processing_seconds, compute_type):
     payload, outputs = build_transcription_outputs(
         result, options={}, input_metadata={'format': 'pcm', 'size_bytes': int(result['duration'] * 16000) * 2,
-            'input_mode': 'live', 'protocol': 1, 'generation': generation}, processing_seconds=processing_seconds, compute_type=compute_type)
+            'input_mode': 'live', 'protocol': result.get('protocol', 1), 'generation': generation}, processing_seconds=processing_seconds, compute_type=compute_type)
     minio = get_minio_client()
     written = []
     published = False

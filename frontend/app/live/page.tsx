@@ -23,6 +23,7 @@ export default function LivePage() {
   const capture = useLiveCapture();
   const [project, setProject] = useState<LocationChoice | null>(null);
   const [folder, setFolder] = useState<LocationChoice | null>(null);
+  const [diarize, setDiarize] = useState(false);
   const [name, setName] = useState("Transcrição ao vivo");
   const busy = ["starting", "listening", "finishing"].includes(capture.state);
   useEffect(() => { if (hydrated && !user) router.replace(loginUrl()); }, [hydrated, user, router]);
@@ -38,11 +39,12 @@ export default function LivePage() {
           onProjectChange={(value) => { setProject(value); setFolder(null); }} onFolderChange={setFolder}
           disabled={busy} loadError={projects.isError ? "Tente novamente ou informe um nome." : null} />
         <p className="text-sm">Idioma: Português · O áudio não é armazenado.</p>
+        <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={diarize} disabled={busy} onChange={(e) => setDiarize(e.target.checked)} />Identificar falantes durante a captura</label>
         <div className="flex gap-3 flex-wrap">
           {!busy && <Button disabled={!project || !name.trim()} onClick={() => capture.start({
             ...(project?.id ? { project_id: project.id } : { project: project?.name }),
             ...(folder?.id ? { folder_id: folder.id } : folder ? { folder: folder.name } : {}),
-          }, name.trim())}>Iniciar microfone</Button>}
+          }, name.trim(), diarize)}>Iniciar microfone</Button>}
           {capture.state === "listening" && <Button onClick={() => void capture.finish()}>Finalizar</Button>}
           {busy && <Button variant="outline" onClick={() => void capture.cancel()}>Cancelar</Button>}
           <span role="status" className="self-center text-sm text-muted-foreground">{{idle: "Pronto para iniciar", starting: "Conectando e verificando disponibilidade…", listening: "Ouvindo", finishing: "Finalizando e salvando…", completed: "Transcrição salva", interrupted: "Sessão interrompida", cancelled: "Sessão cancelada"}[capture.state]}</span>
@@ -53,7 +55,7 @@ export default function LivePage() {
       {(busy || capture.segments.length > 0) && <div className="h-[50vh] border rounded-lg overflow-hidden flex">
         <LiveTranscriptView status={{job_id: capture.jobId ?? "", type: "main", status: "processing", progress: 0,
           created_at: "", transcribed_seconds: capture.duration}} segments={capture.segments}
-          preloaded={capture.segments.length} immediate partial={capture.partial} />
+          preloaded={capture.segments.length} immediate partial={capture.partial} diarization={capture.diarization} />
       </div>}
     </main>
   </div>;

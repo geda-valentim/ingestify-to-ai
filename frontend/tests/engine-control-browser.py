@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Chromium contract test: third provider schema, desired vs applied and log replay."""
-import argparse,json
+import argparse,json,re
 from urllib.parse import urlparse,parse_qs
 from playwright.sync_api import sync_playwright,expect
 
@@ -51,6 +51,7 @@ def check(browser,url,mobile=False):
     page.unroute('**/admin/**',api)
     page.route('http://localhost:8080/**',api);page.route('http://127.0.0.1:8080/**',api)
     page.goto(url+'/admin/engines/vm-test')
+    expect(page.get_by_text(re.compile('docker compose')).first).to_be_visible()
     page.get_by_role('tab',name='Configuração',exact=True).click()
     page.get_by_label('Zona do provider').fill('us-test-1')
     page.get_by_label('Instâncias desejadas').fill('2')

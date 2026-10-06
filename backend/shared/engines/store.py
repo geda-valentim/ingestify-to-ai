@@ -357,7 +357,7 @@ def set_credentials(db: Session, engine: Engine, fields: dict, *, public_key: st
         schema = {f['name']:f.get('mask','none') for f in descriptor(engine.adapter_type).get('credential_fields',[])}
     except ValueError:
         schema = CREDENTIAL_FIELDS.get(engine.adapter_type)
-    if schema is None:
+    if not schema:
         raise EngineStateError(f"The {engine.adapter_type} engine takes no credentials", 422)
     if not public_key:
         raise EngineStateError("ENGINE_SECRETS_PUBLIC_KEY is not set: credentials cannot be stored", 409)

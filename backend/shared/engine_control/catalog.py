@@ -64,7 +64,8 @@ def profiles():
             model=s.whisper_model,
             footprint_gb=s.live_vram_footprint_gb,
             device="cuda",
-            approved=s.live_transcription_enabled,
+            approved=s.live_transcription_enabled
+            and s.audio_transcriber_provider == "faster-whisper",
         ),
     ]
     from shared.engine_control.registry import descriptors

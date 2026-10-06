@@ -1,0 +1,13 @@
+-r requirements-whisperx.in
+celery==5.3.4
+redis==5.0.1
+pydantic-settings>=2.3,<3
+python-dotenv==1.0.0
+httpx[socks]>=0.27,<0.28
+sqlalchemy>=2,<3
+pymysql>=1.1
+cryptography>=43,<51
+bcrypt>=4
+elasticsearch>=8.11,<9
+minio>=7.2,<8
+pydub==0.25.1

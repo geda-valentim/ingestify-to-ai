@@ -5,12 +5,15 @@ from celery import Task
 from celery.exceptions import Reject
 from shared.engine_control import admission
 from shared.engine_control.service import ControlError
+from shared.config import get_settings
 
 
 class ManagedTask(Task):
     abstract = True
 
     def __call__(self, *args, **kwargs):
+        if not get_settings().engine_control_enabled:
+            return super().__call__(*args, **kwargs)
         feature = None
         if self.name.startswith("workers.vision_tasks."):
             feature = "vision"

@@ -18,9 +18,6 @@ def before_write(db, engine, version=None, runtime=False, credentials=False):
         raise VersionConflict("VERSION_CONFLICT: re-read the engine")
     if not get_settings().engine_control_enabled:
         return
-    managed = db.query(RuntimeProfile).filter_by(engine_id=engine.id).first()
-    if not managed:
-        return
     locked = (
         db.query(ControlResource)
         .filter_by(owner_engine_id=engine.id)
@@ -31,6 +28,9 @@ def before_write(db, engine, version=None, runtime=False, credentials=False):
         raise VersionConflict(
             "OPERATION_CONFLICT: resource is controlled by an active/uncertain operation"
         )
+    managed = db.query(RuntimeProfile).filter_by(engine_id=engine.id).first()
+    if not managed:
+        return
     if runtime:
         raise VersionConflict(
             "RUNTIME_OPERATION_REQUIRED: save a runtime profile and execute a plan"

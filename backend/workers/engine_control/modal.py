@@ -33,6 +33,8 @@ class ModalControlAdapter:
 
     def validate(self, engine, feature, p, db):
         p = common.validate(engine, feature, p, db)
+        if (engine.config or {}).get("whisperx_manifest"):
+            raise ValueError("WHISPERX_CONTROL_PROFILE_NOT_QUALIFIED")
         if p["provider_settings"]:
             raise ValueError("Unknown Modal provider settings")
         if not (engine.config or {}).get("control_identity"):

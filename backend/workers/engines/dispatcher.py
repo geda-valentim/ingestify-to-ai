@@ -263,6 +263,19 @@ def _ineligible(tick: _Tick, engine: Engine, cand: JobDispatch, feature: str, bl
     from shared.engine_control.registry import external_data
     if external_data(engine.adapter_type) and not cand.remote_allowed:
         return 'not_remote_allowed'
+    options = (((cand.payload or {}).get('kwargs') or {}).get('options') or {})
+    if feature == 'transcription' and options.get('transcriber_provider') == 'whisperx':
+        if executor.remote:
+            capabilities = ((engine.deployments or {}).get(feature) or {}).get('capabilities', [])
+            if not {'whisperx', 'diarization', 'transcript_schema_2'} <= set(capabilities):
+                return 'diarization_not_ready'
+        else:
+            from shared.config import get_settings
+            if not get_settings().whisperx_diarization_ready:
+                return 'diarization_not_ready'
+        # The fixed 3 GB legacy footprint cannot qualify this pipeline.
+        if not binding.vram_override_gb:
+            return 'whisperx_footprint_required'
     if executor.remote:
         max_bytes = (engine.config or {}).get("max_input_bytes") or DEFAULT_MAX_INPUT_BYTES
         if cand.media_bytes and int(cand.media_bytes) > int(max_bytes):
