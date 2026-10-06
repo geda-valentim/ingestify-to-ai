@@ -1,5 +1,8 @@
 # Shared Infrastructure Guide
 
+Development workflow only. Production requires isolated authenticated TLS
+infrastructure; use the [production runbook](runbooks/production-infrastructure.md).
+
 This guide explains how to use Ingestify's smart infrastructure detection to share Redis, MinIO, and Elasticsearch across multiple projects or machines.
 
 ## Overview

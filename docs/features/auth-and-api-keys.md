@@ -76,14 +76,16 @@ Redis (`ratelimit:<bucket>:<identidade>`), janela fixa:
 | Regra | Variável | Default |
 |---|---|---|
 | Tentativas de login por IP por minuto | `RATE_LIMIT_PER_MINUTE` | `10` |
-| Falhas por conta antes do bloqueio | `LOGIN_MAX_FAILED_ATTEMPTS` | `5` |
-| Duração do bloqueio (desde a 1ª falha) | `LOGIN_LOCKOUT_SECONDS` | `900` |
+| Tentativas por conta (reserva antes de verificar a senha) | `LOGIN_MAX_FAILED_ATTEMPTS` | `5` |
+| Janela de tentativas por conta | `LOGIN_LOCKOUT_SECONDS` | `900` |
 | Registros por IP por hora | `REGISTER_LIMIT_PER_HOUR` | `5` |
 
-Excedido, a resposta é `429` com `Retry-After`. O IP considerado é o do peer direto
-(`X-Forwarded-For` é ignorado — atrás de proxy, todos compartilham o IP do proxy). Username
-e e-mail da mesma conta compartilham o contador de falhas. Se o Redis cair, o limitador
-**falha aberto** (deixa passar e loga um aviso).
+Excedido, a resposta é `429` com `Retry-After`. O IP vem do peer ASGI: o Uvicorn
+só aceita forwarding de proxies explicitamente confiáveis. Username e e-mail
+da mesma conta compartilham o orçamento, reservado atomicamente antes de bcrypt.
+Se o Redis cair, login/cadastro respondem **503** com `Retry-After: 30`; nenhum
+token é emitido quando a atualização obrigatória dos contadores falha. Veja o
+[contrato de ingress](../security-auth-ingress.md).
 
 ## Autorização de recursos
 

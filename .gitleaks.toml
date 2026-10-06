@@ -1,0 +1,130 @@
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Reviewed exact synthetic literal or environment reference; restricted rule and files"
+targetRules = ["curl-auth-header"]
+condition = "AND"
+regexTarget = "secret"
+paths = ["^docs/LANDING_PAGE_BRIEF\\.md$"]
+regexes = ["^SUA_CHAVE$"]
+
+[[allowlists]]
+description = "Reviewed exact synthetic literal or environment reference; restricted rule and files"
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "secret"
+paths = ["^backend/tests/test_remote_engine\\.py$"]
+regexes = ["^as\\-NewSecret0123456789$"]
+
+[[allowlists]]
+description = "Reviewed exact synthetic literal or environment reference; restricted rule and files"
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "secret"
+paths = ["^backend/shared/engines/sealing\\.py$"]
+regexes = ["^ChaCha20\\-Poly1305\\.$"]
+
+[[allowlists]]
+description = "Reviewed exact synthetic literal or environment reference; restricted rule and files"
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "secret"
+paths = ["^backend/tests/test_engine_secrets\\.py$"]
+regexes = ["^ak\\-AbCdEfGh1234567890$"]
+
+[[allowlists]]
+description = "Reviewed exact synthetic literal or environment reference; restricted rule and files"
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "secret"
+paths = ["^backend/tests/test_engine_secrets\\.py$"]
+regexes = ["^as\\-ZyXwVuTs0987654321QwErTy$"]
+
+[[allowlists]]
+description = "Reviewed exact synthetic literal or environment reference; restricted rule and files"
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "secret"
+paths = ["^backend/tests/test_engine_secrets\\.py$"]
+regexes = ["^sk\\-proj\\-abcdefghijklmnop1234$"]
+
+[[allowlists]]
+description = "Reviewed exact synthetic literal or environment reference; restricted rule and files"
+targetRules = ["jwt"]
+condition = "AND"
+regexTarget = "secret"
+paths = ["^backend/tests/test_engine_secrets\\.py$"]
+regexes = ["^eyJhbGciOiJIUzI1NiJ9\\.eyJzdWIiOiIxMjM0NTY3ODkwIn0\\.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U$"]
+
+[[allowlists]]
+description = "Reviewed exact synthetic literal or environment reference; restricted rule and files"
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "secret"
+paths = ["^backend/tests/test_upload_projects\\.py$"]
+regexes = ["^doc2md_sk_unbound\\-key$"]
+
+[[allowlists]]
+description = "Reviewed exact synthetic literal or environment reference; restricted rule and files"
+targetRules = ["curl-auth-header"]
+condition = "AND"
+regexTarget = "secret"
+paths = ["^backend/api/routes\\.py$"]
+regexes = ["^your\\-api\\-key$"]
+
+[[allowlists]]
+description = "Reviewed exact synthetic literal or environment reference; restricted rule and files"
+targetRules = ["curl-auth-header"]
+condition = "AND"
+regexTarget = "secret"
+paths = ["^test_upload_apikey\\.sh$"]
+regexes = ["^YOUR_JWT_TOKEN$"]
+
+[[allowlists]]
+description = "Reviewed exact synthetic literal or environment reference; restricted rule and files"
+targetRules = ["curl-auth-header"]
+condition = "AND"
+regexTarget = "secret"
+paths = ["^README\\.md$", "^backend/docs/IMPLEMENTATION_SUMMARY\\.md$", "^backend/docs/README_CLEAN_ARCH\\.md$"]
+regexes = ["^YOUR_TOKEN$"]
+
+[[allowlists]]
+description = "Reviewed exact synthetic literal or environment reference; restricted rule and files"
+targetRules = ["curl-auth-header"]
+condition = "AND"
+regexTarget = "secret"
+paths = ["^frontend/QUICKSTART\\.md$", "^frontend/app/api\\-keys/page\\.tsx$"]
+regexes = ["^doc2md_sk_\\.\\.\\.$"]
+
+[[allowlists]]
+description = "Reviewed exact synthetic literal or environment reference; restricted rule and files"
+targetRules = ["curl-auth-header"]
+condition = "AND"
+regexTarget = "secret"
+paths = ["^docs/STATUS\\.md$"]
+regexes = ["^GOOGLE_TOKEN$"]
+
+[[allowlists]]
+description = "Reviewed exact synthetic literal or environment reference; restricted rule and files"
+targetRules = ["curl-auth-header"]
+condition = "AND"
+regexTarget = "secret"
+paths = ["^docs/STATUS\\.md$"]
+regexes = ["^DROPBOX_TOKEN$"]
+
+[[allowlists]]
+description = "Reviewed exact synthetic literal or environment reference; restricted rule and files"
+targetRules = ["curl-auth-user"]
+condition = "AND"
+regexTarget = "secret"
+paths = ["^docker\\-compose\\.prod\\.yml$"]
+regexes = ["^\"elastic:\\$\\$ELASTIC_PASSWORD\"$"]
+
+[[allowlists]]
+description = "Portuguese API documentation placeholder SUA_CHAVE"
+targetRules = ["curl-auth-header"]
+condition = "AND"
+regexTarget = "secret"
+paths = ["^frontend/components/landing/content\\.ts$"]
+regexes = ["^SUA_CHAVE$"]
