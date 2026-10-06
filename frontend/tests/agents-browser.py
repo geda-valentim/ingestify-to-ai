@@ -27,6 +27,15 @@ async def main():
    assert await page.get_by_role('heading',name=text,exact=True).is_visible()
    await page.get_by_role('button',name='Copy agent request').click()
    assert request in await page.evaluate('navigator.clipboard.readText()')
+  diagram=page.get_by_role('group',name='Select a workflow step')
+  for index,name in enumerate(['Ingest','Track','Read','Search']):
+   button=diagram.get_by_role('button',name=f'Step {index+1}: {name}',exact=True)
+   await button.click()
+   assert await button.get_attribute('aria-pressed')=='true'
+   assert await group.get_by_role('button',name=name,exact=False).get_attribute('aria-pressed')=='true'
+  await diagram.get_by_role('button',name='Step 2: Track').focus()
+  await page.keyboard.press('Space')
+  assert await page.get_by_role('heading',name='Long jobs. Short tool calls.').is_visible()
   await group.get_by_role('button',name='Search',exact=False).focus()
   await page.keyboard.press('Enter')
   assert await page.get_by_role('heading',name='Find the work already done.').is_visible()
@@ -49,6 +58,12 @@ async def main():
     await page.locator(selector).scroll_into_view_if_needed();await page.wait_for_timeout(200)
     assert await page.evaluate('document.documentElement.scrollWidth<=innerWidth'),(width,name)
     await page.screenshot(path=str(OUT/f'{width}-{name}.png'))
+   for index,name in enumerate(['Ingest','Track','Read','Search']):
+    button=page.get_by_role('button',name=f'Step {index+1}: {name}',exact=True)
+    await button.click()
+    assert await button.get_attribute('aria-pressed')=='true'
+    box=await button.bounding_box()
+    assert box['width']>=44 and box['height']>=44
    await page.goto(URL+'/',wait_until='networkidle')
    assert await page.evaluate('document.documentElement.scrollWidth<=innerWidth'),('home',width)
    assert await page.get_by_role('navigation',name='Footer links').get_by_role('link',name='Agents').is_visible()

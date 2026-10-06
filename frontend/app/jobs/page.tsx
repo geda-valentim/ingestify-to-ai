@@ -190,7 +190,7 @@ function JobsList() {
     const params = new URLSearchParams();
     if (currentProjectId) params.set("project_id", currentProjectId);
     if (currentProjectId && folderId && folderId !== ROOT_FOLDER) params.set("folder_id", folderId);
-    return `/dashboard${params.toString() ? `?${params}` : ""}`;
+    return `/convert${params.toString() ? `?${params}` : ""}`;
   })();
 
   const { data: knownTags = [] } = useQuery({
@@ -472,7 +472,7 @@ function JobsList() {
                       <p className="font-medium">No jobs yet</p>
                       <p className="text-sm text-muted-foreground mt-1">Upload a document, audio or video to get started.</p>
                       <Button asChild className="mt-4">
-                        <Link href="/dashboard">
+                        <Link href="/convert">
                           <Plus className="h-4 w-4 mr-2" />
                           New upload
                         </Link>
