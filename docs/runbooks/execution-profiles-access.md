@@ -125,3 +125,13 @@ operações que já guardam autoridade delegada revalidam o ator e não ganham p
 de bootstrap. Preserve watchdog/exposição e a migração aditiva. Voltar código
 anterior exige revisão específica da compatibilidade; não apague tabelas nem
 locks/reservas para fazer rollback.
+
+## Registro do dev (2026-10-06)
+
+PR #45 mergeado; migração 0009 aplicada após backup consistente do SQL. Controle
+e acesso habilitados na API e executores, com frontend reconstruído/reiniciado.
+Host `dev-ingestify` mantém sua identidade; manifests e imagens registrados foram
+atualizados. Cinco engines foram classificadas como desenvolvimento pela API.
+Áudio/live continuam com zero réplicas e o worker genérico com duas.
+Biblioteca, IAM, capabilities e documentação pública foram verificados.
+Não foram criados grants delegados nem executados deploys pagos nessa ativação.
