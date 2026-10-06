@@ -1,32 +1,29 @@
 "use client";
 
-import { Suspense, useEffect, useState } from "react";
+import { Suspense, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  RefreshCw,
   ChevronLeft,
   ChevronRight,
   FileText,
-  Folder as FolderIcon,
-  Image as ImageIcon,
   Loader2,
-  Mic,
   Plus,
   Search,
-  Trash2,
-  X,
 } from "lucide-react";
 import { format, formatDistanceToNow } from "date-fns";
 import { jobsApi, tagsApi } from "@/lib/api";
 import { useAuthStore } from "@/lib/store/auth";
 import { loginUrl } from "@/lib/session";
-import { cn, formatApiError, formatBytes, parseApiDate } from "@/lib/utils";
+import { cn, formatApiError, parseApiDate } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
 import { AppHeader } from "@/components/app-header";
-import { TagChip } from "@/components/tag-input";
+import { JobsFilters, STATUS_TABS, KINDS } from "./filters";
+import { JobRow } from "./job-row";
+import { JobTagEditor } from "./tag-editor";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -46,38 +43,9 @@ import {
   filterTitle,
   type LocationFilter,
 } from "@/components/projects/project-sidebar";
-import type { JobKind, JobListItem, JobStatus } from "@/types/api";
+import type { JobListItem } from "@/types/api";
 
 const PAGE_SIZE = 20;
-
-const STATUS_TABS: { value: JobStatus | "all"; label: string }[] = [
-  { value: "all", label: "All" },
-  { value: "processing", label: "Processing" },
-  { value: "queued", label: "Queued" },
-  { value: "completed", label: "Completed" },
-  { value: "failed", label: "Failed" },
-];
-
-const KINDS: { value: JobKind | "all"; label: string }[] = [
-  { value: "all", label: "All types" },
-  { value: "document", label: "Documents" },
-  { value: "transcription", label: "Transcriptions" },
-  { value: "image", label: "Images" },
-];
-
-const KIND_ICONS: Record<JobKind, React.ComponentType<{ className?: string }>> = {
-  document: FileText,
-  transcription: Mic,
-  image: ImageIcon,
-};
-
-const STATUS_STYLES: Record<string, string> = {
-  completed: "bg-green-500/10 text-green-700 dark:text-green-400 border-green-500/20",
-  failed: "bg-red-500/10 text-red-700 dark:text-red-400 border-red-500/20",
-  processing: "bg-blue-500/10 text-blue-700 dark:text-blue-400 border-blue-500/20",
-  queued: "bg-yellow-500/10 text-yellow-700 dark:text-yellow-400 border-yellow-500/20",
-  cancelled: "bg-muted text-muted-foreground",
-};
 
 function relative(date?: string | null) {
   if (!date) return null;
@@ -110,17 +78,21 @@ function JobsList() {
   const hasHydrated = useAuthStore((state) => state._hasHydrated);
 
   // Filters live in the URL: back/forward, reload and shared links all keep them.
-  const status = (searchParams.get("status") as JobStatus | null) ?? "all";
-  const kind = (searchParams.get("kind") as JobKind | null) ?? "all";
-  const tags = searchParams.getAll("tag");
+  const status = STATUS_TABS.find(item => item.value === searchParams.get("status"))?.value ?? "all";
+  const kind = KINDS.find(item => item.value === searchParams.get("kind"))?.value ?? "all";
+  const tags = [...new Set(searchParams.getAll("tag").filter(Boolean))];
   const q = searchParams.get("q") ?? "";
   const contentMode = searchParams.get("in") === "content";
-  const page = Math.max(0, Number(searchParams.get("page") ?? 1) - 1);
+  const requestedPage = Number(searchParams.get("page") ?? 1);
+  const page = Number.isSafeInteger(requestedPage) && requestedPage >= 1 && requestedPage <= 1_000_000 ? requestedPage - 1 : 0;
+  const paramsRef = useRef(searchParams);
+  paramsRef.current = searchParams;
   const projectId = searchParams.get("project_id");
   const folderId = searchParams.get("folder_id");
   const location: LocationFilter = { projectId, folderId };
 
   const [searchDraft, setSearchDraft] = useState(q);
+  const [jobToTag, setJobToTag] = useState<JobListItem | null>(null);
   const [jobToDelete, setJobToDelete] = useState<JobListItem | null>(null);
 
   useEffect(() => {
@@ -128,7 +100,7 @@ function JobsList() {
   }, [isAuthenticated, hasHydrated, router]);
 
   const setParams = (updates: Record<string, string | string[] | null>, { replace = false } = {}) => {
-    const next = new URLSearchParams(searchParams.toString());
+    const next = new URLSearchParams(paramsRef.current.toString());
     for (const [key, value] of Object.entries(updates)) {
       next.delete(key);
       if (Array.isArray(value)) value.forEach((v) => next.append(key, v));
@@ -143,7 +115,7 @@ function JobsList() {
 
   // Typing updates the URL after a pause, without a history entry per key.
   useEffect(() => {
-    if (searchDraft === q) return;
+    if (searchDraft.trim() === q) return;
     const t = setTimeout(() => setParams({ q: searchDraft.trim() || null }, { replace: true }), 300);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -167,6 +139,7 @@ function JobsList() {
       }),
     enabled: !!token && !contentMode,
     placeholderData: keepPreviousData,
+    retry: 1,
     // Poll fast only while something on screen is still moving.
     refetchInterval: (query) =>
       query.state.data?.jobs.some((j) => j.status === "queued" || j.status === "processing") ? 3000 : 30000,
@@ -176,6 +149,7 @@ function JobsList() {
     queryKey: ["search", q, token],
     queryFn: () => jobsApi.search({ query: q, limit: 100 }),
     enabled: !!token && contentMode && q.length > 0,
+    retry: 1,
   });
 
   // Counts move as jobs arrive; refresh them at the slow list cadence.
@@ -185,7 +159,7 @@ function JobsList() {
   const currentProjectId = projectId ?? filterProject(projects, location)?.id ?? null;
   const selectLocation = (next: LocationFilter) =>
     setParams({ project_id: next.projectId, folder_id: next.folderId });
-  // "New upload" from inside a project starts there (an explicit choice, so allowed).
+  // "New conversion" from inside a project starts there (an explicit choice, so allowed).
   const uploadHref = (() => {
     const params = new URLSearchParams();
     if (currentProjectId) params.set("project_id", currentProjectId);
@@ -193,7 +167,7 @@ function JobsList() {
     return `/convert${params.toString() ? `?${params}` : ""}`;
   })();
 
-  const { data: knownTags = [] } = useQuery({
+  const tagsQuery = useQuery({
     queryKey: ["tags", token],
     queryFn: () => tagsApi.list(),
     enabled: !!token,
@@ -205,6 +179,7 @@ function JobsList() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["jobs"] });
       queryClient.invalidateQueries({ queryKey: ["tags"] });
+      queryClient.invalidateQueries({ queryKey: ["dashboard-jobs"] });
       toast({ title: "Job deleted", description: "The job and its files were removed." });
       setJobToDelete(null);
     },
@@ -217,65 +192,43 @@ function JobsList() {
   const jobs = data?.jobs ?? [];
   const total = data?.total ?? 0;
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
-  const hasFilters =
-    status !== "all" || kind !== "all" || tags.length > 0 || q.length > 0 || !!projectId || !!folderId;
   const toggleTag = (tag: string) =>
     setParams({ tag: tags.includes(tag) ? tags.filter((t) => t !== tag) : [...tags, tag] });
-  const suggestedTags = knownTags.filter((t) => !tags.includes(t.tag)).slice(0, 12);
+  const hasListFilters = status !== "all" || kind !== "all" || tags.length > 0 || q.length > 0;
+  const resetFilters = () => {
+    setSearchDraft("");
+    setParams({ status: null, kind: null, tag: null, q: null });
+  };
+  // Deletion and filter changes can make a bookmarked page fall out of range.
+  useEffect(() => {
+    if (!contentMode && data && !jobsQuery.isPlaceholderData && !jobsQuery.isError && page >= totalPages) {
+      setParams({ page: totalPages > 1 ? String(totalPages) : null }, { replace: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [contentMode, data, jobsQuery.isPlaceholderData, jobsQuery.isError, page, totalPages]);
+  if (!hasHydrated || !isAuthenticated) return <div className="flex min-h-screen items-center justify-center text-muted-foreground">Loading jobs…</div>;
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-background via-background to-muted">
+    <div className="min-h-screen bg-background">
       <AppHeader />
 
       <main className="container mx-auto px-4 py-8">
-        <div className="max-w-6xl mx-auto space-y-6">
-          {/* Title */}
+        <div className="max-w-7xl mx-auto space-y-6">
           <div className="flex flex-wrap items-end justify-between gap-4">
             <div className="min-w-0">
-              {projectId || folderId ? (
-                <h1 className="flex flex-wrap items-center gap-x-2 text-3xl font-bold">
-                  <button
-                    type="button"
-                    onClick={() => selectLocation({ projectId: null, folderId: null })}
-                    className="text-muted-foreground hover:text-foreground"
-                  >
-                    My Jobs
-                  </button>
-                  <ChevronRight className="h-6 w-6 shrink-0 text-muted-foreground" aria-hidden />
-                  {title?.folder ? (
-                    <>
-                      <button
-                        type="button"
-                        onClick={() => selectLocation({ projectId: currentProjectId, folderId: null })}
-                        className="min-w-0 truncate text-muted-foreground hover:text-foreground"
-                      >
-                        {title.project}
-                      </button>
-                      <ChevronRight className="h-6 w-6 shrink-0 text-muted-foreground" aria-hidden />
-                      <span className={cn("min-w-0 truncate", folderId === ROOT_FOLDER && "italic")}>{title.folder}</span>
-                    </>
-                  ) : (
-                    <span className="min-w-0 truncate">{title?.project ?? "…"}</span>
-                  )}
-                </h1>
-              ) : (
-                <h1 className="text-3xl font-bold">My Jobs</h1>
-              )}
-              <p className="text-muted-foreground mt-1">
-                {data ? `${data.counts.all} job${data.counts.all === 1 ? "" : "s"}` : "Your conversions and transcriptions"}
-              </p>
+              <Link href="/dashboard" className="mb-3 inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"><ChevronLeft className="h-3 w-3" />Workspace</Link>
+              <h1 className="text-3xl font-semibold tracking-tight">Jobs</h1>
+              <p className="mt-2 text-sm text-muted-foreground">Track conversions. Organize results. Find the data you need.</p>
             </div>
-            <Button asChild>
-              <Link href={uploadHref}>
-                <Plus className="h-4 w-4 mr-2" />
-                New upload
-              </Link>
-            </Button>
+            <div className="flex gap-2">
+              <Button variant="outline" aria-label="Refresh results" disabled={contentMode ? contentSearch.isFetching || !q : jobsQuery.isFetching} onClick={() => { if (contentMode) contentSearch.refetch(); else { jobsQuery.refetch(); projectsQuery.refetch(); } }}><RefreshCw className={cn("h-4 w-4", (contentMode ? contentSearch.isFetching : jobsQuery.isFetching) && "animate-spin")} /></Button>
+              <Button asChild><Link href={contentMode ? "/convert" : uploadHref}><Plus className="mr-2 h-4 w-4" />New conversion</Link></Button>
+            </div>
           </div>
 
-          <div className="md:grid md:grid-cols-[13rem_minmax(0,1fr)] md:gap-6 lg:grid-cols-[15rem_minmax(0,1fr)]">
-            {/* Projects: a column from md up */}
-            <aside className="hidden md:block">
+          <div className={cn(!contentMode && "lg:grid lg:grid-cols-[13rem_minmax(0,1fr)] lg:gap-6")}>
+            {/* Project navigation on desktop */}
+            {!contentMode && <aside className="hidden lg:block">
               <div className="sticky top-20 max-h-[calc(100vh-6rem)] overflow-y-auto rounded-xl border bg-background p-2">
                 <ProjectSidebar
                   projects={projects}
@@ -285,153 +238,36 @@ function JobsList() {
                   onSelect={selectLocation}
                 />
               </div>
-            </aside>
+            </aside>}
 
-            <div className="min-w-0 space-y-6">
-              {/* Projects: two selects below md */}
-              {projects.length > 0 && (
-                <div className="md:hidden">
+            <div className="flex min-w-0 flex-col gap-5">
+              {/* Compact project navigation on smaller screens */}
+              {!contentMode && projects.length > 0 && (
+                <div className="lg:hidden">
                   <ProjectSelects projects={projects} filter={location} onSelect={selectLocation} />
                 </div>
               )}
 
-              {/* Filters */}
-              <div className="rounded-xl border bg-background p-4 space-y-4">
-                <div className="flex flex-col md:flex-row gap-3">
-                  <div className="relative flex-1">
-                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                    <Input
-                      value={searchDraft}
-                      onChange={(e) => setSearchDraft(e.target.value)}
-                      placeholder={contentMode ? "Search inside converted content…" : "Search by name…"}
-                      className="pl-9 pr-9"
-                    />
-                    {searchDraft && (
-                      <button
-                        type="button"
-                        onClick={() => setSearchDraft("")}
-                        className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-                        aria-label="Clear search"
-                      >
-                        <X className="h-4 w-4" />
-                      </button>
-                    )}
-                  </div>
-                  <div className="flex rounded-md border p-0.5 w-fit" role="group" aria-label="Search in">
-                    {[
-                      { value: false, label: "Names" },
-                      { value: true, label: "Content" },
-                    ].map((opt) => (
-                      <button
-                        key={opt.label}
-                        type="button"
-                        onClick={() => setParams({ in: opt.value ? "content" : null })}
-                        aria-pressed={contentMode === opt.value}
-                        className={cn(
-                          "px-3 py-1.5 text-sm rounded-sm transition-colors",
-                          contentMode === opt.value ? "bg-secondary font-medium" : "text-muted-foreground hover:text-foreground"
-                        )}
-                      >
-                        {opt.label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
+              {!contentMode && (projectId || folderId) && <nav aria-label="Job location" className="flex min-w-0 flex-wrap items-center gap-2 text-sm">
+                <button type="button" onClick={() => selectLocation({ projectId: null, folderId: null })} className="text-muted-foreground hover:underline">All jobs</button><ChevronRight className="h-3 w-3 text-muted-foreground" />
+                <button type="button" onClick={() => selectLocation({ projectId: currentProjectId, folderId: null })} className="max-w-full truncate font-medium hover:underline">{title?.project ?? "Selected project"}</button>
+                {folderId && <><ChevronRight className="h-3 w-3 text-muted-foreground" /><span className="max-w-full truncate">{title?.folder ?? "Selected folder"}</span></>}
+              </nav>}
+              <JobsFilters
+                draft={searchDraft} onDraft={setSearchDraft} onSearch={() => setParams({ q: searchDraft.trim() || null })}
+                contentMode={contentMode} onMode={value => setParams({ in: value ? "content" : null })}
+                status={status} kind={kind} tags={tags} counts={data?.counts}
+                knownTags={tagsQuery.data ?? []} tagsLoading={tagsQuery.isLoading} tagsError={tagsQuery.isError} retryTags={() => tagsQuery.refetch()}
+                onStatus={value => setParams({ status: value === "all" ? null : value })}
+                onKind={value => setParams({ kind: value === "all" ? null : value })}
+                onTag={toggleTag} onClear={resetFilters} hasFilters={hasListFilters}
+              />
+              {!contentMode && <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground" aria-live="polite">
+                <span>{jobsQuery.isLoading ? "Loading jobs…" : data ? `${total.toLocaleString()} job${total === 1 ? "" : "s"}${hasListFilters ? " matching filters" : ""}` : "Jobs unavailable"}</span>
+                <span className="flex items-center gap-1.5">{jobsQuery.isFetching && <Loader2 className="h-3 w-3 animate-spin" />}{jobsQuery.isFetching ? "Updating…" : "Newest first · auto-refresh"}</span>
+              </div>}
 
-                {!contentMode && (
-                  <>
-                    {/* Status tabs */}
-                    <div className="flex items-center gap-x-1 overflow-x-auto whitespace-nowrap border-b -mx-4 px-4">
-                      {STATUS_TABS.map((tab) => {
-                        const active = status === tab.value;
-                        const count = data?.counts?.[tab.value];
-                        return (
-                          <button
-                            key={tab.value}
-                            type="button"
-                            onClick={() => setParams({ status: tab.value === "all" ? null : tab.value })}
-                            className={cn(
-                              "-mb-px border-b-2 px-3 pb-2 text-sm transition-colors",
-                              active
-                                ? "border-primary font-medium text-foreground"
-                                : "border-transparent text-muted-foreground hover:text-foreground"
-                            )}
-                          >
-                            {tab.label}
-                            {count !== undefined && (
-                              <span
-                                className={cn(
-                                  "ml-1.5 rounded-full px-1.5 py-0.5 text-xs tabular-nums",
-                                  active ? "bg-primary text-primary-foreground" : "bg-muted"
-                                )}
-                              >
-                                {count}
-                              </span>
-                            )}
-                          </button>
-                        );
-                      })}
-                    </div>
-
-                    {/* Kind + tags */}
-                    <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-                      <div className="flex flex-wrap gap-1.5">
-                        {KINDS.map((k) => (
-                          <Button
-                            key={k.value}
-                            size="sm"
-                            variant={kind === k.value ? "secondary" : "ghost"}
-                            className="h-8"
-                            onClick={() => setParams({ kind: k.value === "all" ? null : k.value })}
-                          >
-                            {k.label}
-                          </Button>
-                        ))}
-                      </div>
-
-                      {(tags.length > 0 || suggestedTags.length > 0) && (
-                        <div className="flex flex-wrap items-center gap-1.5 lg:justify-end lg:max-w-[60%]">
-                          <span className="text-xs text-muted-foreground mr-1">Tags:</span>
-                          {tags.map((tag) => (
-                            <TagChip key={tag} tag={tag} active onRemove={() => toggleTag(tag)} />
-                          ))}
-                          {suggestedTags.map((t) => (
-                            <TagChip
-                              key={t.tag}
-                              tag={`${t.tag} · ${t.count}`}
-                              onClick={() => toggleTag(t.tag)}
-                              className="cursor-pointer"
-                            />
-                          ))}
-                        </div>
-                      )}
-                    </div>
-
-                    {hasFilters && (
-                      <div className="flex items-center justify-between text-sm">
-                        <span className="text-muted-foreground">
-                          {total} matching job{total === 1 ? "" : "s"}
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setSearchDraft("");
-                            router.push("/jobs");
-                          }}
-                          className="text-primary hover:underline underline-offset-4"
-                        >
-                          Clear all filters
-                        </button>
-                      </div>
-                    )}
-                  </>
-                )}
-              </div>
-
-              {contentMode && (projectId || folderId) && (
-                <p className="text-xs text-muted-foreground">Content search covers all your projects.</p>
-              )}
-
+              {!contentMode && projectsQuery.isError && <div role="alert" className="flex flex-wrap items-center gap-2 text-xs text-destructive lg:hidden">Project navigation could not load. <button type="button" className="underline" onClick={() => projectsQuery.refetch()}>Retry projects</button></div>}
               {/* Results */}
               {contentMode ? (
                 <ContentResults
@@ -439,11 +275,14 @@ function JobsList() {
                   isLoading={contentSearch.isLoading}
                   error={contentSearch.error}
                   results={contentSearch.data?.results ?? []}
+                  total={contentSearch.data?.total ?? 0}
+                  onRetry={() => contentSearch.refetch()}
                 />
               ) : jobsQuery.error ? (
-                <div className="rounded-xl border border-destructive/50 p-8 text-center text-destructive">
+                <div role="alert" className="rounded-xl border border-destructive/50 p-8 text-center text-destructive">
                   <p className="font-semibold">Could not load your jobs</p>
                   <p className="text-sm mt-1">{formatApiError(jobsQuery.error)}</p>
+                  <Button variant="outline" className="mt-4" onClick={() => jobsQuery.refetch()}>Try again</Button>
                 </div>
               ) : jobsQuery.isLoading ? (
                 <div className="rounded-xl border bg-background divide-y">
@@ -460,21 +299,21 @@ function JobsList() {
               ) : jobs.length === 0 ? (
                 <div className="rounded-xl border bg-background py-16 px-6 text-center">
                   <FileText className="h-12 w-12 mx-auto mb-4 text-muted-foreground/50" />
-                  {hasFilters ? (
+                  {hasListFilters ? (
                     <>
                       <p className="font-medium">No jobs match these filters</p>
-                      <Button variant="link" onClick={() => router.push("/jobs")}>
-                        Clear all filters
+                      <Button variant="link" onClick={resetFilters}>
+                        Reset filters
                       </Button>
                     </>
                   ) : (
                     <>
-                      <p className="font-medium">No jobs yet</p>
+                      <p className="font-medium">{projectId || folderId ? "No jobs in this location yet" : "No jobs yet"}</p>
                       <p className="text-sm text-muted-foreground mt-1">Upload a document, audio or video to get started.</p>
                       <Button asChild className="mt-4">
-                        <Link href="/convert">
+                        <Link href={uploadHref}>
                           <Plus className="h-4 w-4 mr-2" />
-                          New upload
+                          New conversion
                         </Link>
                       </Button>
                     </>
@@ -483,6 +322,7 @@ function JobsList() {
               ) : (
                 <>
                   <ul
+                    aria-label="Jobs" aria-busy={jobsQuery.isFetching} inert={jobsQuery.isPlaceholderData}
                     className={cn(
                       "rounded-xl border bg-background divide-y overflow-hidden transition-opacity",
                       jobsQuery.isPlaceholderData && "opacity-60"
@@ -495,6 +335,7 @@ function JobsList() {
                         activeTags={tags}
                         onTag={toggleTag}
                         onDelete={() => setJobToDelete(job)}
+                        onEditTags={() => setJobToTag(job)}
                         showProject={!projectId && !folderId}
                         showFolder={!folderId}
                         onLocation={selectLocation}
@@ -526,6 +367,7 @@ function JobsList() {
                           ) : (
                             <Button
                               key={n}
+                              aria-label={`Page ${n + 1}`} aria-current={n === page ? "page" : undefined}
                               variant={n === page ? "secondary" : "ghost"}
                               size="sm"
                               className="min-w-9"
@@ -554,7 +396,8 @@ function JobsList() {
         </div>
       </main>
 
-      <AlertDialog open={jobToDelete !== null} onOpenChange={(open) => !open && setJobToDelete(null)}>
+      {jobToTag && <JobTagEditor key={jobToTag.job_id} job={jobToTag} onClose={() => setJobToTag(null)} />}
+      <AlertDialog open={jobToDelete !== null} onOpenChange={(open) => { if (!open && !deleteMutation.isPending) setJobToDelete(null); }}>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Delete “{jobToDelete?.name || jobToDelete?.job_id}”?</AlertDialogTitle>
@@ -563,9 +406,9 @@ function JobsList() {
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogCancel disabled={deleteMutation.isPending}>Cancel</AlertDialogCancel>
             <AlertDialogAction
-              onClick={() => jobToDelete && deleteMutation.mutate(jobToDelete.job_id)}
+              onClick={(event) => { event.preventDefault(); if (jobToDelete) deleteMutation.mutate(jobToDelete.job_id); }}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
               disabled={deleteMutation.isPending}
             >
@@ -597,174 +440,19 @@ function pageNumbers(current: number, total: number): (number | null)[] {
   return out;
 }
 
-function JobRow({
-  job,
-  activeTags,
-  onTag,
-  onDelete,
-  showProject,
-  showFolder,
-  onLocation,
-}: {
-  job: JobListItem;
-  activeTags: string[];
-  onTag: (tag: string) => void;
-  onDelete: () => void;
-  /** Off once the list is filtered to one project (every row would say the same). */
-  showProject: boolean;
-  showFolder: boolean;
-  onLocation: (filter: LocationFilter) => void;
-}) {
-  const router = useRouter();
-  const Icon = KIND_ICONS[job.kind] ?? FileText;
-  const created = relative(job.created_at);
-  const href = `/jobs/${job.job_id}`;
-  const running = job.status === "processing" || job.status === "queued";
-  const title = job.name || job.filename || job.job_id;
-
-  const meta = [
-    job.filename && job.filename !== title ? job.filename : null,
-    job.file_size_bytes ? formatBytes(job.file_size_bytes) : null,
-    job.total_pages ? `${job.pages_completed ?? 0}/${job.total_pages} pages` : null,
-  ].filter(Boolean);
-
-  return (
-    <li
-      className="group relative flex flex-col gap-3 p-4 hover:bg-muted/40 transition-colors cursor-pointer sm:flex-row sm:items-center"
-      onClick={(e) => {
-        // Chips and buttons handle their own clicks; anything else opens the job.
-        if ((e.target as HTMLElement).closest("a,button")) return;
-        router.push(href);
-      }}
-    >
-      <div className="flex min-w-0 flex-1 items-start gap-3">
-        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
-          <Icon className="h-5 w-5" />
-        </div>
-        <div className="min-w-0 flex-1 space-y-1">
-          <Link href={href} className="block truncate font-medium hover:underline underline-offset-4" title={title}>
-            {title}
-          </Link>
-          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
-            <span className="capitalize">{job.kind}</span>
-            {meta.map((m) => (
-              <span key={m as string} className="before:content-['·'] before:mr-2 truncate max-w-[18rem]">
-                {m}
-              </span>
-            ))}
-            {created && (
-              <span className="before:content-['·'] before:mr-2" title={created.full}>
-                {created.text}
-              </span>
-            )}
-          </div>
-          {(job.tags.length > 0 || (job.project && (showProject || (showFolder && job.folder)))) && (
-            <div className="flex flex-wrap gap-1 pt-1">
-              {job.project && (showProject || (showFolder && job.folder)) && (
-                <LocationChip job={job} showProject={showProject} showFolder={showFolder} onLocation={onLocation} />
-              )}
-              {job.tags.map((tag) => (
-                <TagChip
-                  key={tag}
-                  tag={tag}
-                  active={activeTags.includes(tag)}
-                  onClick={() => onTag(tag)}
-                  className="cursor-pointer"
-                />
-              ))}
-            </div>
-          )}
-          {job.status === "failed" && job.error && (
-            <p className="text-xs text-destructive line-clamp-1" title={job.error}>
-              {job.error}
-            </p>
-          )}
-        </div>
-      </div>
-
-      <div className="flex items-center justify-between gap-3 pl-[3.25rem] sm:pl-0 sm:justify-end">
-        <div className="flex flex-col items-start gap-1.5 sm:items-end sm:w-36">
-          <span
-            className={cn(
-              "inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-2.5 py-0.5 text-xs font-medium capitalize",
-              STATUS_STYLES[job.status] ?? STATUS_STYLES.cancelled
-            )}
-          >
-            {running && <Loader2 className="h-3 w-3 animate-spin" />}
-            {job.status}
-            {job.status === "processing" && ` · ${job.progress}%`}
-          </span>
-          {running && (
-            <div className="h-1 w-28 rounded-full bg-secondary">
-              <div className="h-1 rounded-full bg-primary transition-all" style={{ width: `${job.progress}%` }} />
-            </div>
-          )}
-        </div>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="text-muted-foreground hover:text-destructive hover:bg-destructive/10 sm:opacity-0 sm:group-hover:opacity-100 focus-visible:opacity-100"
-          onClick={onDelete}
-          aria-label={`Delete ${title}`}
-        >
-          <Trash2 className="h-4 w-4" />
-        </Button>
-      </div>
-    </li>
-  );
-}
-
-/** "Project › Folder" on a row; each part filters the list to it. */
-function LocationChip({
-  job,
-  showProject,
-  showFolder,
-  onLocation,
-}: {
-  job: JobListItem;
-  showProject: boolean;
-  showFolder: boolean;
-  onLocation: (filter: LocationFilter) => void;
-}) {
-  const project = job.project!;
-  const folder = showFolder ? job.folder : null;
-  return (
-    <span className="inline-flex max-w-[20rem] items-center gap-1 rounded-md border border-primary/20 bg-primary/5 px-2 py-0.5 text-xs font-medium text-foreground">
-      <FolderIcon className="h-3 w-3 shrink-0 text-primary opacity-80" />
-      {showProject && (
-        <button
-          type="button"
-          onClick={() => onLocation({ projectId: project.id, folderId: null })}
-          className="min-w-0 truncate hover:underline underline-offset-2"
-          title={`All jobs in ${project.name}`}
-        >
-          {project.name}
-        </button>
-      )}
-      {showProject && folder && <span className="text-muted-foreground">›</span>}
-      {folder && (
-        <button
-          type="button"
-          onClick={() => onLocation({ projectId: project.id, folderId: folder.id })}
-          className="min-w-0 truncate hover:underline underline-offset-2"
-          title={`All jobs in ${project.name} › ${folder.name}`}
-        >
-          {folder.name}
-        </button>
-      )}
-    </span>
-  );
-}
-
 function ContentResults({
   q,
   isLoading,
   error,
   results,
+  total,
+  onRetry,
 }: {
   q: string;
   isLoading: boolean;
   error: unknown;
+  total: number;
+  onRetry: () => void;
   results: { job_id: string; filename?: string | null; total_pages?: number | null; created_at?: string | null; preview: string }[];
 }) {
   if (!q) {
@@ -787,6 +475,7 @@ function ContentResults({
       <div className="rounded-xl border border-destructive/50 p-8 text-center text-destructive">
         <p className="font-semibold">Search failed</p>
         <p className="text-sm mt-1">{formatApiError(error)}</p>
+        <Button variant="outline" className="mt-4" onClick={onRetry}>Try again</Button>
       </div>
     );
   }
@@ -799,7 +488,7 @@ function ContentResults({
     );
   }
   return (
-    <ul className="rounded-xl border bg-background divide-y overflow-hidden">
+    <div className="space-y-3"><p className="text-xs text-muted-foreground">Showing {results.length} of {total} content matches{total > results.length ? ". Refine your search to narrow the results." : ""}</p><ul aria-label="Content matches" className="rounded-xl border bg-background divide-y overflow-hidden">
       {results.map((hit) => {
         const created = relative(hit.created_at);
         return (
@@ -814,6 +503,6 @@ function ContentResults({
           </li>
         );
       })}
-    </ul>
+    </ul></div>
   );
 }
