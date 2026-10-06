@@ -54,6 +54,7 @@ from shared.admin import is_effective_admin
 from shared.auth import get_current_active_user
 from shared.config import get_settings
 from shared.database import SessionLocal, get_db
+from shared.job_admission import Admission, admit_job
 from shared.engines import dispatch as engine_dispatch
 from shared.models import Job, JobStatus as DBJobStatus, User
 from shared.redis_client import VISION_HEARTBEAT_TTL_SECONDS, get_redis_client
@@ -376,15 +377,14 @@ def _create_vision_job(
         folder_id=location.folder_id if location else None,
     )
     try:
-        db.add(db_job)
+        db_job = db.merge(db_job)
         set_job_tags(db_job, tags or [])
         db.commit()
     except Exception as e:
-        # Mesmo tratamento do resto do repositório: o MySQL fora do ar degrada
-        # a listagem de jobs, não pode derrubar a requisição.
+        # No task may be published without its authoritative quota/owner row.
         logger.error(f"Error creating image job in MySQL: {e}", exc_info=True)
         db.rollback()
-        return None
+        raise _error(503, "JOB_ADMISSION_UNAVAILABLE", "Database unavailable") from None
 
     return db_job
 
@@ -537,6 +537,7 @@ async def _run_vision(
     tags: Optional[List[str]] = None,
     plan: Optional[UploadPlan] = None,
     path: str = "",
+    *, admission: Admission,
 ) -> Dict[str, Any]:
     """
     Valida, cria o job, despacha e espera — para os quatro pontos de entrada.
@@ -554,7 +555,8 @@ async def _run_vision(
         _location_step(resolve_upload_location, db, current_user, plan, path) if plan is not None else None
     )
 
-    job_id = str(uuid4())
+    admission.ensure(db)
+    job_id = admission.job_id
     db_job = _create_vision_job(
         job_id=job_id,
         filename=safe_name,
@@ -715,6 +717,7 @@ async def describe_image(
     http_request: Request,
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
+    admission: Admission = Depends(admit_job),
 ):
     """
     Descreve uma imagem enviada em base64 e devolve a mesma imagem de volta.
@@ -741,7 +744,7 @@ async def describe_image(
     tags = parse_tags_or_422(request.tags)
     plan = _plan_location(db, current_user, http_request, _json_location(request))
     image_bytes = _decode_base64_image(request.image_base64)
-    common = await _run_vision(
+    common = await _run_vision(admission=admission,
         kind="describe",
         image_bytes=image_bytes,
         filename=request.filename,
@@ -771,6 +774,7 @@ async def describe_image_upload(
     location: LocationFields = Depends(upload_location_form),
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
+    admission: Admission = Depends(admit_job),
 ):
     """
     Igual a `POST /images/describe`, com a imagem em `multipart/form-data`.
@@ -794,8 +798,8 @@ async def describe_image_upload(
 
     tag_list = parse_tags_or_422(tags)
     plan = _plan_location(db, current_user, http_request, location)
-    image_bytes = await file.read()
-    common = await _run_vision(
+    image_bytes = await file.read(settings.vision_max_image_size_mb * 1024 * 1024 + 1)
+    common = await _run_vision(admission=admission,
         kind="describe",
         image_bytes=image_bytes,
         filename=file.filename,
@@ -815,6 +819,7 @@ async def ocr_image(
     http_request: Request,
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
+    admission: Admission = Depends(admit_job),
 ):
     """
     Extrai o texto de uma imagem com `<OCR_WITH_REGION>` do Florence-2.
@@ -831,7 +836,7 @@ async def ocr_image(
     tags = parse_tags_or_422(request.tags)
     plan = _plan_location(db, current_user, http_request, _json_location(request))
     image_bytes = _decode_base64_image(request.image_base64)
-    common = await _run_vision(
+    common = await _run_vision(admission=admission,
         kind="ocr",
         image_bytes=image_bytes,
         filename=request.filename,
@@ -853,14 +858,15 @@ async def ocr_image_upload(
     location: LocationFields = Depends(upload_location_form),
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
+    admission: Admission = Depends(admit_job),
 ):
     """Igual a `POST /images/ocr`, com a imagem em `multipart/form-data`."""
     _require_vision_enabled()
 
     tag_list = parse_tags_or_422(tags)
     plan = _plan_location(db, current_user, http_request, location)
-    image_bytes = await file.read()
-    common = await _run_vision(
+    image_bytes = await file.read(settings.vision_max_image_size_mb * 1024 * 1024 + 1)
+    common = await _run_vision(admission=admission,
         kind="ocr",
         image_bytes=image_bytes,
         filename=file.filename,

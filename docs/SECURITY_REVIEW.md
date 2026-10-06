@@ -1,15 +1,17 @@
 # Revisão de segurança — Ingestify
 
-Data: 2026-09-28. Base: estado atual do worktree, commit `ec8989c` mais alterações locais ainda não commitadas. Método: inspeção estática dos endpoints FastAPI, autenticação/autorização, fontes externas, workers, armazenamento, frontend e arquivos Docker Compose. Não foi feito teste de invasão nem auditoria de dependências ou do ambiente implantado. Severidade considera uma API acessível a usuários autenticados; riscos de infraestrutura dependem da topologia real.
+**Atualização de 2026-10-06:** S-01–S-04 foram reavaliados e receberam correções na branch `fix/oss-security-hardening`. A validação integrada e os limites de publicação estão em [SECURITY_REVIEW_2026-10-06.md](SECURITY_REVIEW_2026-10-06.md). Isso não declara o ambiente dev atualizado nem o histórico pronto para publicação. As evidências originais abaixo permanecem para rastreabilidade.
+
+Data da revisão original: 2026-09-28. Base: estado atual do worktree, commit `ec8989c` mais alterações locais ainda não commitadas. Método: inspeção estática dos endpoints FastAPI, autenticação/autorização, fontes externas, workers, armazenamento, frontend e arquivos Docker Compose. Não foi feito teste de invasão nem auditoria de dependências ou do ambiente implantado. Severidade considera uma API acessível a usuários autenticados; riscos de infraestrutura dependem da topologia real.
 
 ## Resumo e ordem de correção
 
 | ID | Severidade | Achado | Estado |
 | --- | --- | --- | --- |
 | S-01 | Alta | JWT do Ingestify é enviado como credencial a Google Drive/Dropbox | **Corrigido em 2026-10-05** (header `X-Source-Token`, token fora da mensagem do Celery) |
-| S-02 | Média | Criação de jobs de conversão sem limite por usuário ou concorrência | Confirmado no código; impacto depende da capacidade implantada |
-| S-03 | Média | Limite de login/cadastro usa IP do proxy e falha aberto se Redis cair | Confirmado no código; impacto depende de proxy/Redis |
-| S-04 | Média | Elasticsearch/Redis sem autenticação obrigatória e conexões internas sem TLS | Confirmado na configuração; exposição depende da rede implantada |
+| S-02 | Média | Criação de jobs de conversão sem limite por usuário ou concorrência | Corrigido no código: admissão SQL por usuário, orçamento de entrada e limite distribuído; ver revisão de 2026-10-06 |
+| S-03 | Média | Limite de login/cadastro usa IP do proxy e falha aberto se Redis cair | Corrigido no código: Redis fail-closed e contrato de proxy explícito; implantação requer configuração do ingress |
+| S-04 | Média | Elasticsearch/Redis sem autenticação obrigatória e conexões internas sem TLS | Corrigido no overlay de produção: autenticação/TLS obrigatórios e rede isolada; não aplicado ao dev |
 
 ### S-01 — Confusão de credenciais nas fontes Google Drive e Dropbox
 

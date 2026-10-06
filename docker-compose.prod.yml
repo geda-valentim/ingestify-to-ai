@@ -1,80 +1,183 @@
-# Docker Compose configuration for production
-# Use: docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+# Production: apply LAST, after any GPU/audio/live overlays (Compose >= 2.24.4).
+# See docs/runbooks/production-infrastructure.md. No development source mounts.
+x-production-environment: &production-environment
+  ENVIRONMENT: production
+  TRUSTED_PROXY_IPS: ${TRUSTED_PROXY_IPS:-}
+  PYTHONUNBUFFERED: "1"
+  REDIS_PASSWORD: ${REDIS_PASSWORD:?production requires REDIS_PASSWORD}
+  REDIS_HOST: ${REDIS_HOST:-redis}
+  REDIS_PORT: ${REDIS_PORT:-6379}
+  REDIS_SSL: "true"
+  REDIS_SSL_CA_CERTS: /run/ingestify-tls/ca.crt
+  CELERY_BROKER_URL: ${CELERY_BROKER_URL:-rediss://${REDIS_HOST:-redis}:6379/0}
+  CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-rediss://${REDIS_HOST:-redis}:6379/1}
+  ELASTICSEARCH_URL: ${ELASTICSEARCH_URL:-https://elasticsearch:9200}
+  ELASTICSEARCH_USER: ${ELASTICSEARCH_USER:-elastic}
+  ELASTICSEARCH_PASSWORD: ${ELASTICSEARCH_PASSWORD:?production requires ELASTICSEARCH_PASSWORD}
+  ELASTICSEARCH_VERIFY_CERTS: "true"
+  ELASTICSEARCH_CA_CERTS: /run/ingestify-tls/ca.crt
+  MINIO_ENDPOINT: ${MINIO_ENDPOINT:-minio:9000}
+  MINIO_PUBLIC_ENDPOINT: ${MINIO_PUBLIC_ENDPOINT:?set browser-facing HTTPS S3 hostname:port}
+  MINIO_SECURE: "true"
+  MINIO_CA_CERTS: /run/ingestify-tls/ca.crt
+  DATABASE_URL: ${DATABASE_URL:?production requires DATABASE_URL}
+  CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:?production requires CORS_ALLOWED_ORIGINS}
 
 services:
-  minio:
-    # Production: use secure credentials from environment
+  elasticsearch:
+    ports: !reset []
     environment:
-      - MINIO_ROOT_USER=${MINIO_ROOT_USER}
-      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
-    restart: unless-stopped
+      xpack.security.enabled: "true"
+      xpack.security.http.ssl.enabled: "true"
+      xpack.security.http.ssl.key: certs/elasticsearch.key
+      xpack.security.http.ssl.certificate: certs/elasticsearch.crt
+      xpack.security.http.ssl.certificate_authorities: certs/ca.crt
+      ELASTIC_PASSWORD: ${ELASTIC_BOOTSTRAP_PASSWORD:-${ELASTICSEARCH_PASSWORD:?production requires ELASTICSEARCH_PASSWORD}}
+    volumes:
+      - ${PRODUCTION_TLS_DIR:?set certificate directory}:/usr/share/elasticsearch/config/certs:ro
+    healthcheck:
+      test: [CMD-SHELL, 'curl --fail --silent --cacert config/certs/ca.crt -u "elastic:$$ELASTIC_PASSWORD" https://localhost:9200/_cluster/health >/dev/null']
+    security_opt: !override [no-new-privileges:true]
+    cap_drop: [ALL]
+
+  redis:
+    ports: !reset []
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?production requires REDIS_PASSWORD}
+    command: [sh, -ec, 'exec redis-server --appendonly yes --port 0 --tls-port 6379 --tls-cert-file /tls/redis.crt --tls-key-file /tls/redis.key --tls-ca-cert-file /tls/ca.crt --tls-auth-clients no --requirepass "$$REDIS_PASSWORD"']
+    volumes:
+      - ${PRODUCTION_TLS_DIR:?set certificate directory}:/tls:ro
+    healthcheck:
+      test: [CMD-SHELL, 'REDISCLI_AUTH="$$REDIS_PASSWORD" redis-cli --tls --cacert /tls/ca.crt -h redis ping | grep -q PONG']
+    security_opt: !override [no-new-privileges:true]
+
+  minio:
+    image: minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
+    ports: !reset []
+    command: server /data --console-address ":9001" --certs-dir /tls
+    volumes:
+      - ${PRODUCTION_TLS_DIR:?set certificate directory}/minio:/tls:ro
+    healthcheck:
+      test: [CMD, curl, --fail, --cacert, /tls/CAs/ca.crt, https://localhost:9000/minio/health/live]
+    security_opt: !override [no-new-privileges:true]
 
   api:
-    # Production: no volume mounts, use code baked into image
-    # Remove dev overrides
-    volumes:
-      - ./tmp:/tmp/ingestify
-    command: uvicorn api.main:app --host 0.0.0.0 --port 8000 --workers 4
     environment:
-      # Overrides ENVIRONMENT=development from the base file. Without this the
-      # global exception handler returns raw exception text to clients.
-      - ENVIRONMENT=production
-      - PYTHONUNBUFFERED=1
-      - LOG_LEVEL=INFO
-      - ENVIRONMENT=production  # generic 500 errors, fail-fast startup checks
-    restart: unless-stopped
-
+      <<: *production-environment
+    security_opt: !override [no-new-privileges:true]
+    # Minimal privileges for entrypoint ownership repair + dropping root.
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, SETUID, SETGID]
+    volumes: !override
+      - ./tmp:/tmp/ingestify
+      - ${PRODUCTION_TLS_DIR:?set certificate directory}/ca.crt:/run/ingestify-tls/ca.crt:ro
+    ports: !override ["127.0.0.1:8000:8000"]
+    command: [uvicorn, api.main:app, --host, 0.0.0.0, --port, "8000", --workers, "4", --ws-max-size, "16384", --ws-max-queue, "10", --no-access-log, --proxy-headers, --forwarded-allow-ips, "${TRUSTED_PROXY_IPS:-}"]
   worker:
-    # Production: use full worker concurrency
-    volumes:
-      - ./tmp:/tmp/ingestify
-      # Keep the shared HF cache so a re-routed vision task never re-downloads
-      - hf_cache:/models/huggingface
-    command: celery -A workers.celery_app worker --loglevel=info --concurrency=4
     environment:
-      - ENVIRONMENT=production
-      - PYTHONUNBUFFERED=1
-      - ENVIRONMENT=production
-    restart: unless-stopped
-    # Scale workers in production
-    deploy:
-      replicas: 5
+      <<: *production-environment
+    security_opt: !override [no-new-privileges:true]
+    # Minimal privileges for entrypoint ownership repair + dropping root.
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, SETUID, SETGID]
+    volumes: !override
+      - ./tmp:/tmp/ingestify
+      - ${PRODUCTION_TLS_DIR:?set certificate directory}/ca.crt:/run/ingestify-tls/ca.crt:ro
+      - hf_cache:/models/huggingface
+  worker-audio:
+    environment:
+      <<: *production-environment
+    security_opt: !override [no-new-privileges:true]
+    # Minimal privileges for entrypoint ownership repair + dropping root.
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, SETUID, SETGID]
+    volumes: !override
+      - ./tmp:/tmp/ingestify
+      - ${PRODUCTION_TLS_DIR:?set certificate directory}/ca.crt:/run/ingestify-tls/ca.crt:ro
+      - hf_cache:/models/huggingface
+      - ${WHISPERX_MODEL_DIR:-./models/whisperx}:/models/whisperx:ro
 
   worker-vision:
-    # Same reason as `beat` below: without this it inherits
-    # ENVIRONMENT=development from the base file and bypasses the
-    # production-only credential checks in shared/config.py.
-    # The ./tmp mount is re-declared because the API hands the decoded image to
-    # this worker through it.
-    volumes:
-      - ./tmp:/tmp/ingestify
-      - hf_cache:/models/huggingface
     environment:
-      - ENVIRONMENT=production
-      - PYTHONUNBUFFERED=1
-    restart: unless-stopped
-    # Concurrency stays at 1 in production too: one resident model per box.
-    # Scale out with replicas, never with concurrency.
-    deploy:
-      replicas: 1
+      <<: *production-environment
+    security_opt: !override [no-new-privileges:true]
+    # Minimal privileges for entrypoint ownership repair + dropping root.
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, SETUID, SETGID]
+    volumes: !override
+      - ./tmp:/tmp/ingestify
+      - ${PRODUCTION_TLS_DIR:?set certificate directory}/ca.crt:/run/ingestify-tls/ca.crt:ro
+      - hf_cache:/models/huggingface
+  worker-dispatch:
+    environment:
+      <<: *production-environment
+    security_opt: !override [no-new-privileges:true]
+    # Minimal privileges for entrypoint ownership repair + dropping root.
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, SETUID, SETGID]
+    volumes: !override
+      - ./tmp:/tmp/ingestify
+      - ${PRODUCTION_TLS_DIR:?set certificate directory}/ca.crt:/run/ingestify-tls/ca.crt:ro
+      - hf_cache:/models/huggingface
+  worker-remote:
+    environment:
+      <<: *production-environment
+    security_opt: !override [no-new-privileges:true]
+    # Minimal privileges for entrypoint ownership repair + dropping root.
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, SETUID, SETGID]
+    volumes: !override
+      - ./tmp:/tmp/ingestify
+      - ${PRODUCTION_TLS_DIR:?set certificate directory}/ca.crt:/run/ingestify-tls/ca.crt:ro
+      - ./secrets/engine_secrets_private:/run/secrets/engine_secrets_private:ro
+      - ${WHISPERX_MODEL_DIR:-./models/whisperx}:/models/whisperx:ro
 
   beat:
-    # Celery Beat inherits ENVIRONMENT=development from the base file otherwise,
-    # which would bypass the production-only credential checks in shared/config.py
     environment:
-      - ENVIRONMENT=production
-      - PYTHONUNBUFFERED=1
-    restart: unless-stopped
+      <<: *production-environment
+    security_opt: !override [no-new-privileges:true]
+    # Minimal privileges for entrypoint ownership repair + dropping root.
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, SETUID, SETGID]
+    volumes: !override
+      - ./tmp:/tmp/ingestify
+      - ${PRODUCTION_TLS_DIR:?set certificate directory}/ca.crt:/run/ingestify-tls/ca.crt:ro
+  worker-live:
+    extends:
+      service: worker
+    profiles: [live]
+    env_file: !reset []
+    environment:
+      <<: *production-environment
+    security_opt: !override [no-new-privileges:true]
+    volumes: !override
+      - ./tmp:/tmp/ingestify
+      - hf_cache:/models/huggingface
+      - ${PRODUCTION_TLS_DIR:?set certificate directory}/ca.crt:/run/ingestify-tls/ca.crt:ro
+      - ${WHISPERX_MODEL_DIR:-./models/whisperx}:/models/whisperx:ro
+      - ${LIVE_DIARIZATION_MODEL_DIR:-./models/diart}:/models/diart:ro
 
   frontend:
-    # Production: use built image, no dev overrides
-    build:
-      context: .
-      dockerfile: docker/Dockerfile.frontend
     environment:
-      - NODE_ENV=production
-      - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://localhost:8000}
-    restart: unless-stopped
-    # Remove dev volumes and command overrides
-    volumes: []
-    command: []
+      NODE_ENV: production
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:?set public HTTPS API URL}
+    ports: !override ["127.0.0.1:3000:3000"]
+    volumes: !reset []
+    command: !reset []
+    security_opt: !override [no-new-privileges:true]
+    cap_drop: [ALL]
+
+# Never attach production to the auto-detected shared development network.
+networks:
+  ingestify-network:
+    name: ${COMPOSE_PROJECT_NAME:-ingestify-prod}-private
+
+volumes:
+  elasticsearch_data:
+    name: ${COMPOSE_PROJECT_NAME:-ingestify-prod}-elasticsearch-data
+  redis_data:
+    name: ${COMPOSE_PROJECT_NAME:-ingestify-prod}-redis-data
+  minio_data:
+    name: ${COMPOSE_PROJECT_NAME:-ingestify-prod}-minio-data
+  hf_cache:
+    name: ${COMPOSE_PROJECT_NAME:-ingestify-prod}-hf-cache

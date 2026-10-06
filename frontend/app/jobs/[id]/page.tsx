@@ -779,7 +779,7 @@ export default function JobStatusPage({ params }: PageProps) {
                                 checked={isChecked}
                                 onCheckedChange={() => togglePageSelection(page.page_number)}
                                 onClick={(e) => e.stopPropagation()}
-                                className="flex-shrink-0"
+                                className="shrink-0"
                               />
                             )}
 
@@ -792,7 +792,7 @@ export default function JobStatusPage({ params }: PageProps) {
                               className="flex-1 flex items-center justify-between text-left min-w-0"
                             >
                               <div className="flex items-center gap-2 flex-1 min-w-0">
-                                <div className="flex-shrink-0">
+                                <div className="shrink-0">
                                   {page.status === "completed" && (
                                     <CheckCircle2 className="h-4 w-4 text-green-600 dark:text-green-400" />
                                   )}
@@ -813,7 +813,7 @@ export default function JobStatusPage({ params }: PageProps) {
                                   Page {page.page_number}
                                 </span>
                               </div>
-                              <div className="flex items-center gap-2 flex-shrink-0">
+                              <div className="flex items-center gap-2 shrink-0">
                                 {page.retry_count > 0 && (
                                   <Badge variant="secondary" className="h-5 px-1.5 text-[10px]">
                                     {page.retry_count}/3

@@ -32,6 +32,7 @@ def _settings(**overrides):
         "minio_access_key": "key",
         "minio_secret_key": "secret",
         "minio_secure": False,
+        "minio_ca_certs": "",
         "minio_bucket_uploads": "ingestify-uploads",
         "minio_bucket_pages": "ingestify-pages",
         "minio_bucket_audio": "ingestify-audio",

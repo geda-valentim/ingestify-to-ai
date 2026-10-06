@@ -55,7 +55,7 @@ referência · **planejado** = não implementado.
 | `docker-compose.yml` | Base: `api` (:8000), `worker` (5 réplicas, fila `ingestify`), `worker-audio` (fila `ingestify-audio`), `worker-vision` (fila `ingestify-vision`), `beat`, `frontend` (:3000). Redis, Elasticsearch e MinIO ficam no profile `infra` e publicam só em `127.0.0.1`. MySQL **não** está no compose (padrão: `host.docker.internal`). |
 | `docker-compose.gpu.yml` | Overlay opt-in de GPU (`make gpu`): `worker` vira 1 processo em CUDA, `worker-audio` com `AUDIO_WORKER_REPLICAS` (padrão 2) em CUDA, `worker-vision` em CUDA. Ver [GPU.md](GPU.md). |
 | `docker-compose.live.yml` | Overlay opt-in de live com worker GPU privado e profile `live`. Exige migração explícita e validação antes de ativar em produção; ver [guia live](features/live-transcription.md). |
-| `docker-compose.prod.yml` | Produção (`make prod`): `ENVIRONMENT=production` em todos os serviços (o base usa `development`), `uvicorn --workers 4`, `worker` com `--concurrency=4`, frontend sem volumes de dev. |
+| `docker-compose.prod.yml` | Produção via `scripts/start-production.sh` / `make prod`: overlay final, TLS/autenticação obrigatórios, rede/volumes isolados e portas de aplicação em loopback. Exige `.env.production` e certificados; veja o [runbook](runbooks/production-infrastructure.md). |
 | `docker-compose.infra.yml` | Só a infraestrutura compartilhada (`make infra-start`). Ver [SHARED_INFRASTRUCTURE.md](SHARED_INFRASTRUCTURE.md). |
 | `docker-compose.override.yml` | Overlay **local, fora do git**, aplicado automaticamente pelo `docker compose` quando existe (ex.: remapear portas). Não é parte do produto. |
 
@@ -66,7 +66,9 @@ Atalhos: `make start` (detecta infraestrutura compartilhada), `make dev`, `make 
 
 | Doc | Estado | Conteúdo |
 |---|---|---|
-| [SECURITY_REVIEW.md](SECURITY_REVIEW.md) | atual | Revisão de segurança de 2026-10-03 (âncoras de linha corrigidas em 2026-10-04). |
+| [SECURITY_REVIEW_2026-10-06.md](SECURITY_REVIEW_2026-10-06.md) | atual | Correções S-01–S-04, revisão independente, dependências e limites para publicação. |
+| [SECURITY_REVIEW.md](SECURITY_REVIEW.md) | histórico atualizado | Achados originais com links para correções e evidências atuais. |
+| [security-history-review.md](security-history-review.md) | atual | Triagem de segredos no histórico e verificações pendentes antes da publicação. |
 | [CODE_REVIEW.md](CODE_REVIEW.md) | histórico | Revisão de 2026-08-24; vários achados já corrigidos (anotados no texto). |
 | [specs/README.md](specs/README.md) | atual | Convenção de specs (uma decisão por arquivo). Modelo: [specs/_TEMPLATE.md](specs/_TEMPLATE.md). |
 

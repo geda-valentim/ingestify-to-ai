@@ -101,3 +101,33 @@ class TestPDFSplitter:
         splitter = PDFSplitter(temp_dir=tmp_path)
         with pytest.raises(ValueError):
             splitter.split_pdf(tmp_path / "doc.txt", upload_to_minio=False)
+
+
+def test_page_budget_rejects_before_extraction_or_minio(tmp_path, monkeypatch):
+    from shared.config import get_settings
+    from shared.pdf_splitter import PDFPageLimitError
+    monkeypatch.setattr(get_settings(), 'max_pdf_pages', 2)
+    splitter = PDFSplitter(tmp_path / 'pages')
+    monkeypatch.setattr(splitter, 'get_page_count', lambda path: 3)
+    with pytest.raises(PDFPageLimitError, match='PDF_PAGE_LIMIT_EXCEEDED'):
+        splitter.split_pdf(tmp_path / 'large.pdf')
+    assert list(splitter.temp_dir.iterdir()) == []
+
+
+def test_page_budget_preserves_pdf_at_limit(tmp_path, monkeypatch):
+    from shared.config import get_settings
+    monkeypatch.setattr(get_settings(), 'max_pdf_pages', 2)
+    source = tmp_path / 'small.pdf'
+    source.write_bytes(b'%PDF-source')
+    splitter = PDFSplitter(tmp_path / 'pages')
+    monkeypatch.setattr(splitter, 'get_page_count', lambda path: 2)
+    extracted = []
+    def extract(arguments, **kwargs):
+        extracted.append(arguments)
+        Path(arguments[-1]).write_bytes(b'%PDF-page')
+    monkeypatch.setattr(subprocess, 'run', extract)
+    pages = splitter.split_pdf(source, upload_to_minio=False)
+    assert [number for number, _, _ in pages] == [1, 2]
+    assert all(path.read_bytes() == b'%PDF-page' for _, path, _ in pages)
+    assert source.read_bytes() == b'%PDF-source'
+    assert len(extracted) == 2

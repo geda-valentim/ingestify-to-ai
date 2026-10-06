@@ -286,9 +286,9 @@ dev: ensure-jwt-secret ## Start in development mode with hot reload
 	@docker compose up -d
 	@echo "$(GREEN)✅ Development mode ready!$(NC)"
 
-prod: ensure-jwt-secret ## Start in production mode
+prod: ## Start production with .env.production and verified TLS
 	@echo "$(CYAN)🚀 Starting production mode...$(NC)"
-	@docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+	@scripts/start-production.sh
 	@echo "$(GREEN)✅ Production mode ready!$(NC)"
 
 scale: ensure-jwt-secret ## Scale workers (usage: make scale n=10)

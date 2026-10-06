@@ -28,7 +28,7 @@ from shared.minio_client import get_minio_client
 from shared.database import SessionLocal
 from shared.models import Job, Page, JobStatus
 from shared.config import get_settings
-from shared.pdf_splitter import PDFSplitter, should_split_pdf
+from shared.pdf_splitter import PDFSplitter, PDFPageLimitError, should_split_pdf
 from shared.engines.media import AUDIO_EXTENSIONS
 # Moved to workers.engines.pipeline; the old names stay importable from here
 from workers.engines.pipeline import (  # noqa: F401
@@ -633,15 +633,16 @@ def process_conversion(
             return {"job_id": job_id, "status": "failed" if changed else "discarded"}
         # A transcription that ran out of time will run out of time again: fail for good
         is_audio_job = bool(options.get('is_audio'))
+        retry_pending = not is_audio_job and self.request.retries < self.max_retries
 
         # Update Redis
         redis_client.set_job_status(
             job_id=job_id,
             job_type="main",
-            status="failed",
+            status="queued" if retry_pending else "failed",
             progress=0,
             error=error_msg,
-            completed_at=datetime.utcnow(),
+            completed_at=None if retry_pending else datetime.utcnow(),
         )
 
         # Update MySQL
@@ -649,9 +650,9 @@ def process_conversion(
         try:
             job = db.query(Job).filter(Job.id == job_id).first()
             if job:
-                job.status = JobStatus.FAILED
+                job.status = JobStatus.PENDING if retry_pending else JobStatus.FAILED
                 job.error_message = error_msg
-                job.completed_at = datetime.utcnow()
+                job.completed_at = None if retry_pending else datetime.utcnow()
                 db.commit()
         except Exception as e:
             logger.error(f"[MAIN JOB {job_id}] MySQL update error on timeout: {e}")
@@ -687,14 +688,16 @@ def process_conversion(
                     'callback_url': callback_url, 'auth_token': auth_token})
             return {"job_id": job_id, "status": "failed", "error": str(exc)}
 
+        retry_pending = self.request.retries < self.max_retries
+
         # Update Redis
         redis_client.set_job_status(
             job_id=job_id,
             job_type="main",
-            status="failed",
+            status="queued" if retry_pending else "failed",
             progress=0,
             error=str(exc),
-            completed_at=datetime.utcnow(),
+            completed_at=None if retry_pending else datetime.utcnow(),
         )
 
         # Update MySQL: Mark job as failed
@@ -702,9 +705,9 @@ def process_conversion(
         try:
             job = db.query(Job).filter(Job.id == job_id).first()
             if job:
-                job.status = JobStatus.FAILED
+                job.status = JobStatus.PENDING if retry_pending else JobStatus.FAILED
                 job.error_message = str(exc)
-                job.completed_at = datetime.utcnow()
+                job.completed_at = None if retry_pending else datetime.utcnow()
                 db.commit()
         except Exception as e:
             logger.error(f"[MAIN JOB {job_id}] MySQL failure error: {e}")
@@ -843,6 +846,21 @@ def split_pdf_task(
         logger.info(f"[SPLIT JOB {split_job_id}] Completed - {total_pages} page jobs created")
 
         return {"split_job_id": split_job_id, "pages_created": total_pages}
+
+    except PDFPageLimitError:
+        # A page budget is permanent; retrying the split would spend the same
+        # budget again. No pages were extracted, persisted, or enqueued.
+        for identifier, kind in ((split_job_id, "split"), (parent_job_id, "main")):
+            redis_client.set_job_status(identifier, kind, "failed", error="PDF_PAGE_LIMIT_EXCEEDED",
+                                        completed_at=datetime.utcnow())
+        with SessionLocal() as db:
+            parent = db.query(Job).filter(Job.id == parent_job_id).with_for_update().first()
+            if parent is not None:
+                parent.status = JobStatus.FAILED
+                parent.error_message = "PDF_PAGE_LIMIT_EXCEEDED"
+                parent.completed_at = datetime.utcnow()
+                db.commit()
+        return {"split_job_id": split_job_id, "status": "failed", "error": "PDF_PAGE_LIMIT_EXCEEDED"}
 
     except Exception as exc:
         logger.error(f"[SPLIT JOB {split_job_id}] Failed: {exc}", exc_info=True)

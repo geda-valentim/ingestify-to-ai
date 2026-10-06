@@ -1,5 +1,7 @@
 # Isolated live parent runtime; the Diart subprocess uses a separate environment.
 -r requirements-whisperx-worker.in
-fastapi==0.116.1
-uvicorn==0.35.0
+fastapi==0.142.2
+starlette==1.7.0
+anyio==4.15.1
+uvicorn==0.54.0
 websockets==15.0.1

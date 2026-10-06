@@ -49,7 +49,7 @@ class TestMergePDFs:
         """Teste: Merge de PDFs bem-sucedido"""
         output_path = tmp_path / "merged.pdf"
 
-        with patch('infrastructure.adapters.pypdf_merger_adapter.PdfMerger') as mock_merger_class:
+        with patch('infrastructure.adapters.pypdf_merger_adapter.PdfWriter') as mock_merger_class:
             mock_merger = Mock()
             mock_merger_class.return_value = mock_merger
 
@@ -88,7 +88,7 @@ class TestMergePDFs:
             PDFBookmark(title="Chapter 2", page_number=5),
         ]
 
-        with patch('infrastructure.adapters.pypdf_merger_adapter.PdfMerger') as mock_merger_class:
+        with patch('infrastructure.adapters.pypdf_merger_adapter.PdfWriter') as mock_merger_class:
             mock_merger = Mock()
             mock_merger_class.return_value = mock_merger
 
@@ -174,7 +174,7 @@ class TestValidatePDF:
     @pytest.mark.asyncio
     async def test_validate_pdf_corrupted(self, adapter, sample_pdf_path):
         """Teste: PDF corrompido"""
-        from PyPDF2.errors import PdfReadError
+        from pypdf.errors import PdfReadError
 
         with patch('infrastructure.adapters.pypdf_merger_adapter.PdfReader') as mock_reader_class:
             mock_reader_class.side_effect = PdfReadError("Corrupted")
@@ -236,7 +236,7 @@ class TestGetPDFInfo:
     @pytest.mark.asyncio
     async def test_get_pdf_info_corrupted(self, adapter, sample_pdf_path):
         """Teste: PDF corrompido"""
-        from PyPDF2.errors import PdfReadError
+        from pypdf.errors import PdfReadError
 
         with patch('infrastructure.adapters.pypdf_merger_adapter.PdfReader') as mock_reader_class:
             mock_reader_class.side_effect = PdfReadError("Corrupted")
@@ -364,3 +364,24 @@ class TestParsePDFDate:
         result = adapter._parse_pdf_date(date_str)
 
         assert result is None
+
+
+@pytest.mark.asyncio
+async def test_real_pypdf_merge_preserves_pages_and_outline(tmp_path):
+    from pypdf import PdfWriter, PdfReader
+    inputs = []
+    for index in range(2):
+        path = tmp_path / f"input-{index}.pdf"
+        writer = PdfWriter()
+        writer.add_blank_page(width=72, height=72)
+        writer.write(path)
+        writer.close()
+        inputs.append(path)
+    output = tmp_path / "merged.pdf"
+    result = await PyPDFMergerAdapter().merge_pdfs(inputs, output,
+        bookmarks=[PDFBookmark(title="Second page", page_number=1)])
+    assert result.total_pages == 2
+    reader = PdfReader(output)
+    assert len(reader.pages) == 2
+    assert reader.outline[0]["/Title"] == "Second page"
+    assert reader.get_destination_page_number(reader.outline[0]) == 1

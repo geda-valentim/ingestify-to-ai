@@ -10,6 +10,7 @@ from typing import Literal, Optional
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy.orm import Session
+from shared.job_admission import Admission, admit_job
 from shared.auth import get_current_active_user
 from shared.config import get_settings
 from shared.database import get_db, SessionLocal
@@ -80,7 +81,8 @@ def unavailable(code):
 
 @router.post('', status_code=201)
 def create_session(body: CreateSession, request: Request, response: Response,
-                   user: User = Depends(get_current_active_user), db: Session = Depends(get_db)):
+                   user: User = Depends(get_current_active_user), db: Session = Depends(get_db),
+                   admission: Admission = Depends(admit_job)):
     settings = get_settings()
     fields = LocationFields(body.project, body.project_id, body.folder, body.folder_id)
     plan = prepare_upload_location(db, user, request, fields)
@@ -92,16 +94,18 @@ def create_session(body: CreateSession, request: Request, response: Response,
     if len(settings.live_internal_token) < 32 or not available(db):
         unavailable('LIVE_NOT_READY')
     store, cache = get_store(), get_redis_client()
-    job_id, committed = str(uuid.uuid4()), False
+    job_id, committed = admission.job_id, False
     generation = None
     try:
         lease, worker = store.reserve(job_id, protocol=body.protocol)
         generation = lease['generation']
         location = resolve_upload_location(db, user, plan, '/transcribe/live/sessions')
+        admission.ensure(db)
         job = Job(id=job_id, user_id=user.id, project_id=location.project_id, folder_id=location.folder_id,
             name=body.name, filename='live.pcm', source_type='audio', job_type='MAIN',
-            mime_type='application/octet-stream', status=JobStatus.PENDING)
-        db.add(job)
+            mime_type='application/octet-stream', status=JobStatus.PENDING,
+            file_size_bytes=admission.allowance_bytes)
+        job = db.merge(job)
         db.flush()
         set_job_tags(job, tags)
         db.add(LiveSession(job_id=job_id, state='created', backend=worker['backend'], model=worker['model'],
@@ -206,15 +210,42 @@ async def live_stream(ws: WebSocket, job_id: str):
     async def periodic():
         while True:
             await asyncio.sleep(5)
-            if not await asyncio.to_thread(store.renew, job_id, generation):
+            if completed:
+                return
+            renewed = await asyncio.to_thread(store.renew, job_id, generation)
+            if completed:
+                return
+            if not renewed:
                 raise LiveError('LIVE_LEASE_LOST', 1011)
             # Reload short-lived transaction; never hold a read view across WS awaits.
             with SessionLocal() as db:
                 live = db.get(LiveSession, job_id)
                 state = live.state if live else None
+            if state == 'completed' and live.generation == generation and persistence is not None:
+                # SQL commits before the persistence thread returns. Wait for
+                # its publication fence instead of treating completion as loss.
+                await asyncio.shield(persistence)
+                return
             if state not in ('streaming', 'finalizing'):
                 raise LiveError('LIVE_SESSION_GONE', 4404)
-            await asyncio.to_thread(transition, job_id, generation, [state], state, clock.samples)
+            try:
+                await asyncio.to_thread(transition, job_id, generation, [state], state, clock.samples)
+            except LiveError as exc:
+                if exc.code != 'LIVE_SESSION_GONE' or persistence is None:
+                    raise
+                # A state transition can also win before slow uploads finish;
+                # keep renewing unless this generation is durably completed.
+                with SessionLocal() as db:
+                    current = db.get(LiveSession, job_id)
+                    if not current or current.generation != generation:
+                        raise
+                    current_state = current.state
+                if current_state in ('streaming', 'finalizing'):
+                    continue
+                if current_state != 'completed':
+                    raise
+                await asyncio.shield(persistence)
+                return
 
     try:
         auth = control(await asyncio.wait_for(ws.receive_text(), 5))
@@ -339,6 +370,9 @@ async def live_stream(ws: WebSocket, job_id: str):
                         except Exception:
                             raise LiveError('LIVE_STORAGE_FAILED', 1011) from None
                         completed = True
+                        # The terminal event guarantees persisted results and
+                        # reclaimed live capacity, rather than racing finally.
+                        await asyncio.to_thread(store.release, job_id, generation)
                         await emit({'type': 'session.completed', 'result_url': f'/jobs/{job_id}/result',
                                     'inference_seconds': event['inference_seconds'],
                                     **({'diarization_digest': diarization_complete['digest']} if diarization_complete else {})})

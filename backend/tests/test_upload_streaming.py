@@ -12,6 +12,11 @@ import workers.celery_app  # noqa: F401  (import order used by the worker; avoid
 from api import routes
 from api.projects_api import UploadLocation
 from workers import tasks
+from shared.database import Base
+from shared.models import User
+from shared.job_admission import Admission
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
 USER = SimpleNamespace(id="user-1", username="alice")
 DATA = b"%PDF-1.4 " + bytes(range(256)) * 50
@@ -62,7 +67,12 @@ class FakeMinio:
 
 
 @pytest.fixture
-def env(tmp_path, monkeypatch):
+def env(tmp_path, monkeypatch, fake_redis):
+    engine = create_engine(f"sqlite:///{tmp_path / 'streaming.db'}")
+    Base.metadata.create_all(bind=engine)
+    database = sessionmaker(bind=engine)()
+    database.add(User(id=USER.id, username=USER.username, email="alice@example.test", hashed_password="unit"))
+    database.commit()
     minio = FakeMinio()
     enqueued = []
     monkeypatch.setattr(routes.settings, "temp_storage_path", str(tmp_path))
@@ -76,19 +86,28 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr(routes, "prepare_upload_location", lambda *args: "plan")
     monkeypatch.setattr(routes, "resolve_upload_location", lambda *args: location)
     monkeypatch.setattr(routes, "find_duplicate_job",
-                        lambda db, user_id, checksum, loc, transcription_profile_hash=None: (db.query(None).filter().first(), None))
+                        lambda db, user_id, checksum, loc, transcription_profile_hash=None: (db.query(None).filter().first(), None) if isinstance(db, FakeDB) else (None, None))
     monkeypatch.setattr(routes, "existing_job_location", lambda db, job, loc: {})
-    return SimpleNamespace(tmp=tmp_path, minio=minio, enqueued=enqueued)
+    environment = SimpleNamespace(tmp=tmp_path, minio=minio, enqueued=enqueued, db=database, redis=fake_redis)
+    yield environment
+    database.close()
+    engine.dispose()
 
 
 def upload_file(data=DATA, name="report.pdf"):
     return UploadFile(file=io.BytesIO(data), filename=name, headers={"content-type": "application/pdf"})
 
 
-def upload(data=DATA, db=None):
-    return asyncio.run(routes.upload_and_convert(
-        file=upload_file(data), name=None, tags=None, docling_preset="fast", current_user=USER, db=db or FakeDB(),
-    ))
+def upload(env, data=DATA, db=None):
+    admission = Admission(env.redis.client, USER.id, routes.settings)
+    admission.reserve(env.db, USER.id)
+    try:
+        return asyncio.run(routes.upload_and_convert(
+            file=upload_file(data), name=None, tags=None, docling_preset="fast",
+            current_user=USER, db=db if db is not None else env.db, admission=admission,
+        ))
+    finally:
+        admission.release(env.db)
 
 
 def staging_files(tmp):
@@ -97,7 +116,7 @@ def staging_files(tmp):
 
 
 def test_upload_is_moved_to_job_dir_and_streamed_to_minio(env):
-    response = upload()
+    response = upload(env)
     job_dir = env.tmp / "uploads" / str(response.job_id)
     saved = job_dir / "report.pdf"
 
@@ -109,7 +128,7 @@ def test_upload_is_moved_to_job_dir_and_streamed_to_minio(env):
 
 def test_upload_over_limit_is_rejected_without_leftovers(env):
     with pytest.raises(HTTPException) as exc:
-        upload(b"x" * (1024 * 1024 + 1))
+        upload(env, b"x" * (1024 * 1024 + 1))
     assert exc.value.status_code == 413
     assert staging_files(env.tmp) == []
     assert env.enqueued == []
@@ -117,17 +136,22 @@ def test_upload_over_limit_is_rejected_without_leftovers(env):
 
 def test_duplicate_upload_discards_staged_file(env):
     existing = SimpleNamespace(id="3f1c9a2e-0000-4000-8000-00000000000a", created_at=datetime.utcnow())
-    response = upload(db=FakeDB(existing=existing))
+    response = upload(env, db=FakeDB(existing=existing))
     assert str(response.job_id) == existing.id
     assert staging_files(env.tmp) == []
     assert env.enqueued == []
 
 
 def test_convert_streams_the_uploaded_file(env):
-    response = asyncio.run(routes.convert_document(
-        source_type="file", source=None, file=upload_file(), name=None, tags=None,
-        authorization=None, current_user=USER, db=FakeDB(),
-    ))
+    admission = Admission(env.redis.client, USER.id, routes.settings)
+    admission.reserve(env.db, USER.id)
+    try:
+        response = asyncio.run(routes.convert_document(
+            source_type="file", source=None, file=upload_file(), name=None, tags=None,
+            authorization=None, current_user=USER, db=env.db, admission=admission,
+        ))
+    finally:
+        admission.release(env.db)
     saved = env.tmp / "uploads" / str(response.job_id) / "report.pdf"
     assert saved.read_bytes() == DATA
     assert env.enqueued[0]["source"] == str(saved)
@@ -146,7 +170,7 @@ class BrokenDB(FakeDB):
 
 def test_staged_file_removed_when_setup_fails_before_enqueue(env):
     with pytest.raises(RuntimeError):
-        upload(db=BrokenDB())
+        upload(env, db=BrokenDB())
     assert staging_files(env.tmp) == []
     assert env.enqueued == []
 

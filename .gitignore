@@ -46,7 +46,6 @@ tmp/
 logs/
 
 # Docker
-.dockerignore
 docker-compose.override.yml
 
 # Testing
@@ -81,7 +80,6 @@ node_modules
 .pnp.js
 .yarn/install-state.gz
 /coverage
-package-lock.json
 
 # Next.js
 .next/
@@ -105,3 +103,9 @@ yarn-error.log*
 
 # Engine private keys (spec 0003) - never committed
 secrets/
+
+# Dependency lock is required for reproducible frontend builds.
+!frontend/package-lock.json
+
+# Copied from the locked PDF.js package by prebuild/predev.
+frontend/public/pdfjs/

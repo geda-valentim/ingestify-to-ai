@@ -15,6 +15,7 @@ from pathlib import Path
 import threading
 import time
 
+from workers.engines.runtime_security import require_safe_runtime
 from workers.engines.transcript_schema import normalize_aligned_segments, validate_result
 
 VERSION = '3.8.6'
@@ -101,6 +102,7 @@ def offline_silero(path):
 class WhisperXRuntime:
     def __init__(self, model_dir, device='cpu', compute_type='int8', *, batch_size=1,
                  max_audio_seconds=7200, allow_unqualified=False):
+        require_safe_runtime('whisperx')
         if importlib.metadata.version('whisperx') != VERSION:
             raise WhisperXError('WHISPERX_VERSION_MISMATCH', f'requires {VERSION}')
         self.root = Path(model_dir)
@@ -124,6 +126,7 @@ class WhisperXRuntime:
         return str(path)
 
     def _load_asr(self):
+        require_safe_runtime("whisperx")
         import whisperx
         # force offline; credentials are never passed to a job or inference call.
         import os
@@ -146,6 +149,7 @@ class WhisperXRuntime:
 
     def transcribe(self, audio_path, options=None, *, on_progress=None, should_cancel=None,
                    on_phase=None, model_name='turbo'):
+        require_safe_runtime("whisperx")
         import whisperx
         options = dict(options or {})
         should_cancel = should_cancel or options.get('_should_cancel')
@@ -281,5 +285,6 @@ class WhisperXRuntime:
 
 def transcribe(model, audio_path, options=None, *, model_name='turbo', on_progress=None, should_cancel=None):
     """Identical entry point to whisper_core, consumed by the Modal runner."""
+    require_safe_runtime("whisperx")
     return model.transcribe(audio_path, options, model_name=model_name, on_progress=on_progress,
                             should_cancel=should_cancel)

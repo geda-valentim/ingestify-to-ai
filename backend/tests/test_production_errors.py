@@ -11,7 +11,13 @@ from shared.config import Settings
 
 def test_environment_defaults_to_production(monkeypatch):
     monkeypatch.delenv("ENVIRONMENT", raising=False)
-    assert Settings(_env_file=None).environment == "production"
+    assert Settings(_env_file=None,
+        redis_password="unit-redis", redis_ssl=True,
+        celery_broker_url="rediss://redis/0", celery_result_backend="rediss://redis/1",
+        elasticsearch_url="https://elasticsearch:9200", elasticsearch_user="unit",
+        elasticsearch_password="unit-secret", elasticsearch_verify_certs=True,
+        minio_secure=True, database_url="mysql+pymysql://app:unit-secret@db/test",
+    ).environment == "production"
 
 
 def test_sql_echo_is_off_by_default(monkeypatch):

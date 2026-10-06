@@ -1,12 +1,12 @@
 # Multi-stage build for Next.js frontend
 
 # Stage 1: Dependencies
-FROM node:20-alpine AS deps
+FROM node:24-alpine AS deps
 WORKDIR /app
 
 # Copy package files
 COPY frontend/package.json ./
-COPY frontend/package-lock.json* ./
+COPY frontend/package-lock.json ./
 
 # Configure npm for better reliability
 RUN npm config set fetch-retry-mintimeout 20000 && \
@@ -17,12 +17,10 @@ RUN npm config set fetch-retry-mintimeout 20000 && \
 # Install dependencies with cache mount and retry logic
 # BuildKit cache mount speeds up rebuilds significantly
 RUN --mount=type=cache,target=/root/.npm \
-    npm install --legacy-peer-deps || \
-    npm install --legacy-peer-deps || \
-    npm install --legacy-peer-deps
+    npm ci --ignore-scripts
 
 # Stage 2: Builder
-FROM node:20-alpine AS builder
+FROM node:24-alpine AS builder
 WORKDIR /app
 
 # Copy dependencies from deps stage
@@ -38,7 +36,7 @@ ENV NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
 RUN npm run build
 
 # Stage 3: Runner
-FROM node:20-alpine AS runner
+FROM node:24-alpine AS runner
 WORKDIR /app
 
 ENV NODE_ENV=production

@@ -20,7 +20,7 @@ const PRIMARY_LINKS: NavLink[] = [
   { href: "/jobs", label: "My Jobs", icon: Search },
 ];
 const DOCS_LINK: NavLink = { href: "/docs", label: "Docs", icon: BookOpen };
-const LINK_STYLE = "flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
+const LINK_STYLE = "flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring";
 
 /**
  * Header shared by every authenticated page, so the navigation is the same
@@ -97,7 +97,7 @@ export function AppHeader({ className }: { className?: string }) {
   return (
     <header className={cn("border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60", className)}>
       <div className="container mx-auto flex h-16 items-center gap-6 px-4">
-        <Link href={user ? "/dashboard" : "/login"} className="flex shrink-0 items-center gap-2 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+        <Link href={user ? "/dashboard" : "/login"} className="flex shrink-0 items-center gap-2 rounded-md focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring">
           <FileText aria-hidden="true" className="h-6 w-6 text-primary" />
           <span className="text-xl font-bold">Ingestify</span>
         </Link>
@@ -128,7 +128,7 @@ export function AppHeader({ className }: { className?: string }) {
                     </DropdownMenu.Item>
                   ))}
                   <DropdownMenu.Separator className="my-1 h-px bg-border" />
-                  <DropdownMenu.Item onSelect={handleLogout} className={cn(LINK_STYLE, "cursor-pointer outline-none data-[highlighted]:bg-accent")}>
+                  <DropdownMenu.Item onSelect={handleLogout} className={cn(LINK_STYLE, "cursor-pointer outline-hidden data-[highlighted]:bg-accent")}>
                     <LogOut aria-hidden="true" className="h-4 w-4" /> Logout
                   </DropdownMenu.Item>
                 </DropdownMenu.Content>

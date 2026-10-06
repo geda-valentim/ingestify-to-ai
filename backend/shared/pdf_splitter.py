@@ -3,9 +3,14 @@ import subprocess
 from pathlib import Path
 from typing import List, Tuple, Optional
 import logging
+from shared.config import get_settings
 from shared.minio_client import get_minio_client
 
 logger = logging.getLogger(__name__)
+
+
+class PDFPageLimitError(ValueError):
+    """Permanent rejection before page extraction or child publication."""
 
 
 class PDFSplitter:
@@ -60,6 +65,8 @@ class PDFSplitter:
 
         try:
             total_pages = self.get_page_count(pdf_path)
+            if total_pages > get_settings().max_pdf_pages:
+                raise PDFPageLimitError('PDF_PAGE_LIMIT_EXCEEDED')
             logger.info(f"PDF tem {total_pages} páginas")
 
             page_files = []

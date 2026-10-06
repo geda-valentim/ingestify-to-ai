@@ -74,6 +74,7 @@ def build_image(spec: Dict[str, object], *, allow_unhashed: bool = False) -> "mo
         .env({
             "LD_LIBRARY_PATH": CUDA_LIBRARY_PATH.replace(PYTHON_VERSION, python_version),
             "HF_HUB_OFFLINE": "1",
+            "ENVIRONMENT": "production",
             "PYTHONPATH": REMOTE_ROOT,
             DEPLOY_ENV: json.dumps(spec, sort_keys=True),
         })

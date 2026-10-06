@@ -90,6 +90,12 @@ class FakeAsyncResult:
 @pytest.fixture
 def env(db, fake_redis, tmp_path, monkeypatch):
     enqueued = []
+    # Device/converter tests legitimately clear the Settings cache. Bind this
+    # request fixture to the current snapshot, shared with real admission.
+    from shared.config import get_settings
+    settings = get_settings()
+    monkeypatch.setattr(routes, "settings", settings)
+    monkeypatch.setattr(image_routes, "settings", settings)
     monkeypatch.setattr(routes.settings, "temp_storage_path", str(tmp_path))
     monkeypatch.setattr(routes.settings, "enable_audio_transcription", True)
     monkeypatch.setattr(image_routes.settings, "enable_image_description", True)

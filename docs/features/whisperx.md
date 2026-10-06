@@ -1,5 +1,10 @@
 # WhisperX e falantes — canário da spec 0006
 
+**Restrição de segurança (2026-10-06):** WhisperX e Diart são recusados em
+produção enquanto suas dependências tiverem advisories sem resolução compatível.
+Flags de qualificação não removem esse bloqueio. Testes locais requerem
+`ENVIRONMENT=development`; veja a [revisão de dependências](../security-python-dependencies.md).
+
 Atualizado em 2026-10-05. Implementação atrás de configuração explícita; o provider
 padrão continua `faster-whisper` até passar pelos gates da
 [spec 0006](../specs/0006-whisperx-e-identificacao-de-falantes.md).

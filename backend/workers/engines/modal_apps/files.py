@@ -27,6 +27,7 @@ SOURCE_FILES: List[Path] = [
     WORKERS_DIR / "engines" / "__init__.py",
     WORKERS_DIR / "engines" / "whisper_core.py",
     WORKERS_DIR / "engines" / "whisperx_core.py",
+    WORKERS_DIR / "engines" / "runtime_security.py",
     WORKERS_DIR / "engines" / "transcript_schema.py",
     MODAL_APPS_DIR / "__init__.py",
     MODAL_APPS_DIR / "files.py",
