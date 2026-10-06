@@ -1,0 +1,61 @@
+# Only reviewed historical false positives. Real exposures remain blocking.
+# curl-auth-header; documented example, synthetic fixture or descriptive text
+5bece0942edce5609fb83402a8568beb71f21920:docs/LANDING_PAGE_BRIEF.md:curl-auth-header:216
+# generic-api-key; documented example, synthetic fixture or descriptive text
+5002ae803e07440b715d7bd45edcb8556ff30bcf:backend/tests/test_remote_engine.py:generic-api-key:299
+# generic-api-key; documented example, synthetic fixture or descriptive text
+9b9144f6c511301c8f0174132e70042487fc18d8:backend/shared/engines/sealing.py:generic-api-key:9
+# generic-api-key; documented example, synthetic fixture or descriptive text
+9b9144f6c511301c8f0174132e70042487fc18d8:backend/tests/test_engine_secrets.py:generic-api-key:22
+# generic-api-key; documented example, synthetic fixture or descriptive text
+9b9144f6c511301c8f0174132e70042487fc18d8:backend/tests/test_engine_secrets.py:generic-api-key:23
+# generic-api-key; documented example, synthetic fixture or descriptive text
+9b9144f6c511301c8f0174132e70042487fc18d8:backend/tests/test_engine_secrets.py:generic-api-key:99
+# jwt; documented example, synthetic fixture or descriptive text
+9b9144f6c511301c8f0174132e70042487fc18d8:backend/tests/test_engine_secrets.py:jwt:98
+# generic-api-key; documented example, synthetic fixture or descriptive text
+07b269841e00f914a8f0dc5269bfa01a8f7b3c2d:backend/tests/test_upload_projects.py:generic-api-key:37
+# curl-auth-header; documented example, synthetic fixture or descriptive text
+73429472a68858eba2e40c666889591a5e26932b:backend/api/routes.py:curl-auth-header:71
+# curl-auth-header; documented example, synthetic fixture or descriptive text
+73429472a68858eba2e40c666889591a5e26932b:backend/api/routes.py:curl-auth-header:76
+# curl-auth-header; documented example, synthetic fixture or descriptive text
+7af352c9cb5a254171423bbe5fe8ece45ef1cb79:test_upload_apikey.sh:curl-auth-header:35
+# curl-auth-header; documented example, synthetic fixture or descriptive text
+7c0af6ae92b7c68038cb3d4e085f422eb0e1174e:backend/docs/IMPLEMENTATION_SUMMARY.md:curl-auth-header:199
+# curl-auth-header; documented example, synthetic fixture or descriptive text
+7c0af6ae92b7c68038cb3d4e085f422eb0e1174e:backend/docs/IMPLEMENTATION_SUMMARY.md:curl-auth-header:213
+# curl-auth-header; documented example, synthetic fixture or descriptive text
+7c0af6ae92b7c68038cb3d4e085f422eb0e1174e:backend/docs/IMPLEMENTATION_SUMMARY.md:curl-auth-header:217
+# curl-auth-header; documented example, synthetic fixture or descriptive text
+7c0af6ae92b7c68038cb3d4e085f422eb0e1174e:backend/docs/README_CLEAN_ARCH.md:curl-auth-header:84
+# curl-auth-header; documented example, synthetic fixture or descriptive text
+7c0af6ae92b7c68038cb3d4e085f422eb0e1174e:backend/docs/README_CLEAN_ARCH.md:curl-auth-header:89
+# curl-auth-header; documented example, synthetic fixture or descriptive text
+7c0af6ae92b7c68038cb3d4e085f422eb0e1174e:backend/docs/README_CLEAN_ARCH.md:curl-auth-header:93
+# curl-auth-header; documented example, synthetic fixture or descriptive text
+7c0af6ae92b7c68038cb3d4e085f422eb0e1174e:frontend/.next/standalone/.next/server/app/api-keys/page.js:curl-auth-header:2
+# generic-api-key; public React compiler hook signature
+7c0af6ae92b7c68038cb3d4e085f422eb0e1174e:frontend/.next/static/chunks/_4ce210c6._.js:generic-api-key:1304
+# curl-auth-header; documented example, synthetic fixture or descriptive text
+7c0af6ae92b7c68038cb3d4e085f422eb0e1174e:frontend/.next/static/chunks/app/api-keys/page-11f4ec3c1fba8506.js:curl-auth-header:1
+# curl-auth-header; documented example, synthetic fixture or descriptive text
+12a445303c9f42cdbad685ea90fe8268fde1ca89:frontend/.next/server/chunks/ssr/[root-of-the-server]__86d70dac._.js:curl-auth-header:1163
+# curl-auth-header; documented example, synthetic fixture or descriptive text
+12a445303c9f42cdbad685ea90fe8268fde1ca89:frontend/.next/static/chunks/app/api-keys/page-da4164c9335d72cb.js:curl-auth-header:1
+# curl-auth-header; documented example, synthetic fixture or descriptive text
+12a445303c9f42cdbad685ea90fe8268fde1ca89:frontend/.next/static/chunks/_dd5a0f2b._.js:curl-auth-header:1202
+# generic-api-key; public React compiler hook signature
+12a445303c9f42cdbad685ea90fe8268fde1ca89:frontend/.next/static/chunks/_dd5a0f2b._.js:generic-api-key:1281
+# curl-auth-header; documented example, synthetic fixture or descriptive text
+12a445303c9f42cdbad685ea90fe8268fde1ca89:frontend/app/api-keys/page.tsx:curl-auth-header:287
+# curl-auth-header; documented example, synthetic fixture or descriptive text
+12a445303c9f42cdbad685ea90fe8268fde1ca89:frontend/QUICKSTART.md:curl-auth-header:61
+# curl-auth-header; documented example, synthetic fixture or descriptive text
+c831f512091eda2143e7243c92925a283bb49ede:docs/STATUS.md:curl-auth-header:133
+# curl-auth-header; documented example, synthetic fixture or descriptive text
+c831f512091eda2143e7243c92925a283bb49ede:docs/STATUS.md:curl-auth-header:141
+# curl-auth-header; documented example, synthetic fixture or descriptive text
+c831f512091eda2143e7243c92925a283bb49ede:README.md:curl-auth-header:124
+# curl-auth-header; documented example, synthetic fixture or descriptive text
+c831f512091eda2143e7243c92925a283bb49ede:README.md:curl-auth-header:135

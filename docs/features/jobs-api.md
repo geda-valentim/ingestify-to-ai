@@ -140,15 +140,36 @@ curl -H "X-API-Key: $INGESTIFY_API_KEY" http://localhost:8000/jobs/$JOB_ID/resul
 
 ### `DELETE /jobs/{job_id}`
 
-Remove, nesta ordem: o resultado e as páginas no Elasticsearch; para transcrições, os
-objetos de áudio/legendas no MinIO; as linhas do MySQL (`jobs` filhos, `pages`, o MAIN —
+Jobs pendentes/em processamento, ou com páginas em execução, respondem **409**
+`JOB_ACTIVE_DELETE_FORBIDDEN`; isso impede liberar a vaga enquanto o trabalho
+continua. Retry de páginas também passa pela admissão por usuário.
+
+Primeiro confirma a remoção do original no MinIO (documento ou áudio). Se a
+remoção falhar, responde **503** `JOB_INPUT_CLEANUP_FAILED` e conserva a linha SQL
+com seu orçamento de entrada; repetir a exclusão é seguro se o original já foi
+purgado. Depois remove o resultado e as páginas no Elasticsearch; para
+transcrições, tenta remover as legendas no MinIO; as linhas do MySQL (`jobs` filhos, `pages`, o MAIN —
 `job_tags` cai por cascade); e as chaves do Redis (MAIN, SPLIT, PAGEs, MERGE e o índice
 `user:{id}:jobs`). Responde `{message, job_id, deleted_at}`.
 
-**Lacuna:** para documentos, os objetos no MinIO **não** são apagados — o original
-(`ingestify-uploads/uploads/{job_id}/…`), os PDFs por página
-(`ingestify-pages/pages/{job_id}/…`) e os Markdown por página
-(`ingestify-results/results/{job_id}/…`) permanecem.
+**Lacuna:** os objetos derivados de documentos no MinIO, como PDFs por página
+(`ingestify-pages/pages/{job_id}/…`) e Markdown por página
+(`ingestify-results/results/{job_id}/…`), permanecem. Esse volume derivado não
+faz parte do orçamento de entrada.
+
+## Admissão por usuário
+
+Criação de jobs exige orçamento compartilhado entre JWT e API keys do mesmo
+usuário. São 20 criações/minuto, 4 jobs ativos, 1.000 retidos e 1 GiB de entradas
+retidas/projetadas por padrão. Variáveis `JOB_*` em `.env.example` ajustam esses
+valores. O limite é validado antes da leitura/processamento no handler; o parser
+HTTP multipart ainda pode receber/spoolar bytes antes da dependency da rota.
+
+Orçamento esgotado responde **429**; Redis/SQL indisponível responde **503**.
+Reservas provisórias expiram após 600 segundos; jobs persistidos e retries
+automáticos continuam ocupando vaga. O splitter rejeita PDFs acima de
+`MAX_PDF_PAGES=500` antes de criar as páginas. O orçamento SQL não é uma quota
+física para todo o espaço de outputs no Elasticsearch/MinIO.
 
 ## Configuração
 
