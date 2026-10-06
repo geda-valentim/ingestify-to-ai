@@ -52,6 +52,12 @@ export function DocsBrowser({
           </ul>
         </div>
       ))}
+      <Link
+        href="/agents"
+        className="block px-3 text-primary underline underline-offset-4"
+      >
+        {pt ? "Ingestify para agentes" : "Ingestify for agents"}
+      </Link>
       <a
         href={`${API_URL}/openapi.json`}
         className="block px-3 text-primary underline underline-offset-4"

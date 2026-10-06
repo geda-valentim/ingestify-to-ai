@@ -9,6 +9,9 @@ export function GET() {
     "",
     "Documentation pages contain static HTML and can be read without JavaScript. Examples are illustrative; consult the OpenAPI schema for request and response contracts.",
     "",
+    "## Agent integration",
+    `- [Ingestify for agents](${DOCS_ORIGIN}/agents): HTTP tool workflows for ingesting, tracking, reading and searching data.`,
+    "",
     "## Documentation",
     `- [Overview](${DOCS_ORIGIN}/docs): English documentation index.`,
     ...DOCS_TOPICS.map(
