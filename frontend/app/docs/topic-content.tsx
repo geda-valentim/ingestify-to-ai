@@ -1750,8 +1750,8 @@ curl --fail "${API_URL}/admin/gpus" \\
 
       <Endpoint method="GET" path="/admin/execution-profiles" />
       <Endpoint
-        method="PUT"
-        path="/admin/engines/{id}/runtime-profile-binding"
+        method="POST"
+        path="/admin/engines/{id}/runtime-profile/bind"
       />
       <P>{t.capacity}</P>
       <P>{t.health}</P>
