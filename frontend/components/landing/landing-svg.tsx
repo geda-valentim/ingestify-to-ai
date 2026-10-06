@@ -1,5 +1,5 @@
 "use client";
-import { useId } from "react";
+import { useId, useState } from "react";
 
 function Spectrum({ id }: { id: string }) {
   return (
@@ -352,90 +352,162 @@ export function ComputeDiagram({ cloud }: { cloud: boolean }) {
   );
 }
 
+const lakeAdapters = [
+  { name: "MinIO", label: "SELF-HOSTED", destination: "your MinIO bucket" },
+  { name: "Amazon S3", label: "AWS", destination: "your Amazon S3 bucket" },
+  {
+    name: "Google Cloud Storage",
+    label: "GCP",
+    destination: "your Google Cloud Storage bucket",
+  },
+  {
+    name: "Azure Blob",
+    label: "MICROSOFT AZURE",
+    destination: "your Azure Blob container",
+  },
+];
+
 export function LakeDeliveryDiagram() {
   const id = useId();
+  const [selected, setSelected] = useState(0);
   return (
     <div className="lake-flow">
-      <svg
-        className="lake-connections"
-        viewBox="0 0 1000 120"
-        preserveAspectRatio="none"
-        aria-hidden="true"
+      <div className="lake-pipeline">
+        <svg
+          className="lake-connections"
+          viewBox="0 0 1000 120"
+          preserveAspectRatio="none"
+          aria-hidden="true"
+        >
+          <defs>
+            <linearGradient
+              id={id}
+              gradientUnits="userSpaceOnUse"
+              x1="166"
+              y1="60"
+              x2="500"
+              y2="60"
+            >
+              <stop stopColor="#f06b91" />
+              <stop offset=".25" stopColor="#eeb94a" />
+              <stop offset=".5" stopColor="#6dc7ad" />
+              <stop offset=".75" stopColor="#6e9fe9" />
+              <stop offset="1" stopColor="#b889df" />
+            </linearGradient>
+          </defs>
+          <path
+            d="M166 60H500"
+            stroke={`url(#${id})`}
+            strokeWidth="2"
+            className="diagram-route"
+          />
+          <path
+            d="M500 60H1000"
+            stroke="#999"
+            strokeWidth="1.5"
+            strokeDasharray="5 7"
+          />
+        </svg>
+        <ol>
+          <li>
+            <span className="lake-node">
+              <svg viewBox="0 0 48 48" aria-hidden="true">
+                <path d="M13 7h16l7 7v27H13zM29 7v8h7M19 23h11M19 29h11M19 35h7" />
+              </svg>
+            </span>
+            <span className="lake-state">AVAILABLE</span>
+            <h3>Source files</h3>
+            <p>
+              Documents, images
+              <br />
+              and recordings
+            </p>
+          </li>
+          <li>
+            <span className="lake-node">
+              <svg viewBox="0 0 48 48" aria-hidden="true">
+                <path d="m5 16 19-10 19 10-19 10zM5 24l19 10 19-10M5 32l19 10 19-10" />
+              </svg>
+            </span>
+            <span className="lake-state">AVAILABLE</span>
+            <h3>Conversion API</h3>
+            <p>
+              Markdown, text,
+              <br />
+              transcripts and metadata
+            </p>
+          </li>
+          <li className="lake-planned">
+            <span className="lake-node">
+              <svg viewBox="0 0 48 48" aria-hidden="true">
+                <ellipse cx="24" cy="10" rx="17" ry="6" />
+                <path d="M7 10v27c0 8 34 8 34 0V10M7 23c0 8 34 8 34 0" />
+              </svg>
+            </span>
+            <span className="lake-state">PLANNED DELIVERY</span>
+            <h3>Your Data Lake</h3>
+            <p>
+              Your destination.
+              <br />
+              Your choice of adapter.
+            </p>
+          </li>
+        </ol>
+      </div>
+      <div
+        className="lake-adapters"
+        role="group"
+        aria-label="Preview a planned Data Lake adapter"
       >
-        <defs>
-          <linearGradient
-            id={id}
-            gradientUnits="userSpaceOnUse"
-            x1="166"
-            y1="60"
-            x2="500"
-            y2="60"
+        <svg
+          className="lake-branches"
+          viewBox="0 0 48 292"
+          preserveAspectRatio="none"
+          aria-hidden="true"
+        >
+          <defs>
+            <Spectrum id={`${id}-branches`} />
+          </defs>
+          {lakeAdapters
+            .map((adapter, index) => ({ ...adapter, index }))
+            .sort(
+              (a, b) =>
+                Number(a.index === selected) - Number(b.index === selected),
+            )
+            .map(({ name, index }) => (
+              <path
+                key={name}
+                d={`M0 44H12Q20 44 20 ${index === 0 ? 36 : 52}V${32 + index * 76}H48`}
+                fill="none"
+                stroke={selected === index ? `url(#${id}-branches)` : "#ddd"}
+                strokeWidth={selected === index ? 2 : 1}
+              />
+            ))}
+        </svg>
+        {lakeAdapters.map((adapter, index) => (
+          <button
+            key={adapter.name}
+            type="button"
+            aria-pressed={selected === index}
+            aria-controls="lake-adapter-preview"
+            onClick={() => setSelected(index)}
           >
-            <stop stopColor="#f06b91" />
-            <stop offset=".25" stopColor="#eeb94a" />
-            <stop offset=".5" stopColor="#6dc7ad" />
-            <stop offset=".75" stopColor="#6e9fe9" />
-            <stop offset="1" stopColor="#b889df" />
-          </linearGradient>
-        </defs>
-        <path
-          d="M166 60H500"
-          stroke={`url(#${id})`}
-          strokeWidth="2"
-          className="diagram-route"
-        />
-        <path
-          d="M500 60H834"
-          stroke="#999"
-          strokeWidth="1.5"
-          strokeDasharray="5 7"
-        />
-      </svg>
-      <ol>
-        <li>
-          <span className="lake-node">
-            <svg viewBox="0 0 48 48" aria-hidden="true">
-              <path d="M13 7h16l7 7v27H13zM29 7v8h7M19 23h11M19 29h11M19 35h7" />
-            </svg>
-          </span>
-          <span className="lake-state">AVAILABLE</span>
-          <h3>Source files</h3>
-          <p>
-            Documents, images
-            <br />
-            and recordings
-          </p>
-        </li>
-        <li>
-          <span className="lake-node">
-            <svg viewBox="0 0 48 48" aria-hidden="true">
-              <path d="m5 16 19-10 19 10-19 10zM5 24l19 10 19-10M5 32l19 10 19-10" />
-            </svg>
-          </span>
-          <span className="lake-state">AVAILABLE</span>
-          <h3>Conversion API</h3>
-          <p>
-            Markdown, text,
-            <br />
-            transcripts and metadata
-          </p>
-        </li>
-        <li className="lake-planned">
-          <span className="lake-node">
-            <svg viewBox="0 0 48 48" aria-hidden="true">
-              <ellipse cx="24" cy="10" rx="17" ry="6" />
-              <path d="M7 10v27c0 8 34 8 34 0V10M7 23c0 8 34 8 34 0" />
-            </svg>
-          </span>
-          <span className="lake-state">PLANNED DELIVERY</span>
-          <h3>Your Data Lake</h3>
-          <p>
-            The next destination
-            <br />
-            for converted data
-          </p>
-        </li>
-      </ol>
+            <span>{adapter.label}</span>
+            <strong>{adapter.name}</strong>
+            <span className="lake-adapter-dot" aria-hidden="true" />
+          </button>
+        ))}
+      </div>
+      <p
+        className="lake-adapter-preview"
+        id="lake-adapter-preview"
+        aria-live="polite"
+        aria-atomic="true"
+      >
+        <span>PLANNED ADAPTER</span>
+        <strong>{lakeAdapters[selected].name}</strong>
+        <span>Converted data → {lakeAdapters[selected].destination}.</span>
+      </p>
     </div>
   );
 }
