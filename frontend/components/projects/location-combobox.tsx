@@ -215,7 +215,7 @@ export function LocationCombobox({
             commitDraft();
           }}
           onKeyDown={onKeyDown}
-          className="min-w-0 flex-1 bg-transparent py-2 outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed"
+          className="min-w-0 flex-1 bg-transparent py-2 outline-hidden placeholder:text-muted-foreground disabled:cursor-not-allowed"
         />
         {isNew && (
           <span className="shrink-0 rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-primary">

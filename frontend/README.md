@@ -27,7 +27,7 @@ A modern Next.js frontend for the Doc2MD API - Convert documents to Markdown wit
 
 ### Prerequisites
 
-- Node.js 18+
+- Node.js 24 LTS
 - npm or pnpm
 - Doc2MD API running (default: http://localhost:8080)
 
@@ -40,7 +40,7 @@ cd doc2md_front
 
 2. Install dependencies:
 ```bash
-npm install
+npm ci
 ```
 
 3. Configure environment variables:
@@ -100,7 +100,7 @@ doc2md_front/
 - `npm run dev` - Start development server with Turbopack
 - `npm run build` - Build for production
 - `npm run start` - Start production server
-- `npm run lint` - Run ESLint
+- `npm run typecheck` - Check TypeScript
 
 ## Usage
 

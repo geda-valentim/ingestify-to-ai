@@ -85,7 +85,7 @@ function EngineCard({ engine }: { engine: Engine }) {
               <CardTitle className="text-lg">
                 <Link
                   href={`/admin/engines/${encodeURIComponent(engine.slug)}`}
-                  className="hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded"
+                  className="hover:underline focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring rounded"
                 >
                   {engine.display_name}
                 </Link>

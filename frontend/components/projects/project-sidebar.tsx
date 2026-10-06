@@ -162,7 +162,7 @@ export function ProjectSidebar({
 }
 
 const selectClass =
-  "h-10 w-full min-w-0 rounded-md border border-input bg-background px-3 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2";
+  "h-10 w-full min-w-0 rounded-md border border-input bg-background px-3 text-sm ring-offset-background focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2";
 
 /** Below md there is no room for a column (and no Sheet component): two plain selects. */
 export function ProjectSelects({

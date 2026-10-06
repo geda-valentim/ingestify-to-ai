@@ -162,7 +162,7 @@ export function TagInput({
             if (draft.trim()) add(draft);
           }}
           placeholder={value.length ? "" : full ? "" : placeholder}
-          className="flex-1 min-w-[8rem] bg-transparent py-0.5 outline-none placeholder:text-muted-foreground"
+          className="flex-1 min-w-[8rem] bg-transparent py-0.5 outline-hidden placeholder:text-muted-foreground"
         />
       </div>
       {focused && suggestions.length > 0 && !full && (

@@ -79,8 +79,8 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
                 href={href}
                 aria-current={active ? "page" : undefined}
                 className={cn(
-                  "inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                  active ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
+                  "inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring",
+                  active ? "bg-background text-foreground shadow-xs" : "text-muted-foreground hover:text-foreground"
                 )}
               >
                 <Icon className="h-4 w-4" aria-hidden />
