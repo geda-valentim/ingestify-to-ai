@@ -1,3 +1,4 @@
+import { ComputeGuide, ComputeGuideLinks } from "./compute-guides";
 import Link from "next/link";
 import { DOCS_API_URL as API_URL } from "./config";
 import { CodeBlock } from "./code-block";
@@ -1631,6 +1632,7 @@ curl --fail "${API_URL}/admin/gpus" \\
   return (
     <Section id="compute" title={t.title}>
       <P>{t.intro}</P>
+      <ComputeGuideLinks lang={lang} />
       <P>{t.admin}</P>
       <Table
         head={t.head}
@@ -2059,6 +2061,11 @@ export function TopicContent({ topic, lang }: { topic: string; lang: Lang }) {
       return <LiveCaptureDocs lang={lang} copyLabel={t.copy} />;
     case "platform-settings":
       return <PlatformSettingsDocs lang={lang} />;
+    case "engines":
+    case "engine-operations":
+    case "execution-profiles":
+    case "engine-access":
+      return <ComputeGuide topic={topic} lang={lang} />;
     case "compute":
       return <ComputeDocs lang={lang} copyLabel={t.copy} />;
     default:

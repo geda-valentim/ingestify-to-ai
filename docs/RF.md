@@ -524,3 +524,70 @@ X-RateLimit-Limit: 10
 X-RateLimit-Remaining: 7
 X-RateLimit-Reset: 1696184400
 ```
+
+
+---
+
+## RF012 - Engines, operações, perfis e acesso
+
+Contratos implementados conferidos em **2026-10-06** nas specs [0003](specs/0003-motores-de-execucao-roteamento-e-orcamento.md),
+[0007](specs/0007-operacao-de-engines-pelo-admin.md) e [0009](specs/0009-perfis-de-execucao-e-controle-de-acesso.md).
+Os IDs correspondem aos requisitos publicados na documentação web em português e inglês.
+Eles descrevem comportamento da implementação; ativação das flags não comprova readiness ou qualificação de produção.
+
+| Grupo | Guia público | Aplicações |
+|---|---|---|
+| ENG | [/docs/engines](https://dev.ingestify.ai/pt/docs/engines) | PDFs por página, OCR/visão local, rajadas de áudio, roteamento e custo Modal |
+| OPS | [/docs/engine-operations](https://dev.ingestify.ai/pt/docs/engine-operations) | Manutenção com drain, escala/perfil, aquecer/liberar modelo e recuperar exposição |
+| PRF | [/docs/execution-profiles](https://dev.ingestify.ai/pt/docs/execution-profiles) | Configuração reutilizável, revisões imutáveis, publicação e vínculo explícito |
+| ACL | [/docs/engine-access](https://dev.ingestify.ai/pt/docs/engine-access) | Observabilidade, separação de funções, dev sem produção, delegação e credenciais |
+
+### RF012.1 - Requisitos verificáveis
+
+| ID | Comportamento e condição de aceitação |
+|---|---|
+| ENG-01 · Inventário | Listar engines e adapters permitidos, bindings, configured × alive, health e deployments. Leitura delegada e catálogos são filtrados pelo escopo; métricas desconhecidas não significam zero. |
+| ENG-02 · Conexões | Bootstrap cria conexão Modal pausada, grava ou exclui credenciais seladas com senha atual, testa uma ou todas as conexões e registra auditoria. A API não devolve segredos; conta gerenciada respeita locks e exposição pendente. |
+| ENG-03 · Capacidade e VRAM | Validar soma das pegadas e reserva por GPU física, limites do adapter e capacidade remota do executor. GPU local e Modal aceitam E=1; binding local sem GPU pode admitir E>1. Declaração legada não escala processos. |
+| ENG-04 · Roteamento | Aceitar passos ordenados, grupos priority/fill_first, condições de espera/backlog e spend_cap. Sem rota, manter o caminho local habitual. Rotas de documento/visão aceitam apenas local; captura live não usa feature_routes. |
+| ENG-05 · Despacho e recuperação | Persistir backlog FIFO e ledger por tentativa, limitar em voo, usar lease do líder e claim/heartbeat do executor. Recolocar claims abandonados, aplicar backoff e max_attempts; remover rota drena para o caminho habitual. |
+| ENG-06 · Lifecycle | Ativar libera novas colocações; pausar bloqueia novas e preserva trabalhos em voo; reset-health limpa falhas registradas. Estas ações de escalonamento não iniciam, drenam nem desligam containers. |
+| ENG-07 · Orçamento | Admitir remoto somente se max(ledger, reportado) + reservado + estimativa couber no limite menos a margem. Aplicar período/fuso, limite por usuário quando habilitado e caps de rota; reconciliar gasto e alertar antes/esgotamento. |
+| ENG-08 · Qualificação e desempenho | Conferir fingerprint do deploy e readiness, consultar benchmarks e velocidade aprendida. Benchmark CLI tem plano, amostra, teto remoto e confirmação; recommendation com --apply exige redeploy se mudar o remoto. |
+| OPS-01 · Capabilities | Exibir somente features e ações suportadas/autorizadas com razão do bloqueio. Consultar capabilities para a feature selecionada; ação não descrita não pode ser executada. |
+| OPS-02 · Prévia | Criar plano sem iniciar recursos: congelar versão da engine, revisão, hash, identidade, recursos afetados, efeitos, etapas, custo e expiração de cinco minutos. |
+| OPS-03 · Execução idempotente | Executar plan_id + plan_hash com Idempotency-Key; retornar 202 e operation_id. Retry da mesma requisição usa a mesma chave e não duplica efeitos. Outra intenção exige nova chave/plano. |
+| OPS-04 · Locks, drenagem e readiness | Reservar recursos canônicos, cobrir desejado e aplicado, bloquear colocações afetadas e aguardar ledger/live/Celery. Timeout de drain falha sem desligar à força. Verificar inferência, imagem e réplica; processo vivo não basta. |
+| OPS-05 · Eventos e auditoria | Persistir histórico, snapshot e eventos com seq. Polling after/next ou SSE com Authorization recupera eventos após reconexão. Filtrar e revalidar sessão/escopo por lote; nunca pôr token na URL. |
+| OPS-06 · Cancelar e recuperar | can_cancel/can_recover dependem de estado e permissão atual. Cancelamento cooperativo não desfaz RPC aceito. Recovery observa exposição antes de continuar e usa o solicitante atual sem apagar o iniciador. |
+| OPS-07 · Exposição e revogação | Revalidar autoridade antes de cada efeito; revogação impede novos passos. Resultado incerto mantém locks/reservas; watchdog limpa exposição registrada sem iniciar recursos com uma sessão revogada. |
+| PRF-01 · Biblioteca e metadata | Listar/detalhar somente perfis autorizados. Criar nome (1–100 caracteres), descrição (até 1.000), adapter, feature e ambiente; editar nome/descrição com versão esperada. |
+| PRF-02 · Revisões e publicação | Salvar novo payload como revisão imutável, publicar revision_id explícito com version. Rascunho posterior não substitui publicação anterior; catálogo aprovado é fixado por fingerprint. |
+| PRF-03 · Vínculo | POST bind aceita versão da engine, feature e revisão publicada. Resolver host/GPU/modelo e gravar origem/hash/snapshot atomicamente. Não iniciar container, deploy ou reserva de orçamento. |
+| PRF-04 · Histórico, clone e importação | Detalhe mostra revisões e vínculos permitidos. Clone pela UI cria perfil novo em rascunho; bootstrap pode importar desejado legado retirando campos resolvidos. Arquivar barra novos vínculos e preserva histórico/aplicado. |
+| PRF-05 · Compatibilidade | Validar schema/adapter, réplicas, VRAM, host/UUID, ambiente, modelo e fingerprint. Alteração do catálogo ou manifest exige revisão/vínculo explícito, não troca silenciosa em operação. |
+| PRF-06 · Prazo e concorrência de edição | warm_for_seconds até 86.400; template warm_until=null. Resolver deadline uma vez no vínculo. Retry não renova prazo; VERSION_CONFLICT pede leitura e revisão da intenção. |
+| ACL-01 · Sessão e navegação | /access/me e /auth/me retornam estado e permissões; servidor autoriza cada ação e filtra listagens/catálogos/logs/SSE. Cache isolado por sessão não reaproveita dados entre logins. |
+| ACL-02 · Políticas revisionadas | Criar política e revisões de constraints imutáveis; o grant fixa policy_revision_id. Revisão nova não amplia grants existentes. |
+| ACL-03 · Grants e validade | Conceder a usuário ativo papel/subconjunto, revisão de política e expires_at UTC. Revogar com version; usuário inativo, grant vencido/revogado ou pai inválido perde autoridade. |
+| ACL-04 · Uma decisão completa | Um único grant precisa cobrir todas as permissões, identidades e limites da decisão. Não combinar host de um grant com custo ou feature de outro. |
+| ACL-05 · Delegação limitada | Envelope limita permissões concedíveis, escopo, tetos e max_grant_seconds. Grant filho não amplia pai nem prazo; revogação/expiração parental invalida descendentes. |
+| ACL-06 · Recursos compartilhados | Bootstrap classifica ambiente e todos os consumidores de cada recurso. Autorizar união do desejado e aplicado; consumidor desconhecido, não qualificado ou fora do grant bloqueia operação delegada. |
+| ACL-07 · Revogação e auditoria | Autorizar novamente no enqueue, runner, agente e antes de RPC. Admission/epoch duráveis ordenam revogação e efeitos. Auditar publicação, vínculo, grant, estado, cancelamento e recovery, sem segredos. |
+| ACL-08 · Bootstrap e CLI | Gestão global de GPU, rota, orçamento, configuração bruta e lifecycle permanece bootstrap-only. Registrar/ativar/desativar installation principals e alterar estado de sujeitos com comparação esperada; CLI direta não usa sessão delegada. |
+
+### RF012.2 - Pré-condições, interfaces e limites
+
+- Biblioteca/delegação: schema de acesso migrado, `ENGINE_ACCESS_ENABLED` e sessão JWT.
+- Controle físico: schema de controle migrado, `ENGINE_CONTROL_ENABLED`, runner e dependências do adapter.
+- Local: agente com manifests/comandos/imagens e serviços registrados, heartbeat ≤30 s e inventário válido.
+- Modal: credenciais, identidade testada, orçamento, worker remoto, watchdog e artifact/protocolo compatíveis.
+- Binding legado declara capacidade sem escalar containers; ativar/pausar governa novas colocações.
+- Runtime gerenciado: criar/publicar/vincular não executa efeitos; prévia e execução são separadas e aplicado exige verificação.
+- Rotas de documento/visão permanecem locais; Modal atende transcrição de arquivos. Microfone tem worker/piloto próprio.
+- AWS, GCP e Vast AI dependem de adapters futuros; WhisperX não está qualificado para controle Modal.
+- Enum `benchmark` não significa suporte no modal de operações: a medição continua na CLI.
+
+Campos, limites, papéis, API, erros e exemplos estão nos quatro guias públicos.
+Bootstrap e rollback: [controle](runbooks/engine-control-bootstrap.md) e [perfis/acesso](runbooks/execution-profiles-access.md).
+Evidências e canários pendentes: [validação](benchmarks/execution-profiles-validation.md).

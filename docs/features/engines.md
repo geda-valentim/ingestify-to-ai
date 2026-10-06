@@ -226,8 +226,11 @@ docker compose exec api python scripts/engines.py routes set transcription \
 
 ## Capacidade e VRAM
 
-A capacidade é **declarada**, nunca medida: o Ingestify não escala containers Docker. Ele mostra
-"configurado X, vivos Y" e o comando a rodar (`scale_hint`).
+A capacidade do binding legado é **declarada**, não medida. Alterá-la não escala
+containers Docker: a UI mostra "configurado X, vivos Y" e o comando (`scale_hint`).
+Com o controle da spec 0007 habilitado, operações explícitas aplicam o perfil ao
+serviço registrado pelo agente; o executor verifica réplicas e readiness antes
+de atualizar o aplicado. Veja o [guia de operações](https://dev.ingestify.ai/pt/docs/engine-operations).
 
 | Feature | Serviço local | Pegada padrão por processo (com contexto CUDA) | Como mudar réplicas |
 |---|---|---|---|
@@ -568,3 +571,14 @@ $R test --all && $R reconcile
 # 4. Local (opcional, grátis): imprime o comando do container avulso; rode-o com a placa ociosa
 docker compose exec api python scripts/engines.py benchmark --engine local --sample /tmp/ingestify/bench/a.mp3:240 --concurrency 1,2 --pause-local
 ```
+
+## Requisitos, funcionalidades e aplicações na documentação web
+
+O índice público em [/docs/compute](https://dev.ingestify.ai/pt/docs/compute) reúne:
+
+- [Recursos de engines](https://dev.ingestify.ai/pt/docs/engines): ENG-01 a ENG-08, conexões, adapters, capacidade/VRAM, rotas, orçamento, desempenho e casos de uso.
+- [Operações](https://dev.ingestify.ai/pt/docs/engine-operations): OPS-01 a OPS-07, dependências, estados, ações por adapter, prévia, idempotência, drain, logs/SSE, cancelamento e recovery.
+- [Perfis](https://dev.ingestify.ai/pt/docs/execution-profiles): PRF-01 a PRF-06, campos, revisões, catálogo e vínculo.
+- [Acesso](https://dev.ingestify.ai/pt/docs/engine-access): ACL-01 a ACL-08, papéis, ABAC, grants, delegação, consumidores, revogação e principal CLI.
+
+Versões em inglês usam os mesmos paths sem `/pt`. Rastreabilidade em [RF012](../RF.md#rf012---engines-operações-perfis-e-acesso).
