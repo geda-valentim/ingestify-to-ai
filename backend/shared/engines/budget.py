@@ -63,15 +63,29 @@ def _dec(value) -> Decimal:
 
 
 def settled(db: Session, engine_id: str, period: date) -> Decimal:
-    return _dec(db.query(func.sum(EngineUsage.actual_usd)).filter(
+    total = _dec(db.query(func.sum(EngineUsage.actual_usd)).filter(
         EngineUsage.engine_id == engine_id, EngineUsage.period_start == period,
         EngineUsage.status == "settled").scalar())
+    from shared.config import get_settings
+    if get_settings().engine_control_enabled:
+        from shared.engine_control.models import EngineOperation
+        total += _dec(db.query(func.sum(EngineOperation.actual_usd)).filter(
+            EngineOperation.engine_id == engine_id, EngineOperation.period_start == period,
+            EngineOperation.cost_confirmed.is_(True)).scalar())
+    return total
 
 
 def reserved(db: Session, engine_id: str, period: date) -> Decimal:
-    return _dec(db.query(func.sum(EngineUsage.reserved_usd)).filter(
+    total = _dec(db.query(func.sum(EngineUsage.reserved_usd)).filter(
         EngineUsage.engine_id == engine_id, EngineUsage.period_start == period,
         EngineUsage.status.in_(IN_FLIGHT)).scalar())
+    from shared.config import get_settings
+    if get_settings().engine_control_enabled:
+        from shared.engine_control.models import EngineOperation
+        total += _dec(db.query(func.sum(EngineOperation.reserved_usd)).filter(
+            EngineOperation.engine_id == engine_id, EngineOperation.period_start == period,
+            EngineOperation.cost_confirmed.is_(False)).scalar())
+    return total
 
 
 def spent(db: Session, engine: Engine, period: date) -> Decimal:

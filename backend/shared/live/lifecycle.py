@@ -63,6 +63,11 @@ def terminate(job_id, state, code, store, redis_client, generation=None):
         redis_client.set_job_status(job_id, 'main', state, error=code)
         if state == 'cancelled':
             redis_client.delete_partial_transcript(job_id)
+        from shared.config import get_settings
+        if get_settings().engine_control_enabled:
+            from shared.engine_control.models import ControlAdmission
+            db.query(ControlAdmission).filter(ControlAdmission.holder == 'live:' + job_id,
+                ControlAdmission.released_at.is_(None)).update({'released_at':datetime.utcnow()}, synchronize_session=False)
         db.commit()
     return True
 

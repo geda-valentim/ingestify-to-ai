@@ -160,7 +160,9 @@ async def shutdown():
 
 @app.get('/health')
 def health():
-    return {'ready': model is not None, 'active': len(active), 'capacity': settings.live_max_sessions, 'capabilities': capabilities()}
+    return {'ready': model is not None, 'active': len(active), 'capacity': settings.live_max_sessions,
+            'runtime_revision':os.environ.get('INGESTIFY_RUNTIME_REVISION'),
+            'model_profile_id':os.environ.get('INGESTIFY_MODEL_PROFILE'),'model':settings.whisper_model,'capabilities':capabilities()}
 
 
 @app.websocket('/internal/stream')

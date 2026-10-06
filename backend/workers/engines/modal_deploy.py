@@ -74,12 +74,22 @@ def plan(engine: Engine, feature: str) -> Dict[str, object]:
 
 
 def deploy(slug: str, feature: str = "transcription", *, dry_run: bool = False, allow_unhashed: bool = False,
-           session_factory=None, run: Callable = subprocess.run, out: Callable[[str], None] = print) -> Optional[dict]:
+           session_factory=None, run: Callable = subprocess.run, out: Callable[[str], None] = print,
+           control_profile=None, operation_id=None) -> Optional[dict]:
     db = _session(session_factory)
     try:
         engine = db.query(Engine).filter(Engine.slug == slug).first()
         if engine is None:
             raise DeployError(f"No engine {slug!r}")
+        if not operation_id and not dry_run:
+            from shared.engine_control.guards import before_write
+            before_write(db, engine, runtime=True)
+        if control_profile:
+            config = dict(engine.config or {})
+            config['features'] = dict(config.get('features') or {}, **{feature: control_profile['binding']})
+            config['control_fingerprint_version'] = 2
+            config['control_memory_mb'] = control_profile.get('memory_mb')
+            engine.config = config
         p = plan(engine, feature)
         spec = p["spec"]
         out(f"Engine {slug}, {feature}: {json.dumps(spec['decorator'])}")
@@ -120,9 +130,12 @@ def deploy(slug: str, feature: str = "transcription", *, dry_run: bool = False, 
         entry = {"fingerprint": spec["fingerprint"], "protocol": protocol.PROTOCOL_VERSION,
                  "binding": p["binding"], "verified_at": verified_at, "app": protocol.APP_NAME,
                  "decorator": spec["decorator"], "hashed": p["hashed"], "capabilities": meta.get("capabilities", [])}
+        if control_profile:
+            entry['control_protocol'] = 1
         adapter.record_deployment({"fingerprint": spec["fingerprint"], "protocol": protocol.PROTOCOL_VERSION,
                                    "verified_at": verified_at, "capabilities": meta.get("capabilities", [])})
-        store.record_deployment(db, engine, feature, entry, actor_user_id=None, auth_method="cli")
+        if not operation_id:
+            store.record_deployment(db, engine, feature, entry, actor_user_id=None, auth_method="cli")
         out(f"Deployed and verified: {slug} {feature} serves fingerprint {spec['fingerprint'][:16]}...")
         return entry
     finally:

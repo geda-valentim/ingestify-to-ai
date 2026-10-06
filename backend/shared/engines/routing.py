@@ -222,7 +222,8 @@ def remote_problems(engine: Engine, feature: str, fingerprint_of=None, now: Opti
 
     now = now or datetime.utcnow()
     problems = []
-    if engine.adapter_type not in REMOTE_ADAPTERS:
+    from workers.engines import executors
+    if executors.get(engine.adapter_type) is None:
         problems.append(f"adapter {engine.adapter_type!r} has no executor")
     if engine.status != "active":
         problems.append("it is not active (POST /admin/engines/{id}/activate)")
@@ -245,7 +246,8 @@ def remote_capacity(db: Session, steps: List[Dict[str, Any]], overrides: Optiona
     for step in steps:
         for engine_id in step.get("engine_ids", []):
             engine = db.get(Engine, engine_id)
-            if engine is None or engine.adapter_type == "local":
+            from shared.engine_control.registry import execution_mode
+            if engine is None or execution_mode(engine.adapter_type) != 'remote_runner':
                 continue
             config = (overrides or {}).get(engine_id, engine.config or {})
             total += sum(b.capacity for b in bindings(config).values())
@@ -287,7 +289,8 @@ def validate(db: Session, feature: str, spec: RouteSpec, *, fingerprint_of=None,
                     f"Engine {engine.slug} has no capacity for {feature}: "
                     f"set it first (PUT /admin/engines/{engine.slug}/features/{feature})"
                 )
-            if engine.adapter_type == "local":
+            from shared.engine_control.registry import external_data
+            if not external_data(engine.adapter_type):
                 has_local = True
             else:
                 if feature not in REMOTE_ROUTABLE_FEATURES:
@@ -313,7 +316,9 @@ def validate(db: Session, feature: str, spec: RouteSpec, *, fingerprint_of=None,
         if broken:
             raise RouteError("Remote engines not ready: " + "; ".join(
                 f"{slug}: {', '.join(p)}" for slug, p in broken.items()), status=409)
-        if not (remote_worker_alive or _remote_worker_alive)():
+        from shared.engine_control.registry import execution_mode
+        needs_remote_worker=any(execution_mode(e.adapter_type)=='remote_runner' for e in remote_engines)
+        if needs_remote_worker and not (remote_worker_alive or _remote_worker_alive)():
             raise RouteError("No worker-remote is running to execute remote steps: "
                              "docker compose --profile engines up -d worker-remote", status=409)
         needed, available = remote_capacity(db, steps), remote_threads_available()
@@ -323,7 +328,8 @@ def validate(db: Session, feature: str, spec: RouteSpec, *, fingerprint_of=None,
 
     warnings = []
     first_ids = set(steps[0]["engine_ids"])
-    first_is_remote = not any(_resolve(db, i).adapter_type == "local" for i in first_ids)
+    from shared.engine_control.registry import external_data
+    first_is_remote = not any(not external_data(_resolve(db,i).adapter_type) for i in first_ids)
     if first_is_remote and spec.dispatcher_fallback == "local_direct":
         warnings.append("The first step is remote but dispatcher_fallback=local_direct: while the dispatcher "
                         "is down new items go to the local workers, against the order. Use hold to keep it.")

@@ -79,4 +79,6 @@ Rascunho ──▶ Em revisão ──▶ Aprovada ──▶ Implementada
 | 0005 | [Transcrição ao vivo com legendas em streaming](0005-transcricao-ao-vivo.md) | Em revisão | 2026-10-05 |
 | 0006 | [WhisperX e identificação de falantes](0006-whisperx-e-identificacao-de-falantes.md) | Aprovada; canário opt-in, qualificação pendente | 2026-10-05 |
 
+| 0007 | [Operar engines e modelos pelo painel admin](0007-operacao-de-engines-pelo-admin.md) | Em implementação | 2026-10-06 |
+
 <!-- Adicione uma linha aqui ao criar cada spec. -->

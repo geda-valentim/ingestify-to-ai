@@ -42,7 +42,7 @@ function getAuthToken(): string | null {
  * session is over (expired or revoked), so it is ended everywhere at once
  * instead of leaving each page to spin or show a raw error.
  */
-async function apiFetch(input: string, init?: RequestInit): Promise<Response> {
+export async function apiFetch(input: string, init?: RequestInit): Promise<Response> {
   const response = await fetch(input, init);
   if (response.status === 401 && new Headers(init?.headers).has("Authorization")) {
     expireSession();
@@ -82,7 +82,7 @@ function appendLocation(formData: FormData, location: UploadLocation) {
   else if (location.folder?.trim()) formData.append("folder", location.folder.trim());
 }
 
-function getHeaders(includeAuth = false): HeadersInit {
+export function getHeaders(includeAuth = false): HeadersInit {
   const headers: HeadersInit = {};
 
   if (includeAuth) {
