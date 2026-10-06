@@ -156,26 +156,48 @@ def _transcribe_audio(job_id: str, file_path: Path, options: dict, redis_client,
     """
     from workers.audio import transcribe_with_gpu_fallback
 
+    # Durable SQL snapshot is authoritative, including late-discovered media.
+    from shared.transcription import options_from_profile
+    with SessionLocal() as profile_db:
+        profile_job = profile_db.query(Job).filter(Job.id == job_id).first()
+        durable_profile = getattr(profile_job, 'transcription_profile', None)
+    if isinstance(durable_profile, dict):
+        options.update(options_from_profile(durable_profile, options))
     provider_override = options.get('transcriber_provider')
 
-    # Update progress
-    redis_client.update_job_progress(job_id, TRANSCRIPTION_PROGRESS_START)
-
+    progress_callback = _transcription_progress(redis_client, job_id)
     # Transcribe audio
     transcription_options = {
         'language': options.get('audio_language') or options.get('language'),
         'include_word_timestamps': options.get('include_word_timestamps', False),
         'temperature': options.get('temperature', 0.0),
-        'beam_size': options.get('beam_size', 5)
+        'beam_size': options.get('beam_size', 5),
+        **{key: options[key] for key in ('diarize', 'min_speakers', 'max_speakers', 'transcription_profile') if key in options},
     }
 
+    strict = provider_override == 'whisperx' or (provider_override is None and settings.audio_transcriber_provider == 'whisperx')
+    if strict:
+        from workers.engines.pipeline import begin_transcription_attempt, with_transcription_attempt
+        begin_transcription_attempt(job_id, options)
+        raw_progress = progress_callback
+        def progress_callback(*args):
+            if not with_transcription_attempt(job_id, options, lambda: raw_progress(*args)):
+                raise _AttemptNoLongerWanted(job_id)
+        transcription_options['_should_cancel'] = lambda: not with_transcription_attempt(job_id, options, lambda: None) or (guard is not None and not guard())
+        transcription_options['_reset_progress'] = lambda: progress_callback(0, 0)
+        transcription_options['_on_phase'] = lambda phase: with_transcription_attempt(job_id, options,
+            lambda: redis_client.update_job_progress(job_id, TRANSCRIPTION_PROGRESS_START, phase=phase))
+        with_transcription_attempt(job_id, options,
+            lambda: redis_client.update_job_progress(job_id, TRANSCRIPTION_PROGRESS_START))
+    else:
+        redis_client.update_job_progress(job_id, TRANSCRIPTION_PROGRESS_START)
     # Uses the GPU when available (detected once per worker) and falls back to CPU
     transcription_started = time.monotonic()
     result, transcriber = transcribe_with_gpu_fallback(
         file_path,
         transcription_options,
         force_provider=provider_override,
-        on_progress=_transcription_progress(redis_client, job_id),
+        on_progress=progress_callback,
     )
     processing_seconds = round(time.monotonic() - transcription_started, 1)
 
@@ -184,7 +206,12 @@ def _transcribe_audio(job_id: str, file_path: Path, options: dict, redis_client,
         f"on {result.get('device')}: {result['word_count']} words, "
         f"{result['duration']:.2f}s, language={result['language']}"
     )
-    redis_client.update_job_progress(job_id, TRANSCRIPTION_PROGRESS_END)
+    if strict:
+        if not with_transcription_attempt(job_id, options,
+                lambda: redis_client.update_job_progress(job_id, TRANSCRIPTION_PROGRESS_END)):
+            raise _AttemptNoLongerWanted(job_id)
+    else:
+        redis_client.update_job_progress(job_id, TRANSCRIPTION_PROGRESS_END)
 
     if guard is not None and not guard():
         raise _AttemptNoLongerWanted(job_id)
@@ -214,6 +241,17 @@ def _divert_audio_to_backlog(job_id: str, file_path: Path, options: dict, redis_
 
     route = routing.get_route("transcription", session_factory=SessionLocal)
     if route is None or not route.active:
+        # URL/download discovery can happen on the document worker. Keep the
+        # durable snapshot and send WhisperX to its isolated audio image.
+        from celery import current_task
+        delivery = getattr(getattr(current_task, 'request', None), 'delivery_info', None) or {}
+        queue = delivery.get('routing_key')
+        profile = options.get('transcription_profile') or {}
+        if profile.get('provider') == 'whisperx' and queue and queue != settings.transcription_queue:
+            celery_app.send_task(engine_dispatch.PROCESS_CONVERSION, kwargs={
+                'job_id': job_id, 'source_type': 'file', 'source': str(file_path),
+                'options': dict(options, is_audio=True)}, queue=settings.transcription_queue)
+            return True, file_path
         return False, file_path
 
     audio_dir = Path(settings.temp_storage_path) / "audio" / job_id
@@ -252,18 +290,19 @@ def _divert_audio_to_backlog(job_id: str, file_path: Path, options: dict, redis_
     return True, file_path
 
 
-def _set_processing(job_id: str) -> None:
-    db = SessionLocal()
-    try:
-        job = db.query(Job).filter(Job.id == job_id).first()
-        if job:
-            job.status = JobStatus.PROCESSING
-            job.started_at = datetime.utcnow()
-            db.commit()
-    except Exception as e:
-        logger.error(f"[MAIN JOB {job_id}] MySQL update error: {e}")
-    finally:
-        db.close()
+def _set_processing(job_id: str, redis_client=None, options=None) -> None:
+    with SessionLocal() as db:
+        if options:
+            from workers.engines.pipeline import _check_usage_fence
+            _check_usage_fence(db, options)
+        job = db.query(Job).filter(Job.id == job_id).with_for_update().first()
+        if not job or job.status not in (JobStatus.PENDING, JobStatus.PROCESSING):
+            raise _AttemptNoLongerWanted(job_id)
+        job.status = JobStatus.PROCESSING
+        job.started_at = datetime.utcnow()
+        if redis_client is not None:
+            redis_client.set_job_status(job_id=job_id, job_type='main', status='processing', progress=10, started_at=job.started_at)
+        db.commit()
 
 
 def _job_still_open(job_id: str) -> bool:
@@ -303,12 +342,12 @@ def _run_routed_transcription(job_id: str, source: str, options: dict, usage_id:
     change = None
     try:
         logger.info(f"[MAIN JOB {job_id}] Routed transcription, usage {usage_id}")
-        _set_processing(job_id)
-        redis_client.set_job_status(job_id=job_id, job_type="main", status="processing", progress=10,
-                                    started_at=datetime.utcnow())
+        routed_options = dict(options, _usage_id=usage_id, _usage_holder=holder)
+        _set_processing(job_id, redis_client, routed_options)
         file_path = _resolve_uploaded_file(source, job_id)
-        redis_client.update_job_progress(job_id, 20)
-        _transcribe_audio(job_id, file_path, options, redis_client, es_client, guard=lambda: _job_still_open(job_id))
+        if not _strict_audio_task(options):
+            redis_client.update_job_progress(job_id, 20)
+        _transcribe_audio(job_id, file_path, routed_options, redis_client, es_client, guard=lambda: _job_still_open(job_id))
     except _AttemptNoLongerWanted:
         heartbeat.stop()
         logger.warning(f"[MAIN JOB {job_id}] The job is no longer open; its transcript is discarded")
@@ -328,10 +367,11 @@ def _run_routed_transcription(job_id: str, source: str, options: dict, usage_id:
         logger.error(f"[MAIN JOB {job_id}] Routed transcription failed: {exc}", exc_info=True)
         _, change = ledger.settle_failed(usage_id, holder, error_code="INTERNAL", detail=str(exc),
                                          session_factory=SessionLocal)
-        try:
-            shutil.rmtree(Path(settings.temp_storage_path) / job_id, ignore_errors=True)
-        except Exception:
-            pass
+        if not _strict_audio_task(options):
+            try:
+                shutil.rmtree(Path(settings.temp_storage_path) / job_id, ignore_errors=True)
+            except Exception:
+                pass
         return {"job_id": job_id, "status": change.status if change else "failed"}
     finally:
         heartbeat.stop()
@@ -343,6 +383,35 @@ def _run_routed_transcription(job_id: str, source: str, options: dict, usage_id:
                             session_factory=SessionLocal)
     engine_dispatch.kick(celery_app)
     return {"job_id": job_id, "status": "completed"}
+
+
+def _strict_audio_task(options):
+    return options.get('transcriber_provider') == 'whisperx' or (options.get('transcription_profile') or {}).get('provider') == 'whisperx' or bool(options.get('_transcript_attempt_id'))
+
+
+def _fail_transcription_attempt(job_id, options, redis_client, error, *, retry):
+    """Only the still-current execution may publish failure or schedule its retry.
+
+    Audio/source/staging cleanup is deliberately absent: retry needs the source,
+    and an old task must never delete files shared with its successor.
+    """
+    from workers.engines.pipeline import _check_usage_fence
+    with SessionLocal() as db:
+        try:
+            _check_usage_fence(db, options)
+        except RuntimeError:
+            return False
+        job = db.query(Job).filter(Job.id == job_id).with_for_update().populate_existing().first()
+        expected = options.get('_transcript_attempt_id', options.get('_expected_attempt_id'))
+        if not job or job.status not in (JobStatus.PENDING, JobStatus.PROCESSING) or job.transcript_attempt_id != expected:
+            return False
+        job.status = JobStatus.PENDING if retry else JobStatus.FAILED
+        job.error_message = error
+        job.completed_at = None if retry else datetime.utcnow()
+        redis_client.set_job_status(job_id=job_id, job_type='main', status='queued' if retry else 'failed',
+                                   progress=0, error=error, completed_at=job.completed_at)
+        db.commit()
+        return True
 
 
 @celery_app.task(bind=True, max_retries=3, name="workers.tasks.process_conversion")
@@ -371,8 +440,7 @@ def process_conversion(
             the local engine (spec 0003): the reservation to claim before running.
             Without it, everything below runs exactly as it always did.
     """
-    if options is None:
-        options = {}
+    options = dict(options or {})
 
     if usage_id is not None:
         return _run_routed_transcription(job_id, source, options, usage_id)
@@ -385,29 +453,27 @@ def process_conversion(
 
     logger.info(f"[MAIN JOB {job_id}] Starting conversion: {source_type} (preset={preset})")
 
-    # Update MySQL: Set job to processing
-    db = SessionLocal()
-    try:
-        job = db.query(Job).filter(Job.id == job_id).first()
-        if job:
-            job.status = JobStatus.PROCESSING
-            job.started_at = datetime.utcnow()
-            db.commit()
-    except Exception as e:
-        logger.error(f"[MAIN JOB {job_id}] MySQL update error: {e}")
-    finally:
-        db.close()
+    # Terminal SQL state is authoritative even for a redelivered task.
+    with SessionLocal() as db:
+        job = db.query(Job).filter(Job.id == job_id).with_for_update().first()
+        if job is None or job.status in (JobStatus.COMPLETED, JobStatus.CANCELLED):
+            return {"job_id": job_id, "status": "discarded"}
+        if isinstance(getattr(job, 'transcription_profile', None), dict):
+            from shared.transcription import options_from_profile
+            options.update(options_from_profile(job.transcription_profile, options))
+        if _strict_audio_task(options):
+            current = job.transcript_attempt_id
+            expected = options.get('_expected_attempt_id', current)
+            if expected != current or job.status not in (JobStatus.PENDING, JobStatus.PROCESSING):
+                return {"job_id": job_id, "status": "discarded"}
+            options['_expected_attempt_id'] = current
+        job.status = JobStatus.PROCESSING
+        job.started_at = datetime.utcnow()
+        redis_client.set_job_status(job_id=job_id, job_type="main", status="processing", progress=10,
+                                    started_at=job.started_at)
+        db.commit()
 
     try:
-        # Update main job status in Redis
-        redis_client.set_job_status(
-            job_id=job_id,
-            job_type="main",
-            status="processing",
-            progress=10,
-            started_at=datetime.utcnow(),
-        )
-
         # 1. Download file (10% -> 20%)
         logger.info(f"[MAIN JOB {job_id}] Downloading from {source_type}...")
         handler = get_source_handler(source_type)
@@ -434,14 +500,24 @@ def process_conversion(
                 redis_client.delete_source_token(job_id)
 
         logger.info(f"[MAIN JOB {job_id}] File downloaded: {file_path}")
-        redis_client.update_job_progress(job_id, 20)
+        if _strict_audio_task(options):
+            with SessionLocal() as db:
+                job = db.query(Job).filter(Job.id == job_id).with_for_update().first()
+                if not job or job.status not in (JobStatus.PENDING, JobStatus.PROCESSING) or job.transcript_attempt_id != options.get('_expected_attempt_id'):
+                    return {"job_id": job_id, "status": "discarded"}
+                redis_client.update_job_progress(job_id, 20)
+        else:
+            redis_client.update_job_progress(job_id, 20)
 
         # 2. Check if this is an audio file for transcription
         is_audio = options.get('is_audio', False) or source_type == 'audio'
         audio_extensions = AUDIO_EXTENSIONS
         file_ext = file_path.suffix.lower()
 
-        if is_audio or file_ext in audio_extensions:
+        from shared.transcription import is_media_filename
+        if not (is_audio or file_ext in audio_extensions or is_media_filename(file_path.name)) and options.get('diarization_explicit'):
+            raise ValueError('DIARIZATION_MEDIA_REQUIRED')
+        if is_audio or file_ext in audio_extensions or is_media_filename(file_path.name):
             # With a transcription route, audio that only revealed itself here (URL,
             # Drive, Dropbox, or a route created after the upload) joins the backlog
             # instead of transcribing in this worker. No route: nothing changes.
@@ -451,40 +527,10 @@ def process_conversion(
 
             logger.info(f"[MAIN JOB {job_id}] Audio file detected - transcribing with Whisper")
 
-            try:
-                _transcribe_audio(job_id, file_path, options, redis_client, es_client)
-                logger.info(f"[MAIN JOB {job_id}] ✓ Audio transcription completed successfully")
-                return
-
-            except Exception as e:
-                logger.error(f"[MAIN JOB {job_id}] Audio transcription failed: {e}", exc_info=True)
-
-                # Update Redis
-                redis_client.set_job_status(
-                    job_id=job_id,
-                    job_type="main",
-                    status="failed",
-                    progress=0,
-                    error=str(e),
-                    completed_at=datetime.utcnow()
-                )
-
-                # Update MySQL
-                db = SessionLocal()
-                try:
-                    job = db.query(Job).filter(Job.id == job_id).first()
-                    if job:
-                        job.status = JobStatus.FAILED
-                        job.error_message = str(e)
-                        job.completed_at = datetime.utcnow()
-                        db.commit()
-                except Exception as db_error:
-                    logger.error(f"[MAIN JOB {job_id}] MySQL update error: {db_error}")
-                finally:
-                    db.close()
-
-                logger.error(f"[MAIN JOB {job_id}] ✗ Audio transcription failed")
-                raise
+            options['is_audio'] = True
+            _transcribe_audio(job_id, file_path, options, redis_client, es_client)
+            logger.info(f"[MAIN JOB {job_id}] Audio transcription completed successfully")
+            return
 
         # 3. Check if PDF needs splitting
         if should_split_pdf(file_path, min_pages=2):
@@ -582,6 +628,9 @@ def process_conversion(
         logger.warning(f"[MAIN JOB {job_id}] Soft timeout exceeded - marking as failed for retry")
 
         error_msg = f"Task exceeded soft time limit ({settings.conversion_timeout_seconds - 30}s)"
+        if _strict_audio_task(options):
+            changed = _fail_transcription_attempt(job_id, options, redis_client, error_msg, retry=False)
+            return {"job_id": job_id, "status": "failed" if changed else "discarded"}
         # A transcription that ran out of time will run out of time again: fail for good
         is_audio_job = bool(options.get('is_audio'))
 
@@ -625,6 +674,18 @@ def process_conversion(
 
     except Exception as exc:
         logger.error(f"[MAIN JOB {job_id}] Failed: {exc}", exc_info=True)
+        if _strict_audio_task(options):
+            retry = self.request.retries < self.max_retries
+            changed = _fail_transcription_attempt(job_id, options, redis_client, str(exc), retry=retry)
+            if not changed:
+                return {"job_id": job_id, "status": "discarded"}
+            if retry:
+                options['_expected_attempt_id'] = options.get('_transcript_attempt_id', options.get('_expected_attempt_id'))
+                options.pop('_transcript_attempt_id', None)
+                raise self.retry(exc=exc, countdown=60 * (2 ** self.request.retries), args=(), kwargs={
+                    'job_id': job_id, 'source_type': source_type, 'source': source, 'options': options,
+                    'callback_url': callback_url, 'auth_token': auth_token})
+            return {"job_id": job_id, "status": "failed", "error": str(exc)}
 
         # Update Redis
         redis_client.set_job_status(

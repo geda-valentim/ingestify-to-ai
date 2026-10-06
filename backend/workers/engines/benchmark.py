@@ -82,6 +82,30 @@ class BenchmarkError(Exception):
         self.lines = lines or []
 
 
+def qualification_options(settings, manifest=None):
+    """Measure the complete WhisperX pipeline, including diarization/alignment.
+
+    A remote canary takes model identities from its own deployment manifest;
+    local runs use the same durable configuration as admitted jobs.
+    """
+    from shared.transcription import normalize_options, make_profile, options_from_profile
+    if manifest is not None:
+        from workers.engines.modal_apps.protocol import MODEL_NAME
+        settings = settings.model_copy(update={
+            'audio_transcriber_provider': 'whisperx',
+            'whisper_model': manifest['asr'].get('model', MODEL_NAME),
+            'whisperx_asr_revision': manifest['asr']['revision'],
+            'whisperx_vad_revision': manifest['vad']['revision'],
+            'whisperx_diarization_model': manifest['diarizer'].get('model', settings.whisperx_diarization_model),
+            'whisperx_diarization_revision': manifest['diarizer']['revision'],
+            'whisperx_aligner_manifest': json.dumps(manifest['aligners'], sort_keys=True),
+        })
+    full_pipeline = settings.audio_transcriber_provider == 'whisperx'
+    options = normalize_options(settings, {'diarize': full_pipeline,
+                                          'include_word_timestamps': full_pipeline})
+    return options_from_profile(make_profile(settings, options), options)
+
+
 @dataclass
 class Sample:
     path: str
@@ -502,6 +526,12 @@ class ModalBenchRunner:
                  "deadline_seconds": combo.deadline_seconds}
         extra = {DEPLOY_ENV: json.dumps(spec, sort_keys=True), bench_protocol.BENCH_ENV: json.dumps(bench),
                  "PYTHONPATH": str(BACKEND_DIR)}
+        if spec.get('whisperx_manifest'):
+            from shared.config import get_settings
+            settings = get_settings()
+            bench['options'] = qualification_options(settings, spec['whisperx_manifest'])
+            extra[bench_protocol.BENCH_ENV] = json.dumps(bench)
+            extra['WHISPERX_MODEL_DIR'] = settings.whisperx_model_dir
         if self.allow_unhashed:
             extra[ALLOW_UNHASHED_ENV] = "1"
         return self.adapter.subprocess_env(home, extra)
@@ -598,14 +628,16 @@ def local_vram_guard(engine: Engine, feature: str, gpu_ref: str, e: int, used_gb
 
 def _local_process(samples: List[Tuple[str, float]], model_name: str, compute_type: str, out) -> None:
     """One local execution: its own model and CUDA context, like one replica"""
-    from workers.engines import whisper_core
-
+    from shared.config import get_settings
+    from workers.audio.factory import get_audio_transcriber
+    settings = get_settings()
     started = time.time()
-    model = whisper_core.load_model(model_name, "cuda", compute_type)
+    transcriber = get_audio_transcriber()
     cold = time.time() - started
+    options = qualification_options(settings)
     for path, seconds in samples:
         t0 = time.time()
-        whisper_core.transcribe(model, Path(path), {}, model_name=model_name)
+        transcriber.transcribe(Path(path), options)
         t1 = time.time()
         out.put({"media_seconds": seconds, "exec_seconds": t1 - t0, "cold_start_seconds": cold,
                  "wall_seconds": t1 - t0, "start": t0, "end": t1})

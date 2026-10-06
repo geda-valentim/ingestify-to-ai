@@ -135,3 +135,22 @@ class OnlineWhisper:
                 'duration': self.received / RATE, 'word_count': len(text.split()),
                 'char_count': len(text), 'model': model_name, 'provider': 'faster-whisper',
                 'device': 'cuda', 'input_mode': 'live', 'protocol': 1}
+
+
+class WhisperXOnlineASR:
+    """Timestamp adapter for WhisperX's resident faster-whisper subclass.
+
+    File batching/alignment cannot supply OnlineWhisper's native word timestamps.
+    Keep the qualified WhisperX weights, call their inherited timestamp decoder,
+    and preserve LocalAgreement's existing immutable-text policy.
+    """
+    provider = 'whisperx'
+
+    def __init__(self, pipeline):
+        self.pipeline = pipeline
+        self.model = pipeline.model
+        if not callable(getattr(self.model, 'transcribe', None)):
+            raise RuntimeError('WhisperX live ASR does not expose native timestamps')
+
+    def transcribe(self, audio, **options):
+        return self.model.transcribe(audio, **options)

@@ -48,6 +48,7 @@ def meta() -> dict:
         "fingerprint": FINGERPRINT,
         "decorator": DECORATOR,
         "model_revision": protocol.MODEL_REVISION,
+        "capabilities": SPEC.get("capabilities", ["faster-whisper"]),
     }
 
 
@@ -73,7 +74,13 @@ class WhisperRunner:
         started = time.time()
         from workers.engines import whisper_core
 
-        self.model = whisper_core.load_model(protocol.MODEL_DIR, "cuda", protocol.COMPUTE_TYPE)
+        if SPEC.get('whisperx_manifest'):
+            from workers.engines.whisperx_core import WhisperXRuntime
+            runtime = WhisperXRuntime('/models/whisperx', 'cuda', protocol.COMPUTE_TYPE)
+            runtime._load_asr()
+            self.model = {'whisperx': runtime}
+        else:
+            self.model = {'faster-whisper': whisper_core.load_model(protocol.MODEL_DIR, "cuda", protocol.COMPUTE_TYPE)}
         self.cold_start_seconds = time.time() - started
         self.first_input = True
         self.container_id = runner.container_id()

@@ -186,11 +186,18 @@ def _format_timestamp(seconds: float, decimal_marker: str) -> str:
     return f"{hours:02d}:{minutes:02d}:{secs:02d}{decimal_marker}{ms:03d}"
 
 
+def _speaker_text(segment, transcription):
+    text = segment.get('text', '').strip()
+    sid = segment.get('speaker_id')
+    label = next((speaker['label'] for speaker in transcription.get('speakers', []) if speaker['id'] == sid), None)
+    return f"{label}: {text}" if label else text
+
+
 def _subtitle_cues(transcription: Dict[str, Any]):
     """Yield (start, end, text) for each non-empty segment, safe for VTT/SRT"""
     for segment in transcription.get('segments') or []:
         # Blank lines end a cue and "-->" is reserved for timings
-        text = ' '.join(segment.get('text', '').split()).replace('-->', '->')
+        text = ' '.join(_speaker_text(segment, transcription).split()).replace('-->', '->')
         if not text:
             continue
         start = float(segment.get('start') or 0)
@@ -226,11 +233,11 @@ def format_markdown(transcription: Dict[str, Any], include_timestamps: bool = Tr
             seconds = int(start % 60)
             timestamp = f"[{minutes:02d}:{seconds:02d}]"
 
-            text = segment.get('text', '').strip()
+            text = _speaker_text(segment, transcription)
             lines.append(f"{timestamp} {text}")
     else:
         # Just the full text without timestamps
-        lines.append(transcription.get('text', ''))
+        lines.append(format_text(transcription) if transcription.get('schema_version') == 2 else transcription.get('text', ''))
 
     return '\n'.join(lines)
 
@@ -240,7 +247,7 @@ def format_text(transcription: Dict[str, Any]) -> str:
     segments = transcription.get('segments') or []
     if not segments:
         return transcription.get('text', '').strip()
-    lines = (' '.join(segment.get('text', '').split()) for segment in segments)
+    lines = (' '.join(_speaker_text(segment, transcription).split()) for segment in segments)
     return '\n'.join(line for line in lines if line)
 
 
