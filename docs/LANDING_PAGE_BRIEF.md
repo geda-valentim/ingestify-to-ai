@@ -22,13 +22,15 @@ A linguagem deve ser direta e concreta. Use “transcrever uma gravação”, �
 
 ## Direção visual
 
-A referência estética é uma bancada digital de processamento: arquivos entram, uma operação é executada e o resultado aparece organizado. O próprio produto fornece os elementos visuais da página.
+A home será uma experiência cinematográfica controlada pela rolagem. Ao descer, o visitante avança por um filme que mostra arquivos se transformando em informação; ao subir, percorre os mesmos quadros em sentido inverso. Ao parar, a imagem permanece naquele ponto. O próprio produto fornece os elementos visuais da narrativa.
 
 Use fundo escuro em grafite, superfícies discretamente mais claras e texto em branco suave. Verde deve identificar ações principais e trabalhos concluídos; azul pode distinguir execução remota. Reserve âmbar para recursos em piloto. Valide o contraste de todos os textos e controles na implementação.
 
 A tipografia principal deve ter boa leitura e títulos amplos, com pesos bem definidos. Use uma fonte monoespaçada apenas para nomes de arquivos, trechos de código, formatos e eventos de processamento. O espaçamento generoso e a hierarquia devem sustentar a composição.
 
-O elemento de maior destaque será uma prévia de transformação. Mostre um arquivo com conteúdo legível de um lado e seu resultado do outro. Uma trilha curta entre os dois indica a operação. Nas seções seguintes, alterne essa linguagem visual com uma composição de execução e uma área de integração por API.
+O elemento de maior destaque será um palco visual que permanece na tela durante os capítulos da narrativa. Arquivos, regiões de texto, ondas de áudio e unidades de execução se reorganizam dentro do mesmo espaço. A continuidade entre os objetos deve conectar as cenas. Títulos, explicações e botões ficam em uma camada HTML sobreposta, com áreas reservadas para leitura.
+
+A estética combina profundidade discreta, superfícies translúcidas, linhas finas e iluminação controlada. O movimento deve transmitir precisão: aproximação de câmera, separação de camadas, alinhamento de texto e passagem de dados entre destinos. O brilho acompanha ações específicas e preserva o contraste dos conteúdos.
 
 Evite imagens genéricas de robôs, cérebros e circuitos. Também dispense números decorativos, depoimentos fictícios, estrelas de GitHub e gráficos sem dados reais. Modelos e ferramentas podem ser citados como tecnologias utilizadas, sem sugerir parceria ou endosso.
 
@@ -44,6 +46,157 @@ Evite imagens genéricas de robôs, cérebros e circuitos. Também dispense núm
 | 6 | Evolução e abertura do código | Apresentar a visão e o estado do GitHub. |
 | 7 | Perguntas frequentes | Resolver dúvidas sobre execução, vídeo e disponibilidade. |
 | 8 | Chamada final e rodapé | Conduzir para documentação, acesso e repositório. |
+
+As seções 1 a 6 se desenvolvem nos capítulos do filme descritos abaixo. Seu conteúdo deve aparecer junto às cenas correspondentes, evitando repetir toda a narrativa em uma segunda sequência de blocos. Depois do filme, as perguntas frequentes e a chamada final seguem na rolagem normal.
+
+## Filme controlado pela rolagem
+
+### Conceito e continuidade
+
+O fio condutor é um pequeno marcador verde que acompanha a transformação: começa na borda de um arquivo, percorre seu conteúdo, identifica um resultado e conduz a câmera ao próximo contexto. Seu papel é orientar o olhar. Os arquivos mantêm forma e identidade reconhecíveis durante cada transformação.
+
+O cenário é um espaço grafite contínuo, com profundidade e uma base quadriculada muito sutil. A câmera faz deslocamentos curtos e aproximações suaves. Cada cena termina com um elemento cuja posição, escala e direção de movimento já preparam o início da seguinte. O movimento inverso deve preservar essas mesmas correspondências.
+
+Todo o filme representa exemplos ilustrativos. Recuar a rolagem revisita a demonstração; não cancela jobs nem desfaz operações reais. O vídeo não tem áudio e não começa a tocar sozinho. Uma indicação inicial discreta informa: “Role para explorar”.
+
+### Mapa da narrativa
+
+Os percentuais representam a posição ao longo do trecho cinematográfico, do início ao fim. A duração do arquivo de vídeo será definida na produção; o visitante determina o ritmo de exibição pela rolagem.
+
+| Cena | Trecho | Assunto | Imagem de chegada |
+|---|---|---|---|
+| 1 | 0 a 10% | Entradas | Um PDF se aproxima entre arquivos de áudio, imagem e vídeo. |
+| 2 | 10 a 25% | Documentos | Documento e Markdown ficam lado a lado. |
+| 3 | 25 a 40% | Áudio e vídeo | Uma onda de áudio se alinha a segmentos de transcrição. |
+| 4 | 40 a 52% | Imagens | Regiões de uma imagem se conectam ao texto extraído. |
+| 5 | 52 a 70% | Execução | Um trabalho de áudio tem caminhos local e Modal visíveis. |
+| 6 | 70 a 82% | Organização e API | Resultados entram em um projeto e se conectam a uma aplicação. |
+| 7 | 82 a 94% | Evolução | A composição revela futuras conexões entre máquinas e operações. |
+| 8 | 94 a 100% | Encerramento | Os elementos se recolhem e dão espaço à marca e ao próximo passo. |
+
+### Cena 1 Entrada no universo dos arquivos
+
+**Início:** fundo grafite com o título principal e as ações já legíveis. À direita, um documento inclinado em perspectiva ocupa o primeiro plano. Uma forma de onda, um recibo e uma miniatura de vídeo aparecem ao fundo, separados por profundidade. O primeiro quadro precisa funcionar como imagem estática de apresentação.
+
+**Movimento:** conforme a pessoa rola, os quatro arquivos se aproximam e se alinham. O marcador verde toca a borda do PDF. A câmera acompanha esse arquivo e revela seu título, um parágrafo e uma tabela. Os outros formatos recuam para a periferia do palco.
+
+**Fim:** o PDF está quase frontal, com conteúdo reconhecível, e ocupa a área visual principal. O marcador está no topo da página, pronto para percorrê-la.
+
+**Transição:** a mesma página permanece na mesma posição quando começa a cena 2. A aproximação desacelera e dá lugar à leitura das camadas do documento.
+
+**Texto sobreposto:** “Transforme seus arquivos em dados para IA.” As ações iniciais ficam utilizáveis durante a apresentação. O título se recolhe antes de entrar a explicação da próxima operação.
+
+### Cena 2 Documento em informação estruturada
+
+**Início:** o PDF da cena anterior está enquadrado de frente. Título, parágrafo e tabela têm formas visualmente distintas.
+
+**Movimento:** o marcador percorre a página e destaca essas regiões. As camadas se afastam poucos pixels do papel e deslizam para a direita, onde se alinham como título, texto e tabela em Markdown. A folha original continua visível à esquerda para permitir a comparação. No plano de fundo, duas páginas adicionais se separam e chegam a uma sequência ordenada, sugerindo o processamento por página.
+
+**Fim:** origem e resultado estão lado a lado, em um enquadramento estável. O visitante pode parar e ler um pequeno exemplo completo. O indicador “Markdown” identifica a saída.
+
+**Transição:** depois desse momento de leitura, a câmera acompanha uma linha horizontal da tabela. A linha atravessa o quadro e se transforma no eixo de uma forma de onda. O PDF se afasta; a onda continua exatamente no mesmo alinhamento para abrir a cena de áudio.
+
+**Texto sobreposto:** “Do documento ao Markdown.” Complemento: “Texto, tabelas e estrutura para o próximo passo da sua aplicação.” Link: “Ver conversão de documentos”.
+
+### Cena 3 Gravação em transcrição
+
+**Início:** o eixo vindo da tabela sustenta uma forma de onda. Uma pequena miniatura de vídeo aparece ligada à sua faixa de áudio, identificando a origem sem sugerir análise visual das cenas.
+
+**Movimento:** o marcador percorre a onda. Intervalos selecionados se alinham a blocos de transcrição com timestamps. Os blocos se organizam em duas linhas legíveis. As opções TXT, JSON e VTT aparecem como diferentes representações do mesmo resultado. A onda se revela conforme a rolagem, sem pulsação automática quando o visitante para.
+
+**Fim:** forma de onda acima, transcrição abaixo e formatos de saída ao lado. Uma linha de legenda é destacada junto ao intervalo correspondente.
+
+**Transição:** a linha de legenda recebe um contorno retangular. A câmera se aproxima desse contorno enquanto a onda desaparece. O retângulo passa a enquadrar uma linha impressa no recibo da próxima cena, preservando posição e proporção.
+
+**Texto sobreposto:** “Da gravação ao texto.” Complemento: “Transcrição, timestamps e legendas a partir de áudio e vídeo.” Nota próxima: “Vídeo: processamento da faixa de áudio.”
+
+### Cena 4 Imagem em texto e regiões
+
+**Início:** o contorno da cena anterior agora envolve uma linha de um recibo. A câmera recua o suficiente para revelar a imagem inteira.
+
+**Movimento:** outras regiões recebem contornos discretos. Linhas curtas conectam cada região ao texto correspondente em um painel ao lado. Um exemplo como “TOTAL 42,00” aparece como texto extraído, sem se converter em um formulário de campos interpretados. Um seletor visual secundário pode indicar “Descrição” como outra operação disponível, sem competir com a demonstração principal de OCR.
+
+**Fim:** imagem, regiões e texto extraído formam uma composição limpa. O visitante identifica claramente de onde saiu cada trecho.
+
+**Transição:** o painel se reduz e recebe uma moldura de trabalho concluído. A câmera se afasta para revelar uma fila com trabalhos de documento, imagem e áudio. O marcador passa para um novo trabalho de áudio, ainda aguardando execução, que será o protagonista da cena 5.
+
+**Texto sobreposto:** “Da imagem à informação.” Complemento: “Extraia texto com suas regiões ou gere uma descrição pela API.”
+
+### Cena 5 Escolha do local de execução
+
+**Início:** a fila ocupa o centro. À esquerda, um módulo discreto representa os workers locais. À direita, um módulo azul representa o Modal. O trabalho de áudio está pronto para ser encaminhado; resultados já concluídos ficam visualmente separados.
+
+**Movimento:** primeiro se ilumina o caminho local. Trabalhos de documento e imagem permanecem associados a esse destino. Em seguida, uma regra de espera aparece junto ao trabalho de áudio e o caminho até o Modal é revelado. O áudio percorre esse caminho como exemplo de uma rota configurada. Indicadores textuais de capacidade e orçamento acompanham o módulo remoto, sem valores inventados.
+
+**Fim:** os dois destinos estão visíveis. O resultado da transcrição remota retorna ao conjunto de resultados. Os rótulos “Workers locais” e “Modal para transcrição” permanecem legíveis e deixam claro o escopo de cada caminho.
+
+**Transição:** os trajetos se aproximam em perspectiva e seus pontos de chegada se alinham. Os resultados passam a formar as linhas de uma lista de jobs. A câmera segue o resultado de áudio até sua posição nessa lista.
+
+**Texto sobreposto:** “Escolha onde o trabalho acontece.” Complemento: “Execução local e transcrição no Modal, conforme capacidade, prioridade e orçamento configurados.” Nota: “O destino dos dados também depende do provider utilizado.”
+
+Não represente o mesmo job rodando nos dois destinos ao mesmo tempo. O trecho ilustra uma escolha de rota. Ao voltar a rolagem, a animação apenas revisita essa escolha.
+
+### Cena 6 Resultados dentro da rotina
+
+**Início:** os resultados da cena anterior estão alinhados em uma lista com nomes de arquivo, operação e status. Uma moldura de projeto aparece ao redor da lista.
+
+**Movimento:** a câmera recua e revela projeto, pasta e tags. Um job abre seu detalhe e o resultado aparece ao lado da origem. Em seguida, a composição se desloca para reservar espaço a um exemplo curto de API, com a sequência “Enviar → acompanhar → obter resultado”. Uma linha liga o resultado a uma janela simples identificada como “Sua aplicação”.
+
+**Fim:** organização e integração dividem o palco: projeto de um lado, operação acessível por API do outro. O exemplo de código é HTML selecionável, e o botão de copiar permanece utilizável durante o momento de leitura.
+
+**Transição:** a janela da aplicação e o projeto se reduzem, mantendo a conexão entre eles. A câmera abre o enquadramento e revela espaço para novos módulos. Antes que novos elementos apareçam, entra o rótulo “Visão de evolução”.
+
+**Texto sobreposto:** “Cada trabalho tem seu lugar.” Depois: “Uma operação do Ingestify dentro da sua aplicação.” Os dois textos se alternam em momentos distintos, com pausa visual para leitura.
+
+### Cena 7 Evolução para operações distribuídas
+
+**Início:** a estrutura disponível hoje continua sólida no centro, acompanhada do rótulo “Visão de evolução”.
+
+**Movimento:** contornos de outras máquinas aparecem ao redor e se conectam por linhas pontilhadas. Em outra parte do mesmo quadro, módulos de operações se alinham em uma sequência, sugerindo futura composição de etapas. Mantenha poucos elementos grandes e compreensíveis, sem uma nuvem de partículas ou uma rede excessivamente complexa.
+
+**Fim:** a imagem apresenta um sistema que pode crescer a partir da base atual. Os componentes futuros mantêm tratamento de contorno e legendas “Conectar outras máquinas” e “Compor operações”. A condição planejada continua visível durante todo esse trecho.
+
+**Transição:** as linhas externas retornam em direção ao centro conforme a câmera se afasta. Os módulos se organizam ao redor de um plano central vazio, preparando a entrada da marca. O movimento pode lembrar a construção coletiva de uma plataforma, sem representar o GitHub como provedor de execução.
+
+**Texto sobreposto:** “Uma plataforma construída para evoluir com a comunidade.” Complemento: “Mais operações, conexão entre máquinas e fluxos reutilizáveis.” O link “GitHub · Repositório privado” aparece junto ao aviso sobre a abertura planejada.
+
+### Cena 8 Marca e próximo passo
+
+**Início:** os módulos estão organizados em torno do centro. O marcador verde completa seu percurso e se posiciona perto da marca.
+
+**Movimento:** a câmera desacelera. As conexões perdem intensidade e os elementos se recolhem até restar uma composição simples com a marca Ingestify e pequenos símbolos dos formatos de entrada. A escala da marca permanece confortável, sem ocupar a tela inteira.
+
+**Fim:** quadro estável com espaço para “Comece pela transformação que você precisa.” O botão “Explorar a documentação” e o link do GitHub ficam disponíveis. Ao continuar descendo, o palco deixa de ficar fixo e sai normalmente da tela, abrindo as perguntas frequentes e a chamada final.
+
+**Transição para o restante da página:** o fundo e as margens se mantêm iguais aos da seção seguinte, sem corte de cor ou salto de rolagem. Ao subir novamente, a pessoa reencontra esse mesmo quadro final e o filme recua a partir dele.
+
+### Ritmo e reversão
+
+Cada cena deve reservar aproximadamente o primeiro quinto de seu trecho para a entrada, a parte central para transformação e leitura, e o trecho final para preparar a próxima imagem. As proporções são orientações de montagem; os momentos com código e comparação entre entrada e saída precisam de mais espaço de leitura.
+
+Todo estado visual depende da posição da rolagem. Movimento, opacidade, câmera, texto e capítulo ativo devem retornar ao mesmo estado quando o visitante revisita uma posição. Evite disparos que só funcionem uma vez, frases digitadas com temporizador e partículas aleatórias que mudem ao voltar.
+
+Não use reprodução com velocidade negativa como requisito da experiência. O objetivo é selecionar o instante correspondente à rolagem em qualquer direção, com estabilidade nos quadros de chegada. Ao parar de rolar, qualquer suavização deve terminar rapidamente e o quadro deve ficar imóvel.
+
+O vídeo não deve sequestrar a roda do mouse, criar aceleração própria ou impedir a rolagem normal por toque e teclado. Links de navegação levam à posição real do capítulo; entrar diretamente por uma âncora precisa mostrar o quadro e o texto corretos.
+
+### Composição do vídeo e das camadas de interface
+
+O vídeo fornece câmera, objetos, iluminação e transformações. Títulos, legendas de escopo, código, links, botões e avisos de disponibilidade devem ser elementos HTML. Reserve zonas livres para essas camadas em todas as cenas, inclusive nos quadros intermediários.
+
+No desktop, alterne o foco visual entre centro e lateral direita, mantendo uma área tranquila à esquerda para explicação. Faça as trocas de texto nos momentos de menor deslocamento. No celular, use uma composição vertical própria: texto acima e transformação abaixo, preservando a relação entre origem e resultado. Um corte central do filme horizontal não basta quando elimina um dos lados da demonstração.
+
+A produção deve entregar um filme horizontal e uma versão vertical com a mesma ordem de cenas, os quadros inicial e final de cada capítulo, imagens estáticas de fallback e um mapa que relacione os capítulos aos instantes do vídeo. Cada transição precisa ser revisada para frente, para trás e em saltos entre capítulos.
+
+A técnica final de exibição deve ser escolhida após um protótipo com o filme: vídeo com busca por instante ou sequência de quadros, conforme a fluidez e o custo de carregamento observados. Ambas devem preservar a mesma experiência de rolagem reversível. Não carregar todos os quadros de uma sequência de alta resolução de uma só vez.
+
+### Carregamento e experiência alternativa
+
+O primeiro quadro e os textos da apresentação aparecem antes da mídia completa. O carregamento ocorre progressivamente, priorizando o capítulo atual e seus vizinhos. Se o visitante rolar antes de a mídia estar pronta, o texto continua acompanhando a página e a imagem estática do capítulo oferece contexto. Falha de carregamento não pode deixar uma área vazia ou bloquear os links.
+
+Com movimento reduzido, apresente quadros estáticos dos capítulos em seções normais, sem câmera em movimento e sem um longo trecho de palco fixo. A mesma alternativa atende dispositivos nos quais a experiência cinematográfica não atingir fluidez aceitável. O conteúdo e as ações permanecem disponíveis.
+
+Antes de publicar, conferir rolagem lenta, rápida, reversão no meio de cada transição, salto por âncora, redimensionamento, orientação do celular e retorno pelo histórico. Não pode haver telas pretas entre cenas, desencontro persistente de texto e imagem ou conteúdo essencial que só seja legível enquanto se move.
 
 ## Navegação
 
@@ -76,13 +229,13 @@ A home deve ser pública. Atualmente, a rota raiz encaminha o visitante para log
 
 > Construindo o caminho para open source. Repositório privado por enquanto.
 
-No desktop, distribua texto e demonstração em duas colunas, com mais espaço para o resultado visual. No celular, apresente primeiro a promessa e os botões, seguidos pela demonstração.
+No desktop, reserve o lado esquerdo para o texto e as ações da apresentação e use o restante para o primeiro quadro do filme. No celular, apresente a promessa e os botões acima da composição vertical. O primeiro contato deve funcionar antes de qualquer rolagem ou carregamento do vídeo completo.
 
 ### Demonstração de transformação
 
-Apresente três abas: “Documento”, “Áudio” e “Imagem”. Cada uma troca a entrada, a operação e o resultado exibidos.
+As cenas de documento, áudio e imagem formam a demonstração principal, percorrida pela rolagem. Um indicador discreto de capítulos pode oferecer atalhos para as posições correspondentes. Esses atalhos movem a página até a cena e mantêm a mesma linha do tempo.
 
-| Aba | Entrada ilustrativa | Operação | Resultado ilustrativo |
+| Capítulo | Entrada ilustrativa | Operação | Resultado ilustrativo |
 |---|---|---|---|
 | Documento | `relatorio.pdf`, com título, parágrafo e tabela | Conversão de documento | Trecho em Markdown preservando esses elementos. |
 | Áudio | `reuniao.mp3`, com uma forma de onda | Transcrição | Duas falas com timestamps e opções TXT, JSON e VTT. |
@@ -90,7 +243,7 @@ Apresente três abas: “Documento”, “Áudio” e “Imagem”. Cada uma tro
 
 O visitante deve conseguir comparar a origem e a saída. Todo o conteúdo deve ser sintético e identificado como “Exemplo ilustrativo”. A demonstração deve funcionar sem conta e sem disparar inferência real. Ela não deve exibir controles de upload que aparentem enviar arquivos.
 
-Uma transição curta pode revelar o resultado ao trocar de aba. O conteúdo final precisa permanecer disponível com animações reduzidas. Não use durações, custos ou percentuais de precisão fictícios.
+As transições seguem o roteiro do filme. O conteúdo final precisa permanecer disponível na versão estática com movimento reduzido. Não use durações, custos ou percentuais de precisão fictícios.
 
 ## Operações disponíveis
 
@@ -104,7 +257,7 @@ Uma transição curta pode revelar o resultado ao trocar de aba. O conteúdo fin
 
 > Prepare documentos para uma base de conhecimento, transforme gravações em texto e extraia informação de imagens. Escolha a operação e use o resultado no seu próximo passo.
 
-Use três blocos com exemplos de saída. Dê ao bloco de documentos mais espaço visual e componha os demais ao lado ou abaixo.
+Distribua os textos abaixo pelas cenas 2, 3 e 4, junto aos exemplos de saída correspondentes. Na experiência estática, apresente-os em três seções com imagens dos respectivos resultados.
 
 ### Documentos
 
@@ -138,7 +291,7 @@ Ação: “Ver operações de imagem” → `/docs#imagens`.
 
 ### Recurso em piloto
 
-Em uma faixa menor, após as operações principais:
+Em uma nota complementar após as operações principais, fora do filme ou em uma área estável da interface:
 
 > **Microfone ao vivo · Piloto**
 >
@@ -158,7 +311,7 @@ Ação: “Conhecer o piloto” → `/docs#microfone-live`.
 
 > Use workers locais para processar seus arquivos. Para transcrição, configure também contas Modal e defina a prioridade de execução, a capacidade e os limites de orçamento.
 
-Apresente uma composição com uma fila de trabalhos ao centro e dois destinos: “Workers locais” e “Modal para transcrição”. Identifique documentos, imagens e áudio no destino local; no destino Modal, apenas áudio.
+Use a composição da cena 5, com uma fila de trabalhos ao centro e dois destinos: “Workers locais” e “Modal para transcrição”. Identifique documentos, imagens e áudio no destino local; no destino Modal, apenas áudio.
 
 | Destino | Texto público |
 |---|---|
@@ -190,7 +343,7 @@ A conexão simplificada de outras máquinas deve aparecer na seção de evoluç�
 
 > Organize seus arquivos em projetos e pastas, adicione tags e acompanhe os jobs. Para PDFs divididos, consulte páginas já concluídas e reenvie páginas que falharam.
 
-Mostre uma prévia compacta da interface, com projeto, arquivo, operação e status. Priorize uma captura real preparada com dados de demonstração. Caso seja um mockup, identifique-o como ilustrativo e limite-o a comportamentos existentes.
+Use a prévia compacta da interface na cena 6, com projeto, arquivo, operação e status. Prepare os elementos a partir da interface real com dados de demonstração. Identifique a composição como ilustrativa e limite-a a comportamentos existentes.
 
 Três detalhes podem acompanhar a prévia:
 
@@ -210,7 +363,7 @@ Evite apresentar armazenamento permanente de todo resultado como uma garantia ge
 
 > Envie um documento ou uma gravação, receba o identificador do job e acompanhe sua conclusão. Use sua API key para integrar o processamento aos seus scripts e serviços.
 
-Apresente um exemplo curto de envio de documento, com botão de copiar:
+Na segunda parte da cena 6, apresente um exemplo curto de envio de documento em HTML, com botão de copiar:
 
 ```bash
 curl -X POST "https://dev.ingestify.ai/api/upload" \
@@ -244,7 +397,7 @@ O código da landing precisa acompanhar o contrato real da API. Não apresente S
 >
 > Estamos preparando a abertura do código. O repositório ainda é privado; a direção é permitir que mais pessoas inspecionem o funcionamento, contribuam com operações e adaptem a plataforma às suas rotinas.
 
-Use uma composição simples com dois grupos claramente nomeados, sem datas de entrega:
+Na cena 7, mantenha a base atual e a direção de evolução visualmente distintas, conforme os grupos abaixo. Esses grupos orientam os rótulos da cena; a tabela completa pode ser usada na experiência estática, sem datas de entrega.
 
 | Disponível hoje | Direção de evolução |
 |---|---|
@@ -312,11 +465,11 @@ O rodapé reúne marca, documentação, referência da API, acesso à plataforma
 
 ## Comportamento e adaptação
 
-No celular, as seções seguem a mesma narrativa, com exemplos em uma coluna e nenhum texto essencial oculto. Blocos de código podem ter rolagem horizontal própria; o restante da página deve caber na tela.
+No celular, as cenas seguem a mesma narrativa com composição vertical e nenhum texto essencial oculto. A altura do trecho cinematográfico deve ser ajustada para oferecer leitura confortável sem exigir rolagem excessiva. Na alternativa estática, use seções em uma coluna. Blocos de código podem ter rolagem horizontal própria; o restante da página deve caber na tela.
 
-As abas da demonstração e as perguntas frequentes devem funcionar por teclado, com foco visível. Estados como “Piloto” e “Privado” precisam de rótulos textuais. Respeite a preferência por movimento reduzido e mantenha o conteúdo utilizável sem animação.
+Os atalhos entre capítulos e as perguntas frequentes devem funcionar por teclado, com foco visível. Estados como “Piloto” e “Privado” precisam de rótulos textuais. Respeite a preferência por movimento reduzido com a experiência estática descrita no roteiro. A camada visual decorativa não deve duplicar a leitura do conteúdo pelos leitores de tela.
 
-Use animações curtas para troca de exemplos e revelação dos resultados. Evite vídeo pesado no carregamento inicial e efeitos que disputem atenção com o conteúdo. A página deve abrir sem chamadas de inferência, autenticação ou acesso ao GitHub.
+O vídeo é o elemento central da experiência e deve ser sincronizado à rolagem nos dois sentidos. Carregue primeiro o quadro de apresentação e mantenha os textos e as ações disponíveis durante a preparação da mídia. A página deve abrir sem chamadas de inferência, autenticação ou acesso ao GitHub.
 
 Os links internos de documentação deste documento usam as âncoras atualmente publicadas em `/docs`. Se a documentação por tópico for publicada antes da landing, atualize os destinos e preserve redirecionamento ou compatibilidade com as âncoras existentes.
 
@@ -337,6 +490,8 @@ A imagem de compartilhamento deve reproduzir a marca, a promessa central e um ex
 A landing estará pronta quando um visitante conseguir identificar as operações disponíveis, entender seus resultados e distinguir execução atual de evolução planejada. Documentação e acesso ao produto devem estar a um clique, e o GitHub deve ter destino real e aviso de privacidade visível.
 
 Verifique especialmente o funcionamento em telas pequenas, navegação por teclado, contraste, botões de copiar e destinos dos links. Os exemplos devem refletir a API vigente. A apresentação de open source, execução distribuída e recursos em piloto deve manter os estados descritos neste documento até que o produto avance.
+
+O filme deve avançar ao descer, recuar ao subir e permanecer estável ao parar. Cada cena precisa de entrada, transformação, quadro de leitura e saída reconhecíveis. Teste a continuidade nas duas direções e a correspondência entre texto e imagem. A experiência estática, a composição vertical e a falha de carregamento da mídia fazem parte dos critérios de entrega.
 
 ## Referências do produto
 
