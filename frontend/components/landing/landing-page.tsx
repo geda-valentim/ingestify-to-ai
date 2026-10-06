@@ -195,9 +195,7 @@ export function LandingPage() {
         </nav>
       </header>
       <main>
-        <h1 className="sr-only">
-          Self-hosted data conversion for AI engineering
-        </h1>
+        <h1 className="sr-only">Data Engineering and AI-ready conversion</h1>
         <noscript>
           <style>{`.landing-story{height:calc(100svh - 72px)}.landing-story-bottom nav{display:none}`}</style>
         </noscript>
@@ -353,7 +351,7 @@ export function LandingPage() {
         <a href="#" className="landing-brand" aria-label="Ingestify home">
           <Brand />
         </a>
-        <p>Data Engineering → AI Engineering.</p>
+        <p>Data Engineering + AI-ready conversion.</p>
         <nav aria-label="Footer links">
           <Link href="/docs?lang=en">Docs</Link>
           <a href={GITHUB}>GitHub</a>

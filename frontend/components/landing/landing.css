@@ -1801,3 +1801,32 @@
     font-size: 9px !important;
   }
 }
+
+.landing-perspectives {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8%;
+  margin-bottom: 60px;
+  padding: 30px 0;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+.landing-perspectives h3 {
+  font-size: 27px;
+  letter-spacing: -0.04em;
+  margin-bottom: 14px;
+}
+.landing-perspectives p {
+  max-width: 500px;
+  font-size: 14px;
+}
+@media (max-width: 767px) {
+  .landing-perspectives {
+    grid-template-columns: 1fr;
+    gap: 28px;
+    margin-bottom: 40px;
+  }
+  .landing-perspectives h3 {
+    font-size: 25px;
+  }
+}
