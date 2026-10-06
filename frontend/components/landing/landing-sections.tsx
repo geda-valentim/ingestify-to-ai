@@ -122,7 +122,7 @@ export function LandingSections({ signedIn }: { signedIn: boolean }) {
           <h2>
             Different inputs.
             <br />
-            <span className="outline-text">One direction.</span>
+            <span className="secondary-title">One direction.</span>
           </h2>
           <p>
             From the files you already have
@@ -206,7 +206,7 @@ export function LandingSections({ signedIn }: { signedIn: boolean }) {
             <h2>
               Your compute.
               <br />
-              <span className="outline-text">Your call.</span>
+              <span className="secondary-title">Your call.</span>
             </h2>
             <p>
               Choose the resources behind the operation. Configure execution
@@ -254,7 +254,7 @@ export function LandingSections({ signedIn }: { signedIn: boolean }) {
           <h2>
             Build it into
             <br />
-            <span className="outline-text">what comes next.</span>
+            <span className="secondary-title">what comes next.</span>
           </h2>
           <p>
             Upload a file. Track the job. Put the result to work.
@@ -329,7 +329,7 @@ export function LandingSections({ signedIn }: { signedIn: boolean }) {
           <h2>
             Made to connect.
             <br />
-            <span className="outline-text">Built to evolve.</span>
+            <span className="secondary-title">Built to evolve.</span>
           </h2>
           <p>
             Our vision is an open source platform for everyday AI

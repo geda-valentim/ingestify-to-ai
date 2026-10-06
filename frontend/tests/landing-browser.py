@@ -20,6 +20,7 @@ async def main():
         page.on('pageerror', lambda e: errors.append(str(e)))
         await page.goto(URL, wait_until='networkidle')
         assert await page.locator('h1').count() == 1
+        assert await page.locator('.secondary-title').first.evaluate("e=>getComputedStyle(e).webkitTextStrokeWidth") == '0px'
         await page.wait_for_function('document.querySelector("video")?.readyState >= 2')
         assert await page.locator('video').evaluate('(v) => v.paused && v.muted')
         # End, middle and start navigation must seek in both directions.
@@ -70,6 +71,14 @@ async def main():
             else:
                 box = await page.locator('.landing-story-bottom').bounding_box()
                 assert box['y'] + box['height'] <= height + 1
+                if width < 768:
+                    film = page.locator('.landing-film')
+                    frame = await film.bounding_box()
+                    copy = await page.locator('.landing-story-copy').bounding_box()
+                    assert frame['x'] >= 0 and frame['x'] + frame['width'] <= width + 1
+                    assert frame['y'] >= copy['y'] + copy['height']
+                    assert float(await film.evaluate('e=>getComputedStyle(e).opacity')) == 1
+                    assert await film.evaluate('e=>getComputedStyle(e).maskImage') == 'none'
         await page.set_viewport_size({'width':1920,'height':650})
         for chapter in range(8):
             await page.get_by_role('button', name=f'Scene {chapter+1}:', exact=False).click()

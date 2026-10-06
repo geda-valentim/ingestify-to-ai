@@ -34,3 +34,11 @@ O contexto de publicação fica em `/data/tmp/ingestify/release-context/`. A tro
 - Conteúdo público e rótulos acessíveis em inglês. Links de documentação solicitam `lang=en`.
 - Teste de navegador ampliado para seleção de operações, alternância local/Modal, pausa dos efeitos e largura de 1920px, mantendo regressões do filme, cópia, FAQ e alternativas estáticas.
 - Revisão visual em desktop e celular corrigiu a quebra do botão de entrada, o contraste de seletores inativos e a leitura dos exemplos SVG pequenos com equivalentes HTML no celular.
+
+## Marca compartilhada e contraste da home
+
+- `Brand` compartilha ícone, lettering e proporções entre home, rodapé e `AppHeader`, usado por dashboard e admin.
+- Verificação visual das áreas autenticadas usa respostas de API interceptadas no navegador, sem criar contas ou alterar dados: dashboard/admin em 320, 390 e 1440px, incluindo menu mobile.
+- Filme com opacidade integral. No mobile, cópia, quadro completo e navegação ocupam linhas separadas; sem máscara de transparência. A tipografia dos capítulos tem regra própria e preserva espaço para o filme nas telas de 320px.
+- Títulos secundários usam preenchimento sólido, sem contorno sobreposto.
+- Revisão independente conferiu cenas de documentos, Compute, Connect e ponte distribuída em telas pequenas, além da separação de texto e mídia no desktop/tablet.

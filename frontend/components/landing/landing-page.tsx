@@ -3,19 +3,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import Image from "next/image";
-import {
-  ArrowDown,
-  ArrowUpRight,
-  Github,
-  Layers,
-  Pause,
-  Play,
-} from "lucide-react";
+import { ArrowDown, ArrowUpRight, Github, Pause, Play } from "lucide-react";
 import { useAuthStore } from "@/lib/store/auth";
 import { chapterProgress, timelineAt } from "./timeline";
 import { chapters, GITHUB } from "./content";
 import "./landing.css";
 import { LandingSections, useLandingMotion } from "./landing-sections";
+import { Brand } from "@/components/brand";
 import { SpectralLines } from "./landing-svg";
 
 function frame(chapter: number, end = false) {
@@ -170,10 +164,7 @@ export function LandingPage() {
       </a>
       <header className="landing-header">
         <Link className="landing-brand" href="/" aria-label="Ingestify home">
-          <span className="landing-mark" aria-hidden="true">
-            <Layers size={20} strokeWidth={1.5} />
-          </span>
-          ingestify<span className="landing-brand-dot">.</span>
+          <Brand />
         </Link>
         <nav aria-label="Main navigation">
           <button
@@ -350,10 +341,7 @@ export function LandingPage() {
       </main>
       <footer className="landing-footer">
         <a href="#" className="landing-brand" aria-label="Ingestify home">
-          <span className="landing-mark" aria-hidden="true">
-            <Layers size={20} strokeWidth={1.5} />
-          </span>
-          ingestify<span className="landing-brand-dot">.</span>
+          <Brand />
         </a>
         <p>From raw files to new possibilities.</p>
         <nav aria-label="Footer links">

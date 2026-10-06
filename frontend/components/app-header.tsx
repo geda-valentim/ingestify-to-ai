@@ -6,10 +6,11 @@ import { useEffect, useState } from "react";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import * as Dialog from "@radix-ui/react-dialog";
 import { useQuery } from "@tanstack/react-query";
-import { BookOpen, ChevronDown, Cpu, FileText, Key, Menu, Mic, LogIn, LogOut, Search, Upload as UploadIcon, UserRound, X } from "lucide-react";
+import { BookOpen, ChevronDown, Cpu, Key, Menu, Mic, LogIn, LogOut, Search, Upload as UploadIcon, UserRound, X } from "lucide-react";
 import { authApi } from "@/lib/api";
 import { useAuthStore } from "@/lib/store/auth";
 import { Button } from "@/components/ui/button";
+import { Brand } from "@/components/brand";
 import { cn } from "@/lib/utils";
 
 type NavLink = { href: string; label: string; icon: typeof UploadIcon };
@@ -98,8 +99,7 @@ export function AppHeader({ className }: { className?: string }) {
     <header className={cn("border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60", className)}>
       <div className="container mx-auto flex h-16 items-center gap-6 px-4">
         <Link href={user ? "/dashboard" : "/login"} className="flex shrink-0 items-center gap-2 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-          <FileText aria-hidden="true" className="h-6 w-6 text-primary" />
-          <span className="text-xl font-bold">Ingestify</span>
+          <Brand />
         </Link>
 
         {user && (

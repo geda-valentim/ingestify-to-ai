@@ -8,13 +8,13 @@ Este documento orienta o conteúdo, o design e a implementação da landing page
 
 Esta revisão substitui as instruções anteriores de composição e os textos públicos em português. A home publicada usa inglês, incluindo metadados, navegação, exemplos, FAQ e rótulos acessíveis. A abertura passa a ser “Your files. AI-ready.”. O texto vigente está em `frontend/components/landing/content.ts` e `landing-sections.tsx`.
 
-A página ocupa toda a largura da janela, sem um container central limitado a 1440px. Títulos grandes em preto conduzem a leitura; o filme de vidro líquido permanece como apoio, com opacidade menor, máscara lateral e continuidade nos dois sentidos da rolagem. No celular, o texto fica acima da mídia. Fundo branco, uma seção de execução preta e linhas rainbow preservam a identidade aprovada.
+A página ocupa toda a largura da janela, sem um container central limitado a 1440px. Títulos grandes em preto e linhas secundárias preenchidas em cinza conduzem a leitura; o filme de vidro líquido permanece como apoio, com contraste integral, separado do texto e continuidade nos dois sentidos da rolagem. No celular, texto, mídia e navegação usam linhas próprias; o vídeo fica imediatamente abaixo do texto, sem máscara de transparência e com enquadramento completo. Fundo branco, uma seção de execução preta e linhas rainbow preservam a identidade aprovada.
 
 As seções seguintes têm linguagem própria: seletor de documentos/áudio/imagens com transformação em SVG; diagrama de execução local ou Modal; sequência vertical de integração com API; órbitas de linhas na visão open source; encerramento com chamada e marca em proporção natural no rodapé. Os exemplos pequenos do SVG têm uma versão HTML legível no celular. Nenhum diagrama simula uma operação real: são exemplos identificados.
 
 As linhas são animadas com traços SVG, o áudio com ondas e o OCR com regiões pulsantes. A entrada dos títulos e o deslocamento de elementos acompanham a rolagem. Loops ficam pausados fora da tela e há controle global para pausar efeitos. Movimento reduzido remove animações e mantém os capítulos estáticos sem baixar o vídeo. Conteúdo permanece visível sem JavaScript.
 
-A disponibilidade continua explícita: Modal é opcional para transcrição; microfone é piloto; execução distribuída geral e composição de operações são evolução planejada. O GitHub permanece acessível pela navegação e pela seção do projeto.
+A disponibilidade continua explícita: Modal é opcional para transcrição; microfone é piloto; execução distribuída geral e composição de operações são evolução planejada. O GitHub permanece acessível pela navegação e pela seção do projeto. A mesma marca — ícone Layers e lettering natural ingestify. — é compartilhada pela home, rodapé, admin e área autenticada pelo componente Brand.
 
 ## Posicionamento
 
