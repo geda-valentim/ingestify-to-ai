@@ -101,3 +101,13 @@ Regras do [CLAUDE.md](../CLAUDE.md): docs gerais em `docs/`, específicos de bac
 `backend/docs/`, de frontend em `frontend/docs/`. Decisões novas viram uma spec em
 [specs/](specs/). Ao documentar uma funcionalidade, verifique no código e registre a data
 da verificação no topo do arquivo, como em `features/`.
+
+### Guias públicos de engines e perfis
+
+[/docs/compute](https://dev.ingestify.ai/pt/docs/compute) organiza
+[engines](https://dev.ingestify.ai/pt/docs/engines),
+[operações](https://dev.ingestify.ai/pt/docs/engine-operations),
+[perfis](https://dev.ingestify.ai/pt/docs/execution-profiles) e
+[acesso RBAC/ABAC](https://dev.ingestify.ai/pt/docs/engine-access).
+Cada guia inclui requisitos funcionais, pré-condições, recursos, configuração, aplicações, API e erros.
+Rastreabilidade: [RF012](RF.md#rf012---engines-operações-perfis-e-acesso).
