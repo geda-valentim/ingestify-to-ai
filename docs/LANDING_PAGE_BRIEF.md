@@ -4,6 +4,12 @@ O Ingestify transforma documentos, imagens, áudio e vídeo em informação util
 
 Este documento orienta o conteúdo, o design e a implementação da landing page. Os textos públicos propostos aparecem em blocos de citação; as orientações de composição e comportamento acompanham cada seção. O estado das funcionalidades corresponde à documentação consultada em 5 de outubro de 2026. O repositório foi conferido durante a produção e está público; a home usa “Ver no GitHub”.
 
+## Equilíbrio das duas perspectivas
+
+A home mantém **Data Engineering e conversão em dados prontos para IA** com o mesmo peso. A abertura usa “Your files. AI-ready data.”, com “DATA ENGINEERING + AI-READY CONVERSION”. O visitante pode converter um arquivo isolado e usar o resultado em ferramentas de IA, ou integrar as mesmas operações a um pipeline de dados. Não é necessário adotar uma infraestrutura de Data Lake para usar as conversões atuais.
+
+A seção de operações explicita os dois caminhos: AI-ready conversion (Markdown, OCR, transcrições e timestamps) e Data Engineering (jobs via API, contexto de projeto, deduplicação e recuperação por página). O encerramento usa “Convert a file. Build a pipeline.”. AI-ready descreve o texto e os metadados de saída; não anuncia chunking, embeddings ou tabelas lakehouse como prontos. A entrega direta ao Data Lake continua planejada.
+
 ## Posicionamento vigente — Data Engineering para AI Engineering
 
 Esta revisão passa a orientar a mensagem pública da home. O Ingestify é a camada de ingestão e conversão de dados não estruturados para pipelines de Data Engineering e AI Engineering. A entrega atual é transformar documentos, imagens e gravações em Markdown, texto, transcrições e metadados, com execução self-hosted e acesso por API.
