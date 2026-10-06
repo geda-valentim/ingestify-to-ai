@@ -1,0 +1,33 @@
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  flex-shrink: 0;
+  white-space: nowrap;
+  font-size: 25px;
+  font-weight: 600;
+  letter-spacing: -1.1px;
+  line-height: 1;
+  color: inherit;
+}
+.mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  flex-shrink: 0;
+  border: 1px solid #ddd;
+  border-radius: 7px;
+}
+@media (max-width: 767px) {
+  .brand {
+    font-size: 23px;
+  }
+}
+@media (max-width: 359px) {
+  .brand {
+    font-size: 20px;
+    gap: 6px;
+  }
+}
