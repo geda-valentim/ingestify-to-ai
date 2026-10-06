@@ -40,7 +40,10 @@ async def main():
         await page.keyboard.press('Enter')
         await page.wait_for_timeout(150)
         assert abs((await page.locator('#operacoes').bounding_box())['y']-95) < 5
-        await page.get_by_text('O que posso transformar?', exact=True).click()
+        await context.grant_permissions(['clipboard-read', 'clipboard-write'])
+        await page.get_by_role('button', name='Copiar exemplo de envio').click()
+        assert 'X-API-Key: SUA_CHAVE' in await page.evaluate('navigator.clipboard.readText()')
+        await page.locator('summary').filter(has_text='O que posso transformar?').click()
         assert await page.locator('details[open]').count() == 1
         for width, height in [(390,844), (390,667), (768,1024), (844,390)]:
             await page.set_viewport_size({'width':width,'height':height})
@@ -53,6 +56,12 @@ async def main():
                 box = await page.locator('.landing-story-bottom').bounding_box()
                 assert box['y'] + box['height'] <= height + 1
         await context.close()
+        mobile = await browser.new_context(viewport={'width':390,'height':844})
+        page = await mobile.new_page()
+        await page.goto(URL, wait_until='networkidle')
+        await page.wait_for_function('document.querySelector("video")?.readyState >= 2')
+        assert 'ingestify-scroll-mobile.mp4' in await page.locator('video').evaluate('(v)=>v.currentSrc')
+        await mobile.close()
         # Accessibility preferences must prevent downloading the video entirely.
         reduced = await browser.new_context(reduced_motion='reduce')
         page = await reduced.new_page()
