@@ -7,7 +7,10 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
-import { engineControlApi as api } from "@/lib/engine-control-api";
+import {
+  engineControlApi as api,
+  createIdempotencyKey,
+} from "@/lib/engine-control-api";
 import { computeApi } from "@/lib/api";
 import type { Engine, Feature } from "@/types/compute";
 import type {
@@ -62,8 +65,8 @@ export function EngineControl({
   const [busy, setBusy] = useState(false);
   const key = useRef<string | null>(null);
   const caps = useQuery({
-    queryKey: ["control", "caps", engine.id],
-    queryFn: () => api.capabilities(engine.id),
+    queryKey: ["control", "caps", engine.id, feature],
+    queryFn: () => api.capabilities(engine.id, feature),
     refetchInterval: 10000,
   });
   const models = useQuery({
@@ -89,6 +92,7 @@ export function EngineControl({
     queryFn: computeApi.adapters,
   });
   const d = caps.data;
+  const dependency = d?.actions.find((a) => a.reason)?.reason;
   const availableModels = models.data?.filter(
     (p) => p.feature === feature && p.adapters.includes(engine.adapter_type),
   );
@@ -155,7 +159,7 @@ export function EngineControl({
       max_usd: maxUsd,
       drain_timeout_seconds: 900,
     });
-    key.current = crypto.randomUUID();
+    key.current = createIdempotencyKey();
     setPlan(p);
   }
   return (
@@ -221,10 +225,24 @@ export function EngineControl({
                 </Button>
               ))}
             </div>
-            {d?.actions.find((a) => a.reason)?.reason && (
-              <p className="text-sm text-muted-foreground">
-                Dependência: {d.actions.find((a) => a.reason)?.reason}
-              </p>
+            {dependency && (
+              <div className="space-y-2 text-sm text-muted-foreground">
+                <p>
+                  {dependency === "RUNTIME_PROFILE_REQUIRED"
+                    ? "Salve a configuração desejada desta funcionalidade e selecione o host registrado antes de operar."
+                    : dependency === "HOST_AGENT_NOT_READY"
+                      ? "O agente do host selecionado está indisponível. Verifique o host na configuração desejada."
+                      : `Dependência: ${dependency}`}
+                </p>
+                {dependency === "RUNTIME_PROFILE_REQUIRED" && (
+                  <Button
+                    variant="outline"
+                    onClick={() => setTab("configuration")}
+                  >
+                    Configurar perfil
+                  </Button>
+                )}
+              </div>
             )}
             {!!d?.credential_fields.length && (
               <Button

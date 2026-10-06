@@ -104,7 +104,7 @@ def profile_view(p):
     )
 
 
-def capabilities(db, engine):
+def capabilities(db, engine, feature=None):
     d = registry.descriptor(engine.adapter_type)
     from shared.config import get_settings
 
@@ -121,17 +121,23 @@ def capabilities(db, engine):
             ],
         )
     actions = []
-    latest = db.query(RuntimeProfile).filter_by(engine_id=engine.id).first()
+    latest = (
+        latest_profile(db, engine.id, feature)
+        if feature is not None
+        else db.query(RuntimeProfile)
+        .filter_by(engine_id=engine.id)
+        .order_by(RuntimeProfile.created_at.desc(), RuntimeProfile.revision.desc())
+        .first()
+    )
     dependency = None
     if d["execution_mode"] == "queue":
-        host_id = (
-            (latest.profile.get("provider_settings") or {}).get("host_id")
-            if latest
-            else None
-        )
-        h = db.get(ControlHost, host_id) if host_id else None
-        if not h or h.seen_at < now() - timedelta(seconds=30):
-            dependency = "HOST_AGENT_NOT_READY"
+        if latest is None:
+            dependency = "RUNTIME_PROFILE_REQUIRED"
+        else:
+            host_id = (latest.profile.get("provider_settings") or {}).get("host_id")
+            h = db.get(ControlHost, host_id) if host_id else None
+            if not h or h.seen_at < now() - timedelta(seconds=30):
+                dependency = "HOST_AGENT_NOT_READY"
     if (
         not __import__("shared.config", fromlist=["get_settings"])
         .get_settings()
@@ -228,7 +234,12 @@ def create_plan(db, engine, req, actor):
     if engine.version != req.engine_version:
         raise ControlError("VERSION_CONFLICT")
     cap = next(
-        (a for a in capabilities(db, engine)["actions"] if a["type"] == req.type), None
+        (
+            a
+            for a in capabilities(db, engine, req.feature)["actions"]
+            if a["type"] == req.type
+        ),
+        None,
     )
     if cap is None or not cap["enabled"]:
         raise ControlError(
