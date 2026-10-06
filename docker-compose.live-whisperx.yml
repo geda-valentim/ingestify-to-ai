@@ -1,0 +1,30 @@
+# Opt-in v2 overlay AFTER docker-compose.live.yml, before the tunnel overlay.
+# Build and qualify CUDA/weights before setting LIVE_DIARIZATION_QUALIFIED=true.
+# API admission remains closed for v2 while either model pipeline is unavailable;
+# v1 readiness only depends on ASR. Existing v1 image remains the rollback target.
+services:
+  api:
+    environment:
+      LIVE_DIARIZATION_ENABLED: ${LIVE_DIARIZATION_ENABLED:-false}
+      LIVE_DIARIZATION_QUALIFIED: ${LIVE_DIARIZATION_QUALIFIED:-false}
+  worker-live:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.live-whisperx
+    environment:
+      AUDIO_TRANSCRIBER_PROVIDER: ${LIVE_ASR_PROVIDER:-faster-whisper}
+      WHISPERX_MODEL_DIR: /models/whisperx
+      LIVE_DIARIZATION_ENABLED: ${LIVE_DIARIZATION_ENABLED:-false}
+      LIVE_DIARIZATION_QUALIFIED: ${LIVE_DIARIZATION_QUALIFIED:-false}
+      LIVE_DIARIZATION_PYTHON: /opt/diart/bin/python
+      LIVE_DIARIZATION_MANIFEST: /models/diart/manifest.json
+      LIVE_DIARIZATION_GPU_GB: ${LIVE_DIARIZATION_GPU_GB:-3}
+      HF_HUB_OFFLINE: '1'
+      TRANSFORMERS_OFFLINE: '1'
+    volumes:
+      - ${WHISPERX_MODEL_DIR:-/var/lib/ingestify/whisperx}:/models/whisperx:ro
+      - ${LIVE_DIARIZATION_MODEL_DIR:-/var/lib/ingestify/diart}:/models/diart:ro
+    # Parent ASR plus isolated diarizer are bounded by this common container.
+    cpus: ${LIVE_CPU_LIMIT:-4}
+    mem_limit: ${LIVE_MEMORY_LIMIT:-8g}
+    pids_limit: 256

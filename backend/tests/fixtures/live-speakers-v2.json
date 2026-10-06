@@ -1,0 +1,142 @@
+{
+  "generation": 7,
+  "received_samples": 176000,
+  "updates": [
+    {
+      "type": "diarization.update",
+      "generation": 7,
+      "revision": 1,
+      "horizon_samples": 80000,
+      "replace_from_samples": 0,
+      "replace_to_samples": 80000,
+      "stable_until_samples": 16000,
+      "speakers": [
+        {
+          "id": "SPEAKER_00",
+          "label": "Falante 1"
+        },
+        {
+          "id": "SPEAKER_01",
+          "label": "Falante 2"
+        }
+      ],
+      "turns": [
+        {
+          "start_samples": 0,
+          "end_samples": 80000,
+          "speaker_id": "SPEAKER_00"
+        },
+        {
+          "start_samples": 16000,
+          "end_samples": 64000,
+          "speaker_id": "SPEAKER_01"
+        }
+      ]
+    },
+    {
+      "type": "diarization.update",
+      "generation": 7,
+      "revision": 2,
+      "horizon_samples": 96000,
+      "replace_from_samples": 32000,
+      "replace_to_samples": 48000,
+      "stable_until_samples": 32000,
+      "speakers": [
+        {
+          "id": "SPEAKER_00",
+          "label": "Falante 1"
+        },
+        {
+          "id": "SPEAKER_01",
+          "label": "Falante 2"
+        }
+      ],
+      "turns": []
+    },
+    {
+      "type": "diarization.update",
+      "generation": 7,
+      "revision": 3,
+      "horizon_samples": 96000,
+      "replace_from_samples": 64000,
+      "replace_to_samples": 96000,
+      "stable_until_samples": 64000,
+      "speakers": [
+        {
+          "id": "SPEAKER_00",
+          "label": "Falante 1"
+        },
+        {
+          "id": "SPEAKER_01",
+          "label": "Falante 2"
+        }
+      ],
+      "turns": [
+        {
+          "start_samples": 64000,
+          "end_samples": 96000,
+          "speaker_id": "SPEAKER_01"
+        }
+      ]
+    },
+    {
+      "type": "diarization.update",
+      "generation": 7,
+      "revision": 4,
+      "horizon_samples": 96000,
+      "replace_from_samples": 96000,
+      "replace_to_samples": 96000,
+      "stable_until_samples": 96000,
+      "speakers": [
+        {
+          "id": "SPEAKER_00",
+          "label": "Falante 1"
+        },
+        {
+          "id": "SPEAKER_01",
+          "label": "Falante 2"
+        }
+      ],
+      "turns": []
+    }
+  ],
+  "canonical": {
+    "generation": 7,
+    "revision": 4,
+    "horizon_samples": 96000,
+    "stable_until_samples": 96000,
+    "speakers": [
+      {
+        "id": "SPEAKER_00",
+        "label": "Falante 1"
+      },
+      {
+        "id": "SPEAKER_01",
+        "label": "Falante 2"
+      }
+    ],
+    "turns": [
+      {
+        "start_samples": 0,
+        "end_samples": 32000,
+        "speaker_id": "SPEAKER_00"
+      },
+      {
+        "start_samples": 16000,
+        "end_samples": 32000,
+        "speaker_id": "SPEAKER_01"
+      },
+      {
+        "start_samples": 48000,
+        "end_samples": 64000,
+        "speaker_id": "SPEAKER_00"
+      },
+      {
+        "start_samples": 48000,
+        "end_samples": 96000,
+        "speaker_id": "SPEAKER_01"
+      }
+    ]
+  },
+  "digest": "761d9b8775864ea5dda20d59b47e8289b8269d95bbf190df42bc595fbd1c235b"
+}
