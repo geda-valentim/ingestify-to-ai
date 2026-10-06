@@ -3,12 +3,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { ArrowUpRight, ArrowRight, Github, Check, Copy } from "lucide-react";
 import { GITHUB, example, faq } from "./content";
-import {
-  OperationDiagram,
-  ComputeDiagram,
-  SpectralLines,
-  Wordmark,
-} from "./landing-svg";
+import { OperationDiagram, ComputeDiagram, SpectralLines } from "./landing-svg";
 
 /** Progressive enhancement: content remains visible without JavaScript. */
 export function useLandingMotion() {
@@ -402,7 +397,6 @@ export function LandingSections({ signedIn }: { signedIn: boolean }) {
             </Link>
           </div>
         </div>
-        <Wordmark />
         <SpectralLines variant="rail" />
       </section>
     </>
