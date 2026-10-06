@@ -1,15 +1,21 @@
 "use client";
 
-import { useEffect } from "react";
 import { Document, Page as PDFPage, pdfjs } from "react-pdf";
 import { Loader2 } from "lucide-react";
 import "react-pdf/dist/Page/AnnotationLayer.css";
 import "react-pdf/dist/Page/TextLayer.css";
 
-// Configure PDF.js worker on client side only
-if (typeof window !== 'undefined') {
-  pdfjs.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjs.version}/pdf.worker.min.js`;
-}
+// Bundle the worker from the locked dependency; do not execute a CDN script.
+pdfjs.GlobalWorkerOptions.workerSrc = new URL(
+  "pdfjs-dist/build/pdf.worker.min.mjs", import.meta.url,
+).toString();
+
+const PDF_OPTIONS = {
+  wasmUrl: "/pdfjs/wasm/",
+  cMapUrl: "/pdfjs/cmaps/",
+  cMapPacked: true,
+  standardFontDataUrl: "/pdfjs/standard_fonts/",
+};
 
 // A URL, or { url, httpHeaders } to send the Authorization header with the request
 export type PdfSource = string | { url: string; httpHeaders?: Record<string, string> };
@@ -38,6 +44,7 @@ export function PdfViewer({
   return (
     <Document
       file={file}
+      options={PDF_OPTIONS}
       onLoadSuccess={onLoadSuccess}
       onLoadError={onLoadError}
       loading={

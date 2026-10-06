@@ -76,7 +76,7 @@ export default function RegisterPage() {
           <CardContent className="space-y-4">
             {error && (
               <div className="rounded-md bg-destructive/10 border border-destructive/20 p-3 text-sm text-destructive flex items-start gap-2 animate-in slide-in-from-top-2">
-                <AlertCircle className="h-4 w-4 mt-0.5 flex-shrink-0" />
+                <AlertCircle className="h-4 w-4 mt-0.5 shrink-0" />
                 <div className="flex-1">
                   <p className="font-medium">Registration Failed</p>
                   <p className="text-xs mt-1 opacity-90">{error}</p>
