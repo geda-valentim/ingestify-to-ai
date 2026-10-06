@@ -17,6 +17,7 @@ if str(BACKEND_ROOT) not in sys.path:
 # Settings are required (and validated) at import time, so they must be present
 # before any module that calls get_settings() is imported. These values are
 # test-only and must never resemble a real credential.
+os.environ.setdefault("ENVIRONMENT", "development")
 os.environ.setdefault("JWT_SECRET_KEY", "test-only-secret-not-for-any-real-environment-0123456789abcdef")
 os.environ.setdefault("MINIO_ACCESS_KEY", "test-access-key")
 os.environ.setdefault("MINIO_SECRET_KEY", "test-secret-key")
@@ -76,3 +77,10 @@ def mock_db_session():
     session.refresh = AsyncMock()
     session.close = MagicMock()
     return session
+
+
+@pytest.fixture(autouse=True)
+def job_admission_redis(monkeypatch, fake_redis):
+    """Exercise admission with the same isolated Redis model as route tests."""
+    from shared import job_admission
+    monkeypatch.setattr(job_admission, 'get_redis_client', lambda: fake_redis)

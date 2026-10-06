@@ -1,5 +1,7 @@
 import io
 import logging
+import ssl
+import urllib3
 from typing import Dict, Optional, BinaryIO, Tuple
 from datetime import timedelta
 from minio import Minio
@@ -37,6 +39,9 @@ class MinIOClient:
                 access_key=settings.minio_access_key,
                 secret_key=settings.minio_secret_key,
                 secure=settings.minio_secure,
+                http_client=urllib3.PoolManager(
+                    ssl_context=ssl.create_default_context(cafile=settings.minio_ca_certs or None),
+                ),
             )
 
         # Bucket names from config

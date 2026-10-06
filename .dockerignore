@@ -1,0 +1,29 @@
+# Build contexts must never upload credentials or runtime data to the daemon.
+.git
+.git/**
+.env
+.env.*
+**/.env
+**/.env.*
+secrets
+secrets/**
+**/*.pem
+**/*.key
+**/credentials.json
+**/service-account*.json
+
+# Host dependencies, caches and generated data are not image inputs.
+.venv
+venv
+**/__pycache__
+**/.pytest_cache
+**/*.pyc
+frontend/node_modules
+frontend/.next
+frontend/*.tsbuildinfo
+models
+tmp
+uploads
+results
+logs
+**/*.log

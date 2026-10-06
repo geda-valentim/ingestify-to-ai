@@ -110,6 +110,10 @@ def handle(request_raw: Any, *, model, state, container_id: str, call_id: Option
                 return False  # the provider's own cancel() still applies
         return False
 
+    from workers.engines.runtime_security import require_safe_runtime
+    # Remote inference is production even when the deployment CLI ran locally.
+    require_safe_runtime(request["options"].get("transcriber_provider", "faster-whisper"), environment="production")
+
     if transcribe is None:
         if request['options'].get('transcriber_provider') == 'whisperx':
             from workers.engines import whisperx_core

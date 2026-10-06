@@ -9,6 +9,7 @@ before (tests/test_tasks_page_conversion.py and the contract tests pin those);
 without a vision route the API never reserves anything.
 """
 
+from shared.job_admission import Admission
 import asyncio
 from datetime import timedelta
 from types import SimpleNamespace
@@ -256,8 +257,10 @@ def test_the_page_retry_endpoint_goes_through_the_route(world, monkeypatch, tmp_
     db = world.Session()
     try:
         alice = db.get(routes.User, ALICE)
+        admission = Admission(world.redis.client, ALICE, routes.settings)
+        admission.reserve(db, ALICE)
         body = asyncio.run(routes.retry_failed_page(PARENT, 7, current_user=alice, owned_job=db.get(Job, PARENT),
-                                                    db_page=db.get(Page, "p7"), db=db))
+                                                    db_page=db.get(Page, "p7"), db=db, admission=admission))
     finally:
         db.close()
 
@@ -343,7 +346,9 @@ def run_vision(world):
     db = world.Session()
     try:
         alice = db.get(routes.User, ALICE)
-        return asyncio.run(image_routes._run_vision("describe", PNG, "x.png", None, alice, db))
+        admission = Admission(world.redis.client, ALICE, routes.settings)
+        admission.reserve(db, ALICE)
+        return asyncio.run(image_routes._run_vision("describe", PNG, "x.png", None, alice, db, admission=admission))
     finally:
         db.close()
 
@@ -422,10 +427,12 @@ def convert(world, monkeypatch, tmp_path):
         db = world.Session()
         try:
             alice = db.get(routes.User, ALICE)
+            admission = Admission(world.redis.client, ALICE, routes.settings)
+            admission.reserve(db, ALICE)
             return asyncio.run(routes.convert_document(
                 source_type=source_type, source=source, file=None, name=None, tags=None,
                 authorization=headers.get("authorization"), source_token=headers.get("source_token"),
-                location=LocationFields(project="Engines"), current_user=alice, db=db))
+                location=LocationFields(project="Engines"), current_user=alice, db=db, admission=admission))
         finally:
             db.close()
 
@@ -481,3 +488,53 @@ def test_the_provider_token_goes_out_of_band_and_is_dropped_after_the_download(w
         tasks.process_conversion.run(**kwargs)
     assert seen["token2"] == "sl.provider"
     assert world.redis.get_source_token(job_id) is None
+
+
+def test_pdf_page_budget_rejection_terminates_parent_before_children(world, pages, monkeypatch):
+    from shared.pdf_splitter import PDFPageLimitError
+    from shared.job_admission import Admission
+    monkeypatch.setattr(tasks.PDFSplitter.return_value, 'split_pdf',
+                        lambda *args, **kwargs: (_ for _ in ()).throw(PDFPageLimitError('PDF_PAGE_LIMIT_EXCEEDED')))
+    result = split(world)
+    assert result['status'] == 'failed'
+    assert pages.delayed == []
+    assert world.celery.named(dispatch.CONVERT_PAGE) == []
+    with world.Session() as db:
+        assert db.get(Job, PARENT).status == JobStatus.FAILED
+        assert db.query(Page).count() == 0
+        monkeypatch.setattr(routes.settings, 'job_max_active', 1)
+        admission = Admission(world.redis.client, ALICE, routes.settings)
+        admission.reserve(db, ALICE)
+        admission.release(db)
+
+
+@pytest.mark.parametrize('exhausted', [False, True])
+@pytest.mark.parametrize('timeout', [False, True])
+def test_conversion_automatic_retry_preserves_active_quota_until_exhausted(world, monkeypatch, exhausted, timeout):
+    from shared.job_admission import Admission
+    monkeypatch.setattr(routes.settings, 'job_max_active', 1)
+    with world.Session() as db:
+        db.add(Job(id=PARENT, user_id=ALICE, filename='doc.pdf', source_type='file',
+                   job_type='MAIN', status=JobStatus.PENDING, file_size_bytes=1))
+        db.commit()
+    monkeypatch.setattr(tasks, 'get_es_client', lambda: SimpleNamespace())
+    from celery.exceptions import SoftTimeLimitExceeded
+    error = SoftTimeLimitExceeded() if timeout else RuntimeError('synthetic transient source failure')
+    monkeypatch.setattr(tasks, 'get_source_handler', lambda source_type: (_ for _ in ()).throw(error))
+    monkeypatch.setattr(tasks.process_conversion, 'retry', lambda **kwargs: RuntimeError('synthetic retry publication'))
+    tasks.process_conversion.push_request(retries=3 if exhausted else 0)
+    try:
+        with pytest.raises(RuntimeError, match='synthetic retry publication'):
+            tasks.process_conversion.run(job_id=PARENT, source_type='url', source='https://example.invalid/doc.pdf', options={})
+    finally:
+        tasks.process_conversion.pop_request()
+    with world.Session() as db:
+        assert db.get(Job, PARENT).status == (JobStatus.FAILED if exhausted else JobStatus.PENDING)
+        admission = Admission(world.redis.client, ALICE, routes.settings)
+        if exhausted:
+            admission.reserve(db, ALICE)
+            admission.release(db)
+        else:
+            with pytest.raises(HTTPException) as failure:
+                admission.reserve(db, ALICE)
+            assert failure.value.status_code == 429

@@ -2728,7 +2728,7 @@
           "Conversion"
         ],
         "summary": "Deletar job",
-        "description": "Deletar job e todos os seus dados associados\n\nRemove completamente um job do sistema, incluindo:\n- Metadados do MySQL (job e pages)\n- Conteúdo do Elasticsearch (markdown)\n- Status temporário do Redis\n- Para transcrições: o áudio/vídeo enviado e as transcrições guardadas no MinIO\n\n**Atenção:** Esta operação é irreversível!\n\n## Para jobs MAIN com páginas:\n- Deleta o job principal\n- Deleta todos os jobs filhos (split, pages, merge)\n- Deleta todos os registros de páginas\n- Remove todo o conteúdo markdown\n\n## Permissões:\n- Apenas o dono do job (verificado no MySQL) pode deletá-lo\n\n## Retorno:\n- 200: Job deletado com sucesso\n- 404: Job não encontrado (também retornado quando o job pertence a outro\n  usuário, para não expor a existência do recurso)",
+        "description": "Deletar job e todos os seus dados associados\n\nRemove os registros do job e confirma a remoção de sua entrada, incluindo:\n- Metadados do MySQL (job e pages)\n- Conteúdo do Elasticsearch (markdown)\n- Status temporário do Redis\n- Arquivo de entrada no MinIO; transcrições derivadas são removidas best effort\n- PDFs/Markdown derivados de documentos e versões antigas de objetos podem permanecer\n\n**Atenção:** Esta operação é irreversível!\n\n## Para jobs MAIN com páginas:\n- Deleta o job principal\n- Deleta todos os jobs filhos (split, pages, merge)\n- Deleta todos os registros de páginas\n- Remove todo o conteúdo markdown\n\n## Permissões:\n- Apenas o dono do job (verificado no MySQL) pode deletá-lo\n\n## Retorno:\n- 200: Job deletado com sucesso\n- 409: Job ou página ainda está em execução\n- 503: Remoção da entrada não confirmada; registro e orçamento são preservados\n- 404: Job não encontrado (também retornado quando o job pertence a outro\n  usuário, para não expor a existência do recurso)",
         "operationId": "delete_job_jobs__job_id__delete",
         "security": [
           {
@@ -3852,7 +3852,7 @@
             "anyOf": [
               {
                 "type": "string",
-                "format": "binary"
+                "contentMediaType": "application/octet-stream"
               },
               {
                 "type": "null"
@@ -4005,7 +4005,7 @@
         "properties": {
           "file": {
             "type": "string",
-            "format": "binary",
+            "contentMediaType": "application/octet-stream",
             "title": "File",
             "description": "Imagem (PNG, JPEG, WEBP, BMP, GIF, TIFF)"
           },
@@ -4104,7 +4104,7 @@
         "properties": {
           "file": {
             "type": "string",
-            "format": "binary",
+            "contentMediaType": "application/octet-stream",
             "title": "File",
             "description": "Imagem (PNG, JPEG, WEBP, BMP, GIF, TIFF)"
           },
@@ -4179,7 +4179,7 @@
         "properties": {
           "file": {
             "type": "string",
-            "format": "binary",
+            "contentMediaType": "application/octet-stream",
             "title": "File",
             "description": "Arquivo de áudio (MP3, WAV, M4A, FLAC, OGG...) ou vídeo (MP4, MKV, MOV, WEBM, AVI...)"
           },
@@ -4340,7 +4340,7 @@
         "properties": {
           "file": {
             "type": "string",
-            "format": "binary",
+            "contentMediaType": "application/octet-stream",
             "title": "File",
             "description": "Arquivo para conversão (PDF, DOCX, HTML, etc.)"
           },
@@ -6857,6 +6857,13 @@
           "type": {
             "type": "string",
             "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
           }
         },
         "type": "object",

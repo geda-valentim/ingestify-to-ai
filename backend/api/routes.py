@@ -40,6 +40,7 @@ from shared.tags import set_job_tags
 from shared.admin import is_effective_admin
 from shared.engines import dispatch as engine_dispatch
 from shared.transcription import is_media_filename
+from shared.job_admission import Admission, admit_job
 from api.transcription_options import admission as transcription_admission, media_input_kind
 from api.tag_routes import TAGS_FORM_DESCRIPTION, add_tags_to_existing_job, parse_tags_or_422
 from api.projects_api import (
@@ -93,6 +94,7 @@ async def upload_and_convert(
     location: LocationFields = Depends(upload_location_form),
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
+    admission: Admission = Depends(admit_job),
 ):
     """
     Upload direto de arquivo para conversão
@@ -174,7 +176,8 @@ async def upload_and_convert(
             )
 
         # Generate job ID for new file
-        job_id = uuid4()
+        admission.ensure(db)
+        job_id = admission.job_id
         created_at = datetime.utcnow()
 
         # Determine job name (use provided name or filename)
@@ -215,7 +218,7 @@ async def upload_and_convert(
                 transcription_profile=transcription_profile,
                 transcription_profile_hash=transcription_profile_hash,
             )
-            db.add(db_job)
+            db_job = db.merge(db_job)
             set_job_tags(db_job, tag_list)
             db.commit()
             logger.info(f"Job {job_id} created in MySQL with name: {job_name} and checksum: {file_checksum}")
@@ -463,6 +466,7 @@ async def transcribe_audio(
     location: LocationFields = Depends(upload_location_form),
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
+    admission: Admission = Depends(admit_job),
 ):
     """
     Transcrever áudio ou vídeo para texto usando Whisper (STT)
@@ -630,7 +634,8 @@ async def transcribe_audio(
             )
 
         # Generate job ID for new file
-        job_id = uuid4()
+        admission.ensure(db)
+        job_id = admission.job_id
         created_at = datetime.utcnow()
 
         # Determine job name
@@ -669,7 +674,7 @@ async def transcribe_audio(
                 transcription_profile=transcription_profile,
                 transcription_profile_hash=transcription_profile_hash,
             )
-            db.add(db_job)
+            db_job = db.merge(db_job)
             set_job_tags(db_job, tag_list)
             db.commit()
             logger.info(f"Audio transcription job {job_id} created in MySQL with name: {job_name} and checksum: {file_checksum}")
@@ -828,6 +833,7 @@ async def convert_document(
     location: LocationFields = Depends(upload_location_form),
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
+    admission: Admission = Depends(admit_job),
 ):
     """
     Conversão de documentos para Markdown
@@ -953,7 +959,8 @@ async def convert_document(
                 )
 
         # Generate job ID for new conversion
-        job_id = uuid4()
+        admission.ensure(db)
+        job_id = admission.job_id
         created_at = datetime.utcnow()
 
         # Determine job name (use provided name or auto-detect)
@@ -1003,7 +1010,7 @@ async def convert_document(
                 transcription_profile=transcription_profile,
                 transcription_profile_hash=transcription_profile_hash,
             )
-            db.add(db_job)
+            db_job = db.merge(db_job)
             set_job_tags(db_job, tag_list)
             db.commit()
             checksum_info = f" and checksum: {file_checksum}" if file_checksum else ""
@@ -1378,11 +1385,12 @@ async def delete_job(
     """
     Deletar job e todos os seus dados associados
 
-    Remove completamente um job do sistema, incluindo:
+    Remove os registros do job e confirma a remoção de sua entrada, incluindo:
     - Metadados do MySQL (job e pages)
     - Conteúdo do Elasticsearch (markdown)
     - Status temporário do Redis
-    - Para transcrições: o áudio/vídeo enviado e as transcrições guardadas no MinIO
+    - Arquivo de entrada no MinIO; transcrições derivadas são removidas best effort
+    - PDFs/Markdown derivados de documentos e versões antigas de objetos podem permanecer
 
     **Atenção:** Esta operação é irreversível!
 
@@ -1397,6 +1405,8 @@ async def delete_job(
 
     ## Retorno:
     - 200: Job deletado com sucesso
+    - 409: Job ou página ainda está em execução
+    - 503: Remoção da entrada não confirmada; registro e orçamento são preservados
     - 404: Job não encontrado (também retornado quando o job pertence a outro
       usuário, para não expor a existência do recurso)
     """
@@ -1430,7 +1440,30 @@ async def delete_job(
                 terminate(job_id, "cancelled", "LIVE_JOB_DELETED",
                           LiveStore(redis_client.client, settings.live_worker_id), redis_client)
 
+    db.rollback()
+    db_job = db.query(Job).filter(Job.id == job_id, Job.user_id == current_user.id).populate_existing().with_for_update().one_or_none()
+    if db_job is None:
+        raise HTTPException(404, detail="Job não encontrado")
+    if db_job is not None and db_job.status in (DBJobStatus.PENDING, DBJobStatus.PROCESSING):
+        raise HTTPException(409, detail={"code": "JOB_ACTIVE_DELETE_FORBIDDEN"})
+    if db.query(Page).filter(Page.job_id == job_id,
+                            Page.status.in_((DBJobStatus.PENDING, DBJobStatus.PROCESSING))).count():
+        raise HTTPException(409, detail={"code": "JOB_ACTIVE_DELETE_FORBIDDEN"})
+
     logger.info(f"Deleting job {job_id} for user {current_user.username}")
+
+    # Keep the input-byte ledger until deletion of the original is confirmed.
+    # S3 remove_object succeeds for an already absent (e.g. purged) source.
+    if db_job.minio_upload_path:
+        try:
+            input_store = get_minio_client()
+            input_bucket = (input_store.bucket_audio if db_job.source_type == "audio"
+                            else input_store.bucket_uploads)
+            if input_store.delete_file(input_bucket, db_job.minio_upload_path) is not True:
+                raise RuntimeError("Input removal was not confirmed")
+        except Exception:
+            db.rollback()
+            raise HTTPException(503, detail={"code": "JOB_INPUT_CLEANUP_FAILED"})
 
     # 1. Delete from Elasticsearch (if available)
     if es_client:
@@ -1452,8 +1485,6 @@ async def delete_job(
     if db_job and db_job.source_type == "audio":
         try:
             minio_client = get_minio_client()
-            if db_job.minio_upload_path:
-                minio_client.delete_file(minio_client.bucket_audio, db_job.minio_upload_path)
             minio_client.delete_folder(minio_client.bucket_audio, f"transcripts/{job_id}/")
         except Exception as e:
             logger.warning(f"Failed to delete audio objects of job {job_id} from MinIO: {e}")
@@ -2316,6 +2347,7 @@ async def retry_failed_page(
     owned_job: Optional[Job] = Depends(get_owned_job),
     db_page: Optional[Page] = Depends(get_owned_page_or_none),
     db: Session = Depends(get_db),
+    admission: Admission = Depends(admit_job),
 ):
     """
     Tenta reprocessar uma página que falhou
@@ -2338,6 +2370,14 @@ async def retry_failed_page(
     - Apenas o dono do job (verificado no MySQL) pode reprocessar a página.
       Jobs de outros usuários retornam 404.
     """
+    # Admission starts a fresh transaction; ownership dependencies may have
+    # loaded objects before a concurrent deletion committed. Re-read rather
+    # than dereference ORM instances whose rows could have disappeared.
+    owned_job = db.query(Job).filter(Job.id == job_id, Job.user_id == current_user.id).populate_existing().one_or_none()
+    if owned_job is None:
+        raise HTTPException(404, detail="Job principal não encontrado")
+    db_page = db.query(Page).filter(Page.job_id == job_id, Page.page_number == page_number).populate_existing().first()
+
     redis_client = get_redis_client()
 
     # Ownership já validada em get_owned_page_or_none -> get_owned_job
@@ -2406,14 +2446,24 @@ async def retry_failed_page(
         import uuid
 
         # Generate new job ID for the retry
-        new_page_job_id = str(uuid.uuid4())
+        admission.ensure(db)
+        new_page_job_id = admission.job_id
+        locked_parent = db.query(Job).filter(Job.id == job_id, Job.user_id == current_user.id).with_for_update().one_or_none()
+        if locked_parent is None:
+            raise HTTPException(404, detail="Job principal não encontrado")
 
-        # Update page status to pending and increment retry count
-        db_page.status = DBJobStatus.PENDING
-        db_page.page_job_id = new_page_job_id
-        db_page.error_message = None
-        db_page.retry_count += 1
+        # Conditional update prevents concurrent retries of the same page.
+        changed = db.query(Page).filter(Page.id == db_page.id, Page.status == DBJobStatus.FAILED,
+                                        Page.retry_count < 3).update({
+            Page.status: DBJobStatus.PENDING, Page.page_job_id: new_page_job_id,
+            Page.error_message: None, Page.retry_count: Page.retry_count + 1}, synchronize_session=False)
+        if changed != 1:
+            raise HTTPException(409, detail={"code": "PAGE_RETRY_CONFLICT"})
+        # Transfer the durable active slot from placeholder to Page in the same
+        # commit, so admissions observe one of them across the transition.
+        db.query(Job).filter(Job.id == admission.job_id).delete(synchronize_session=False)
         db.commit()
+        db.refresh(db_page)
 
         logger.info(f"Retry attempt {db_page.retry_count}/3 for page {page_number}")
 
@@ -2493,10 +2543,31 @@ async def retry_failed_page(
     except ImportError as e:
         logger.error(f"Celery tasks not available: {e}")
         db.rollback()
+        # The parent/page may have been deleted while this request waited
+        # for its SQL lock. Conditional SQL avoids dereferencing expired ORM
+        # objects and cannot alter another attempt's page state.
+        db.query(Page).filter(Page.job_id == job_id, Page.page_job_id == admission.job_id).update(
+            {Page.status: DBJobStatus.FAILED}, synchronize_session=False)
+        db.commit()
         raise HTTPException(status_code=503, detail="Sistema de processamento indisponível")
+    except HTTPException:
+        db.rollback()
+        # The parent/page may have been deleted while this request waited
+        # for its SQL lock. Conditional SQL avoids dereferencing expired ORM
+        # objects and cannot alter another attempt's page state.
+        db.query(Page).filter(Page.job_id == job_id, Page.page_job_id == admission.job_id).update(
+            {Page.status: DBJobStatus.FAILED}, synchronize_session=False)
+        db.commit()
+        raise
     except Exception as e:
         logger.error(f"Error retrying page {page_number} of job {job_id}: {e}", exc_info=True)
         db.rollback()
+        # The parent/page may have been deleted while this request waited
+        # for its SQL lock. Conditional SQL avoids dereferencing expired ORM
+        # objects and cannot alter another attempt's page state.
+        db.query(Page).filter(Page.job_id == job_id, Page.page_job_id == admission.job_id).update(
+            {Page.status: DBJobStatus.FAILED}, synchronize_session=False)
+        db.commit()
         raise HTTPException(status_code=500, detail="Erro ao reprocessar página")
 
 

@@ -1,7 +1,7 @@
 """
 PyPDF Merger Adapter
 
-Implementação de PDFMergerPort usando PyPDF2
+Implementação de PDFMergerPort usando pypdf
 """
 import logging
 from pathlib import Path
@@ -9,8 +9,8 @@ from typing import List, Dict, Optional
 from datetime import datetime
 import asyncio
 
-from PyPDF2 import PdfMerger, PdfReader, PdfWriter
-from PyPDF2.errors import PdfReadError
+from pypdf import PdfReader, PdfWriter
+from pypdf.errors import PdfReadError
 
 from application.ports.pdf_merger_port import (
     PDFMergerPort,
@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 class PyPDFMergerAdapter(PDFMergerPort):
     """
-    Adapter para merge de PDFs usando PyPDF2
+    Adapter para merge de PDFs usando pypdf
 
     Características:
     - Merge de múltiplos PDFs
@@ -70,8 +70,8 @@ class PyPDFMergerAdapter(PDFMergerPort):
             # Criar diretório de saída se não existir
             output_path.parent.mkdir(parents=True, exist_ok=True)
 
-            # Executar merge em thread separada (PyPDF2 é síncrono)
-            merger = PdfMerger()
+            # Executar merge em thread separada (pypdf é síncrono)
+            merger = PdfWriter()
 
             for pdf_file in pdf_files:
                 merger.append(str(pdf_file))

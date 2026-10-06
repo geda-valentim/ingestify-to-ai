@@ -14,6 +14,8 @@ destroys.
 import builtins
 import importlib
 import sys
+import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -32,6 +34,47 @@ VISION_MODULES = [
 HEAVY_MODULES = ("torch", "transformers", "PIL", "huggingface_hub")
 
 
+def isolated_import_check(module_names, block=False):
+    # Celery decorators register tasks process-wide; sys.modules restoration
+    # cannot undo those registrations safely in a shared pytest process.
+    script = """
+import builtins, importlib, sys
+modules = %r
+heavy = %r
+real_import = builtins.__import__
+def blocking_import(name, *args, **kwargs):
+    if name.split('.')[0] in heavy:
+        raise ImportError(name + ' blocked by import probe')
+    return real_import(name, *args, **kwargs)
+if %r:
+    builtins.__import__ = blocking_import
+for name in modules:
+    importlib.import_module(name)
+assert not any(name in sys.modules for name in heavy)
+""" % (module_names, HEAVY_MODULES, block)
+    result = subprocess.run([sys.executable, "-c", script],
+        cwd=Path(__file__).resolve().parents[1], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.fixture(autouse=True)
+def restore_import_state():
+    """Import probes must not replace classes/Pillow plugin state for later tests."""
+    def tracked(name):
+        return name in VISION_MODULES or name == "api.image_routes" or name.split(".")[0] in HEAVY_MODULES
+    modules = {name: module for name, module in sys.modules.items() if tracked(name)}
+    parents = {name: dict(sys.modules[name].__dict__) for name in ("workers", "workers.vision", "api", "PIL") if name in sys.modules}
+    yield
+    for name in list(sys.modules):
+        if tracked(name) and name not in modules:
+            sys.modules.pop(name, None)
+    sys.modules.update(modules)
+    for name, attributes in parents.items():
+        if name in sys.modules:
+            sys.modules[name].__dict__.clear()
+            sys.modules[name].__dict__.update(attributes)
+
+
 @pytest.mark.parametrize("module_name", VISION_MODULES)
 def test_module_imports_without_torch(module_name, monkeypatch):
     """Every module imports even when `import torch` is guaranteed to fail.
@@ -40,6 +83,9 @@ def test_module_imports_without_torch(module_name, monkeypatch):
     so this test proves the property on a developer machine that happens to have
     the vision extra as well as in CI, where it does not.
     """
+    if module_name == "workers.vision_tasks":
+        isolated_import_check([module_name], block=True)
+        return
     real_import = builtins.__import__
 
     def blocking_import(name, *args, **kwargs):
@@ -98,16 +144,7 @@ def test_the_image_routes_module_imports_without_torch(monkeypatch):
 
 def test_importing_the_package_pulls_in_no_heavy_dependency():
     """Importing is not merely possible - it must also be free."""
-    for name in list(sys.modules):
-        if name.split(".")[0] in HEAVY_MODULES:
-            del sys.modules[name]
-
-    for module_name in VISION_MODULES:
-        sys.modules.pop(module_name, None)
-        importlib.import_module(module_name)
-
-    leaked = [name for name in HEAVY_MODULES if name in sys.modules]
-    assert leaked == [], f"importing the vision package loaded {leaked}"
+    isolated_import_check(VISION_MODULES)
 
 
 def test_constructing_a_describer_loads_nothing():

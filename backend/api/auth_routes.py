@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Form, Request
-from sqlalchemy import func, or_
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 from datetime import timedelta
 
@@ -86,9 +86,11 @@ def _lockout_identity(db: Session, login: str) -> str:
     fall back to the normalized string (still rate limited, no enumeration).
     """
     normalized = rate_limit.normalize_identity(login)
-    user = db.query(User).filter(
-        or_(func.lower(User.username) == normalized, func.lower(User.email) == normalized)
-    ).first()
+    # Match authentication precedence: a username may equal another user's
+    # email; an unordered OR query could charge the wrong account.
+    user = db.query(User).filter(func.lower(User.username) == normalized).first()
+    if user is None:
+        user = db.query(User).filter(func.lower(User.email) == normalized).first()
     return f"user:{user.id}" if user else f"name:{normalized}"
 
 
@@ -124,10 +126,13 @@ async def login(
     - 401: Invalid credentials
     - 429: Too many attempts (per IP, or too many failures for this account)
     """
-    account = _lockout_identity(db, username)
     rate_limit.hit("login:ip", rate_limit.client_ip(request), settings.rate_limit_per_minute, 60)
+    account = _lockout_identity(db, username)
     rate_limit.check_failures("login:failed", account, settings.login_max_failed_attempts)
 
+    # Reserve an account attempt atomically before password verification.
+    # Concurrent requests cannot all pass the separate failure-count check.
+    rate_limit.hit("login:account", account, settings.login_max_failed_attempts, settings.login_lockout_seconds)
     user = authenticate_user(db, username, password)
 
     if not user:
@@ -145,6 +150,7 @@ async def login(
         )
 
     rate_limit.reset("login:failed", account)
+    rate_limit.reset("login:account", account)
 
     # Create access token
     access_token_expires = timedelta(minutes=settings.jwt_expiration_minutes)

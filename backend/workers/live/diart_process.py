@@ -13,6 +13,8 @@ import re
 import struct
 import sys
 
+from workers.engines.runtime_security import require_safe_runtime
+
 MAX_MESSAGE = 256_000
 HEADER = struct.Struct('!I')
 
@@ -72,6 +74,7 @@ def checkpoint_globals():
 
 class DiartSession:
     def __init__(self, manifest, device='cuda'):
+        require_safe_runtime('diart')
         import torch
         import numpy as np
         from diart import SpeakerDiarization, SpeakerDiarizationConfig
@@ -147,6 +150,7 @@ class DiartSession:
 
 
 def main():
+    require_safe_runtime("diart")
     # Third-party diagnostic print calls must never corrupt the private pipe.
     source, destination = sys.stdin.buffer, sys.stdout.buffer
     sys.stdout = sys.stderr

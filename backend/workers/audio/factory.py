@@ -66,6 +66,8 @@ def get_audio_transcriber(force_provider: Optional[str] = None) -> AudioTranscri
 
     configured = settings.audio_transcriber_provider
     provider = force_provider or configured
+    from workers.engines.runtime_security import require_safe_runtime
+    require_safe_runtime(provider, environment=settings.environment)
 
     if provider != configured:
         logger.info(f"Building a one-off audio transcriber with provider: {provider}")
@@ -83,6 +85,8 @@ def get_audio_transcriber(force_provider: Optional[str] = None) -> AudioTranscri
 
 
 def _build_transcriber(provider: str, settings) -> AudioTranscriber:
+    from workers.engines.runtime_security import require_safe_runtime
+    require_safe_runtime(provider, environment=settings.environment)
     if provider == "whisperx":
         from workers.audio.whisperx_transcriber import WhisperXTranscriber
         return _create_on_best_device(lambda d: WhisperXTranscriber(

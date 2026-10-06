@@ -20,6 +20,7 @@ from api import routes
 from api import routing_admin_routes as admin
 from api.projects_api import LocationFields
 from shared.engines import dispatch, ledger, routing
+from shared.job_admission import Admission
 from shared.models import AdminAudit, EngineUsage, FeatureRoute, Job, JobDispatch, JobStatus, User
 from workers import tasks
 from workers.engines import local, watchdog
@@ -63,33 +64,42 @@ def upload(name, data=None, content_type="audio/mpeg"):
 
 def transcribe(world, user_id=ALICE, name="aula.mp3"):
     db, who = user(world, user_id)
+    admission = Admission(world.redis.client, who.id, routes.settings)
+    admission.reserve(db, who.id)
     try:
         return asyncio.run(routes.transcribe_audio(
             file=upload(name), name=None, tags=None, language="pt", include_timestamps=True,
             include_word_timestamps=False, output_format="markdown", purge_source=False,
             location=LocationFields(project="Engines"),
-            current_user=who, db=db))
+            current_user=who, db=db, admission=admission))
     finally:
+        admission.release(db)
         db.close()
 
 
 def upload_endpoint(world, name="aula.mp3", content_type="audio/mpeg"):
     db, who = user(world, ALICE)
+    admission = Admission(world.redis.client, who.id, routes.settings)
+    admission.reserve(db, who.id)
     try:
         return asyncio.run(routes.upload_and_convert(file=upload(name, content_type=content_type), name=None,
                                                      tags=None, docling_preset="fast",
-                                                     location=LocationFields(project="Engines"), current_user=who, db=db))
+                                                     location=LocationFields(project="Engines"), current_user=who, db=db, admission=admission))
     finally:
+        admission.release(db)
         db.close()
 
 
 def convert_endpoint(world, name="aula.mp3"):
     db, who = user(world, ALICE)
+    admission = Admission(world.redis.client, who.id, routes.settings)
+    admission.reserve(db, who.id)
     try:
         return asyncio.run(routes.convert_document(source_type="file", source=None, file=upload(name), name=None,
                                                    tags=None, authorization=None,
-                                                   location=LocationFields(project="Engines"), current_user=who, db=db))
+                                                   location=LocationFields(project="Engines"), current_user=who, db=db, admission=admission))
     finally:
+        admission.release(db)
         db.close()
 
 
@@ -146,7 +156,7 @@ def test_without_a_route_process_conversion_still_retries(world, monkeypatch):
     with pytest.raises(Retry):
         tasks.process_conversion.run(job_id=job_id, source_type="file", source=str(source), options={"is_audio": True})
     assert retried == [60]
-    assert world.job(job_id).status == JobStatus.FAILED
+    assert world.job(job_id).status == JobStatus.PENDING
     assert world.count(JobDispatch) == 0 and world.count(EngineUsage) == 0
 
 

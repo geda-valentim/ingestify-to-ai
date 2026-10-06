@@ -2,11 +2,13 @@
 Fixed-window rate limiting backed by Redis
 
 Used to slow down online password guessing / credential stuffing on the
-authentication endpoints. If Redis is unavailable the limiter fails open
-(requests are allowed and a warning is logged) so an outage does not lock
-everyone out.
+authentication endpoints. If Redis is unavailable, protected operations return
+503 with Retry-After; independent process-local counters cannot safely replace
+the shared budget across replicas. Existing authenticated sessions remain usable.
 """
 import logging
+import hashlib
+import ipaddress
 from typing import Optional
 
 from fastapi import HTTPException, Request, status
@@ -19,12 +21,36 @@ KEY_PREFIX = "ratelimit"
 
 
 def client_ip(request: Request) -> str:
-    """IP of the direct peer (X-Forwarded-For is client-controlled, so it is not trusted)"""
-    return request.client.host if request.client else "unknown"
+    """Use the ASGI peer, normalized after Uvicorn trusted-proxy processing.
+
+    Never read forwarding headers here. Configure Uvicorn with an explicit
+    trusted ingress IP; requests from other peers retain their socket address.
+    """
+    try:
+        address = ipaddress.ip_address(request.client.host)
+        if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped:
+            address = address.ipv4_mapped
+        return str(address)
+    except (AttributeError, ValueError):
+        raise _unavailable()
 
 
 def _redis():
     return get_redis_client().client
+
+
+def _unavailable() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail="Autenticação temporariamente indisponível. Tente novamente mais tarde.",
+        headers={"Retry-After": "30"},
+    )
+
+
+def _key(bucket: str, identity: str) -> str:
+    # Avoid persisting attempted emails/usernames in Redis key names.
+    digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()
+    return f"{KEY_PREFIX}:{bucket}:{digest}"
 
 
 def _too_many(retry_after: int, detail: str) -> HTTPException:
@@ -51,7 +77,7 @@ def _increment(redis, key: str, window_seconds: int) -> int:
 
 def hit(bucket: str, identity: str, limit: int, window_seconds: int) -> None:
     """Count one request for (bucket, identity); raise 429 once `limit` is exceeded in the window"""
-    key = f"{KEY_PREFIX}:{bucket}:{identity}"
+    key = _key(bucket, identity)
     try:
         redis = _redis()
         count = _increment(redis, key, window_seconds)
@@ -60,13 +86,14 @@ def hit(bucket: str, identity: str, limit: int, window_seconds: int) -> None:
             raise _too_many(ttl if ttl and ttl > 0 else window_seconds, "Muitas tentativas. Tente novamente mais tarde.")
     except HTTPException:
         raise
-    except Exception as e:
-        logger.warning(f"Rate limiter unavailable ({bucket}), allowing request: {e}")
+    except Exception:
+        logger.warning("Rate limiter unavailable (%s)", bucket)
+        raise _unavailable() from None
 
 
 def check_failures(bucket: str, identity: str, limit: int) -> None:
     """Raise 429 if `identity` already has `limit` recorded failures (e.g. account lockout)"""
-    key = f"{KEY_PREFIX}:{bucket}:{identity}"
+    key = _key(bucket, identity)
     try:
         redis = _redis()
         failures = int(redis.get(key) or 0)
@@ -75,23 +102,26 @@ def check_failures(bucket: str, identity: str, limit: int) -> None:
             raise _too_many(ttl if ttl and ttl > 0 else 60, "Muitas tentativas de login. Tente novamente mais tarde.")
     except HTTPException:
         raise
-    except Exception as e:
-        logger.warning(f"Rate limiter unavailable ({bucket}), allowing request: {e}")
+    except Exception:
+        logger.warning("Rate limiter unavailable (%s)", bucket)
+        raise _unavailable() from None
 
 
 def record_failure(bucket: str, identity: str, window_seconds: int) -> None:
     """Record one failure for `identity`; the counter expires `window_seconds` after the first failure"""
     try:
-        _increment(_redis(), f"{KEY_PREFIX}:{bucket}:{identity}", window_seconds)
-    except Exception as e:
-        logger.warning(f"Rate limiter unavailable ({bucket}), failure not recorded: {e}")
+        _increment(_redis(), _key(bucket, identity), window_seconds)
+    except Exception:
+        logger.warning("Rate limiter unavailable (%s)", bucket)
+        raise _unavailable() from None
 
 
 def reset(bucket: str, identity: str) -> None:
     try:
-        _redis().delete(f"{KEY_PREFIX}:{bucket}:{identity}")
-    except Exception as e:
-        logger.warning(f"Rate limiter unavailable ({bucket}), could not reset: {e}")
+        _redis().delete(_key(bucket, identity))
+    except Exception:
+        logger.warning("Rate limiter unavailable (%s)", bucket)
+        raise _unavailable() from None
 
 
 def normalize_identity(value: Optional[str]) -> str:

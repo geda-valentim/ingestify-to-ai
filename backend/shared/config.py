@@ -1,7 +1,7 @@
 import logging
 import re
 from functools import lru_cache
-from typing import List
+from typing import Literal, List
 from urllib.parse import quote
 
 from pydantic import Field, ValidationError, ValidationInfo, field_validator, model_validator
@@ -69,6 +69,8 @@ class Settings(BaseSettings):
     redis_port: int = 6379
     redis_db: int = 0
     redis_password: str = ""
+    redis_ssl: bool = False
+    redis_ssl_ca_certs: str = ""
 
     # Celery Configuration
     celery_broker_url: str = "redis://redis:6379/0"
@@ -201,6 +203,8 @@ class Settings(BaseSettings):
     # a 10-minute PDF merge and 504 for reasons unrelated to vision.
     vision_queue: str = "ingestify-vision"
 
+    max_pdf_pages: int = Field(default=500, gt=0)
+
     # Storage Settings
     result_ttl_seconds: int = 3600
     cleanup_interval_hours: int = 24
@@ -233,7 +237,8 @@ class Settings(BaseSettings):
     elasticsearch_url: str = "http://elasticsearch:9200"
     elasticsearch_user: str = ""  # Leave empty for no auth
     elasticsearch_password: str = ""
-    elasticsearch_verify_certs: bool = False
+    elasticsearch_verify_certs: bool = True
+    elasticsearch_ca_certs: str = ""
 
     # MinIO Object Storage
     minio_endpoint: str = "127.0.0.1:9000"  # MinIO running on local machine
@@ -243,6 +248,7 @@ class Settings(BaseSettings):
     minio_access_key: str = Field(..., min_length=1)
     minio_secret_key: str = Field(..., min_length=1)
     minio_secure: bool = False  # True for HTTPS in production
+    minio_ca_certs: str = ""
     minio_bucket_uploads: str = "ingestify-uploads"
     minio_bucket_pages: str = "ingestify-pages"
     minio_bucket_audio: str = "ingestify-audio"
@@ -282,7 +288,7 @@ class Settings(BaseSettings):
     # REQUIRED - intentionally no default. A hardcoded default here would be a
     # published signing key: anyone with the source could forge valid tokens.
     jwt_secret_key: str = Field(..., min_length=JWT_SECRET_MIN_LENGTH)
-    jwt_algorithm: str = "HS256"
+    jwt_algorithm: Literal["HS256"] = "HS256"
     jwt_expiration_minutes: int = 60  # 1 hour
 
     # Authentication
@@ -368,18 +374,36 @@ class Settings(BaseSettings):
     login_lockout_seconds: int = 900  # Lockout window (counted from the first failure)
     register_limit_per_hour: int = 5  # Registrations per client IP per hour
 
+    # Distributed admission budgets shared by all API keys and sessions of a user.
+    job_creation_limit: int = Field(default=20, gt=0)
+    job_creation_window_seconds: int = Field(default=60, gt=0)
+    job_max_active: int = Field(default=4, gt=0)
+    job_max_retained: int = Field(default=1000, gt=0)
+    job_max_storage_mb: int = Field(default=1024, gt=0)
+    job_admission_timeout_seconds: int = Field(default=600, gt=0)
+
     # Environment
     # "production" unless explicitly set: development mode returns exception
     # messages to clients and skips the startup fail-fast checks
     environment: str = "production"
     sql_echo: bool = False  # Log every SQL statement with its parameters (debug only)
     log_level: str = "INFO"
+    trusted_proxy_ips: str = ""
 
     model_config = SettingsConfigDict(
         env_file=".env",
         case_sensitive=False,
         extra="ignore",
     )
+
+    @field_validator("trusted_proxy_ips")
+    @classmethod
+    def _require_exact_trusted_proxy_ips(cls, value: str) -> str:
+        import ipaddress
+        for address in value.split(","):
+            if address.strip():
+                ipaddress.ip_address(address.strip())
+        return value
 
     @field_validator("jwt_secret_key")
     @classmethod
@@ -498,6 +522,41 @@ class Settings(BaseSettings):
                         "and update MINIO_ROOT_USER / MINIO_ROOT_PASSWORD and "
                         f"{field.upper()}."
                     )
+        return self
+
+    @model_validator(mode="after")
+    def _require_authenticated_tls_in_production(self) -> "Settings":
+        if self.environment.strip().lower() != "production":
+            return self
+        from urllib.parse import urlsplit, parse_qs, unquote
+        if not self.redis_password or not self.redis_ssl:
+            raise ValueError("Production requires REDIS_PASSWORD and REDIS_SSL=true")
+        for field in ("celery_broker_url", "celery_result_backend"):
+            parsed = urlsplit(getattr(self, field))
+            if parsed.scheme != "rediss":
+                raise ValueError(f"Production requires {field.upper()} to use rediss://")
+            query = parse_qs(parsed.query)
+            if any(value.lower() not in {"true", "1"} for value in query.get("ssl_check_hostname", ["true"])):
+                raise ValueError(f"{field.upper()} must require TLS hostname verification")
+            if any(value.lower() not in {"required", "2"} for value in query.get("ssl_cert_reqs", ["required"])):
+                raise ValueError(f"{field.upper()} must require TLS certificate verification")
+        if (urlsplit(self.elasticsearch_url).scheme != "https" or
+                not self.elasticsearch_verify_certs or not self.elasticsearch_user or
+                not self.elasticsearch_password):
+            raise ValueError("Production requires authenticated HTTPS Elasticsearch with certificate verification")
+        if not self.minio_secure:
+            raise ValueError("Production requires MINIO_SECURE=true")
+        database = urlsplit(self.database_url)
+        if (unquote(database.username or "").lower() == "root" or not database.password
+                or unquote(database.password).lower() in {"root", "password"}):
+            raise ValueError("Production requires non-root database credentials with a non-default password")
+        return self
+
+    @model_validator(mode="after")
+    def _block_vulnerable_optional_ml_runtimes(self) -> "Settings":
+        if self.environment.strip().lower() != "development":
+            if self.audio_transcriber_provider.strip().lower() == "whisperx" or self.live_diarization_enabled:
+                raise ValueError("WhisperX/Diart production release is blocked pending patched and qualified ML dependencies; use faster-whisper")
         return self
 
     @property

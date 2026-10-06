@@ -1,0 +1,50 @@
+# Lightweight backend unit/integration test dependencies: no Docling/torch/models.
+# Regenerate: uv pip compile backend/requirements-test.in --universal --python-version 3.11 --generate-hashes -o backend/requirements-test.lock
+setuptools>=75.0.0
+fastapi==0.142.2
+starlette==1.7.0
+anyio==4.15.1
+uvicorn[standard]==0.54.0
+websockets==16.0  # private/public live protocol, bounded queues
+celery==5.3.4
+redis==5.0.1
+pydantic>=2.9.0,<3.0.0
+pydantic-core>=2.23.0,<3.0.0
+pydantic-settings>=2.3.0,<3.0.0
+httpx[socks]==0.28.1  # patched Starlette supports the current HTTPX transport
+python-multipart==0.0.32
+python-dotenv==1.2.4
+beautifulsoup4>=4.12.3,<5.0.0
+lxml>=5.0.0  # Fast HTML/XML parser for BeautifulSoup
+requests>=2.32.2,<3.0.0
+pypdf==6.19.0  # maintained PDF reader/writer; no obsolete PyPDF2 parser
+playwright>=1.40.0  # Browser automation for JS-heavy sites
+python-socks>=2.4.0  # SOCKS proxy protocol support
+google-api-python-client==2.108.0
+google-auth==2.25.2
+google-auth-oauthlib==1.1.0
+google-auth-httplib2==0.2.0
+dropbox==12.2.2
+structlog==23.2.0
+pytest==9.1.1
+pytest-asyncio==1.4.0
+pytest-cov==7.1.0
+sqlalchemy>=2.0.0,<3.0.0
+pymysql>=1.1.0
+alembic>=1.13.0
+croniter>=2.0.0  # Cron expression parsing for recurring crawlers
+pytz>=2024.1     # Timezone handling for scheduled crawlers
+bcrypt>=4.0.0
+PyJWT==2.15.1  # HS256 JWTs; avoids vulnerable jose/ecdsa surface
+cryptography>=43,<51
+passlib[bcrypt]>=1.7.4
+elasticsearch>=8.11.0,<9.0.0
+minio>=7.2.0,<8.0.0
+pydub>=0.25.1  # Audio file handling and metadata extraction
+audioop-lts==0.2.2; python_version >= "3.13"  # stdlib audioop was removed in Python 3.13
+ffmpeg-python>=0.2.0  # Audio format conversion support
+numpy==2.3.5  # real PCM/tensor contract fixtures, without torch
+fakeredis[lua]==2.26.2  # execute admission Lua against isolated Redis semantics
+pillow==12.3.0  # real image parsers and pixel-bomb guard tests
+faster-whisper==1.2.1  # CPU feature extractor contracts; no model downloads
+av==18.1.0  # same media API as the production provider

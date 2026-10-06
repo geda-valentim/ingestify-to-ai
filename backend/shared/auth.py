@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta
 from typing import Optional
-from jose import JWTError, jwt
+import jwt
+from jwt.exceptions import InvalidTokenError
 import bcrypt
 from fastapi import Depends, HTTPException, Header, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials, APIKeyHeader
@@ -110,7 +111,7 @@ def verify_token(token: str) -> Optional[str]:
         if user_id is None:
             return None
         return user_id
-    except JWTError:
+    except InvalidTokenError:
         return None
 
 
