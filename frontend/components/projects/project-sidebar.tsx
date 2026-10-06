@@ -1,5 +1,7 @@
 "use client";
 
+import { useState } from "react";
+import { Input } from "@/components/ui/input";
 import { Folder as FolderIcon, FolderOpen, Inbox, Layers, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { Project } from "@/types/api";
@@ -49,7 +51,7 @@ function Count({ n, active }: { n: number; active?: boolean }) {
 
 const itemClass = (active: boolean) =>
   cn(
-    "flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors",
+    "flex min-h-10 w-full min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors",
     active ? "bg-secondary font-medium text-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground"
   );
 
@@ -68,7 +70,8 @@ export function ProjectSidebar({
   onSelect: (filter: LocationFilter) => void;
 }) {
   const selected = filterProject(projects, filter);
-  const total = projects.reduce((sum, p) => sum + p.job_count, 0);
+  const [search, setSearch] = useState("");
+  const visibleProjects = projects.filter(project => project.name.toLocaleLowerCase().includes(search.trim().toLocaleLowerCase()));
 
   return (
     <nav aria-label="Projects" className="space-y-3">
@@ -80,11 +83,13 @@ export function ProjectSidebar({
       >
         <Layers className="h-4 w-4 shrink-0" />
         <span className="truncate">All jobs</span>
-        {projects.length > 0 && <Count n={total} active={!selected && !filter.projectId} />}
+
       </button>
 
       <div>
         <p className="px-2 pb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Projects</p>
+        {projects.length > 6 && <Input aria-label="Find a project" placeholder="Find a project…" value={search} onChange={event => setSearch(event.target.value)} className="mb-2 mt-2 h-9 text-xs" />}
+        {!isLoading && !error && projects.length > 0 && visibleProjects.length === 0 && <p className="px-2 py-3 text-xs text-muted-foreground">No matching projects.</p>}
         {isLoading ? (
           <div className="flex items-center gap-2 px-2 py-1.5 text-sm text-muted-foreground">
             <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -96,7 +101,7 @@ export function ProjectSidebar({
           <p className="px-2 py-1.5 text-xs text-muted-foreground">No projects yet. Name one when you upload.</p>
         ) : (
           <ul className="space-y-0.5">
-            {projects.map((p) => {
+            {visibleProjects.map((p) => {
               const isSelected = selected?.id === p.id;
               const projectActive = isSelected && !filter.folderId;
               return (
@@ -175,7 +180,6 @@ export function ProjectSelects({
   onSelect: (filter: LocationFilter) => void;
 }) {
   const selected = filterProject(projects, filter);
-  const total = projects.reduce((sum, p) => sum + p.job_count, 0);
 
   return (
     <div className="grid grid-cols-2 gap-2">
@@ -185,7 +189,7 @@ export function ProjectSelects({
         value={selected?.id ?? ""}
         onChange={(e) => onSelect({ projectId: e.target.value || null, folderId: null })}
       >
-        <option value="">All jobs ({total})</option>
+        <option value="">All projects</option>
         {projects.map((p) => (
           <option key={p.id} value={p.id}>
             {p.name} ({p.job_count})
