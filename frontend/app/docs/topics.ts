@@ -31,6 +31,17 @@ export const DOCS_GROUPS: {
     },
   },
   {
+    id: "compute",
+    title: {
+      pt: "Engines, perfis e acesso",
+      en: "Engines, profiles and access",
+    },
+    description: {
+      pt: "Requisitos, configuração e aplicações de runtime, rotas e permissões.",
+      en: "Requirements, configuration and use cases for runtime, routing and permissions.",
+    },
+  },
+  {
     id: "operations",
     title: { pt: "Jobs e operação", en: "Jobs and operations" },
     description: {
@@ -139,8 +150,32 @@ export const DOCS_TOPICS: {
   {
     slug: "compute",
     anchor: "compute",
-    group: "operations",
+    group: "compute",
     title: { pt: "Compute e motores", en: "Compute and engines" },
+  },
+  {
+    slug: "engines",
+    anchor: "engines",
+    group: "compute",
+    title: { pt: "Recursos das engines", en: "Engine features" },
+  },
+  {
+    slug: "engine-operations",
+    anchor: "engine-operations",
+    group: "compute",
+    title: { pt: "Operações de engines", en: "Engine operations" },
+  },
+  {
+    slug: "execution-profiles",
+    anchor: "execution-profiles",
+    group: "compute",
+    title: { pt: "Perfis de execução", en: "Execution profiles" },
+  },
+  {
+    slug: "engine-access",
+    anchor: "engine-access",
+    group: "compute",
+    title: { pt: "Acesso RBAC e ABAC", en: "RBAC and ABAC access" },
   },
 ];
 

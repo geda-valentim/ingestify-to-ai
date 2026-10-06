@@ -201,3 +201,12 @@ mergeado e a funcionalidade foi ativada no dev com migração explícita, restar
 coordenado e verificação da API. A documentação web fica em `/docs/compute` e
 `/pt/docs/compute`. Um canário físico de host/Modal e concessões limitadas
 ainda precisam seguir o rollout descrito no runbook.
+
+## Requisitos e aplicações publicados
+
+Guias completos de [perfis](https://dev.ingestify.ai/pt/docs/execution-profiles),
+[RBAC/ABAC](https://dev.ingestify.ai/pt/docs/engine-access),
+[operações](https://dev.ingestify.ai/pt/docs/engine-operations) e
+[engines](https://dev.ingestify.ai/pt/docs/engines) incluem requisitos identificados,
+pré-condições, campos/limites, contratos da API, diagnóstico e exemplos.
+Os mesmos IDs PRF/ACL/OPS/ENG estão em [RF012](../RF.md#rf012---engines-operações-perfis-e-acesso).
