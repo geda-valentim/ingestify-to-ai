@@ -24,7 +24,7 @@ async def main():
         assert await page.locator('video').evaluate('(v) => v.paused && v.muted')
         # End, middle and start navigation must seek in both directions.
         for chapter in [7, 3, 6, 1, 0]:
-            await page.get_by_role('button', name=f'Cena {chapter+1}:', exact=False).click()
+            await page.get_by_role('button', name=f'Scene {chapter+1}:', exact=False).click()
             await page.wait_for_function('(n)=>document.querySelector(".landing-story-copy").dataset.chapter === String(n)', arg=chapter)
             expected = (chapter * 2 + (.25 - .08) / .76) * 3
             await page.wait_for_function('(t)=>Math.abs(document.querySelector("video").currentTime-t)<.1', arg=expected)
@@ -35,17 +35,32 @@ async def main():
         for segment in [11.1, 12.5, 13.8]:
             await page.evaluate('(s)=>{let e=document.querySelector(".landing-story");scrollTo(0,scrollY+e.getBoundingClientRect().top-72+s/15*(e.offsetHeight-(innerHeight-72)))}', segment)
             await page.wait_for_timeout(150)
-            assert await page.locator('.landing-story-copy .landing-eyebrow').inner_text() == 'VISÃO DE EVOLUÇÃO'
-        await page.get_by_role('link', name='Pular apresentação').focus()
+            assert await page.locator('.landing-story-copy .landing-eyebrow').inner_text() == 'PLANNED EVOLUTION'
+        await page.get_by_role('link', name='Skip the introduction').focus()
         await page.keyboard.press('Enter')
         await page.wait_for_timeout(150)
         assert abs((await page.locator('#operacoes').bounding_box())['y']-95) < 5
+        # Full-bleed layout and interactive, animated SVG sections.
+        assert await page.locator('.landing').get_attribute('lang') == 'en'
+        assert (await page.locator('#operacoes').bounding_box())['width'] == 1440
+        for name in ['Audio & video', 'Images', 'Documents']:
+            button = page.get_by_role('button', name=name, exact=True)
+            await button.click()
+            assert await button.get_attribute('aria-pressed') == 'true'
+        await page.get_by_role('button', name='Modal · audio').click()
+        assert 'runs on Modal' in await page.locator('.compute-selection').inner_text()
+        await page.get_by_role('button', name='Local', exact=True).click()
+        assert 'runs locally' in await page.locator('.compute-selection').inner_text()
+        await page.get_by_role('button', name='Pause motion', exact=True).click()
+        assert await page.locator('.landing').get_attribute('data-motion') == 'paused'
+        await page.get_by_role('button', name='Resume motion', exact=True).click()
+        assert await page.locator('.landing').get_attribute('data-motion') == 'running'
         await context.grant_permissions(['clipboard-read', 'clipboard-write'])
-        await page.get_by_role('button', name='Copiar exemplo de envio').click()
-        assert 'X-API-Key: SUA_CHAVE' in await page.evaluate('navigator.clipboard.readText()')
-        await page.locator('summary').filter(has_text='O que posso transformar?').click()
+        await page.get_by_role('button', name='Copy upload example').click()
+        assert 'X-API-Key: YOUR_API_KEY' in await page.evaluate('navigator.clipboard.readText()')
+        await page.locator('summary').filter(has_text='What can I transform?').click()
         assert await page.locator('details[open]').count() == 1
-        for width, height in [(390,844), (390,667), (768,1024), (844,390)]:
+        for width, height in [(1920,1080), (1920,650), (320,640), (390,844), (390,667), (768,1024), (844,390)]:
             await page.set_viewport_size({'width':width,'height':height})
             await page.evaluate('scrollTo(0,0)')
             await page.wait_for_timeout(250)
@@ -55,6 +70,14 @@ async def main():
             else:
                 box = await page.locator('.landing-story-bottom').bounding_box()
                 assert box['y'] + box['height'] <= height + 1
+        await page.set_viewport_size({'width':1920,'height':650})
+        for chapter in range(8):
+            await page.get_by_role('button', name=f'Scene {chapter+1}:', exact=False).click()
+            await page.wait_for_timeout(150)
+            box = await page.locator('.landing-story-copy').bounding_box()
+            bottom = await page.locator('.landing-story-bottom').bounding_box()
+            assert box['y'] >= 72, (chapter, box)
+            assert box['y'] + box['height'] < bottom['y'], (chapter, box, bottom)
         await context.close()
         mobile = await browser.new_context(viewport={'width':390,'height':844})
         page = await mobile.new_page()
@@ -70,16 +93,20 @@ async def main():
         await page.goto(URL, wait_until='networkidle')
         assert await page.locator('.landing-static article').count() == 8
         assert not videos
+        await page.locator('#api').scroll_into_view_if_needed()
+        assert await page.locator('.api-sequence').evaluate("e=>getComputedStyle(e,'::before').transform") == 'none'
+        await page.evaluate('scrollBy(0,150)')
+        assert await page.locator('.api-sequence').evaluate("e=>getComputedStyle(e,'::before').transform") == 'none'
         await reduced.close()
         # Media failure must retain navigation and the relevant static frame.
         fallback = await browser.new_context(viewport={'width':1440,'height':900})
         page = await fallback.new_page()
         await page.route('**/*.mp4', lambda route: route.abort())
         await page.goto(URL, wait_until='networkidle')
-        await page.get_by_role('button', name='Cena 4: Imagens').click()
+        await page.get_by_role('button', name='Scene 4: Images').click()
         await page.wait_for_timeout(250)
         assert 'scene-04' in await page.locator('.landing-film img').get_attribute('src')
-        assert await page.get_by_role('link', name='Operações de imagem').is_visible()
+        assert await page.get_by_role('link', name='Explore image operations').is_visible()
         assert not errors, errors
         await browser.close()
         print('Landing browser: video forward/reverse/stop, future labels, chapters, skip, FAQ, viewport layouts, reduced motion and media fallback passed.')

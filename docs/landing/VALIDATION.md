@@ -26,3 +26,11 @@ Os testes de responsividade usaram viewports de navegador. Não representam vali
 O desenvolvimento usa um worktree isolado e atualizado com `origin/main`, para manter fora do PR as alterações locais de outras tarefas. O ambiente já executava páginas de projetos, documentação por tópico e configurações que ainda tinham alterações locais. A imagem de publicação preserva esse frontend e acrescenta exclusivamente os arquivos da home; essas alterações anteriores não são incorporadas ao PR da home.
 
 O contexto de publicação fica em `/data/tmp/ingestify/release-context/`. A troca é limitada ao serviço `frontend` do Docker Compose existente, usando `--no-deps --no-build`. A imagem anterior é conservada para rollback. O resultado público e a preservação dos demais serviços são verificados depois da troca.
+
+## Revisão de layout e inglês
+
+- Home sem limite de largura central, títulos predominantes e filme em segundo plano.
+- SVGs próprios para operações, execução local/Modal, linhas rainbow e marca final; sem bibliotecas de animação adicionais.
+- Conteúdo público e rótulos acessíveis em inglês. Links de documentação solicitam `lang=en`.
+- Teste de navegador ampliado para seleção de operações, alternância local/Modal, pausa dos efeitos e largura de 1920px, mantendo regressões do filme, cópia, FAQ e alternativas estáticas.
+- Revisão visual em desktop e celular corrigiu a quebra do botão de entrada, o contraste de seletores inativos e a leitura dos exemplos SVG pequenos com equivalentes HTML no celular.
