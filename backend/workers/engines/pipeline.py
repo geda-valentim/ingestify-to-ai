@@ -193,6 +193,8 @@ def begin_transcription_attempt(job_id, options, *, session_factory=None, attemp
         job = db.query(Job).filter(Job.id == job_id).with_for_update().first()
         if not job or job.status not in (JobStatus.PENDING, JobStatus.PROCESSING):
             raise RuntimeError('TRANSCRIPTION_ATTEMPT_CANCELLED')
+        if '_expected_attempt_id' in options and options['_expected_attempt_id'] != job.transcript_attempt_id:
+            raise RuntimeError('TRANSCRIPTION_ATTEMPT_CANCELLED')
         job.transcript_attempt_id = attempt_id
         db.commit()
     options['_transcript_attempt_id'] = attempt_id
@@ -278,3 +280,17 @@ def _check_usage_fence(db, options):
                                            JobDispatch.subject_id == usage.job_id).first() if usage else None
     if not usage or usage.holder != options.get('_usage_holder') or usage.status not in ('spawning', 'running') or not dispatch or dispatch.usage_id != usage_id:
         raise RuntimeError('TRANSCRIPTION_ATTEMPT_CANCELLED')
+
+
+def with_transcription_attempt(job_id, options, callback, *, session_factory=None):
+    """Serialize transient updates with terminal state, takeover and publication."""
+    with (session_factory or SessionLocal)() as db:
+        try:
+            _check_usage_fence(db, options)
+        except RuntimeError:
+            return False
+        job = db.query(Job).filter(Job.id == job_id).with_for_update().populate_existing().first()
+        if not job or job.status not in (JobStatus.PENDING, JobStatus.PROCESSING) or job.transcript_attempt_id != options.get('_transcript_attempt_id'):
+            return False
+        callback()
+        return True

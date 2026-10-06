@@ -154,6 +154,8 @@ class WhisperXRuntime:
             _check_cancel(should_cancel)
             audio = load_bounded_audio(audio_path, self.max_audio_seconds)
             duration = len(audio) / 16000
+            if on_progress:
+                on_progress(0, duration, None)
             if duration > self.max_audio_seconds:
                 raise WhisperXError('AUDIO_DURATION_LIMIT_EXCEEDED')
             profile = options.get('transcription_profile')
