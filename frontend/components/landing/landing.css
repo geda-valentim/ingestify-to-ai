@@ -1924,3 +1924,134 @@
     max-height: none;
   }
 }
+
+/* Branches preview the planned destination adapter, without configuring a job. */
+.lake-flow {
+  display: grid;
+  grid-template-columns: minmax(0, 3fr) minmax(215px, 1fr);
+  row-gap: 28px;
+}
+.lake-pipeline {
+  position: relative;
+}
+.lake-adapters {
+  position: relative;
+  display: grid;
+  gap: 12px;
+  padding-left: 48px;
+}
+.lake-branches {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 48px;
+  height: 292px;
+  overflow: visible;
+}
+.lake-adapters button {
+  position: relative;
+  height: 64px;
+  padding: 10px 30px 10px 16px;
+  border: 1px solid #ddd;
+  background: #fff;
+  text-align: left;
+  color: #111;
+  cursor: pointer;
+  transition:
+    border-color 0.2s,
+    background 0.2s;
+}
+.lake-adapters button:hover {
+  border-color: #888;
+}
+.lake-adapters button[aria-pressed="true"] {
+  border-color: #111;
+  background: #fafafa;
+}
+.lake-adapters button > span:first-child {
+  display: block;
+  font:
+    9px ui-monospace,
+    monospace;
+  letter-spacing: 0.08em;
+  color: #666;
+  margin-bottom: 5px;
+}
+.lake-adapters button strong {
+  display: block;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.15;
+}
+.lake-adapter-dot {
+  position: absolute;
+  width: 5px;
+  height: 5px;
+  right: 14px;
+  top: 29px;
+  border-radius: 50%;
+  background: #ddd;
+}
+.lake-adapters button[aria-pressed="true"] .lake-adapter-dot {
+  background: #111;
+}
+.lake-flow .lake-adapter-preview {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: baseline;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding-top: 24px;
+  border-top: 1px solid var(--line);
+  margin: 0;
+  font-size: 14px;
+}
+.lake-adapter-preview > span:first-child {
+  font:
+    10px ui-monospace,
+    monospace;
+  letter-spacing: 0.08em;
+}
+.lake-adapter-preview strong {
+  font-weight: 500;
+  color: #111;
+}
+@media (max-width: 1000px) and (min-width: 768px) {
+  .lake-flow {
+    grid-template-columns: minmax(0, 3fr) minmax(220px, 1fr);
+  }
+  .lake-flow h3 {
+    font-size: 21px;
+  }
+  .lake-flow p {
+    font-size: 12px;
+  }
+}
+@media (max-width: 767px) {
+  .lake-flow {
+    grid-template-columns: minmax(0, 1fr);
+    row-gap: 0;
+  }
+  .lake-adapters {
+    margin: 24px 0 28px 31px;
+    padding-left: 32px;
+  }
+  .lake-branches {
+    width: 32px;
+  }
+  .lake-adapters::before {
+    content: "";
+    position: absolute;
+    width: 1px;
+    background: #ddd;
+    left: 0;
+    top: -60px;
+    height: 104px;
+  }
+  .lake-flow .lake-adapter-preview {
+    gap: 10px 16px;
+  }
+  .lake-adapter-preview > span:last-child {
+    flex-basis: 100%;
+  }
+}

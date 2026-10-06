@@ -68,6 +68,14 @@ async def main():
         assert payload['result']['markdown'].startswith('# Report')
         assert 'PLANNED' in await page.locator('#data-lake .roadmap-label').inner_text()
         assert await page.locator('.lake-planned').get_by_text('PLANNED DELIVERY').is_visible()
+        adapters = page.get_by_role('group', name='Preview a planned Data Lake adapter')
+        for name in ['MinIO', 'Amazon S3', 'Google Cloud Storage', 'Azure Blob']:
+            button = adapters.get_by_role('button', name=name, exact=False)
+            await button.focus()
+            await page.keyboard.press('Enter')
+            assert await button.get_attribute('aria-pressed') == 'true'
+            assert await page.locator('#lake-adapter-preview strong').inner_text() == name
+            assert await adapters.locator('button[aria-pressed="true"]').count() == 1
         await page.get_by_role('button', name='Upload request', exact=True).click()
         await page.locator('summary').filter(has_text='What can I transform?').click()
         assert await page.locator('details[open]').count() == 1
