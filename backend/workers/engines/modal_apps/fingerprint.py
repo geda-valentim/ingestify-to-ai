@@ -29,6 +29,8 @@ def deploy_spec(feature: str, config: dict, binding: Binding) -> Dict[str, objec
                   "compute_type": protocol.COMPUTE_TYPE},
         "decorator": pricing.modal_decorator(config, binding),
     }
+    if config.get('control_fingerprint_version') == 2:
+        spec['fingerprint_version'] = 2
     if config.get('whisperx_manifest'):
         manifest = config['whisperx_manifest']
         if not isinstance(manifest, dict) or not manifest.get('qualified'):
@@ -44,6 +46,9 @@ def deploy_spec(feature: str, config: dict, binding: Binding) -> Dict[str, objec
 def fingerprint(spec: Dict[str, object]) -> str:
     digest = hashlib.sha256()
     body = {k: v for k, v in spec.items() if k != "fingerprint"}
+    if body.get('fingerprint_version') == 2:
+        body['decorator'] = {k: v for k, v in body['decorator'].items()
+                             if k not in ('max_containers', 'min_containers', 'scaledown_window', 'buffer_containers')}
     digest.update(json.dumps(body, sort_keys=True, separators=(",", ":")).encode())
     for path in SOURCE_FILES + [REQUIREMENTS_IN, LOCK_FILE, WHISPERX_LOCK]:
         digest.update(path.relative_to(BACKEND_DIR).as_posix().encode() + b"\0")

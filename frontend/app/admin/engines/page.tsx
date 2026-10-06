@@ -24,6 +24,7 @@ import {
   isLocal,
 } from "@/components/admin/engine-views";
 import type { Engine, Feature } from "@/types/compute";
+import { CreateEngine } from "@/components/admin/engine-control";
 
 export default function EnginesPage() {
   const token = useAuthStore((s) => s.token);
@@ -53,6 +54,8 @@ export default function EnginesPage() {
         </p>
         <Freshness updatedAt={query.dataUpdatedAt} fetching={query.isFetching} />
       </div>
+
+      <CreateEngine />
 
       {query.error ? <QueryError error={query.error} what="the latest engine state (showing the last one)" /> : null}
 

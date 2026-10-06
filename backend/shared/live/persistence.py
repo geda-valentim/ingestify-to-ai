@@ -58,6 +58,11 @@ def finish_live(job_id, generation, result, store, redis_client, es_client, proc
             if not redis_client.set_job_result(job_id, payload):
                 raise LiveError('LIVE_STORE_UNAVAILABLE', 1011)
             completed_at = datetime.utcnow()
+            from shared.config import get_settings
+            if get_settings().engine_control_enabled:
+                from shared.engine_control.models import ControlAdmission
+                db.query(ControlAdmission).filter(ControlAdmission.holder == 'live:' + job_id,
+                    ControlAdmission.released_at.is_(None)).update({'released_at':datetime.utcnow()}, synchronize_session=False)
             live.state, live.ended_at = 'completed', completed_at
             job.status, job.completed_at = JobStatus.COMPLETED, live.ended_at
             job.char_count, job.has_elasticsearch_result = result['char_count'], True

@@ -114,7 +114,12 @@ def validate_engine_config(adapter_type: str, config: dict, vision_model_id: Opt
     except ValidationError as e:
         raise CapacityError(f"Invalid engine configuration: {e.errors()[0]['msg']}") from None
 
-    supported = ADAPTER_FEATURES.get(adapter_type)
+    from shared.engine_control.registry import descriptor
+    try:
+        adapter = descriptor(adapter_type)
+    except ValueError:
+        adapter = None
+    supported = set(adapter['features']) & set(FEATURES) if adapter else ADAPTER_FEATURES.get(adapter_type)
     if supported is None:
         raise CapacityError(f"Unknown adapter type {adapter_type!r}")
     for feature, binding in by_feature.items():
@@ -129,6 +134,10 @@ def validate_engine_config(adapter_type: str, config: dict, vision_model_id: Opt
                 f"{feature}: executions_per_worker={binding.executions_per_worker} exceeds {limit}{hint}"
             )
 
+    from shared.engine_control.registry import capacity_validator
+    validator=capacity_validator(adapter_type)
+    if validator:
+        return validator(config, by_feature, vision_model_id)
     if adapter_type == "local":
         return _validate_local(by_feature, gpus, vision_model_id)
     return _validate_modal(config, by_feature, vision_model_id)
@@ -193,7 +202,12 @@ def deploy_state(adapter_type: str, deployments: dict, feature: str, binding: Bi
     deployed = (deployments or {}).get(feature)
     if not deployed:
         return "not_deployed"
-    if deployed.get("binding") != binding.model_dump(exclude_none=True):
+    expected_binding = binding.model_dump(exclude_none=True)
+    deployed_binding = deployed.get("binding")
+    if deployed.get('control_protocol') and isinstance(deployed_binding, dict):
+        expected_binding = {k:v for k,v in expected_binding.items() if k != 'workers'}
+        deployed_binding = {k:v for k,v in deployed_binding.items() if k != 'workers'}
+    if deployed_binding != expected_binding:
         return "needs_redeploy"
     if expected_fingerprint is not None and deployed.get("fingerprint") != expected_fingerprint:
         return "needs_redeploy"

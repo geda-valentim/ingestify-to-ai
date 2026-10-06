@@ -190,7 +190,8 @@ def _place_feature(tick: _Tick, route: routing.RouteSnapshot) -> None:
     db = _session(tick.session_factory)
     try:
         engines = {e.id: e for e in db.query(Engine).filter(Engine.id.in_(route.engine_ids()))}
-        with_remote = any(e.adapter_type != "local" for e in engines.values())
+        from shared.engine_control.registry import external_data
+        with_remote = any(external_data(e.adapter_type) for e in engines.values())
         for engine in engines.values():
             if engine.adapter_type == "local":
                 tick.local_unhealthy[(engine.id, route.feature)] = _local_health(tick, db, engine, route.feature)
@@ -259,6 +260,9 @@ def _ineligible(tick: _Tick, engine: Engine, cand: JobDispatch, feature: str, bl
         return "unhealthy"
     if _excluded(cand, engine.id, tick.now):
         return "excluded"
+    from shared.engine_control.registry import external_data
+    if external_data(engine.adapter_type) and not cand.remote_allowed:
+        return 'not_remote_allowed'
     options = (((cand.payload or {}).get('kwargs') or {}).get('options') or {})
     if feature == 'transcription' and options.get('transcriber_provider') == 'whisperx':
         if executor.remote:
@@ -370,6 +374,10 @@ def _place(tick: _Tick, db: Session, route, cand: JobDispatch, engine: Engine, i
             db.rollback()
             raise Fenced()
         locked = db.query(Engine).filter(Engine.id == engine.id).with_for_update().one()
+        from shared.engine_control.admission import placement_blocked
+        if placement_blocked(db, locked, route.feature):
+            db.rollback()
+            return "maintenance"
         if in_flight(db, locked.id, feature) >= binding.capacity:
             db.rollback()
             _set_full(db, locked.id, feature, now)

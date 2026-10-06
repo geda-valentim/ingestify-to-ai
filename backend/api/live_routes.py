@@ -94,7 +94,10 @@ def create_session(body: CreateSession, request: Request, response: Response,
     store, cache = get_store(), get_redis_client()
     job_id, committed = str(uuid.uuid4()), False
     generation = None
+    admission_tickets = []
     try:
+        from shared.engine_control.admission import acquire
+        admission_tickets = acquire('live-transcription', 'live:' + job_id)
         lease, worker = store.reserve(job_id, protocol=body.protocol)
         generation = lease['generation']
         location = resolve_upload_location(db, user, plan, '/transcribe/live/sessions')
@@ -119,6 +122,8 @@ def create_session(body: CreateSession, request: Request, response: Response,
                 'max_duration_seconds': settings.live_max_duration_seconds}
     except Exception as exc:
         db.rollback()
+        from shared.engine_control.admission import release
+        release(admission_tickets)
         if generation is not None:
             if committed:
                 terminate(job_id, 'failed', 'LIVE_ADMISSION_FAILED', store, cache, generation)

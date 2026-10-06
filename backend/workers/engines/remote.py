@@ -154,10 +154,11 @@ def snapshot(engine: Engine) -> Dict[str, Any]:
 
 
 def default_adapter_factory(engine: Engine, credentials: Dict[str, str]):
-    if engine.adapter_type != "modal":
-        raise EngineError(ErrorCode.INTERNAL, f"no remote adapter for {engine.adapter_type!r}")
-    from workers.engines.adapters.modal import ModalAdapter
-    return ModalAdapter(snapshot(engine), credentials)
+    from shared.engine_control.registry import remote_adapter
+    try:
+        return remote_adapter(engine.adapter_type, snapshot(engine), credentials)
+    except ValueError as exc:
+        raise EngineError(ErrorCode.INTERNAL,str(exc)) from None
 
 
 # Replaced in tests (a ModalAdapter over a fake `modal` module)

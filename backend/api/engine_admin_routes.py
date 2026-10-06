@@ -93,7 +93,7 @@ async def list_engine_adapters(admin_user=Depends(require_admin)) -> List[Dict[s
         name: {"title": f.title, "vram_per_execution_gb": default_vram_gb(name, settings.vision_model_id)}
         for name, f in FEATURES.items()
     }
-    return [
+    views = [
         {
             "type": "local",
             "features": sorted(ADAPTER_FEATURES["local"]),
@@ -118,6 +118,18 @@ async def list_engine_adapters(admin_user=Depends(require_admin)) -> List[Dict[s
             "vram_reserve_gb": DEFAULT_VRAM_RESERVE_GB,
         },
     ]
+    from shared.engine_control.registry import descriptors
+    known={view['type'] for view in views}
+    for descriptor in descriptors():
+        if descriptor['type'] in known:
+            continue
+        supported=set(descriptor['features'])&set(FEATURES)
+        views.append(dict(type=descriptor['type'],features=sorted(supported),
+            feature_info={key:value for key,value in features.items() if key in supported},
+            gpu_options=descriptor.get('gpu_options','Resources selected by the adapter'),
+            max_executions_per_worker=descriptor.get('max_executions_per_worker',1),
+            vram_reserve_gb=descriptor.get('vram_reserve_gb',0)))
+    return views
 
 
 @router.get("/engines", summary="List engines")
