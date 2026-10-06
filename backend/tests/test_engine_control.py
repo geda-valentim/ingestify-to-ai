@@ -91,6 +91,33 @@ def profile():
     )
 
 
+def test_local_capabilities_distinguish_missing_profile_and_stale_host(world):
+    Session = world
+    with Session() as db:
+        engine = Engine(id="local-test", slug="local-test", display_name="Local",
+                        adapter_type="local", config={"features": {}}, deployments={})
+        db.add(engine)
+        db.add(ControlHost(id="fresh", inventory={}, seen_at=datetime.utcnow()))
+        db.add(ControlHost(id="stale", inventory={}, seen_at=datetime.utcnow()-timedelta(minutes=1)))
+        db.commit()
+        missing = service.capabilities(db, engine, "transcription")
+        assert not missing["managed"]
+        assert {a["reason"] for a in missing["actions"]} == {"RUNTIME_PROFILE_REQUIRED"}
+        db.add(RuntimeProfile(engine_id=engine.id, feature="transcription", revision=1,
+                              profile={"provider_settings": {"host_id": "stale"}}))
+        db.add(RuntimeProfile(engine_id=engine.id, feature="document_conversion", revision=1,
+                              profile={"provider_settings": {"host_id": "fresh"}}))
+        db.commit()
+        stale = service.capabilities(db, engine, "transcription")
+        assert {a["reason"] for a in stale["actions"]} == {"HOST_AGENT_NOT_READY"}
+        assert all(a["enabled"] for a in service.capabilities(db, engine, "document_conversion")["actions"])
+        db.add(RuntimeProfile(engine_id=engine.id, feature="transcription", revision=2,
+                              profile={"provider_settings": {"host_id": "fresh"}}))
+        db.commit()
+        assert all(a["enabled"] for a in service.capabilities(db, engine, "transcription")["actions"])
+        assert {a["reason"] for a in service.capabilities(db, engine, "vision")["actions"]} == {"RUNTIME_PROFILE_REQUIRED"}
+
+
 def prepared(Session):
     with Session() as db:
         saved = service.save_profile(
