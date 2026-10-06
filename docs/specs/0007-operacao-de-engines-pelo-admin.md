@@ -25,6 +25,9 @@ acrescenta um runner e um watchdog independentes. Todos os workers de conteúdo
 gerenciados precisam receber a configuração de controle para que a admissão e
 a drenagem sejam respeitadas; preservar a escala, os overlays e os dispositivos
 reais da instalação durante o bootstrap.
+O [runbook de bootstrap](../runbooks/engine-control-bootstrap.md) detalha a
+persistência dos overlays, a migração de tabelas preliminares e as permissões
+da identidade montada na API.
 
 O catálogo inicial controla os modelos já existentes. Perfis WhisperX de
 controle ainda não foram qualificados: esses engines recusam alteração de
