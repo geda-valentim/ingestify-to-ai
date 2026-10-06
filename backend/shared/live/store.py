@@ -29,8 +29,8 @@ class LiveStore:
         value = self.redis.get(self.worker_key)
         return json.loads(value) if value else None
 
-    def reserve(self, job_id):
-        generation = secrets.randbits(63) or 1
+    def reserve(self, job_id, protocol=1):
+        generation = secrets.randbits(53) or 1
         for _ in range(20):
             with self.redis.pipeline() as p:
                 try:
@@ -39,6 +39,8 @@ class LiveStore:
                     worker = json.loads(raw) if raw else None
                     if not worker or not worker.get('ready'):
                         raise LiveError('LIVE_NOT_READY', 1013)
+                    if protocol == 2 and 'online_diarization' not in worker.get('capabilities', []):
+                        raise LiveError('LIVE_DIARIZATION_NOT_READY', 1013)
                     # A released/expired lease can precede the return of an
                     # in-flight CUDA call. Keep admission closed while that
                     # process-local decoder still occupies the worker.
@@ -49,11 +51,16 @@ class LiveStore:
                             raise LiveError('LIVE_CAPACITY_FULL', 1013)
                     slots = [f'live:slot:{self.worker_id}:{i}' for i in range(worker['capacity'])]
                     p.watch(*slots)
-                    slot = next((key for key in slots if p.get(key) is None), None)
+                    values = [p.get(key) for key in slots]
+                    if protocol == 2:
+                        online_reserved = sum(bool(raw and json.loads(raw).get('protocol') == 2) for raw in values)
+                        if online_reserved >= worker.get('diarization_capacity', worker['capacity']):
+                            raise LiveError('LIVE_DIARIZATION_NOT_READY', 1013)
+                    slot = next((key for key, raw in zip(slots, values) if raw is None), None)
                     if slot is None:
                         raise LiveError('LIVE_CAPACITY_FULL', 1013)
                     lease = {'job_id': job_id, 'worker_id': self.worker_id, 'generation': generation,
-                             'slot': slot, 'incarnation': worker['incarnation'], 'phase': 'created'}
+                             'protocol': protocol, 'slot': slot, 'incarnation': worker['incarnation'], 'phase': 'created'}
                     p.multi()
                     p.set(slot, dumps(lease), ex=60)
                     p.set(f'live:lease:{job_id}', dumps(lease), ex=60)
@@ -74,7 +81,8 @@ class LiveStore:
         slot = self.redis.get(lease['slot'])
         worker = self.readiness()
         return bool(slot and json.loads(slot) == lease and worker and worker.get('ready')
-                    and worker['incarnation'] == lease['incarnation'])
+                    and worker['incarnation'] == lease['incarnation']
+                    and (lease.get('protocol', 1) == 1 or 'online_diarization' in worker.get('capabilities', [])))
 
     def renew(self, job_id, generation, activate=False):
         key = f'live:lease:{job_id}'
@@ -85,6 +93,8 @@ class LiveStore:
                     raw, wr = p.get(key), p.get(self.worker_key)
                     lease, worker = (json.loads(raw) if raw else None), (json.loads(wr) if wr else None)
                     if not lease or lease['generation'] != generation or not worker or not worker.get('ready') or worker['incarnation'] != lease['incarnation']:
+                        return False
+                    if lease.get('protocol', 1) == 2 and 'online_diarization' not in worker.get('capabilities', []):
                         return False
                     if activate and lease['phase'] != 'created':
                         return False

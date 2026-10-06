@@ -8,7 +8,7 @@ from datetime import datetime
 from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy.orm import Session
 from shared.auth import get_current_active_user
 from shared.config import get_settings
@@ -19,6 +19,7 @@ from shared.elasticsearch_client import get_es_client
 from shared.tags import set_job_tags
 from shared.live.protocol import AudioClock, LiveError, control, RATE, TERMINAL
 from shared.live.store import LiveStore
+from shared.live.diarization import DiarizationState, annotate_result
 from shared.live.lifecycle import available, transition, terminate, sweep
 from shared.live.persistence import finish_live
 from api.deps import get_owned_job
@@ -47,6 +48,17 @@ class CreateSession(BaseModel):
     tags: list[str] = Field(default_factory=list)
     language: Literal['pt'] = 'pt'
     audio: AudioFormat = Field(default_factory=AudioFormat)
+    protocol: Literal[1, 2] = 1
+    diarize: bool = False
+
+    @model_validator(mode='before')
+    @classmethod
+    def protocol_options(cls, value):
+        if isinstance(value, dict):
+            protocol, diarize = value.get('protocol', 1), value.get('diarize', False)
+            if type(protocol) is not int or type(diarize) is not bool or (protocol == 2) != diarize:
+                raise ValueError('protocol 2 requires diarize=true; protocol 1 does not support diarization')
+        return value
 
 
 def get_store():
@@ -75,13 +87,15 @@ def create_session(body: CreateSession, request: Request, response: Response,
     tags = parse_tags_or_422(body.tags)
     if not settings.live_transcription_enabled:
         unavailable('LIVE_DISABLED')
+    if body.protocol == 2 and not (settings.live_diarization_enabled and settings.live_diarization_qualified):
+        unavailable('LIVE_DIARIZATION_NOT_READY')
     if len(settings.live_internal_token) < 32 or not available(db):
         unavailable('LIVE_NOT_READY')
     store, cache = get_store(), get_redis_client()
     job_id, committed = str(uuid.uuid4()), False
     generation = None
     try:
-        lease, worker = store.reserve(job_id)
+        lease, worker = store.reserve(job_id, protocol=body.protocol)
         generation = lease['generation']
         location = resolve_upload_location(db, user, plan, '/transcribe/live/sessions')
         job = Job(id=job_id, user_id=user.id, project_id=location.project_id, folder_id=location.folder_id,
@@ -101,7 +115,7 @@ def create_session(body: CreateSession, request: Request, response: Response,
         response.headers['Cache-Control'] = 'no-store'
         ws_url = str(request.url_for('live_stream', job_id=job_id))
         return {'job_id': job_id, 'status': 'pending', 'ws_url': ws_url, 'ticket': ticket,
-                'ticket_expires_in': 60, 'audio': body.audio.model_dump(), 'chunk_ms': 200,
+                'protocol': body.protocol, 'diarize': body.diarize, 'ticket_expires_in': 60, 'audio': body.audio.model_dump(), 'chunk_ms': 200,
                 'max_duration_seconds': settings.live_max_duration_seconds}
     except Exception as exc:
         db.rollback()
@@ -177,6 +191,11 @@ async def live_stream(ws: WebSocket, job_id: str):
     completed = False
     worker_compute_type = None
     handshake_pending = True
+    protocol = 1
+    diarization = None
+    diarization_complete = None
+    worker_provider = 'faster-whisper'
+    finalizing = asyncio.Event()
 
     async def emit(event):
         nonlocal event_seq
@@ -199,10 +218,15 @@ async def live_stream(ws: WebSocket, job_id: str):
 
     try:
         auth = control(await asyncio.wait_for(ws.receive_text(), 5))
-        if auth.get('type') != 'authenticate' or type(auth.get('protocol')) is not int or auth.get('protocol') != 1:
+        if auth.get('type') != 'authenticate' or type(auth.get('protocol')) is not int or auth.get('protocol') not in (1, 2):
             raise LiveError('LIVE_INVALID_TICKET', 4401)
         binding = await asyncio.to_thread(store.consume, auth.get('ticket'), job_id)
         generation = binding['generation']
+        protocol = auth['protocol']
+        if protocol != binding.get('protocol', 1):
+            raise LiveError('LIVE_INVALID_TICKET', 4401)
+        if protocol == 2:
+            diarization = DiarizationState(generation)
         with SessionLocal() as db:
             job = db.get(Job, job_id)
             owner = db.get(User, binding['user_id'])
@@ -221,7 +245,7 @@ async def live_stream(ws: WebSocket, job_id: str):
             additional_headers={'X-Live-Token': settings.live_internal_token},
             max_size=65536, max_queue=10, write_limit=16384, open_timeout=5,
             ping_interval=10, ping_timeout=10) as worker:
-            await worker.send(__import__('json').dumps({'job_id': job_id, 'generation': generation}))
+            await worker.send(__import__('json').dumps({'job_id': job_id, 'generation': generation, 'protocol': protocol}))
 
             async def client_input():
                 while True:
@@ -244,12 +268,13 @@ async def live_stream(ws: WebSocket, job_id: str):
                         if message.get('type') == 'cancel':
                             raise LiveError('LIVE_CANCELLED', 4404)
                         clock.finish(message)
+                        finalizing.set()
                         await asyncio.to_thread(transition, job_id, generation, ['streaming'], 'finalizing', clock.samples)
                         await asyncio.wait_for(worker.send(frame['text']), 2)
                         return
 
             async def worker_output():
-                nonlocal processed_samples, inference_seconds, persistence, completed, worker_compute_type
+                nonlocal processed_samples, inference_seconds, persistence, completed, worker_compute_type, diarization_complete, worker_provider
                 ready = False
                 async for text in worker:
                     event = control(text, 65536)
@@ -257,6 +282,11 @@ async def live_stream(ws: WebSocket, job_id: str):
                     if not await asyncio.to_thread(store.valid, job_id, generation):
                         raise LiveError('LIVE_LEASE_LOST', 1011)
                     if kind == 'session.ready':
+                        if ready or event.get('protocol', 1) != protocol or (protocol == 2 and event.get('generation') != generation):
+                            raise LiveError('LIVE_DECODER_PROTOCOL', 1011)
+                        worker_provider = event.get('provider', 'faster-whisper')
+                        if worker_provider not in ('whisperx', 'faster-whisper'):
+                            raise LiveError('LIVE_DECODER_PROTOCOL', 1011)
                         ready = True
                         worker_compute_type = event.get('compute_type')
                         await emit(event)
@@ -276,18 +306,30 @@ async def live_stream(ws: WebSocket, job_id: str):
                         await asyncio.to_thread(store.append_confirmed, job_id, generation, [segment])
                         segments.append(segment)
                         await emit(event)
+                    elif kind == 'diarization.update':
+                        if not ready or diarization is None or diarization_complete is not None:
+                            raise LiveError('LIVE_DIARIZATION_PROTOCOL', 1011)
+                        if diarization.apply(event, clock.samples):
+                            await emit(event)
+                    elif kind == 'diarization.completed':
+                        if diarization is None or diarization_complete is not None or not finalizing.is_set():
+                            raise LiveError('LIVE_DIARIZATION_PROTOCOL', 1011)
+                        diarization.finish(event, clock.samples)
+                        diarization_complete = event
                     elif kind == 'transcript.partial':
                         await emit(event)
                     elif kind == 'session.error':
                         raise LiveError(event.get('code', 'LIVE_DECODER_FAILED'), 1011)
                     elif kind == 'decoder.completed':
-                        if not ready or event.get('samples') != clock.samples:
+                        if not ready or event.get('samples') != clock.samples or (protocol == 2 and (diarization_complete is None or not finalizing.is_set())):
                             raise LiveError('LIVE_DECODER_PROTOCOL', 1011)
                         text_result = ' '.join(s['text'] for s in segments)
                         result = {'text': text_result, 'segments': segments, 'language': language,
                             'duration': clock.samples / RATE, 'word_count': len(text_result.split()),
                             'char_count': len(text_result), 'model': model_name,
-                            'provider': 'faster-whisper', 'device': 'cuda'}
+                            'provider': worker_provider, 'device': 'cuda', 'protocol': protocol}
+                        if diarization is not None:
+                            result = annotate_result(diarization, result, diarization_complete.get('provenance', {}))
                         persistence = asyncio.create_task(asyncio.to_thread(finish_live, job_id, generation, result,
                             store, cache, get_es_client(), event['inference_seconds'], worker_compute_type))
                         try:
@@ -298,16 +340,23 @@ async def live_stream(ws: WebSocket, job_id: str):
                             raise LiveError('LIVE_STORAGE_FAILED', 1011) from None
                         completed = True
                         await emit({'type': 'session.completed', 'result_url': f'/jobs/{job_id}/result',
-                                    'inference_seconds': event['inference_seconds']})
+                                    'inference_seconds': event['inference_seconds'],
+                                    **({'diarization_digest': diarization_complete['digest']} if diarization_complete else {})})
                         return
                     else:
                         raise LiveError('LIVE_DECODER_PROTOCOL', 1011)
                 raise LiveError('LIVE_INTERRUPTED', 1011)
 
+            async def drain_deadline():
+                await finalizing.wait()
+                await asyncio.sleep(30)
+                if not completed:
+                    raise LiveError('LIVE_DIARIZATION_TIMEOUT' if protocol == 2 else 'LIVE_DECODER_TIMEOUT', 1011)
+
             input_task = asyncio.create_task(client_input())
             output_task = asyncio.create_task(worker_output())
             lease_task = asyncio.create_task(periodic())
-            tasks = [input_task, output_task, lease_task]
+            tasks = [input_task, output_task, lease_task, asyncio.create_task(drain_deadline())]
             pending = set(tasks)
             while output_task in pending:
                 done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)

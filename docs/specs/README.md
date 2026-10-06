@@ -77,5 +77,6 @@ Rascunho ──▶ Em revisão ──▶ Aprovada ──▶ Implementada
 | 0003 | [Motores de execução: roteamento por feature com orçamento (local + Modal)](0003-motores-de-execucao-roteamento-e-orcamento.md) | Em revisão | 2026-10-04 |
 | 0004 | [Projetos e pastas: o Ingestify como portal de ingestão](0004-projects-and-folders.md) | Rascunho | 2026-10-01 |
 | 0005 | [Transcrição ao vivo com legendas em streaming](0005-transcricao-ao-vivo.md) | Em revisão | 2026-10-05 |
+| 0006 | [WhisperX e identificação de falantes](0006-whisperx-e-identificacao-de-falantes.md) | Aprovada; canário opt-in, qualificação pendente | 2026-10-05 |
 
 <!-- Adicione uma linha aqui ao criar cada spec. -->

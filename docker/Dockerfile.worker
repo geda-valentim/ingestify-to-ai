@@ -24,6 +24,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Copy every requirements file so the `-r` chain inside them resolves
 COPY backend/requirements*.txt ./
+# The shared deployment fingerprint includes this lock without importing WhisperX.
+COPY backend/requirements-whisperx-cuda.lock ./
 
 # Install Python dependencies with cache mount (requires BuildKit)
 RUN --mount=type=cache,target=/root/.cache/pip \

@@ -1,6 +1,8 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { labelsForInterval, type DiarizationState } from "@/hooks/live-diarization";
+
+import { useEffect, useRef, useState, useMemo } from "react";
 import { ArrowDown } from "lucide-react";
 import { jobsApi } from "@/lib/api";
 import { cn, formatDuration } from "@/lib/utils";
@@ -113,16 +115,18 @@ export function LiveTranscriptView({
   preloaded,
   immediate = false,
   partial = "",
+  diarization = null,
 }: {
   status: JobStatusResponse;
   segments: TranscriptSegment[];
   preloaded: number;
   immediate?: boolean;
   partial?: string;
+  diarization?: DiarizationState | null;
 }) {
   const revealed = useReveal(segments.length, preloaded);
   const shown = immediate ? segments.length : revealed;
-  const visible = segments.slice(0, shown);
+  const visible = useMemo(() => segments.slice(0, shown), [segments, shown]);
   const containerRef = useRef<HTMLDivElement>(null);
   const [following, setFollowing] = useState(true);
   const [seenWhileAway, setSeenWhileAway] = useState(0);
@@ -159,6 +163,32 @@ export function LiveTranscriptView({
   const newLines = following ? 0 : shown - seenWhileAway;
   const last = visible[visible.length - 1];
 
+  const renderedSegments = useMemo(() => visible.map((segment, i) => {
+              const speaker = diarization ? labelsForInterval(diarization, segment.start, segment.end) : null;
+              const newest = i === visible.length - 1;
+              return (
+                <li
+                  key={`${segment.start}-${segment.end}`}
+                  className={cn(
+                    "flex gap-4 rounded-md px-2 py-2 border-l-2 transition-colors duration-1000",
+                    !immediate && i >= preloaded && "animate-in fade-in slide-in-from-bottom-2 duration-500",
+                    newest ? "border-primary bg-primary/5" : "border-transparent"
+                  )}
+                >
+                  <span className="shrink-0 w-14 pt-0.5 font-mono text-xs text-muted-foreground tabular-nums">
+                    {formatDuration(segment.start)}
+                  </span>
+                  <span className={cn("text-sm leading-relaxed", !newest && "text-foreground/85")}>
+                    {speaker && <span className="block text-xs font-medium text-primary" data-testid="live-speaker">
+                      {speaker.labels.length ? (speaker.labels.join(" + ") + (speaker.unknown ? " + Falante não identificado" : "")) : speaker.provisional ? "Identificando falante" : "Falante não identificado"}
+                      {speaker.labels.length > 0 && speaker.provisional ? " · provisório" : ""}
+                    </span>}
+                    {segment.text}
+                  </span>
+                </li>
+              );
+            }), [visible, diarization, immediate, preloaded]);
+
   return (
     <div className="relative flex-1 min-h-0 flex flex-col">
       <div ref={containerRef} onScroll={onScroll} className="flex-1 overflow-y-auto px-4 pb-4 md:px-6 md:pb-6 space-y-4">
@@ -172,7 +202,7 @@ export function LiveTranscriptView({
               </span>
               Live
             </span>
-            <h2 className="text-xl font-semibold">Transcribing…</h2>
+            <h2 className="text-xl font-semibold">{{transcribing: "Transcribing…", aligning: "Aligning words…", diarizing: "Identifying speakers…", saving: "Saving…"}[status.phase ?? "transcribing"]}</h2>
           </div>
 
           {immediate && <p className="text-xs text-muted-foreground tabular-nums">{formatDuration(status.transcribed_seconds ?? 0)} recebidos · {words} palavras confirmadas</p>}
@@ -200,31 +230,16 @@ export function LiveTranscriptView({
 
         <div className="border rounded-lg bg-muted/30 p-4 md:p-6">
           <ol className="space-y-1">
-            {visible.map((segment, i) => {
-              const newest = i === visible.length - 1;
-              return (
-                <li
-                  key={`${segment.start}-${segment.end}`}
-                  className={cn(
-                    "flex gap-4 rounded-md px-2 py-2 border-l-2 transition-colors duration-1000",
-                    !immediate && i >= preloaded && "animate-in fade-in slide-in-from-bottom-2 duration-500",
-                    newest ? "border-primary bg-primary/5" : "border-transparent"
-                  )}
-                >
-                  <span className="shrink-0 w-14 pt-0.5 font-mono text-xs text-muted-foreground tabular-nums">
-                    {formatDuration(segment.start)}
-                  </span>
-                  <span className={cn("text-sm leading-relaxed", !newest && "text-foreground/85")}>
-                    {segment.text}
-                  </span>
-                </li>
-              );
-            })}
+            {renderedSegments}
             <li className="flex gap-4 px-2 py-2" aria-live="polite">
               <span className="shrink-0 w-14 pt-0.5 font-mono text-xs text-muted-foreground/60 tabular-nums">
                 {last ? formatDuration(last.end) : formatDuration(0)}
               </span>
               <span className="flex items-center gap-1 text-sm text-muted-foreground">
+                {diarization && <span className="mr-2 text-xs" data-testid="live-speaker-pending">
+                  {labelsForInterval(diarization, last?.end ?? 0, status.transcribed_seconds ?? 0).labels.join(" + ") || "Identificando falante"}
+                  {" · provisório"}
+                </span>}
                 {partial && <span className="mr-2" data-testid="live-partial">{partial}</span>}
                 {!last && !partial && <span className="mr-2">Listening — the first lines show up in a few seconds</span>}
                 {[0, 150, 300].map((delay) => (

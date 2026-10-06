@@ -7,6 +7,7 @@ from fastapi import HTTPException
 
 import workers.celery_app  # noqa: F401  (import order used by the worker; avoids a circular import)
 from api import routes
+from shared.models import JobStatus
 
 JOB_ID = "3f1c9a2e-0000-4000-8000-000000000001"
 USER = SimpleNamespace(id="user-1")
@@ -138,3 +139,38 @@ def test_invalid_format_is_rejected(backend):
     with pytest.raises(HTTPException) as exc:
         get_result("docx")
     assert exc.value.status_code == 422
+
+
+def durable_job(status=JobStatus.COMPLETED, attempt=None):
+    return SimpleNamespace(id=JOB_ID, status=status, completed_at=None,
+        transcription_profile={'provider':'whisperx'}, transcript_attempt_id=attempt)
+
+
+def test_durable_sql_status_blocks_stale_completed_cache(backend):
+    backend({'markdown':'stale', 'metadata':METADATA, 'transcript':{'vtt':VTT}})
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(routes.get_job_result(JOB_ID, format_='vtt', current_user=USER,
+            owned_job=durable_job(JobStatus.PROCESSING, 'new-attempt'), db=FakeDB()))
+    assert exc.value.status_code == 400
+
+
+def test_durable_attempt_reads_only_selected_objects_after_cache_expiry(backend, monkeypatch):
+    from shared.live import lifecycle
+    monkeypatch.setattr(lifecycle, 'available', lambda db:False)
+    backend({'transcript':{'vtt':'WRONG ATTEMPT'}}, minio_objects={
+        f'transcripts/{JOB_ID}/attempts/winner/transcript.vtt':VTT.encode(),
+        f'transcripts/{JOB_ID}/transcript.vtt':b'WRONG LEGACY'})
+    monkeypatch.setattr(FakeRedis, 'get_job_status', lambda self, job_id:None)
+    response = asyncio.run(routes.get_job_result(JOB_ID, format_='vtt', current_user=USER,
+        owned_job=durable_job(attempt='winner'), db=FakeDB()))
+    assert response.body.decode() == VTT
+
+
+def test_downloaded_document_candidate_still_reads_after_cache_expiry(backend, monkeypatch):
+    from shared.live import lifecycle
+    monkeypatch.setattr(lifecycle, 'available', lambda db:False)
+    backend(None, es_result={'markdown_content':'# PDF', 'metadata':{'format':'pdf','size_bytes':10}})
+    monkeypatch.setattr(FakeRedis, 'get_job_status', lambda self, job_id:None)
+    response = asyncio.run(routes.get_job_result(JOB_ID, format_='markdown', current_user=USER,
+        owned_job=durable_job(), db=FakeDB()))
+    assert response.result.markdown == '# PDF'
