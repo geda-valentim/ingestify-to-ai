@@ -20,6 +20,8 @@ from shared.engine_control.models import EngineOperation, OperationPlan, Control
 from shared.models import Engine
 from api.engine_admin_routes import require_admin_session, _engine_or_404
 from api.admin_routes import require_admin
+from api.access_deps import access_session, scoped_engine, scoped_features
+from shared.access import policy
 
 router = APIRouter(prefix="/admin", tags=["Admin - Engine control"])
 host_router = APIRouter(prefix="/internal/engine-hosts", tags=["Engine hosts"])
@@ -62,8 +64,8 @@ class Connection(Closed):
 
 
 @router.get("/engine-control-adapters")
-def adapters(user=Depends(require_admin_session)):
-    return registry.descriptors()
+def adapters(user=Depends(access_session), db: Session = Depends(get_db)):
+    return policy.visible_catalog(db, user.id, registry.descriptors(), "adapter")
 
 
 @router.post("/engines", status_code=201)
@@ -109,27 +111,73 @@ def connection(
 def caps(
     engine_id: str,
     feature: str | None = None,
-    user=Depends(require_admin_session),
+    user=Depends(access_session),
     db: Session = Depends(get_db),
 ):
-    return invoke(service.capabilities, db, _engine_or_404(db, engine_id), feature)
+    e = scoped_engine(db, engine_id, user.id, feature)
+    descriptor = invoke(registry.descriptor, e.adapter_type)
+    features = scoped_features(db, e, user.id, descriptor["features"])
+    if not features:
+        raise HTTPException(404, detail={"code": "ENGINE_NOT_FOUND"})
+    selected = feature if feature is not None else features[0]
+    out = invoke(service.capabilities, db, e, selected)
+    filtered = policy.visible_catalog(db, user.id, [descriptor], "adapter")
+    if filtered:
+        out.update(
+            {k: v for k, v in filtered[0].items() if k not in ("actions", "features")}
+        )
+    out["features"] = features
+    latest = service.latest_profile(db, e.id, selected)
+    profile_visible = not latest or policy.allowed(
+        db,
+        user.id,
+        "engines.read",
+        engine=e,
+        feature=selected,
+        profile=service.source_profile(db, latest.source_profile_revision_id),
+        runtime=latest.profile,
+    )
+    if not profile_visible:
+        out["managed"] = False
+    out["hosts"] = policy.visible_catalog(db, user.id, out["hosts"], "host")
+    for action in out["actions"]:
+        if not profile_visible or not policy.allowed(
+            db,
+            user.id,
+            "engine_operations.execute." + action["type"],
+            engine=e,
+            feature=selected,
+        ):
+            action.update(enabled=False, reason="ACCESS_DENIED")
+    return out
 
 
 @router.get("/model-profiles")
-def model_profiles(user=Depends(require_admin_session)):
-    return catalog.profiles()
+def model_profiles(user=Depends(access_session), db: Session = Depends(get_db)):
+    return policy.visible_catalog(db, user.id, catalog.profiles(), "model")
 
 
 @router.get("/engines/{engine_id}/runtime-profile")
 def get_profile(
     engine_id: str,
     feature: str = "transcription",
-    user=Depends(require_admin_session),
+    user=Depends(access_session),
     db: Session = Depends(get_db),
 ):
     enabled()
-    e = _engine_or_404(db, engine_id)
-    return service.profile_view(service.latest_profile(db, e.id, feature))
+    e = scoped_engine(db, engine_id, user.id, feature)
+    p = service.latest_profile(db, e.id, feature)
+    if p and not policy.allowed(
+        db,
+        user.id,
+        "engines.read",
+        engine=e,
+        feature=feature,
+        runtime=p.profile,
+        profile=service.source_profile(db, p.source_profile_revision_id),
+    ):
+        raise HTTPException(404, detail={"code": "RUNTIME_PROFILE_NOT_FOUND"})
+    return service.profile_view(p)
 
 
 @router.put("/engines/{engine_id}/runtime-profile")
@@ -152,23 +200,61 @@ def put_profile(
 
 
 @router.get("/engines/{engine_id}/runtime-status")
-def status(
-    engine_id: str, user=Depends(require_admin_session), db: Session = Depends(get_db)
-):
+def status(engine_id: str, user=Depends(access_session), db: Session = Depends(get_db)):
     enabled()
-    return service.runtime_status(db, _engine_or_404(db, engine_id))
+    e = scoped_engine(db, engine_id, user.id)
+    out = service.runtime_status(db, e)
+    fs = scoped_features(db, e, user.id, out["desired"].keys())
+    out["desired"] = {
+        k: v
+        for k, v in out["desired"].items()
+        if k in fs
+        and policy.allowed(
+            db,
+            user.id,
+            "engines.read",
+            engine=e,
+            feature=k,
+            runtime=v["profile"],
+            profile=service.source_profile(db, v.get("source_profile_revision_id")),
+        )
+    }
+    out["applied"] = [
+        r
+        for r in out["applied"]
+        if r["feature"] in fs
+        and policy.allowed(
+            db,
+            user.id,
+            "engines.read",
+            engine=e,
+            feature=r["feature"],
+            runtime=r["profile"],
+            profile=service.source_profile(db, r.get("source_profile_revision_id")),
+        )
+    ]
+    out["resources"] = [
+        r
+        for r in out["resources"]
+        if policy.allowed(db, user.id, "engines.read", engine=e, resources=[r["key"]])
+    ]
+    return out
 
 
 @router.post("/engines/{engine_id}/operation-plans")
 def plan(
     engine_id: str,
     body: PlanRequest,
-    user=Depends(require_admin_session),
+    user=Depends(access_session),
     db: Session = Depends(get_db),
 ):
     enabled()
     return invoke(
-        service.create_plan, db, _engine_or_404(db, engine_id), body, str(user.id)
+        service.create_plan,
+        db,
+        scoped_engine(db, engine_id, user.id, body.feature),
+        body,
+        str(user.id),
     )
 
 
@@ -177,11 +263,11 @@ def execute(
     engine_id: str,
     body: Execute,
     idempotency_key: str = Header(...),
-    user=Depends(require_admin_session),
+    user=Depends(access_session),
     db: Session = Depends(get_db),
 ):
     enabled()
-    e = _engine_or_404(db, engine_id)
+    e = scoped_engine(db, engine_id, user.id)
     p = db.get(OperationPlan, body.plan_id)
     if not p or p.engine_id != e.id:
         raise HTTPException(404, detail={"code": "PLAN_NOT_FOUND"})
@@ -201,24 +287,37 @@ def history(
     engine_id: str | None = None,
     limit: int = 50,
     before: str | None = None,
-    user=Depends(require_admin_session),
+    user=Depends(access_session),
     db: Session = Depends(get_db),
 ):
     enabled()
-    q = db.query(EngineOperation)
+    q = policy.scoped_query(db, user.id, db.query(EngineOperation), "operation")
     if engine_id:
-        q = q.filter_by(engine_id=_engine_or_404(db, engine_id).id)
+        q = q.filter_by(engine_id=scoped_engine(db, engine_id, user.id).id)
     if before:
-        old = db.get(EngineOperation, before)
+        old = invoke(service.authorize_operation, db, before, user.id)
         if old:
             q = q.filter(EngineOperation.created_at < old.created_at)
-    rows = (
-        q.order_by(EngineOperation.created_at.desc(), EngineOperation.id.desc())
-        .limit(min(max(limit, 1), 100))
-        .all()
-    )
+    page_size = min(max(limit, 1), 100)
+    # Scan already scoped SQL in bounded chunks until enough identity-qualified rows are found.
+    rows = []
+    offset = 0
+    while len(rows) < page_size:
+        candidates = (
+            q.order_by(EngineOperation.created_at.desc(), EngineOperation.id.desc())
+            .offset(offset)
+            .limit(100)
+            .all()
+        )
+        if not candidates:
+            break
+        rows.extend(r for r in candidates if can_read_operation(db, r, user.id))
+        offset += len(candidates)
+        if len(candidates) < 100:
+            break
+    rows = rows[:page_size]
     return {
-        "operations": [service.operation_view(x) for x in rows],
+        "operations": [operation_view(db, x, user.id) for x in rows],
         "next": rows[-1].id if rows else None,
     }
 
@@ -226,35 +325,36 @@ def history(
 @router.get("/engine-operations/{operation_id}")
 def snapshot(
     operation_id: str,
-    user=Depends(require_admin_session),
+    user=Depends(access_session),
     db: Session = Depends(get_db),
 ):
     enabled()
-    op = db.get(EngineOperation, operation_id)
+    op = invoke(service.authorize_operation, db, operation_id, user.id)
     if not op:
         raise HTTPException(404, detail={"code": "OPERATION_NOT_FOUND"})
-    return service.operation_view(op)
+    return operation_view(db, op, user.id)
 
 
 @router.get("/engine-operations/{operation_id}/events")
 def events(
     operation_id: str,
     after: int = 0,
-    user=Depends(require_admin_session),
+    user=Depends(access_session),
     db: Session = Depends(get_db),
 ):
     enabled()
+    invoke(service.authorize_operation, db, operation_id, user.id)
     return invoke(service.events, db, operation_id, max(after, 0))
 
 
 @router.post("/engine-operations/{operation_id}/cancel")
 def cancel(
     operation_id: str,
-    user=Depends(require_admin_session),
+    user=Depends(access_session),
     db: Session = Depends(get_db),
 ):
     enabled()
-    return invoke(service.request_cancel, db, operation_id)
+    return invoke(service.request_cancel, db, operation_id, user.id)
 
 
 @router.get("/engine-operations/{operation_id}/stream")
@@ -262,7 +362,7 @@ async def stream(
     operation_id: str,
     request: Request,
     after: int = 0,
-    user=Depends(require_admin_session),
+    user=Depends(access_session),
 ):
     enabled()
 
@@ -281,14 +381,16 @@ async def stream(
                         str(subject) != str(user.id)
                         or not fresh
                         or not fresh.is_active
-                        or not (
-                            fresh.is_admin
-                            or str(fresh.id) in get_settings().admin_user_ids.split(",")
-                        )
                     ):
                         return None
                 except Exception:
                     return None
+            try:
+                service.authorize_operation(db, operation_id, user.id)
+            except service.ControlError:
+                if reauthorize:
+                    return None
+                raise HTTPException(404, detail={"code": "OPERATION_NOT_FOUND"})
             return invoke(service.events, db, operation_id, cursor)
 
     await run_in_threadpool(read, max(after, 0), False)
@@ -388,6 +490,10 @@ def host_next(host_id: str, request: Request, db: Session = Depends(get_db)):
             or op.cancel_requested
         ):
             continue
+        try:
+            policy.operation_authority(db, op)
+        except service.ControlError:
+            continue
         return {
             "operation_id": op.id,
             "generation": op.generation,
@@ -406,7 +512,10 @@ def host_check(
     db: Session = Depends(get_db),
 ):
     host_identity(host_id, request)
+    if policy.enabled():
+        invoke(policy.epoch, db, True)
     op = invoke(service.fenced, db, op_id, generation)
+    invoke(policy.operation_authority, db, op, effect=policy.enabled())
     if op.handles.get("host_id") != host_id:
         raise HTTPException(403)
     return {"cancel_requested": op.cancel_requested, "deadline": op.deadline}
@@ -428,6 +537,8 @@ def host_event(
     db: Session = Depends(get_db),
 ):
     host_identity(host_id, request)
+    if body.effect and policy.enabled():
+        invoke(policy.epoch, db, True)
     op = invoke(service.fenced, db, op_id, body.generation)
     if op.handles.get("host_id") != host_id:
         raise HTTPException(403)
@@ -473,8 +584,29 @@ def host_result(
 @router.post("/engine-operations/{operation_id}/recover", status_code=202)
 def recover(
     operation_id: str,
-    user=Depends(require_admin_session),
+    user=Depends(access_session),
     db: Session = Depends(get_db),
 ):
     enabled()
-    return invoke(service.request_recovery, db, operation_id)
+    return invoke(service.request_recovery, db, operation_id, user.id)
+
+
+def can_read_operation(db, op, actor):
+    try:
+        service.authorize_operation(db, op.id, actor)
+        return True
+    except service.ControlError:
+        return False
+
+
+def operation_view(db, op, actor):
+    out = service.operation_view(op)
+    for flag, permission in [
+        ("can_cancel", "engine_operations.cancel"),
+        ("can_recover", "engine_operations.recover"),
+    ]:
+        try:
+            service.authorize_operation(db, op.id, actor, permission)
+        except service.ControlError:
+            out[flag] = False
+    return out

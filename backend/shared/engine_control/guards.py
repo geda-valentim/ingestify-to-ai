@@ -11,7 +11,56 @@ from shared.engines.store import VersionConflict
 from shared.models import Engine
 
 
-def before_write(db, engine, version=None, runtime=False, credentials=False):
+def before_write(
+    db,
+    engine,
+    version=None,
+    runtime=False,
+    credentials=False,
+    actor=None,
+    auth_method=None,
+):
+    from shared.access import policy
+
+    if policy.enabled():
+        policy.epoch(db, True)
+        try:
+            if actor:
+                if credentials:
+                    keys = [
+                        r.key
+                        for r in db.query(ControlResource).filter_by(
+                            owner_engine_id=engine.id
+                        )
+                    ]
+                    policy.authorize(
+                        db,
+                        actor,
+                        "engine_connections.credentials.manage",
+                        engine=engine,
+                        resources=keys,
+                        lock=True,
+                    )
+                else:
+                    from shared.access.service import bootstrap
+
+                    bootstrap(db, actor)
+            elif auth_method == "cli":
+                from shared.access.legacy import installation
+
+                installation(db)
+            else:
+                from shared.engine_control.service import ControlError
+
+                raise ControlError("ACCESS_REVOKED", 403)
+        except Exception as exc:
+            from shared.engine_control.service import ControlError
+            from shared.engines.store import EngineStateError
+
+            if isinstance(exc, ControlError):
+                raise EngineStateError(exc.code, exc.status) from None
+            raise
+
     # CAS/serialization applies to legacy writers too, without introducing control-table reads.
     db.query(Engine).filter_by(id=engine.id).populate_existing().with_for_update().one()
     if version is not None and version != engine.version:

@@ -343,6 +343,11 @@ def test_streamed_secret_split_across_chunks_is_never_persisted(tmp_path):
         def check(self):
             pass
 
+        def admit_effect(self, step):
+            # This context exercises log redaction; production contexts persist
+            # the authorization admission before spawning the subprocess.
+            assert step == "subprocess"
+
         def log(self, line):
             self.lines.append(line)
 

@@ -1,6 +1,11 @@
 // Generated from OpenAPI spec
 
-export type JobStatus = "queued" | "processing" | "completed" | "failed" | "cancelled";
+export type JobStatus =
+  | "queued"
+  | "processing"
+  | "completed"
+  | "failed"
+  | "cancelled";
 export type JobType = "main" | "split" | "page" | "merge" | "download";
 export type SourceType = "file" | "url" | "gdrive" | "dropbox";
 
@@ -23,6 +28,8 @@ export interface UserResponse {
   created_at: string;
   /** Effective admin (users.is_admin or ADMIN_USER_IDS). Absent in sessions saved by older builds. */
   is_admin?: boolean;
+  permissions?: string[];
+  engine_access_enabled?: boolean;
 }
 
 export interface Token {
@@ -165,8 +172,8 @@ export interface DocumentMetadata {
   available_formats?: TranscriptFormat[] | null;
   schema_version?: number | null;
   speakers?: TranscriptSpeaker[] | null;
-  diarization?: TranscriptJson['diarization'] | null;
-  alignment?: TranscriptJson['alignment'] | null;
+  diarization?: TranscriptJson["diarization"] | null;
+  alignment?: TranscriptJson["alignment"] | null;
 }
 
 /** Formats `GET /jobs/{id}/result?format=` serves for transcription jobs. */
@@ -190,12 +197,24 @@ export interface TranscriptSegment {
 }
 
 /** Body of `?format=json` on a transcription job. */
-export interface TranscriptSpeaker { id: string; label: string }
-export interface TranscriptTurn { start: number; end: number; speaker_id: string }
+export interface TranscriptSpeaker {
+  id: string;
+  label: string;
+}
+export interface TranscriptTurn {
+  start: number;
+  end: number;
+  speaker_id: string;
+}
 export interface TranscriptJson {
   schema_version?: 2;
   speakers?: TranscriptSpeaker[];
-  diarization?: { status: "completed" | "disabled"; speaker_count: number | null; turns: TranscriptTurn[]; engine?: string };
+  diarization?: {
+    status: "completed" | "disabled";
+    speaker_count: number | null;
+    turns: TranscriptTurn[];
+    engine?: string;
+  };
   alignment?: { status: "completed" | "unavailable"; model?: string | null };
   language: string | null;
   duration: number;

@@ -93,7 +93,12 @@ e e-mail da mesma conta compartilham o contador de falhas. Se o Redis cair, o li
 - **Admin (`/admin/*`):** um usuário é admin se `users.is_admin` é verdadeiro **ou** se o id
   está em `ADMIN_USER_IDS` (UUIDs separados por vírgula). A regra é uma só
   (`shared/admin.py:is_effective_admin`) para as rotas admin e para o campo `is_admin` de
-  `GET /auth/me` e `POST /auth/register`. Quem não é admin recebe `403`. Endpoints em
+  `GET /auth/me` e `POST /auth/register`. Nas rotas administrativas gerais, quem não é
+  admin recebe `403`. Compute pode conceder acesso por grants quando
+  `ENGINE_ACCESS_ENABLED=true`: biblioteca, controle e IAM humano exigem JWT e
+  RBAC/ABAC atual, inclusive para leitura; uma API key não transmite esses papéis.
+  `/auth/me` expõe as permissões para navegação. Veja [perfis e acesso](execution-profiles.md).
+  Endpoints gerais em
   [monitoring-and-admin.md](monitoring-and-admin.md).
 - **Primeiro admin:** pelo shell do servidor ou do container, por e-mail ou id, nunca por
   username (que qualquer um escolhe no cadastro):
@@ -124,6 +129,7 @@ e e-mail da mesma conta compartilham o contador de falhas. Se o Redis cair, o li
 
 - Um usuário desativado (`is_active=false`) recebe `400 Inactive user`, não `401/403`.
 - Revogar uma API key a apaga (não há "desativar"); o campo `is_active` não tem endpoint.
-- Não há escopos/permissões por chave: uma API key tem todo o poder do usuário.
+- Não há escopos configuráveis por chave nas APIs de jobs. Controle, biblioteca e IAM
+  humano exigem sessão JWT; grants Compute não autorizam essas rotas por API key.
 - O header `Authorization` colide com o token de provedor exigido por Google Drive/Dropbox
   (ver [sources.md](sources.md#limites-e-lacunas-conhecidas)).

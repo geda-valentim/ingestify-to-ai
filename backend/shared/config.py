@@ -302,6 +302,8 @@ class Settings(BaseSettings):
 
     # Spec 0007 is opt-in after scripts/migrate_0007_engine_control.py.
     engine_control_enabled: bool = False
+    engine_access_enabled: bool = False
+    engine_installation_principal_id: str = ""
     engine_control_queue: str = "ingestify-engine-control"
     engine_control_beat: bool = False
     # Root-owned JSON {host_id: sha256(machine_token)}. Separate from admin JWT.
