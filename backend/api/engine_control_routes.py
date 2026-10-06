@@ -107,9 +107,12 @@ def connection(
 
 @router.get("/engines/{engine_id}/capabilities")
 def caps(
-    engine_id: str, user=Depends(require_admin_session), db: Session = Depends(get_db)
+    engine_id: str,
+    feature: str | None = None,
+    user=Depends(require_admin_session),
+    db: Session = Depends(get_db),
 ):
-    return invoke(service.capabilities, db, _engine_or_404(db, engine_id))
+    return invoke(service.capabilities, db, _engine_or_404(db, engine_id), feature)
 
 
 @router.get("/model-profiles")

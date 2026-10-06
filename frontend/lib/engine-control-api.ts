@@ -37,9 +37,19 @@ export async function controlRequest<T>(
   return data as T;
 }
 const engine = (id: string) => `/admin/engines/${encodeURIComponent(id)}`;
+export function createIdempotencyKey(): string {
+  // getRandomValues also works on HTTP LAN origins, unlike randomUUID.
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join(
+    "",
+  );
+}
+
 export const engineControlApi = {
-  capabilities: (id: string) =>
-    controlRequest<Capabilities>(`${engine(id)}/capabilities`),
+  capabilities: (id: string, feature?: string) =>
+    controlRequest<Capabilities>(
+      `${engine(id)}/capabilities${feature ? `?feature=${encodeURIComponent(feature)}` : ""}`,
+    ),
   adapters: () =>
     controlRequest<Capabilities[]>("/admin/engine-control-adapters"),
   models: () => controlRequest<ModelProfile[]>("/admin/model-profiles"),
