@@ -66,7 +66,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
               Compute
             </h1>
             <p className="text-muted-foreground mt-1">
-              Where heavy work runs. Read-only: each screen shows the command that changes it.
+              Configure engines, workers and models. Follow operations and observed runtime state.
             </p>
           </div>
         </div>

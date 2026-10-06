@@ -49,6 +49,10 @@ _EXECUTORS: Dict[str, Executor] = {"local": LocalExecutor(), "modal": _remote_ex
 
 
 def get(adapter_type: str) -> Optional[Executor]:
+    from shared.engine_control.registry import job_executor
+    registered = job_executor(adapter_type)
+    if registered is not None:
+        return registered
     return _EXECUTORS.get(adapter_type)
 
 

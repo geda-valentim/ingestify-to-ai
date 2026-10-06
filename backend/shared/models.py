@@ -603,3 +603,7 @@ class LiveSession(Base):
     last_audio_at = Column(DateTime)
     ended_at = Column(DateTime)
     error_code = Column(String(100))
+
+# Spec 0007: explicit migration; SDK-free control models share this metadata.
+from shared.engine_control.models import (RuntimeProfile, ControlResource, OperationPlan,
+    EngineOperation, OperationEvent, OperationOutbox, ControlAdmission, ControlHost)  # noqa: E402,F401

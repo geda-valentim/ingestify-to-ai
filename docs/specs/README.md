@@ -78,4 +78,6 @@ Rascunho ──▶ Em revisão ──▶ Aprovada ──▶ Implementada
 | 0004 | [Projetos e pastas: o Ingestify como portal de ingestão](0004-projects-and-folders.md) | Rascunho | 2026-10-01 |
 | 0005 | [Transcrição ao vivo com legendas em streaming](0005-transcricao-ao-vivo.md) | Em revisão | 2026-10-05 |
 
+| 0007 | [Operar engines e modelos pelo painel admin](0007-operacao-de-engines-pelo-admin.md) | Em implementação | 2026-10-06 |
+
 <!-- Adicione uma linha aqui ao criar cada spec. -->

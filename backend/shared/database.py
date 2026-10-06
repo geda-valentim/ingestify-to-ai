@@ -48,8 +48,15 @@ def init_db():
     # Existing deployments use the explicit 0005 migration. Disabled live must
     # not introduce DDL or require its table on a routine API restart.
     tables = [table for table in Base.metadata.sorted_tables
-              if not (existing and table.name == "live_sessions")]
+              if not (existing and (table.name == "live_sessions" or
+                  table.name.startswith("engine_control_") or table.name.startswith("engine_operation") or
+                  table.name == "engine_runtime_profiles"))]
     Base.metadata.create_all(bind=engine, tables=tables)
+    if settings.engine_control_enabled:
+        from shared.engine_control.migration import TABLES
+        missing={table.name for table in TABLES}-set(inspect(engine).get_table_names())
+        if missing:
+            raise RuntimeError('Engine control requires the explicit 0007 migration before enabling it')
     _add_missing_columns()
 
     # The built-in local engine (spec 0003): this server's workers, no bindings until declared
