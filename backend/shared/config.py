@@ -284,6 +284,13 @@ class Settings(BaseSettings):
     engine_secrets_private_keys: str = ""
     engine_secrets_private_keys_file: str = ""
 
+    # Spec 0007 is opt-in after scripts/migrate_0007_engine_control.py.
+    engine_control_enabled: bool = False
+    engine_control_queue: str = "ingestify-engine-control"
+    engine_control_beat: bool = False
+    # Root-owned JSON {host_id: sha256(machine_token)}. Separate from admin JWT.
+    engine_host_identities_file: str = ""
+
     # Routing (spec 0003, slice 3b). Only used once a feature has a route; with no
     # row in feature_routes nothing here is read and no dispatcher is needed.
     # The dispatcher's queue, consumed by the optional worker-dispatch service

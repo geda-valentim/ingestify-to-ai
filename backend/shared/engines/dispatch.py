@@ -178,6 +178,10 @@ def submit(*, feature: str, job_id: str, user_id: Optional[str], is_admin: bool,
     if down and route.dispatcher_fallback == "local_direct" and route.has_local_step():
         usage_id, dispatch_id = _reserve_fallback(route, feature, job_id, user_id, remote_allowed, payload,
                                                   media_bytes, session_factory, now, subject)
+        if usage_id is None:
+            if feature in PROBED_FEATURES:
+                celery.send_task(PROBE_TASK, args=[dispatch_id], queue=get_settings().dispatch_queue)
+            return "queued"
         try:
             publish_local(celery, feature, payload, usage_id)
         except Exception:
@@ -223,7 +227,15 @@ def _reserve_fallback(route, feature, job_id, user_id, remote_allowed, payload, 
                       now, subject) -> Tuple[int, int]:
     def work(db: Session):
         local_id = next(e for s in route.steps for e in s["engine_ids"] if e in route.local_engine_ids)
-        engine = db.get(Engine, local_id)
+        engine = db.query(Engine).filter_by(id=local_id).with_for_update().one()
+        from shared.engine_control.admission import placement_blocked
+        if placement_blocked(db, engine, feature):
+            d = JobDispatch(feature=feature, subject_type=subject[0], subject_id=subject[1], job_id=str(job_id),
+                user_id=user_id, remote_allowed=remote_allowed, state="probing" if feature in PROBED_FEATURES else "waiting",
+                payload=payload, media_bytes=media_bytes, enqueued_at=now, updated_at=now, exclude_engines=[])
+            db.add(d)
+            db.flush()
+            return None, d.id
         binding = bindings(engine.config or {}).get(feature)
         usage = EngineUsage(
             kind="job", engine_id=engine.id, feature=feature, subject_type=subject[0], subject_id=subject[1],
@@ -355,6 +367,10 @@ def place_now(*, feature: str, subject_id: str, job_id: Optional[str], user_id: 
                     continue
                 binding = bindings(engine.config or {})[feature]
                 locked = db.query(Engine).filter(Engine.id == engine.id).with_for_update().one()
+                from shared.engine_control.admission import placement_blocked
+                if placement_blocked(db, locked, feature):
+                    refusals.append(f"{engine.slug}:maintenance")
+                    continue
                 if in_flight(db, locked.id, feature) >= binding.capacity:
                     refusals.append(f"{engine.slug}:full")
                     continue

@@ -31,6 +31,7 @@ import {
   setCapacityCommand,
 } from "@/components/admin/engine-views";
 import type { Engine, Feature } from "@/types/compute";
+import { EngineControl } from "@/components/admin/engine-control";
 
 export default function EngineDetailPage() {
   const params = useParams<{ id: string }>();
@@ -117,6 +118,8 @@ export default function EngineDetailPage() {
           )}
         </CardContent>
       </Card>
+
+      <EngineControl engine={engine} onChanged={() => { query.refetch(); }} />
 
       <Card>
         <CardHeader className="pb-3">
