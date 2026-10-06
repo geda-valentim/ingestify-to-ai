@@ -10,6 +10,12 @@ A home mantém **Data Engineering e conversão em dados prontos para IA** com o 
 
 A seção de operações explicita os dois caminhos: AI-ready conversion (Markdown, OCR, transcrições e timestamps) e Data Engineering (jobs via API, contexto de projeto, deduplicação e recuperação por página). O encerramento usa “Convert a file. Build a pipeline.”. AI-ready descreve o texto e os metadados de saída; não anuncia chunking, embeddings ou tabelas lakehouse como prontos. A entrega direta ao Data Lake continua planejada.
 
+## Operações guiadas pela rolagem
+
+A seção “Convert for AI. Connect your data.” mantém os textos e os diagramas SVG. Ao descer, o seletor percorre Documents → Audio & video → Images; ao subir, percorre a ordem inversa. Os botões continuam navegando diretamente para cada etapa.
+
+Quando o painel completo cabe na tela, ele permanece fixo abaixo do cabeçalho enquanto o diagrama e a descrição mudam. No celular, em janelas baixas e com movimento reduzido, os três painéis seguem o fluxo normal da página, com o seletor acompanhando o conteúdo visível. Sem JavaScript, todos os painéis permanecem disponíveis. Não há vídeo nesta seção, captura da roda do mouse ou bloqueio da rolagem.
+
 ## Posicionamento vigente — Data Engineering para AI Engineering
 
 Esta revisão passa a orientar a mensagem pública da home. O Ingestify é a camada de ingestão e conversão de dados não estruturados para pipelines de Data Engineering e AI Engineering. A entrega atual é transformar documentos, imagens e gravações em Markdown, texto, transcrições e metadados, com execução self-hosted e acesso por API.
