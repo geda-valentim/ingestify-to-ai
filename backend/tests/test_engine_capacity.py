@@ -167,9 +167,12 @@ def test_the_engine_view_shows_capacity_and_liveness_but_no_secret(db):
     store.set_local_gpus(db, local, [GPU0], version=None, actor_user_id=None, auth_method="cli")
     store.set_binding(db, local, "transcription", Binding(gpu_ref="gpu0", workers=2), version=None,
                       actor_user_id=None, auth_method="cli")
-    modal = Engine(slug="modal_1", display_name="Modal 1", adapter_type="modal", config={"features": {}},
+    private_fingerprint = "private-credential-fingerprint-for-redaction-test"
+    # A public UUID may contain the old short fixture value `f00` by chance.
+    # Keep that collision explicit so redaction checks cannot depend on luck.
+    modal = Engine(id="9e55c7bf-9f00-4866-94b5-55c7a6625e13", slug="modal_1", display_name="Modal 1", adapter_type="modal", config={"features": {}},
                    deployments={}, credentials_sealed=b"ING1sealed", credentials_key_id="abc",
-                   credentials_masked={"token_id": {"is_set": True, "hint": "6DEi"}, "fingerprint": "f00"})
+                   credentials_masked={"token_id": {"is_set": True, "hint": "6DEi"}, "fingerprint": private_fingerprint})
     db.add(modal)
     db.commit()
 
@@ -181,7 +184,10 @@ def test_the_engine_view_shows_capacity_and_liveness_but_no_secret(db):
 
     modal_view = store.engine_view(db, modal, alive_by_feature={})
     assert modal_view["credentials"] == {"token_id": {"is_set": True, "hint": "6DEi"}}
-    assert "sealed" not in str(modal_view) and "f00" not in str(modal_view)
+    assert modal_view["id"] == modal.id
+    assert {"credentials_sealed", "credentials_key_id"}.isdisjoint(modal_view)
+    assert "ING1sealed" not in str(modal_view)
+    assert private_fingerprint not in str(modal_view)
 
 
 # --- admin API ---------------------------------------------------------------------------------
