@@ -69,10 +69,20 @@ async def main():
         assert 'PLANNED' in await page.locator('#data-lake .roadmap-label').inner_text()
         assert await page.locator('.lake-planned').get_by_text('PLANNED DELIVERY').is_visible()
         adapters = page.get_by_role('group', name='Preview a planned Data Lake adapter')
+        names = ['MinIO', 'Amazon S3', 'Google Cloud Storage', 'Azure Blob']
+        for width, height in [(1440,900),(390,844),(320,640)]:
+            await page.set_viewport_size({'width':width,'height':height})
+            for index in [0,1,2,3,2,1,0]:
+                await adapters.get_by_role('button').nth(index).evaluate(
+                    '(e)=>{const r=e.getBoundingClientRect();scrollTo(0,scrollY+r.top+r.height/2-(innerHeight+72)/2)}')
+                await page.wait_for_function('(name)=>document.querySelector("#lake-adapter-preview strong").textContent===name', arg=names[index])
+                assert await adapters.get_by_role('button').nth(index).get_attribute('aria-pressed') == 'true'
+        await page.set_viewport_size({'width':1440,'height':900})
         for name in ['MinIO', 'Amazon S3', 'Google Cloud Storage', 'Azure Blob']:
             button = adapters.get_by_role('button', name=name, exact=False)
             await button.focus()
             await page.keyboard.press('Enter')
+            await page.wait_for_timeout(150)
             assert await button.get_attribute('aria-pressed') == 'true'
             assert await page.locator('#lake-adapter-preview strong').inner_text() == name
             assert await adapters.locator('button[aria-pressed="true"]').count() == 1
@@ -124,6 +134,11 @@ async def main():
         assert await page.locator('.api-sequence').evaluate("e=>getComputedStyle(e,'::before').transform") == 'none'
         await page.evaluate('scrollBy(0,150)')
         assert await page.locator('.api-sequence').evaluate("e=>getComputedStyle(e,'::before').transform") == 'none'
+        reduced_adapters = page.locator('.lake-adapters')
+        await reduced_adapters.get_by_role('button', name='Azure Blob', exact=False).click()
+        await page.evaluate('scrollBy(0,-150)')
+        await page.wait_for_timeout(150)
+        assert await page.locator('#lake-adapter-preview strong').inner_text() == 'Azure Blob'
         await reduced.close()
         # Media failure must retain navigation and the relevant static frame.
         fallback = await browser.new_context(viewport={'width':1440,'height':900})

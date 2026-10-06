@@ -1,5 +1,6 @@
 "use client";
-import { useId, useState } from "react";
+import { useId } from "react";
+import { useLakeAdapterScroll } from "./use-lake-adapter-scroll";
 
 function Spectrum({ id }: { id: string }) {
   return (
@@ -369,7 +370,7 @@ const lakeAdapters = [
 
 export function LakeDeliveryDiagram() {
   const id = useId();
-  const [selected, setSelected] = useState(0);
+  const { adaptersRef, selected, selectAdapter } = useLakeAdapterScroll();
   return (
     <div className="lake-flow">
       <div className="lake-pipeline">
@@ -456,6 +457,7 @@ export function LakeDeliveryDiagram() {
       </div>
       <div
         className="lake-adapters"
+        ref={adaptersRef}
         role="group"
         aria-label="Preview a planned Data Lake adapter"
       >
@@ -490,7 +492,7 @@ export function LakeDeliveryDiagram() {
             type="button"
             aria-pressed={selected === index}
             aria-controls="lake-adapter-preview"
-            onClick={() => setSelected(index)}
+            onClick={() => selectAdapter(index)}
           >
             <span>{adapter.label}</span>
             <strong>{adapter.name}</strong>
