@@ -79,7 +79,7 @@ const operations = [
     format: "DOCUMENT → MARKDOWN + METADATA",
     formats: "PDF · DOCX · HTML · PPTX · XLSX",
     limits: "Default upload limit: 50 MB",
-    href: "/docs?lang=en#documentos",
+    href: "/docs/documents",
   },
   {
     name: "Audio & video",
@@ -90,7 +90,7 @@ const operations = [
     format: "AUDIO / VIDEO → TXT · JSON · VTT · SRT",
     formats: "MP3 · WAV · FLAC · M4A · MP4 · MOV · WEBM",
     limits: "Default transcription limits: audio 50 MB · video 500 MB",
-    href: "/docs?lang=en#transcribe",
+    href: "/docs/transcription",
   },
   {
     name: "Images",
@@ -101,7 +101,7 @@ const operations = [
     format: "IMAGE → TEXT + REGIONS",
     formats: "PNG · JPEG · WEBP · BMP · GIF · TIFF",
     limits: "Defaults: 10 MB decoded image data · 50 million pixels",
-    href: "/docs?lang=en#imagens",
+    href: "/docs/images",
   },
 ];
 export function LandingSections({ signedIn }: { signedIn: boolean }) {
@@ -239,7 +239,7 @@ export function LandingSections({ signedIn }: { signedIn: boolean }) {
           </div>
         </div>
         <p className="formats-docs">
-          See the <Link href="/docs?lang=en">documentation</Link> for the full
+          See the <Link href="/docs">documentation</Link> for the full
           format matrix, engine compatibility and deployment limits.
         </p>
       </section>
@@ -282,7 +282,7 @@ export function LandingSections({ signedIn }: { signedIn: boolean }) {
                 ? "This audio example runs on Modal. Documents and images stay with local workers."
                 : "This audio example runs locally. Modal is an optional route for transcription."}
             </p>
-            <Link className="landing-text-link" href="/docs?lang=en#compute">
+            <Link className="landing-text-link" href="/docs/compute">
               Explore execution
               <ArrowUpRight size={16} />
             </Link>
@@ -530,7 +530,7 @@ export function LandingSections({ signedIn }: { signedIn: boolean }) {
               Open workspace
               <ArrowRight size={18} />
             </Link>
-            <Link className="landing-text-link" href="/docs?lang=en">
+            <Link className="landing-text-link" href="/docs">
               Read the docs
               <ArrowUpRight size={18} />
             </Link>
