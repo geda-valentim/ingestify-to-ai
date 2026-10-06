@@ -6,6 +6,7 @@ are not ASR probabilities. No model or biometric embeddings cross this boundary.
 from copy import deepcopy
 import json
 import math
+from numbers import Real
 import re
 
 MAX_SPEAKERS = 20
@@ -125,6 +126,14 @@ def speaker_for_interval(start, end, turns):
 
 def normalize_aligned_segments(segments, turns, *, expose_words=False):
     """Split only when aligned words prove a speaker change; retain untimed text."""
+    def scalar(value):
+        # WhisperX alignment emits NumPy scalars. Convert at the inference
+        # boundary; keep the remote JSON validator strict about primitive types.
+        if (isinstance(value, bool) or not isinstance(value, Real)
+                or not math.isfinite(value) or value < 0):
+            raise ValueError('INVALID_ALIGNMENT_NUMBER')
+        return float(value)
+
     result = []
     for segment in segments:
         words = []
@@ -132,12 +141,14 @@ def normalize_aligned_segments(segments, turns, *, expose_words=False):
             start, end = raw.get('start'), raw.get('end')
             if start is None or end is None:
                 start = end = None
+            else:
+                start, end = scalar(start), scalar(end)
             word = {'word': raw['word'], 'start': start, 'end': end,
                     'speaker_id': speaker_for_interval(start, end, turns)}
             if raw.get('score') is not None:
-                word['alignment_score'] = raw['score']
+                word['alignment_score'] = scalar(raw['score'])
             if raw.get('probability') is not None:
-                word['probability'] = raw['probability']
+                word['probability'] = scalar(raw['probability'])
             words.append(word)
         # Never recreate text from incompletely aligned tokens: punctuation,
         # numeric strings and unaligned words are part of the user's transcript.
@@ -160,7 +171,8 @@ def normalize_aligned_segments(segments, turns, *, expose_words=False):
         else:
             labels = {w['speaker_id'] for w in words}
             label = next(iter(labels)) if words and len(labels) == 1 else None
-            entry = {'start': segment['start'], 'end': segment['end'], 'text': segment['text'], 'speaker_id': label}
+            entry = {'start': scalar(segment['start']), 'end': scalar(segment['end']),
+                     'text': segment['text'], 'speaker_id': label}
             if expose_words:
                 entry['words'] = words
             result.append(entry)

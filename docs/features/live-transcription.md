@@ -172,6 +172,25 @@ O checkpoint sintético de Pyannote e os testes de protocolo/clustering também
 não qualificam qualidade de identificação. Pesos gated e inferência CUDA real
 continuam pendentes nesta entrega.
 
+Para o replay de qualificação, acrescente `--diarize` ao runner existente:
+
+```bash
+python scripts/benchmark_live_transcribe.py \
+  --audio /caminho/local/clip.pcm --api-url http://localhost:18103 \
+  --project Benchmark --phase warm --diarize --output /tmp/live-v2-report.json
+```
+
+O relatório registra o relógio de cada frame enviado e dos eventos recebidos,
+identificação observada antes do `finish`, digest e igualdade do resultado salvo.
+Uma divergência de protocolo, texto, catálogo, intervalos ou watermark falha o
+replay; protocolo 2 usa deadline de finalização de 30 s. `outcome: completed`
+significa integridade do replay, não aprovação dos gates. A primeira atribuição é
+medida desde o início da captura, não desde fala anotada. `inference_seconds` e
+`inference_rtf` medem somente ASR (`inference_measurement_scope: asr-only`),
+não o custo conjunto ASR + Diart exigido pelo gate. O ponto de observação é
+o receptor WebSocket: ainda são necessários snapshots do navegador nos deadlines
+causais, referências humanas e pontuação DER/WER para qualificar a experiência.
+
 Rollback: feche a admissão v2, drene ou cancele as sessões v2, então volte à imagem
 live anterior. Preserve leitores schema 2 e registros de resultados. Não troque
 o provider nem remova o subprocesso de uma sessão em andamento. Os testes em
