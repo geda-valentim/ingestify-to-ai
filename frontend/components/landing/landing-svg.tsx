@@ -351,20 +351,3 @@ export function ComputeDiagram({ cloud }: { cloud: boolean }) {
     </svg>
   );
 }
-export function Wordmark() {
-  return (
-    <svg className="landing-wordmark" viewBox="0 0 1200 245" aria-hidden="true">
-      <text
-        x="-4"
-        y="205"
-        textLength="1205"
-        lengthAdjust="spacingAndGlyphs"
-        fontSize="245"
-        fontWeight="500"
-        letterSpacing="-17"
-      >
-        ingestify.
-      </text>
-    </svg>
-  );
-}
