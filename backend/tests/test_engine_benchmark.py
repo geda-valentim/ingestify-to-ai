@@ -302,6 +302,64 @@ def test_each_combination_is_an_ephemeral_modal_run_with_a_scratch_environment(w
     assert result.completed and result.billed_seconds == 100.0 and result.items[0].exec_seconds == 8
 
 
+def test_whisperx_benchmark_uses_full_pipeline_and_deployment_models(world, tmp_path, monkeypatch):
+    from shared.config import get_settings
+    add_modal(world)
+    engine = engine_row(world)
+    manifest = {'qualified':True, 'asr':{'model':'turbo','revision':'a'*40},
+                'vad':{'revision':'b'*40}, 'aligners':{'pt':{'revision':'c'*40}},
+                'diarizer':{'model':'pyannote/speaker-diarization-community-1','revision':'d'*40}}
+    engine.config = {**engine.config, 'whisperx_manifest':manifest}
+    monkeypatch.setattr(get_settings(), 'whisperx_model_dir', '/models/test-whisperx')
+    adapter = SimpleNamespace(subprocess_env=lambda home, extra:extra)
+    runner = benchmark.ModalBenchRunner(engine, adapter)
+    env = runner.env(str(tmp_path), benchmark.Combination('L4', 1), [])
+    options = json.loads(env[bench_protocol.BENCH_ENV])['options']
+    assert env['WHISPERX_MODEL_DIR'] == '/models/test-whisperx'
+    assert options['transcriber_provider'] == 'whisperx'
+    assert options['diarize'] is True and options['include_word_timestamps'] is True
+    assert options['transcription_profile']['models']['asr_revision'] == 'a'*40
+    assert options['transcription_profile']['models']['diarizer_revision'] == 'd'*40
+
+
+def test_local_whisperx_benchmark_does_not_measure_asr_only_when_default_is_opt_in(monkeypatch):
+    from shared.config import get_settings
+    settings = get_settings()
+    monkeypatch.setattr(settings, 'audio_transcriber_provider', 'whisperx')
+    monkeypatch.setattr(settings, 'whisperx_diarization_default', False)
+    options = benchmark.qualification_options(settings)
+    assert options['diarize'] is True
+    assert options['transcription_profile']['diarize'] is True
+
+
+def test_modal_entry_sends_benchmark_provider_options(tmp_path, monkeypatch):
+    import importlib.util
+    import sys
+    from pathlib import Path
+    from workers.engines.modal_apps import protocol
+    media = tmp_path / 'sample.mp3'
+    media.write_bytes(b'fixture')
+    options = {'transcriber_provider':'whisperx', 'diarize':True, 'include_word_timestamps':True}
+    monkeypatch.setenv(bench_protocol.BENCH_ENV, json.dumps({'samples':[str(media)], 'options':options}))
+    received = []
+    class StopAfterRequest(Exception):
+        pass
+    def spawn(request):
+        received.append(protocol.parse_request(request)['options'])
+        raise StopAfterRequest()
+    fake_app = SimpleNamespace(local_entrypoint=lambda:lambda fn:fn)
+    fake_runner = lambda:SimpleNamespace(transcribe=SimpleNamespace(spawn=spawn))
+    monkeypatch.setitem(sys.modules, 'workers.engines.modal_apps.whisper_app',
+                        SimpleNamespace(app=fake_app, WhisperRunner=fake_runner))
+    path = Path(benchmark.__file__).parent / 'modal_apps/bench_entry.py'
+    spec = importlib.util.spec_from_file_location('benchmark_entry_under_test', path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    with pytest.raises(StopAfterRequest):
+        module.bench()
+    assert received[0]['transcriber_provider'] == 'whisperx' and received[0]['diarize'] is True
+
+
 def test_a_combination_past_its_deadline_is_interrupted_and_billed_from_the_app_start(world, tmp_path):
     add_modal(world)
     engine = engine_row(world)

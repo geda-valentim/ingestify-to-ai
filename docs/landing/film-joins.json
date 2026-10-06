@@ -1,0 +1,58 @@
+[
+  {
+    "join": "scene-01 -> bridge-01-02",
+    "mean_gray_difference": 1.53
+  },
+  {
+    "join": "bridge-01-02 -> scene-02",
+    "mean_gray_difference": 1.672
+  },
+  {
+    "join": "scene-02 -> bridge-02-03",
+    "mean_gray_difference": 2.163
+  },
+  {
+    "join": "bridge-02-03 -> scene-03",
+    "mean_gray_difference": 2.021
+  },
+  {
+    "join": "scene-03 -> bridge-03-04",
+    "mean_gray_difference": 3.016
+  },
+  {
+    "join": "bridge-03-04 -> scene-04",
+    "mean_gray_difference": 2.787
+  },
+  {
+    "join": "scene-04 -> bridge-04-05",
+    "mean_gray_difference": 1.446
+  },
+  {
+    "join": "bridge-04-05 -> scene-05",
+    "mean_gray_difference": 1.57
+  },
+  {
+    "join": "scene-05 -> bridge-05-06",
+    "mean_gray_difference": 2.166
+  },
+  {
+    "join": "bridge-05-06 -> scene-06",
+    "mean_gray_difference": 0.795
+  },
+  {
+    "join": "scene-06 -> bridge-06-07",
+    "mean_gray_difference": 1.475
+  },
+  {
+    "join": "bridge-06-07 -> scene-07",
+    "mean_gray_difference": 2.002
+  },
+  {
+    "join": "scene-07 -> bridge-07-08",
+    "mean_gray_difference": 2.439
+  },
+  {
+    "join": "bridge-07-08 -> scene-08",
+    "mean_gray_difference": 2.127
+  }
+]

@@ -2,7 +2,45 @@
 
 O Ingestify transforma documentos, imagens, áudio e vídeo em informação utilizável por aplicações de IA. A home deve tornar essa proposta visível em poucos segundos, mostrar as operações disponíveis e explicar o controle sobre sua execução. A ambição é evoluir para uma plataforma open source de operações de transformação, executadas localmente ou de forma distribuída.
 
-Este documento orienta o conteúdo, o design e a implementação da landing page. Os textos públicos propostos aparecem em blocos de citação; as orientações de composição e comportamento acompanham cada seção. O estado das funcionalidades corresponde à documentação consultada em 5 de outubro de 2026. A abertura do código está planejada e o repositório permanece privado.
+Este documento orienta o conteúdo, o design e a implementação da landing page. Os textos públicos propostos aparecem em blocos de citação; as orientações de composição e comportamento acompanham cada seção. O estado das funcionalidades corresponde à documentação consultada em 5 de outubro de 2026. O repositório foi conferido durante a produção e está público; a home usa “Ver no GitHub”.
+
+## Equilíbrio das duas perspectivas
+
+A home mantém **Data Engineering e conversão em dados prontos para IA** com o mesmo peso. A abertura usa “Your files. AI-ready data.”, com “DATA ENGINEERING + AI-READY CONVERSION”. O visitante pode converter um arquivo isolado e usar o resultado em ferramentas de IA, ou integrar as mesmas operações a um pipeline de dados. Não é necessário adotar uma infraestrutura de Data Lake para usar as conversões atuais.
+
+A seção de operações explicita os dois caminhos: AI-ready conversion (Markdown, OCR, transcrições e timestamps) e Data Engineering (jobs via API, contexto de projeto, deduplicação e recuperação por página). O encerramento usa “Convert a file. Build a pipeline.”. AI-ready descreve o texto e os metadados de saída; não anuncia chunking, embeddings ou tabelas lakehouse como prontos. A entrega direta ao Data Lake continua planejada.
+
+## Operações guiadas pela rolagem
+
+A seção “Convert for AI. Connect your data.” mantém os textos e os diagramas SVG. Ao descer, o seletor percorre Documents → Audio & video → Images; ao subir, percorre a ordem inversa. Os botões continuam navegando diretamente para cada etapa.
+
+Quando o painel completo cabe na tela, ele permanece fixo abaixo do cabeçalho enquanto o diagrama e a descrição mudam. No celular, em janelas baixas e com movimento reduzido, os três painéis seguem o fluxo normal da página, com o seletor acompanhando o conteúdo visível. Sem JavaScript, todos os painéis permanecem disponíveis. Não há vídeo nesta seção, captura da roda do mouse ou bloqueio da rolagem.
+
+## Posicionamento vigente — Data Engineering para AI Engineering
+
+Esta revisão passa a orientar a mensagem pública da home. O Ingestify é a camada de ingestão e conversão de dados não estruturados para pipelines de Data Engineering e AI Engineering. A entrega atual é transformar documentos, imagens e gravações em Markdown, texto, transcrições e metadados, com execução self-hosted e acesso por API.
+
+A abertura usa “Files in. Data out.” e apresenta self-hosted no primeiro parágrafo. O diferencial é a operação em torno da conversão: jobs assíncronos, deduplicação de documentos dentro do projeto, acompanhamento e recuperação de páginas PDF, projetos, pastas e tags. A página mostra formatos comuns e limites padrão, com links para as regras completas da documentação.
+
+A próxima etapa do produto é a entrega direta ao Data Lake. Ela tem seção própria e rótulo **PLANNED** tanto no diagrama quanto em todos os trechos futuros do filme. Hoje o consumidor recupera os resultados pela API. Os adapters de entrega planejados são MinIO, Amazon S3, Google Cloud Storage (GCP) e Azure Blob, apresentados como ramos selecionáveis de “Your Data Lake”; a seleção demonstra o destino, sem configurar uma integração real. A rolagem destaca o adapter que passa pelo centro da área de leitura, avançando e retornando pelos quatro destinos. Clique e teclado posicionam o destino escolhido nessa mesma linha; com movimento reduzido, a seleção fica manual. A cena do hero e o FAQ também nomeiam essas opções. A home não anuncia conectores prontos, Iceberg/Delta, camadas bronze/silver/gold, chunking, embeddings, webhooks ou qualidade de dados como funcionalidades existentes.
+
+O exemplo da API mantém o contrato vigente (`/api/upload` e `/api/jobs/{job_id}/result`). O upload usa arquivo, projeto e tags; não é necessário expor um preset do motor nesse exemplo. A aba JSON apresenta valores de exemplo compatíveis com `JobResultResponse` e `DocumentMetadata`, conferidos no OpenAPI do serviço em execução. Não se inventa `/v1` nem um parâmetro `preset` que o backend ainda não oferece.
+
+Os CTAs iniciais permitem explorar conversões e código sem conta. O acesso ao workspace continua autenticado. A home liga diretamente ao OpenAPI JSON e informa que a licença MIT está declarada no README do repositório, sem acrescentar termos de licença por conta própria. O conteúdo público e os metadados permanecem em inglês. A home tem um único H1 e suas seções principais são renderizadas no HTML inicial.
+
+As recomendações recebidas sobre segurança, autenticação, versionamento da API, documentação e implementação do Data Lake são frentes separadas; esta entrega altera o posicionamento e o conteúdo da home.
+
+## Revisão implementada — largura total, SVG e inglês
+
+Esta revisão substitui as instruções anteriores de composição e os textos públicos em português. A home publicada usa inglês, incluindo metadados, navegação, exemplos, FAQ e rótulos acessíveis. A abertura passa a ser “Your files. AI-ready.”. O texto vigente está em `frontend/components/landing/content.ts` e `landing-sections.tsx`.
+
+A página ocupa toda a largura da janela, sem um container central limitado a 1440px. Títulos grandes em preto e linhas secundárias preenchidas em cinza conduzem a leitura; o filme de vidro líquido permanece como apoio, com contraste integral, separado do texto e continuidade nos dois sentidos da rolagem. No celular, texto, mídia e navegação usam linhas próprias; o vídeo fica imediatamente abaixo do texto, sem máscara de transparência e com enquadramento completo. Fundo branco, uma seção de execução preta e linhas rainbow preservam a identidade aprovada.
+
+As seções seguintes têm linguagem própria: seletor de documentos/áudio/imagens com transformação em SVG; diagrama de execução local ou Modal; sequência vertical de integração com API; órbitas de linhas na visão open source; encerramento com chamada e marca em proporção natural no rodapé. Os exemplos pequenos do SVG têm uma versão HTML legível no celular. Nenhum diagrama simula uma operação real: são exemplos identificados.
+
+As linhas são animadas com traços SVG, o áudio com ondas e o OCR com regiões pulsantes. A entrada dos títulos e o deslocamento de elementos acompanham a rolagem. Loops ficam pausados fora da tela e há controle global para pausar efeitos. Movimento reduzido remove animações e mantém os capítulos estáticos sem baixar o vídeo. Conteúdo permanece visível sem JavaScript.
+
+A disponibilidade continua explícita: Modal é opcional para transcrição; microfone é piloto; execução distribuída geral e composição de operações são evolução planejada. O GitHub permanece acessível pela navegação e pela seção do projeto. A mesma marca — ícone Layers e lettering natural ingestify. — é compartilhada pela home, rodapé, admin e área autenticada pelo componente Brand.
 
 ## Posicionamento
 
@@ -60,6 +98,8 @@ O fio condutor é uma pequena esfera de vidro líquido que percorre uma linha es
 O cenário é um espaço branco contínuo, com profundidade, sombras suaves e chão branco. Os painéis são de vidro líquido transparente, com conteúdo preto e refração discreta. A câmera faz deslocamentos curtos e aproximações suaves. Cada cena termina com um elemento cuja posição, escala e direção de movimento já preparam o início da seguinte. O movimento inverso deve preservar essas mesmas correspondências.
 
 Todo o filme representa exemplos ilustrativos. Recuar a rolagem revisita a demonstração; não cancela jobs nem desfaz operações reais. O vídeo não tem áudio e não começa a tocar sozinho. Uma indicação inicial discreta informa: “Role para explorar”.
+
+O manifesto de produção em [film-manifest.json](landing/film-manifest.json) é a fonte exata para tempos e pontes: 15 trechos de três segundos, com leitura prolongada nos resultados por mapeamento da rolagem. Os percentuais abaixo orientaram o roteiro inicial.
 
 ### Mapa da narrativa
 
@@ -160,7 +200,7 @@ Não represente o mesmo job rodando nos dois destinos ao mesmo tempo. O trecho i
 
 **Transição:** as linhas externas retornam em direção ao centro conforme a câmera se afasta. Os módulos se organizam ao redor de um plano central vazio, preparando a entrada da marca. O movimento pode lembrar a construção coletiva de uma plataforma, sem representar o GitHub como provedor de execução.
 
-**Texto sobreposto:** “Uma plataforma construída para evoluir com a comunidade.” Complemento: “Mais operações, conexão entre máquinas e fluxos reutilizáveis.” O link “GitHub · Repositório privado” aparece junto ao aviso sobre a abertura planejada.
+**Texto sobreposto:** “Uma plataforma construída para evoluir com a comunidade.” Complemento: “Mais operações, conexão entre máquinas e fluxos reutilizáveis.” O link “Ver no GitHub” leva ao repositório público.
 
 ### Cena 8 Marca e próximo passo
 
@@ -229,7 +269,7 @@ A home deve ser pública. Atualmente, a rota raiz encaminha o visitante para log
 
 **Nota próxima às ações**
 
-> Construindo o caminho para open source. Repositório privado por enquanto.
+> Construindo uma plataforma aberta. Acompanhe o código no GitHub.
 
 No desktop, reserve o lado esquerdo para o texto e as ações da apresentação e use o restante para o primeiro quadro do filme. No celular, apresente a promessa e os botões acima da composição vertical. O primeiro contato deve funcionar antes de qualquer rolagem ou carregamento do vídeo completo.
 
@@ -397,7 +437,7 @@ O código da landing precisa acompanhar o contrato real da API. Não apresente S
 
 > A visão do Ingestify é tornar operações de transformação para IA reutilizáveis e acessíveis. Executar na sua máquina, distribuir o trabalho entre seus servidores e recorrer à nuvem quando fizer sentido.
 >
-> Estamos preparando a abertura do código. O repositório ainda é privado; a direção é permitir que mais pessoas inspecionem o funcionamento, contribuam com operações e adaptem a plataforma às suas rotinas.
+> O repositório está público. Explore o funcionamento, acompanhe as operações e consulte as condições de uso e contribuição nos arquivos do projeto.
 
 Na cena 7, mantenha a base atual e a direção de evolução visualmente distintas, conforme os grupos abaixo. Esses grupos orientam os rótulos da cena; a tabela completa pode ser usada na experiência estática, sem datas de entrega.
 
@@ -413,25 +453,19 @@ Destino confirmado pelo remote do projeto: [github.com/geda-valentim/ingestify-t
 
 **Texto do link**
 
-> GitHub · Repositório privado
+> Ver no GitHub
 
-**Aviso visível ao lado do link**
-
-> A abertura pública está planejada. Enquanto o repositório estiver privado, o GitHub pode mostrar uma página 404 para quem não tem acesso.
-
-O link deve permanecer clicável, com o estado indicado em texto, inclusive para leitores de tela. Não use um botão desabilitado ou esconda a condição apenas em tooltip. O clique abre o destino real e não promete inscrição ou notificação futura.
-
-Quando o código se tornar público, atualizar o rótulo para “Ver no GitHub”, remover o aviso e adicionar instruções reais de contribuição e instalação. Essa mudança depende da abertura efetiva do repositório.
+O link abre o repositório público real. A disponibilidade do código não substitui a licença e as instruções de contribuição; consulte os arquivos do projeto.
 
 ## Perguntas frequentes
 
 **O Ingestify já é open source?**
 
-> A abertura do código está planejada. Por enquanto, o repositório no GitHub é privado.
+> O código está disponível no GitHub. A visão é uma plataforma open source; consulte a licença e as condições de uso nos arquivos do projeto.
 
 **Posso executar no meu ambiente?**
 
-> A arquitetura suporta workers locais em CPU e GPU. Enquanto o repositório estiver privado, a instalação a partir do código depende de acesso ao projeto. Os requisitos variam conforme a operação e os modelos utilizados.
+> A arquitetura suporta workers locais em CPU e GPU. Os requisitos variam conforme a operação e os modelos utilizados.
 
 **Preciso de uma GPU?**
 
@@ -463,7 +497,7 @@ Botão principal: “Explorar a documentação” → `/docs`.
 
 Link secundário: “Entrar na plataforma” → `/login`. Para usuários autenticados, “Abrir painel” → `/dashboard`.
 
-O rodapé reúne marca, documentação, referência da API, acesso à plataforma e GitHub com o indicador de repositório privado. O cadastro não deve ser uma chamada fixa, pois depende da configuração de registro do ambiente.
+O rodapé reúne marca, documentação, referência da API, acesso à plataforma e link para o GitHub público. O cadastro não deve ser uma chamada fixa, pois depende da configuração de registro do ambiente.
 
 ## Comportamento e adaptação
 
@@ -504,4 +538,4 @@ O filme deve avançar ao descer, recuar ao subir e permanecer estável ao parar.
 - [Armazenamento e retenção](features/storage-and-retention.md).
 - [Transcrição ao vivo](features/live-transcription.md).
 - [Organização em projetos](features/projects.md).
-- [Repositório no GitHub](https://github.com/geda-valentim/ingestify-to-ai), privado nesta etapa.
+- [Repositório no GitHub](https://github.com/geda-valentim/ingestify-to-ai), público, conferido durante a produção.

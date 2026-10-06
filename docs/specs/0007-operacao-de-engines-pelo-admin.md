@@ -9,6 +9,31 @@
 | **Relacionadas** | [0003](0003-motores-de-execucao-roteamento-e-orcamento.md), [0005](0005-transcricao-ao-vivo.md), [0006](0006-whisperx-e-identificacao-de-falantes.md) |
 | **Substituída por** | — |
 
+### Estado desta entrega
+
+O código inicial entra em `main` com `ENGINE_CONTROL_ENABLED=false`. API, UI,
+operações SQL, outbox, agente local e adapters local/Modal foram acrescentados;
+as telas e os comandos Docker existentes permanecem disponíveis.
+Os critérios abaixo continuam em aberto até a qualificação física no host e no
+Modal. Esta entrega não declara toda a spec implementada.
+
+Habilitar exige executar `scripts/migrate_0007_engine_control.py` no ambiente
+Python da instalação, registrar o host com `scripts/register_engine_host.py`
+(manifests efetivos, imagens e UUIDs), instalar o serviço systemd e montar o
+arquivo de identidades na API. O overlay `docker-compose.engine-control.yml`
+acrescenta um runner e um watchdog independentes. Todos os workers de conteúdo
+gerenciados precisam receber a configuração de controle para que a admissão e
+a drenagem sejam respeitadas; preservar a escala, os overlays e os dispositivos
+reais da instalação durante o bootstrap.
+
+O catálogo inicial controla os modelos já existentes. Perfis WhisperX de
+controle ainda não foram qualificados: esses engines recusam alteração de
+runtime com `WHISPERX_CONTROL_PROFILE_NOT_QUALIFIED`, preservando os caminhos de
+execução da spec 0006. Custos pagos incertos mantêm a reserva; recovery consulta
+o estado observado sem repetir efeitos externos. Pools pagos, standby/wakeup,
+benchmark pela UI e os gates completos de operação continuam sujeitos às etapas
+de implementação e qualificação descritas nesta spec.
+
 ## 1. Problema
 
 `/admin/engines` mostra configuração e comandos, mas o operador precisa abrir um

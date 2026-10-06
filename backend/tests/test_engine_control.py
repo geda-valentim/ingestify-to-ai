@@ -263,6 +263,45 @@ def test_legacy_writer_cannot_bypass_managed_profile(world):
             )
 
 
+def test_connection_test_locks_credentials_before_any_profile_exists(world):
+    with world() as db:
+        db.add(
+            ControlResource(
+                key="connection-test", owner_engine_id="e", operation_id="active-test"
+            )
+        )
+        db.commit()
+        with pytest.raises(store.VersionConflict, match="OPERATION_CONFLICT"):
+            store.clear_credentials(
+                db,
+                db.get(Engine, "e"),
+                version=0,
+                actor_user_id="admin",
+                auth_method="jwt",
+            )
+
+
+def test_disabled_control_preserves_legacy_task_execution(world, monkeypatch):
+    from workers.engine_control.task_base import ManagedTask
+
+    monkeypatch.setattr(get_settings(), "engine_control_enabled", False)
+
+    def forbid_control(*args, **kwargs):
+        raise AssertionError("Disabled control must not consult control admission")
+
+    monkeypatch.setattr(admission, "acquire", forbid_control)
+
+    class Legacy(ManagedTask):
+        name = "workers.tasks.process_conversion"
+
+        def run(self, job_id):
+            return job_id
+
+    from workers.celery_app import celery_app
+    Legacy.bind(celery_app)
+    assert Legacy()("legacy-id") == "legacy-id"
+
+
 def test_streamed_secret_split_across_chunks_is_never_persisted(tmp_path):
     import sys
     from workers.engine_control.process import stream_run
@@ -304,6 +343,51 @@ def test_pool_stats_sdk_compatibility_never_invents_zero():
     assert pool_count(SimpleNamespace(num_total_containers=3)) == 3
     with pytest.raises(RuntimeError, match="OBSERVATION_UNAVAILABLE"):
         pool_count(SimpleNamespace())
+
+
+def test_modal_readiness_probe_uses_the_loaded_model(monkeypatch):
+    import ast
+    from pathlib import Path
+    from types import SimpleNamespace
+    from workers.engines import whisper_core
+
+    source = Path(__file__).parents[1] / "workers/engines/modal_apps/whisper_app.py"
+    tree = ast.parse(source.read_text())
+    cls = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "WhisperRunner"
+    )
+    method = next(
+        node
+        for node in cls.body
+        if isinstance(node, ast.FunctionDef) and node.name == "control_probe"
+    )
+    method.decorator_list = []
+    namespace = {
+        "protocol": SimpleNamespace(
+            MODEL_REPO="approved-model", MODEL_REVISION="revision"
+        ),
+        "FINGERPRINT": "artifact",
+        "time": SimpleNamespace(sleep=lambda _: None),
+    }
+    exec(
+        compile(ast.Module(body=[method], type_ignores=[]), str(source), "exec"),
+        namespace,
+    )
+    loaded = object()
+    seen = []
+
+    def inference(model, path, options, **kwargs):
+        assert path.exists()
+        seen.append(model)
+
+    monkeypatch.setattr(whisper_core, "transcribe", inference)
+    result = namespace["control_probe"](
+        SimpleNamespace(model={"faster-whisper": loaded}, container_id="container")
+    )
+    assert seen == [loaded]
+    assert result["ready"] and result["fingerprint"] == "artifact"
 
 
 def test_dynamic_policy_does_not_invalidate_control_deployment():

@@ -12,6 +12,8 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 
 COPY backend/workers/ ./workers/
 COPY backend/shared/ ./shared/
+# Fingerprint must see the same WhisperX lock as API/deploy, even on legacy routes.
+COPY backend/requirements-whisperx-cuda.lock ./
 # The engines CLI (test, modal-deploy, modal-lock) runs here: only this service
 # holds the private keys
 COPY scripts/engines.py ./scripts/

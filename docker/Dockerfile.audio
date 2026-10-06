@@ -1,0 +1,21 @@
+# Isolated Python 3.11 audio image. Docling/Florence images retain their own deps.
+FROM python:3.11-slim
+WORKDIR /app
+ARG AUDIO_TARGET=cpu
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg libsndfile1 util-linux \
+    && rm -rf /var/lib/apt/lists/*
+COPY backend/requirements-whisperx-worker-*.lock /tmp/locks/
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --require-hashes --no-deps --extra-index-url https://download.pytorch.org/whl/cpu \
+       -r /tmp/locks/requirements-whisperx-worker-${AUDIO_TARGET}.lock && pip check
+COPY backend/shared ./shared
+COPY backend/workers ./workers
+# Hashing the remote deployment uses the same input on CPU and CUDA workers.
+COPY backend/requirements-whisperx-cuda.lock ./
+ENV HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 PYTHONPATH=/app \
+    LD_LIBRARY_PATH=/usr/local/lib/python3.11/site-packages/nvidia/cublas/lib:/usr/local/lib/python3.11/site-packages/nvidia/cudnn/lib
+RUN useradd --create-home --uid 10001 --user-group app \
+    && mkdir -p /tmp/ingestify && chown app:app /tmp/ingestify
+COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+CMD ["celery", "-A", "workers.celery_app", "worker", "--loglevel=info", "--pool=solo", "--concurrency=1", "-Q", "ingestify-audio", "-n", "ingestify-audio@%h"]

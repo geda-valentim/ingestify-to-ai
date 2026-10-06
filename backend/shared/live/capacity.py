@@ -3,7 +3,7 @@ from shared.engines.capacity import VramUse, validate_engine_config
 from shared.models import Engine
 
 
-def require_production_budget(db, settings, gpu):
+def require_production_budget(db, settings, gpu, *, include_diarization=False):
     engine = db.query(Engine).filter(Engine.slug == 'local').first()
     if engine is None:
         raise RuntimeError('Declare the local GPU and resident workload bindings before enabling live')
@@ -16,6 +16,10 @@ def require_production_budget(db, settings, gpu):
         raise RuntimeError('Live GPU budget is unavailable')
     use.used_gb += settings.live_vram_footprint_gb
     use.terms.append(f'live resident {settings.live_vram_footprint_gb:g}')
+    if include_diarization:
+        footprint = settings.live_diarization_gpu_gb * settings.live_max_sessions
+        use.used_gb += footprint
+        use.terms.append(f'online diarization resident {footprint:g}')
     use.reserve_gb = max(use.reserve_gb, settings.live_vram_reserve_gb, .2 * use.vram_gb)
     if not use.fits:
         raise RuntimeError('Live model does not fit alongside the declared resident workloads: ' + '; '.join(use.explain()))

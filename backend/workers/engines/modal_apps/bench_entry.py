@@ -39,7 +39,7 @@ def bench():
         calls = []
         for _ in range(executions):
             request = protocol.build_request(attempt_key=str(uuid4()), media=media, suffix=Path(path).suffix.lower(),
-                                             options={}, deadline_unix=started + deadline_seconds)
+                                             options=config.get('options', {}), deadline_unix=started + deadline_seconds)
             calls.append((time.time(), runner.transcribe.spawn(request)))
         for spawned, call in calls:
             result, usage = protocol.parse_response(call.get())

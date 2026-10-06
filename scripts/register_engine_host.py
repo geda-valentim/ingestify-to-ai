@@ -62,7 +62,7 @@ def register(args):
         "gpu_uuids": args.gpu_uuid,
         "state_path": str(Path(args.state).resolve()),
     }
-    for filename in (args.output, args.identities):
+    for filename in (args.output, args.identities, args.state):
         Path(filename).parent.mkdir(parents=True, exist_ok=True)
     identities = (
         json.loads(Path(args.identities).read_text())

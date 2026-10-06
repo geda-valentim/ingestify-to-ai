@@ -48,6 +48,7 @@ def meta() -> dict:
         "fingerprint": FINGERPRINT,
         "decorator": DECORATOR,
         "model_revision": protocol.MODEL_REVISION,
+        "capabilities": SPEC.get("capabilities", ["faster-whisper"]),
     }
 
 
@@ -73,7 +74,13 @@ class WhisperRunner:
         started = time.time()
         from workers.engines import whisper_core
 
-        self.model = whisper_core.load_model(protocol.MODEL_DIR, "cuda", protocol.COMPUTE_TYPE)
+        if SPEC.get('whisperx_manifest'):
+            from workers.engines.whisperx_core import WhisperXRuntime
+            runtime = WhisperXRuntime('/models/whisperx', 'cuda', protocol.COMPUTE_TYPE)
+            runtime._load_asr()
+            self.model = {'whisperx': runtime}
+        else:
+            self.model = {'faster-whisper': whisper_core.load_model(protocol.MODEL_DIR, "cuda", protocol.COMPUTE_TYPE)}
         self.cold_start_seconds = time.time() - started
         self.first_input = True
         self.container_id = runner.container_id()
@@ -92,7 +99,7 @@ class WhisperRunner:
             with wave.open(str(path), 'wb') as f:
                 f.setnchannels(1); f.setsampwidth(2); f.setframerate(16000)
                 f.writeframes(b'\0\0' * 16000)
-            transcribe(self.model, path, {'language':'pt'}, model_name=protocol.MODEL_REPO)
+            transcribe(self.model['faster-whisper'], path, {'language':'pt'}, model_name=protocol.MODEL_REPO)
         # Parallel probes hold the instance briefly so one container cannot answer all N.
         time.sleep(2)
         return {'ready':True,'container_id':self.container_id,'fingerprint':FINGERPRINT,

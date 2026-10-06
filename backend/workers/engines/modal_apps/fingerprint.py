@@ -16,7 +16,7 @@ from typing import Dict
 from shared.engines import pricing
 from shared.engines.capacity import Binding
 from workers.engines.modal_apps import protocol
-from workers.engines.modal_apps.files import BACKEND_DIR, LOCK_FILE, REQUIREMENTS_IN, SOURCE_FILES
+from workers.engines.modal_apps.files import BACKEND_DIR, LOCK_FILE, REQUIREMENTS_IN, SOURCE_FILES, WHISPERX_LOCK
 
 
 def deploy_spec(feature: str, config: dict, binding: Binding) -> Dict[str, object]:
@@ -31,6 +31,14 @@ def deploy_spec(feature: str, config: dict, binding: Binding) -> Dict[str, objec
     }
     if config.get('control_fingerprint_version') == 2:
         spec['fingerprint_version'] = 2
+    if config.get('whisperx_manifest'):
+        manifest = config['whisperx_manifest']
+        if not isinstance(manifest, dict) or not manifest.get('qualified'):
+            raise ValueError('WhisperX manifest must pass target qualification before deploy')
+        spec['whisperx_manifest'] = manifest
+        spec['capabilities'] = ['whisperx', 'diarization', 'transcript_schema_2']
+    else:
+        spec['capabilities'] = ['faster-whisper']
     spec["fingerprint"] = fingerprint(spec)
     return spec
 
@@ -42,7 +50,7 @@ def fingerprint(spec: Dict[str, object]) -> str:
         body['decorator'] = {k: v for k, v in body['decorator'].items()
                              if k not in ('max_containers', 'min_containers', 'scaledown_window', 'buffer_containers')}
     digest.update(json.dumps(body, sort_keys=True, separators=(",", ":")).encode())
-    for path in SOURCE_FILES + [REQUIREMENTS_IN, LOCK_FILE]:
+    for path in SOURCE_FILES + [REQUIREMENTS_IN, LOCK_FILE, WHISPERX_LOCK]:
         digest.update(path.relative_to(BACKEND_DIR).as_posix().encode() + b"\0")
         digest.update(path.read_bytes() if path.exists() else b"<missing>")
         digest.update(b"\0")

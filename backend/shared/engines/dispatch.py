@@ -60,6 +60,7 @@ PROBED_FEATURES = frozenset({"transcription"})
 TRANSCRIPTION_OPTIONS = frozenset({
     "language", "audio_language", "include_timestamps", "include_word_timestamps", "output_format",
     "media_kind", "is_audio", "purge_source", "temperature", "beam_size",
+    "diarize", "min_speakers", "max_speakers", "transcription_profile", "transcriber_provider", "diarization_explicit",
 })
 
 # The options /transcribe uses when the caller says nothing; /upload and /convert

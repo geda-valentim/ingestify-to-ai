@@ -304,7 +304,8 @@ def resolve_upload_location(db: Session, user: User, plan: UploadPlan, path: str
 # Deduplication, scoped by project
 # ---------------------------------------------------------------------------
 
-def find_duplicate_job(db: Session, user_id: str, checksum: str, location: UploadLocation) -> Tuple[Optional[Job], Optional[str]]:
+def find_duplicate_job(db: Session, user_id: str, checksum: str, location: UploadLocation,
+                       transcription_profile_hash: Optional[str] = None) -> Tuple[Optional[Job], Optional[str]]:
     """
     A non-failed MAIN job with the same checksum in the same project, if any.
 
@@ -319,6 +320,11 @@ def find_duplicate_job(db: Session, user_id: str, checksum: str, location: Uploa
         # A failed job must not swallow a resubmission: sending the file again is the retry
         Job.status != DBJobStatus.FAILED,
     )
+    # Media results are reusable only with the same durable processing profile.
+    # A legacy NULL profile must not swallow a new request for speaker labels.
+    if transcription_profile_hash is not None:
+        base = base.filter(Job.transcription_profile_hash == transcription_profile_hash,
+                           Job.status != DBJobStatus.CANCELLED)
     same = base.filter(Job.project_id == location.project_id).first()
     if same is not None:
         return same, None
