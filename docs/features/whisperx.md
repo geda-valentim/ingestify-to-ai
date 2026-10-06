@@ -126,3 +126,13 @@ Segundo probe de progresso/cancelamento: a mesma fixture repetida três vezes
 em 8,142 / 16,402 / 24,862 s desde o início; cancelamento após o primeiro chunk
 impediu o decode do próximo. Pico RSS: 2.501 MiB. Evidência isolada de emissão
 incremental entre lotes; não é corpus para DER/WER nem prova de memória em 2 h.
+
+Probe adicional do runtime completo, com o lock CPU do worker instalado e rede
+isolada: ASR + alinhamento torchaudio + validação schema 2 produziram 80 palavras
+com tempos no mesmo áudio de 30 s. Foram 31,662 s incluindo carregamento dos
+modelos, em CPU limitada a dois núcleos; pico RSS de 2.474 MiB sob limite de 3 GiB.
+Essa execução revelou e corrigiu a normalização de escalares NumPy do alinhador
+para números JSON, mantendo a validação estrita na fronteira remota. O manifesto
+de teste permaneceu `qualified: false`; a revisão do checkout Silero foi registrada
+como hash de conteúdo, não como commit upstream. Diarização estava desativada.
+Não é medição aquecida, build limpo Docker, validação CUDA ou qualificação de falantes.

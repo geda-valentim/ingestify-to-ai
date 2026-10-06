@@ -46,6 +46,34 @@ def test_aligned_speaker_changes_split_but_untimed_words_are_kept():
     assert unsplit[0]['words'][1]['start'] is None
 
 
+def test_alignment_native_real_scalars_become_json_primitives_before_validation():
+    from fractions import Fraction
+    # Real scalar subclasses reproduce the strict-type failure without NumPy as
+    # a unit-test dependency; the offline runtime probe covers real NumPy output.
+    class NativeFloat(float):
+        pass
+    raw = {'start':NativeFloat(0), 'end':NativeFloat(2), 'text':'Olá mundo', 'words':[
+        {'word':'Olá','start':NativeFloat(0),'end':NativeFloat(1),'score':Fraction(4,5)},
+        {'word':'mundo'}]}
+    result = sample()
+    result['segments'] = normalize_aligned_segments([raw], result['diarization']['turns'], expose_words=True)
+    validate_result(result)
+    segment = result['segments'][0]
+    assert type(segment['start']) is float and type(segment['end']) is float
+    word = segment['words'][0]
+    assert type(word['start']) is float and type(word['end']) is float
+    assert type(word['alignment_score']) is float and word['alignment_score'] == .8
+    assert segment['words'][1]['start'] is None
+    assert json.loads(json.dumps(result)) == result
+
+
+@pytest.mark.parametrize('value', [True, '0.1', object(), float('nan'), float('inf'), -0.1])
+def test_alignment_scalar_conversion_does_not_coerce_invalid_types(value):
+    with pytest.raises(ValueError, match='INVALID_ALIGNMENT_NUMBER'):
+        normalize_aligned_segments([{'start':0,'end':1,'text':'a','words':[
+            {'word':'a','start':value,'end':1}]}], [], expose_words=True)
+
+
 @pytest.mark.parametrize('change', [
     lambda r: r['segments'][0].update(speaker_id='SPEAKER_19'),
     lambda r: r['segments'][0]['words'][0].update(start=float('nan')),
