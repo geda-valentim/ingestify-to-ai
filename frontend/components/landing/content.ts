@@ -58,7 +58,7 @@ export const chapters = [
     name: "Next",
     eyebrow: "PLANNED / DATA LAKE DELIVERY",
     title: "Next stop.\nYour data lake.",
-    body: "The next step: deliver converted data directly to your data lake, connecting file ingestion to the rest of your data platform.",
+    body: "Planned delivery adapters for MinIO, Amazon S3, Google Cloud Storage and Azure Blob. Connect converted data directly to your data platform.",
     action: "Explore the roadmap",
     href: "#data-lake",
     note: "",
@@ -110,7 +110,7 @@ export const faq = [
   ],
   [
     "Can it deliver directly to my data lake?",
-    "Direct Data Lake delivery is the next planned capability. Today, retrieve conversion results through the API and connect them to your own pipeline. Native delivery destinations and table formats have not been announced.",
+    "Direct delivery is planned with a choice of adapters: MinIO, Amazon S3, Google Cloud Storage (GCP) or Azure Blob. Today, retrieve conversion results through the API and connect them to your own pipeline.",
   ],
   [
     "Does it already create RAG chunks or lakehouse tables?",
