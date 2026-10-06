@@ -21,13 +21,15 @@ Imports `modal`: only the deploy (worker-remote's CLI) and the container load it
 """
 
 import json
+import os
+from pathlib import Path
 from typing import Dict
 
 import modal
 
 from workers.engines.modal_apps import protocol
 from workers.engines.modal_apps.files import (  # noqa: F401  (DEPLOY_ENV re-exported)
-    BACKEND_DIR, DEPLOY_ENV, LOCK_FILE, REQUIREMENTS_IN, SOURCE_FILES, lock_is_hashed,
+    BACKEND_DIR, DEPLOY_ENV, LOCK_FILE, REQUIREMENTS_IN, SOURCE_FILES, WHISPERX_LOCK, lock_is_hashed,
 )
 
 PYTHON_VERSION = "3.13"
@@ -46,8 +48,21 @@ def _weights_command() -> str:
 
 
 def build_image(spec: Dict[str, object], *, allow_unhashed: bool = False) -> "modal.Image":
-    image = modal.Image.debian_slim(python_version=PYTHON_VERSION)
-    if lock_is_hashed():
+    whisperx_manifest = spec.get('whisperx_manifest')
+    python_version = '3.11' if whisperx_manifest else PYTHON_VERSION
+    image = modal.Image.debian_slim(python_version=python_version)
+    if whisperx_manifest:
+        if not lock_is_hashed(WHISPERX_LOCK):
+            raise RuntimeError('WhisperX hashed lock required')
+        image = image.apt_install('ffmpeg', 'libsndfile1').pip_install_from_requirements(
+            str(WHISPERX_LOCK), extra_options='--require-hashes --no-deps')
+        root = Path(os.environ.get('WHISPERX_MODEL_DIR', '/models/whisperx'))
+        if modal.is_local():
+            actual = json.loads((root / 'manifest.json').read_text())
+            if actual != whisperx_manifest:
+                raise RuntimeError('WhisperX provisioned manifest differs from fingerprint')
+        image = image.add_local_dir(str(root), '/models/whisperx', copy=True)
+    elif lock_is_hashed():
         image = image.pip_install_from_requirements(str(LOCK_FILE), extra_options="--require-hashes --no-deps")
     elif allow_unhashed:
         image = image.pip_install_from_requirements(str(REQUIREMENTS_IN))
@@ -55,9 +70,9 @@ def build_image(spec: Dict[str, object], *, allow_unhashed: bool = False) -> "mo
         raise RuntimeError(f"{LOCK_FILE.name} is missing or not fully hashed: run `scripts/engines.py modal-lock` "
                            "first (or deploy with --allow-unhashed, recorded on the engine)")
     image = (
-        image.run_commands(_weights_command())
+        (image if whisperx_manifest else image.run_commands(_weights_command()))
         .env({
-            "LD_LIBRARY_PATH": CUDA_LIBRARY_PATH,
+            "LD_LIBRARY_PATH": CUDA_LIBRARY_PATH.replace(PYTHON_VERSION, python_version),
             "HF_HUB_OFFLINE": "1",
             "PYTHONPATH": REMOTE_ROOT,
             DEPLOY_ENV: json.dumps(spec, sort_keys=True),

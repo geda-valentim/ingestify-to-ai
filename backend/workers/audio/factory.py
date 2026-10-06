@@ -83,6 +83,12 @@ def get_audio_transcriber(force_provider: Optional[str] = None) -> AudioTranscri
 
 
 def _build_transcriber(provider: str, settings) -> AudioTranscriber:
+    if provider == "whisperx":
+        from workers.audio.whisperx_transcriber import WhisperXTranscriber
+        return _create_on_best_device(lambda d: WhisperXTranscriber(
+            model_dir=settings.whisperx_model_dir, model_size=settings.whisper_model,
+            device=d.device, compute_type=d.compute_type, batch_size=settings.whisperx_batch_size,
+            max_audio_seconds=settings.whisperx_max_audio_seconds))
     if provider == "faster-whisper":
         return _create_faster_whisper_transcriber(settings)
     if provider == "openai-whisper":
@@ -91,7 +97,7 @@ def _build_transcriber(provider: str, settings) -> AudioTranscriber:
         return _create_openai_api_transcriber(settings)
     raise ValueError(
         f"Unknown audio transcriber provider: {provider}. "
-        f"Supported providers: faster-whisper, openai-whisper, openai-api"
+        f"Supported providers: whisperx, faster-whisper, openai-whisper, openai-api"
     )
 
 
@@ -204,7 +210,11 @@ def transcribe_with_gpu_fallback(
             raise
         logger.error(f"Transcription failed on GPU, retrying on CPU: {e}")
         mark_gpu_unavailable(str(e))
+        if hasattr(transcriber, "release"):
+            transcriber.release()
         reset_audio_transcriber()
+        if options and options.get('_reset_progress'):
+            options['_reset_progress']()
         transcriber = get_audio_transcriber(force_provider=force_provider)
         result = transcriber.transcribe(audio_path, options, **progress_kwargs)
 
@@ -242,6 +252,12 @@ def get_available_providers() -> dict[str, dict]:
         }
     """
     providers = {}
+    from importlib.util import find_spec
+    providers['whisperx'] = {
+        'available': find_spec('whisperx') is not None,
+        'description': 'WhisperX alignment and speaker diarization (qualified canary)',
+        'recommended': False,
+    }
 
     # Check faster-whisper
     try:

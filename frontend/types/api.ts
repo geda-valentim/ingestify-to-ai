@@ -163,6 +163,10 @@ export interface DocumentMetadata {
   duration?: number | null;
   device?: string | null; // "cuda", "cpu" or "remote"
   available_formats?: TranscriptFormat[] | null;
+  schema_version?: number | null;
+  speakers?: TranscriptSpeaker[] | null;
+  diarization?: TranscriptJson['diarization'] | null;
+  alignment?: TranscriptJson['alignment'] | null;
 }
 
 /** Formats `GET /jobs/{id}/result?format=` serves for transcription jobs. */
@@ -170,9 +174,11 @@ export type TranscriptFormat = "markdown" | "vtt" | "srt" | "txt" | "json";
 
 export interface TranscriptWord {
   word: string;
-  start: number;
-  end: number;
-  probability: number;
+  start: number | null;
+  end: number | null;
+  probability?: number | null;
+  alignment_score?: number | null;
+  speaker_id?: string | null;
 }
 
 export interface TranscriptSegment {
@@ -180,11 +186,18 @@ export interface TranscriptSegment {
   end: number;
   text: string;
   words?: TranscriptWord[];
+  speaker_id?: string | null;
 }
 
 /** Body of `?format=json` on a transcription job. */
+export interface TranscriptSpeaker { id: string; label: string }
+export interface TranscriptTurn { start: number; end: number; speaker_id: string }
 export interface TranscriptJson {
-  language: string;
+  schema_version?: 2;
+  speakers?: TranscriptSpeaker[];
+  diarization?: { status: "completed" | "disabled"; speaker_count: number | null; turns: TranscriptTurn[]; engine?: string };
+  alignment?: { status: "completed" | "unavailable"; model?: string | null };
+  language: string | null;
   duration: number;
   text: string;
   segments: TranscriptSegment[];
@@ -230,6 +243,7 @@ export interface JobStatusResponse {
   page_number?: number | null;
   /** Transcriptions in progress: how much of the media is done, in seconds */
   transcribed_seconds?: number | null;
+  phase?: "transcribing" | "aligning" | "diarizing" | "saving" | null;
   media_duration?: number | null;
   project?: ProjectRef | null;
   folder?: FolderRef | null;
@@ -237,13 +251,6 @@ export interface JobStatusResponse {
   engine?: { kind: "local" | "cloud" } | null;
   /** Only with routing: why it still waits (`in_queue` = backlog, `starting` = placed, not started). */
   queue_reason?: "in_queue" | "starting" | null;
-}
-
-/** One transcribed stretch of the media, in seconds */
-export interface TranscriptSegment {
-  start: number;
-  end: number;
-  text: string;
 }
 
 /** The text of a running transcription, from segment `since` on */
