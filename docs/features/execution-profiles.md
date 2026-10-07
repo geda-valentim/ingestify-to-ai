@@ -23,6 +23,71 @@ Um **perfil de execução** contém os parâmetros de runtime. Um **modelo aprov
 é uma entrada do catálogo instalado. Um **papel de acesso** contém permissões;
 sua política ABAC delimita recursos e limites. São entidades distintas.
 
+## Perfis padrão da instalação (spec 0020)
+
+Uma instalação não começa com a biblioteca vazia. O root cria, publica e — quando a
+engine permite — vincula perfis de execução padrão, sem nenhum efeito físico (nenhum
+plano, operação, outbox ou reserva; aplicar continua sendo uma operação explícita).
+
+| Perfil | Quando | Conteúdo |
+|---|---|---|
+| `Padrão — <modelo>` | Para cada modelo `approved` do catálogo e cada adapter dele | Local: 1 worker sem GPU, `host_id` do único host agent registrado que serve a feature (com mais de um, só os vistos nos últimos 30 s contam; ainda mais de um ⇒ `HOST_AMBIGUOUS`). Modal: `gpu_type` L4, 1 worker, `memory_mb` nulo, sem `cpu`, `min_ready_replicas` 0. Ponto de partida: revise GPU e réplicas antes de vincular |
+| `<engine> — <feature>` | Para cada engine × feature com binding configurado (ou perfil desejado legado) | Reproduz a configuração atual: binding da engine, modelo aprovado do adapter/feature, `desired = max = workers`, `min_ready` 0, cooldown = `scaledown_window` da engine (limitado a 2–3600 s; 60 s quando a engine não define), `on_start`, `memory_mb` nulo, `host_id` do host que serve a feature e tem a GPU do binding. Um perfil desejado legado é importado por whitelist (como o import da tela), com `warm_until` nulo |
+
+O perfil de engine é **vinculado** quando a engine ainda não tem perfil desejado na
+feature. Antes de vincular, a semeadura compara a revisão publicada com a configuração
+**atual** da engine (o perfil pode ter sido criado quando o vínculo ainda não era
+possível e a engine ter sido reajustada depois). Se mudou e o perfil continua só da
+semeadura (toda auditoria dele com `origin: seed` e a mesma `seed_key`, toda revisão do
+mesmo autor), publica uma nova revisão com a configuração atual e vincula essa; se um
+administrador já mexeu no perfil (revisão, publicação, renomeação), pula com
+`SEEDED_PROFILE_STALE`.
+
+Uma engine sem atributos recebe o ambiente da instalação só depois que as validações do
+adapter passaram, na mesma transação do vínculo: se o vínculo falhar, a classificação é
+desfeita. `ENVIRONMENT` é mapeado explicitamente (`development`/`dev`/`local` →
+development, `staging` → staging, `production`/`prod` → production); qualquer outro
+valor pula tudo com `ENVIRONMENT_UNKNOWN`. Vincular passa a engine para "gerenciada":
+escritores legados de capacidade passam a exigir operação. Falhas de vínculo não
+interrompem a semeadura e são repetidas na próxima execução, porque a engine continua
+sem perfil desejado.
+
+**Quando roda:** na criação do root (no cadastro da instalação vazia, em background
+depois da resposta; `make_admin.py --root` roda síncrono), em todo boot da API com root
+existente, quando um host agent se registra, volta após ficar sem heartbeat (> 30 s) ou
+muda de manifest (esta última no máximo uma vez por minuto por host, por processo da
+API), e
+manualmente com `scripts/seed_execution_profiles.py [--dry-run] [--json]` (ou
+`python -m shared.access.seed`). Sem root nada acontece; nenhum gatilho derruba o boot,
+o cadastro ou o heartbeat.
+
+**Idempotência:** a chave (`catalog:<modelo>:<adapter>` ou `engine:<id>:<feature>`) fica
+no `AdminAudit` `execution_profile.created`, gravado na mesma transação do perfil. Renomear
+não duplica; um perfil semeado **arquivado** não é recriado. Mudanças posteriores de
+catálogo não atualizam perfis existentes (crie uma revisão); mudanças de binding só
+atualizam o perfil de engine ainda não vinculado e intocado (acima). Cada passo
+toma o lock do epoch de autorização, então vários workers da API bootando juntos não
+duplicam nada.
+
+**Auditoria:** perfil criado, revisado, publicado, engine classificada e vínculo (`engine.profile_created`)
+levam `{"origin": "seed", "seed_key": ...}` no `after`.
+
+**Com acesso a engines desligado** (`IAM_MODE` diferente de `enforce` e sem o alias
+`ENGINE_ACCESS_ENABLED`) a biblioteca está fechada: a semeadura registra
+`ACCESS_NOT_ENABLED` e roda no próximo boot com o acesso ligado.
+
+**Instalação nova sem host agent:** perfis locais exigem um `host_id` concreto; até um
+host se registrar, `Padrão — …` locais e perfis da engine `local` ficam pendentes com
+`NO_REGISTERED_HOST`. O primeiro heartbeat do host dispara a semeadura, que cria e vincula.
+
+O relatório (`SeedReport`) lista `created`, `published` (com `refreshed: true` para a
+revisão nova de um perfil desatualizado), `bound`, `classified` (engines que receberam o
+ambiente) e `skipped`; cada item
+pulado traz `key`, `stage` (`seed`, `create` ou `bind`), o código estável (`reason`) e
+uma explicação em português (`message`), por exemplo `HOST_AGENT_NOT_READY`,
+`TEST_CONNECTION_FIRST` (Modal sem "Testar conexão"), `MODEL_NOT_APPROVED`,
+`RUNTIME_PROFILE_EXISTS`, `SEEDED_PROFILE_STALE`, `HOST_AMBIGUOUS`, `ENVIRONMENT_UNKNOWN`.
+
 ## Criar, publicar, vincular e operar
 
 1. Abra a biblioteca e crie um perfil nomeado. Escolha provider, feature, ambiente,
@@ -202,6 +267,28 @@ Erros úteis: `ACCESS_NOT_ENABLED`, `ACCESS_DENIED`, `DELEGATION_EXCEEDED`, `SEL
 `PUBLISHED_REVISION_REQUIRED`, `ENGINE_ENVIRONMENT_REQUIRED`,
 `PROFILE_INCOMPATIBLE`, `MODEL_METADATA_CHANGED`, `VERSION_CONFLICT` e os gates
 anteriores `CONTROL_NOT_ENABLED`, `HOST_AGENT_NOT_READY`, `CLEANUP_WATCHDOG_NOT_READY`.
+
+### Corpo de erro
+
+As rotas de controle de engines (`/admin/engines/{id}/…`), perfis/acesso (`/admin/…`) e
+IAM (`/iam/…`) respondem `{"detail": {"code", "message", "next_steps", "cause"?,
+"technical"?}}`. `code` é o contrato estável e não mudou; `message` vem do catálogo único
+`backend/shared/error_catalog.py` e **agora é sempre em português** (antes algumas rotas
+de IAM/acesso devolviam texto em inglês ou só o código); `next_steps` é um vocabulário
+fechado que o admin transforma em botões; `cause` é o gate interno quando um código
+genérico o embrulha (`INVALID_CONFIGURATION` → `HOST_AGENT_NOT_READY`). Clientes devem
+decidir por `code`, nunca por `message`.
+
+Ao criar um plano (`POST /admin/engines/{id}/operation-plans`), uma capability desabilitada responde
+com o status do motivo, não mais sempre `503`:
+
+| Motivo | Antes | Agora |
+|---|---|---|
+| `RUNTIME_PROFILE_REQUIRED` (Modal/local sem perfil desejado) | 503 | **422** |
+| `ACCESS_DENIED` | 503 | **403** |
+| `NOTHING_TO_COOL_DOWN` (cooldown sem perfil desejado: nada para liberar) | 422 `RUNTIME_PROFILE_REQUIRED` | **409** |
+| `ACTION_UNSUPPORTED` | 422 | 422 |
+| demais gates (`CONTROL_NOT_ENABLED`, `HOST_AGENT_NOT_READY`, `CREDENTIALS_REQUIRED`, `CLEANUP_WATCHDOG_NOT_READY`, …) | 503 | 503 |
 
 ## Validação
 

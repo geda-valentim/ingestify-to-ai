@@ -270,6 +270,10 @@ async def startup_event():
 
     init_database_on_boot()
 
+    # Spec 0020: default execution profiles once a root exists; never blocks the boot
+    from shared.access.seed import seed_on_boot
+    seed_on_boot()
+
     # Check Elasticsearch connection
     try:
         from shared.elasticsearch_client import get_es_client

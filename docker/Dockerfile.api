@@ -38,7 +38,7 @@ COPY backend/workers/ ./workers/
 COPY backend/tests/ ./tests/
 COPY backend/pytest.ini .
 # Ops tooling that must be runnable via `docker compose exec api`
-COPY scripts/make_admin.py scripts/engines.py ./scripts/
+COPY scripts/make_admin.py scripts/engines.py scripts/seed_execution_profiles.py ./scripts/
 
 # Create temp directory
 RUN mkdir -p /tmp/doc2md/uploads

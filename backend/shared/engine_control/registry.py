@@ -127,6 +127,8 @@ MODAL = dict(
     create_connection=True,
     requires_budget=True,
     requires_cleanup_watchdog=True,
+    # Profiles bind only after "Testar" records the provider identity (TEST_CONNECTION_FIRST).
+    requires_control_identity=True,
     data_location="provider",
     scale_unit="container",
     control_scope="deployment",

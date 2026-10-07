@@ -4,14 +4,16 @@ import asyncio
 import hashlib
 import hmac
 import json
+import time
 from datetime import datetime
 from pathlib import Path
-from fastapi import APIRouter, Depends, HTTPException, Request, Header
+from api.error_guidance import GuidedRoute
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Header
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import StreamingResponse
 from fastapi.concurrency import run_in_threadpool
 from pydantic import Field
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, sessionmaker
 from shared.config import get_settings
 from shared.database import get_db, SessionLocal
 from shared.engine_control import service, registry, catalog
@@ -25,7 +27,7 @@ from api.iam_deps import engine_access
 from shared.access import policy
 
 # 0009 routes: engine_access only declares them in the IAM inventory (0014 CA1).
-router = APIRouter(prefix="/admin", tags=["Admin - Engine control"], dependencies=[Depends(engine_access())])
+router = APIRouter(prefix="/admin", tags=["Admin - Engine control"], dependencies=[Depends(engine_access())], route_class=GuidedRoute)
 host_router = APIRouter(prefix="/internal/engine-hosts", tags=["Engine hosts"])
 
 
@@ -38,12 +40,19 @@ def invoke(fn, *args, **kw):
     try:
         return fn(*args, **kw)
     except service.ControlError as exc:
-        raise HTTPException(
-            exc.status, detail={"code": exc.code, "message": str(exc)}
-        ) from None
+        raise HTTPException(exc.status, detail=exc.detail()) from None
     except ValueError as exc:
+        # Adapter gates (e.g. HOST_AGENT_NOT_READY) keep INVALID_CONFIGURATION as the
+        # code and surface the gate as `cause` with its own message (0009 CA1).
+        from shared import error_catalog
+
         raise HTTPException(
-            422, detail={"code": "INVALID_CONFIGURATION", "message": str(exc)}
+            422,
+            detail=error_catalog.detail(
+                "INVALID_CONFIGURATION",
+                text=str(exc),
+                context=getattr(exc, "context", None),
+            ),
         ) from None
 
 
@@ -150,7 +159,12 @@ def caps(
             engine=e,
             feature=selected,
         ):
-            action.update(enabled=False, reason="ACCESS_DENIED")
+            from shared import error_catalog
+
+            message, steps = error_catalog.describe("ACCESS_DENIED")
+            action.update(
+                enabled=False, reason="ACCESS_DENIED", message=message, next_steps=steps
+            )
     return out
 
 
@@ -426,11 +440,28 @@ async def stream(
     )
 
 
+IDENTITIES_RETRY_SECONDS = 0.05
+
+
+def read_identities(path):
+    """
+    The host identities file. register_engine_host.py rewrites it in place (the API
+    bind-mounts the single file, so it cannot be renamed over); a read that lands
+    on that write can see partial JSON, so one decode error is retried after a
+    short pause before the request is refused.
+    """
+    try:
+        return json.loads(Path(path).read_text())
+    except json.JSONDecodeError:
+        time.sleep(IDENTITIES_RETRY_SECONDS)
+        return json.loads(Path(path).read_text())
+
+
 def host_identity(host_id: str, request: Request):
     enabled()
     path = get_settings().engine_host_identities_file
     try:
-        identities = json.loads(Path(path).read_text())
+        identities = read_identities(path)
         presented = request.headers.get("x-engine-host-token", "")
         expected = identities.get(host_id, "")
         if (
@@ -452,7 +483,11 @@ class HostHeartbeat(Closed):
 
 @host_router.post("/{host_id}/heartbeat")
 def host_heartbeat(
-    host_id: str, body: HostHeartbeat, request: Request, db: Session = Depends(get_db)
+    host_id: str,
+    body: HostHeartbeat,
+    request: Request,
+    background: BackgroundTasks,
+    db: Session = Depends(get_db),
 ):
     host_identity(host_id, request)
     if set(body.inventory) - {
@@ -464,11 +499,28 @@ def host_heartbeat(
         "readiness",
     }:
         raise HTTPException(422, detail={"code": "INVALID_INVENTORY"})
-    h = db.get(ControlHost, host_id) or ControlHost(id=host_id)
+    h = db.get(ControlHost, host_id)
+    now = datetime.utcnow()
+    from shared.access import seed
+
+    ready = seed.host_became_ready(
+        h.seen_at if h else None,
+        (h.inventory or {}).get("manifest_hash") if h else None,
+        body.inventory,
+        now,
+        host_id=host_id,
+    )
+    h = h or ControlHost(id=host_id)
     h.inventory = body.inventory
-    h.seen_at = datetime.utcnow()
+    h.seen_at = now
     db.add(h)
     db.commit()
+    if ready:
+        # Spec 0020: a host that registers (or comes back) after the root existed gets
+        # its local default profiles created and bound, without waiting for a restart.
+        background.add_task(
+            seed.seed_if_root, sessionmaker(bind=db.get_bind()), f"host {host_id} ready"
+        )
     return {"ok": True}
 
 

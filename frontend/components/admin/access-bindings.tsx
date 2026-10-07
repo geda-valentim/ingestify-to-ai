@@ -15,6 +15,7 @@ import { accessApi } from "@/lib/access-api";
 import { iamApi } from "@/lib/iam-api";
 import type { AccessPolicy, Constraints } from "@/types/access";
 import type { IamBinding, IamBindingCreate, IamRole } from "@/types/iam";
+import { AdminError } from "@/components/admin/admin-error";
 
 // Both families expire within 365 days (spec 0014 CA7, 0009 create_grant).
 const MAX_DAYS = 365;
@@ -73,7 +74,7 @@ export function BindingsPanel({ authority: a }: { authority: AccessAuthority }) 
   const [showInactive, setShowInactive] = useState(false);
   const [filter, setFilter] = useState<"" | Family>("");
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<unknown>(null);
   const catalog = useQuery({
     queryKey: ["iam-catalog"],
     queryFn: iamApi.catalog,
@@ -110,7 +111,7 @@ export function BindingsPanel({ authority: a }: { authority: AccessAuthority }) 
       await fn();
       return true;
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Falha ao salvar");
+      setError(e);
       return false;
     } finally {
       // Also after a 409: the row comes back with its current version and state.
@@ -129,10 +130,8 @@ export function BindingsPanel({ authority: a }: { authority: AccessAuthority }) 
             registradas mas não têm efeito até IAM_MODE=enforce.
           </p>
         )}
-      {(error || catalog.error) && (
-        <p role="alert" className="text-destructive">
-          {error || String(catalog.error)}
-        </p>
+      {(error != null || catalog.error) && (
+        <AdminError error={error ?? catalog.error} fallback="Falha ao salvar" />
       )}
       {(a.platformManage || a.enginesManage) && catalog.data && (
         <GrantForm

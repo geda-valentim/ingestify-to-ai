@@ -38,10 +38,15 @@ class LocalControlAdapter:
     def validate(self, engine, feature, p, db):
         p = common.validate(engine, feature, p, db)
         if set(p["provider_settings"]) != {"host_id"}:
-            raise ValueError("Provider settings require only host_id")
+            raise ValueError("As configurações do provedor aceitam apenas host_id")
         host = db.get(ControlHost, p["provider_settings"]["host_id"])
         if not host or host.seen_at < datetime.utcnow() - timedelta(seconds=30):
-            raise ValueError("HOST_AGENT_NOT_READY")
+            from shared.error_catalog import Gate, host_context
+
+            raise Gate(
+                "HOST_AGENT_NOT_READY",
+                **host_context(p["provider_settings"]["host_id"], host),
+            )
         service = SERVICES[feature]
         if feature == "live-transcription":
             if p["binding"]["executions_per_worker"] != 1 or p["max_replicas"] > 1:
@@ -49,7 +54,9 @@ class LocalControlAdapter:
             if not p["binding"].get("gpu_ref"):
                 raise ValueError("LIVE_REQUIRES_CUDA")
         if service not in host.inventory.get("services", []):
-            raise ValueError("SERVICE_NOT_REGISTERED")
+            from shared.error_catalog import Gate
+
+            raise Gate("SERVICE_NOT_REGISTERED", host=host.id)
         # Do not apply a GPU reference that cannot actually be pinned.
         ref = p["binding"].get("gpu_ref")
         if ref:

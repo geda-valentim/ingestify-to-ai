@@ -108,7 +108,6 @@ def create_user(db: Session, user: User, *, setup_token: Optional[str], ip: Opti
                 ))
                 db.commit()
                 db.refresh(user)
-                return user
             except IntegrityError:
                 db.rollback()
                 if not root_exists(db):
@@ -117,6 +116,10 @@ def create_user(db: Session, user: User, *, setup_token: Optional[str], ip: Opti
                     email=user.email, username=user.username,
                     hashed_password=user.hashed_password, is_active=True,
                 )
+            else:
+                # Spec 0020: the caller seeds the default execution profiles (the API
+                # in a background task, after the response).
+                return user
     db.add(user)
     db.commit()
     db.refresh(user)
