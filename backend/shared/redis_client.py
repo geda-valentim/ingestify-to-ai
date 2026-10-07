@@ -286,7 +286,8 @@ class RedisClient:
         elif child_type == "page":
             if "page_job_ids" not in child_jobs:
                 child_jobs["page_job_ids"] = []
-            child_jobs["page_job_ids"].append(child_job_id)
+            if child_job_id not in child_jobs["page_job_ids"]:  # a split retry re-adds its pages
+                child_jobs["page_job_ids"].append(child_job_id)
         elif child_type == "merge":
             child_jobs["merge_job_id"] = child_job_id
 

@@ -172,15 +172,47 @@ def subject_state(db: Session, subject_type: Optional[str], subject_id: Optional
     return "open", None
 
 
-def recount_parent_pages(db: Session, parent_job_id: str) -> None:
-    """pages_completed / pages_failed of a split job, recounted from its Page rows (no commit)"""
-    parent = db.get(Job, parent_job_id)
+def recount_parent_pages(db: Session, parent_job_id: str) -> bool:
+    """
+    pages_completed / pages_failed of a split job, recounted from its Page rows (no commit).
+    Returns True when this recount settled the MAIN job (PARTIAL): the caller lets
+    purge_source apply once it committed, whichever page settled last (a failure or
+    a completion).
+
+    When every page has settled and some failed for good, the MAIN job is settled
+    too: PARTIAL (the converted pages are kept, the failed ones can be retried),
+    instead of PROCESSING forever. A page retry opens it again (PROCESSING); the
+    merge completes it once every page is COMPLETED.
+
+    Concurrent recounts (two pages settling at once) serialize on the parent's row
+    lock (SELECT ... FOR UPDATE), and the pages are read with a locking read after
+    it, so each recount sees every page change committed before it: the last
+    writer's counts are correct (a plain read could return an older snapshot).
+    """
+    parent = db.query(Job).filter(Job.id == parent_job_id).with_for_update().populate_existing().first()
     if parent is None:
-        return
-    parent.pages_completed = db.query(Page).filter(Page.job_id == parent_job_id,
-                                                   Page.status == JobStatus.COMPLETED).count()
-    parent.pages_failed = db.query(Page).filter(Page.job_id == parent_job_id,
-                                                Page.status == JobStatus.FAILED).count()
+        return False
+    statuses = [status for (status,) in db.query(Page.status).filter(Page.job_id == parent_job_id)
+                .with_for_update().all()]
+    parent.pages_completed = sum(1 for status in statuses if status == JobStatus.COMPLETED)
+    parent.pages_failed = sum(1 for status in statuses if status == JobStatus.FAILED)
+    return settle_parent_with_failed_pages(db, parent, page_count=len(statuses))
+
+
+def settle_parent_with_failed_pages(db: Session, parent: Job, page_count: Optional[int] = None) -> bool:
+    """MAIN job -> PARTIAL once all its pages are terminal and some failed (no commit)."""
+    total = parent.total_pages or 0
+    if not total or not parent.pages_failed or parent.status not in (JobStatus.PENDING, JobStatus.PROCESSING):
+        return False
+    pages = page_count if page_count is not None else db.query(Page).filter(Page.job_id == parent.id).count()
+    if pages < total or parent.pages_completed + parent.pages_failed < pages:
+        return False  # still splitting, or some page is queued / running / waiting for a retry
+    from shared import error_catalog
+
+    parent.status = JobStatus.PARTIAL
+    parent.completed_at = datetime.utcnow()
+    parent.error_message = error_catalog.describe("PAGES_FAILED", failed=parent.pages_failed, total=total)[0]
+    return True
 
 
 def _page_change(d: JobDispatch, status: str, error: Optional[str] = None) -> JobChange:
@@ -205,7 +237,11 @@ def _job_pending(db: Session, d: JobDispatch) -> Optional[JobChange]:
 
 def _job_failed(db: Session, d: JobDispatch, message: str, now: datetime) -> Optional[JobChange]:
     if d.subject_type == "page":
-        # One page failing for good fails that page, never the whole document (as today)
+        # One page failing for good fails that page, never the whole document (as today).
+        # The parent's row lock first, the page after: the order every purge, page
+        # retry and recount takes them in
+        if d.job_id:
+            db.query(Job).filter(Job.id == d.job_id).with_for_update().first()
         page = _page(db, d.job_id, d.subject_id, page_number_of(d))
         if page is not None:
             page.status = JobStatus.FAILED
@@ -622,3 +658,20 @@ def apply_job_change(redis_client, change: Optional[JobChange]) -> None:
                                         **extra)
     except Exception as e:
         logger.warning(f"[ENGINES] Could not mirror job {change.job_id} state to Redis: {e}")
+    if change.status == "failed":
+        _purge_after_terminal_failure(change.parent_job_id if change.job_type == "page" else change.job_id)
+
+
+def _purge_after_terminal_failure(job_id: Optional[str]) -> None:
+    """A backlog item failed for good (after the commit): purge_source applies once the
+    MAIN job is settled (FAILED, or PARTIAL when this was its last page). Never raises."""
+    if not job_id:
+        return
+    try:
+        from shared.database import SessionLocal
+        from shared.job_source import purge_source_if_requested
+        from shared.minio_client import get_minio_client
+
+        purge_source_if_requested(job_id, session_factory=SessionLocal, minio_factory=get_minio_client)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"[ENGINES] purge_source check for job {job_id} failed: {e}")

@@ -458,7 +458,10 @@ def test_production_client_request_is_unchanged(env):
     new = production_request(b"ID3-a-new-recording")
     assert new.status_code == 200
     body = new.json()
-    assert set(body) == {"job_id", "status", "created_at", "message", "project", "folder"}
+    # + duplicate / source_available (additive: purge_source with dedup)
+    assert set(body) == {"job_id", "status", "created_at", "message", "project", "folder",
+                         "duplicate", "source_available"}
+    assert body["duplicate"] is False and body["source_available"] is None
     assert body["status"] == "queued"
     assert body["message"] == "Job de transcrição de áudio enfileirado para processamento"
     assert job_of(env, new).project_id == inbox.id

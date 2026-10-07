@@ -100,11 +100,11 @@ cd frontend && npm run dev
 # Access: http://localhost:3000
 
 # Terminal 3: API (with auto-reload)
-./run_api.sh  # Runs on port 8080
+./scripts/dev/run_api.sh  # Runs on port 8080
 # Access: http://localhost:8080/docs
 
 # Terminal 4: Worker (for background processing)
-./run_worker.sh
+./scripts/dev/run_worker.sh
 ```
 
 ### Logs & Monitoring
@@ -150,13 +150,10 @@ curl -X POST http://localhost:8000/convert \
 ### Rebuild & Scripts
 ```bash
 # Quick rebuild (recommended)
-./rebuild.sh
+./scripts/dev/rebuild.sh
 
 # Start all services
-./start.sh
-
-# Test authentication
-./test_auth.sh
+./scripts/dev/start.sh
 
 # Or manually
 docker compose down
@@ -255,7 +252,6 @@ The system supports two authentication methods:
 1. **JWT tokens** - For user sessions (login/register via auth_routes.py)
 2. **API keys** - For programmatic access (managed via apikey_routes.py)
 
-Test authentication: `./test_auth.sh`
 
 ### Backend Worker Layer ([backend/workers/](backend/workers/))
 - **celery_app.py** - Celery configuration and initialization
@@ -470,7 +466,7 @@ Workers can be scaled independently: `docker compose up -d --scale worker=N`
 
 **Service Ports:**
 - Frontend: 3000
-- API: 8000 (Dockerized) / 8080 (local via run_api.sh)
+- API: 8000 (Dockerized) / 8080 (local via scripts/dev/run_api.sh)
 - Redis: 6379
 - Elasticsearch: 9200
 - MySQL: 3306

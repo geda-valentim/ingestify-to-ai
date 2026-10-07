@@ -1,5 +1,7 @@
 #!/bin/bash
 
+cd "$(dirname "$0")/../.."  # scripts/dev/ -> project root
+
 # Stop the API server
 # This script finds and kills the uvicorn process running the API
 

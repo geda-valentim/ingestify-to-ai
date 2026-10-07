@@ -79,7 +79,6 @@ def outside_world(monkeypatch):
     monkeypatch.setattr(admin_routes, "get_stuck_pages", lambda **kw: [])
     monkeypatch.setattr(admin_routes, "detect_stuck_jobs", lambda: {})
     monkeypatch.setattr(admin_routes, "cleanup_old_jobs", lambda: {})
-    monkeypatch.setattr(admin_routes, "get_job_with_pages", lambda job_id: (SimpleNamespace(id=job_id), []))
 
     inspector = SimpleNamespace(scheduled=lambda: {}, active=lambda: {}, registered=lambda: {})
     monkeypatch.setattr(workers.celery_app.celery_app.control, "inspect", lambda **kw: inspector)
@@ -90,6 +89,14 @@ def outside_world(monkeypatch):
 
     monkeypatch.setattr(routing_admin_routes, "_alive_by_feature", lambda: {})
     monkeypatch.setattr(routing_admin_routes, "_remote_worker_view", lambda: None)
+
+
+@pytest.fixture(autouse=True)
+def job_1(db):
+    """The job the bulk retry targets: no failed pages, so nothing is queued."""
+    from shared.models import Job, JobStatus
+    db.add(Job(id="job-1", job_type="MAIN", status=JobStatus.COMPLETED))
+    db.commit()
 
 
 def _user(db, name, *, is_admin=False):

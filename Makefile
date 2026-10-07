@@ -111,7 +111,7 @@ check-services: ## Check all services connectivity
 
 validate: ## Validate frontend TypeScript
 	@echo "$(CYAN)🔍 Validating frontend TypeScript...$(NC)"
-	@./validate-frontend.sh
+	@./scripts/dev/validate-frontend.sh
 
 smart-start: ensure-jwt-secret ## Smart start: only start services if not accessible
 	@echo ""
@@ -177,7 +177,7 @@ ensure-jwt-secret: ## Generate JWT_SECRET_KEY in .env if missing
 	@./scripts/ensure_jwt_secret.sh
 
 start: ## Start application (auto-detect shared infrastructure)
-	@./start.sh
+	@./scripts/dev/start.sh
 
 stop: ## Stop all services
 	@echo "$(YELLOW)🛑 Stopping services...$(NC)"
@@ -201,7 +201,7 @@ build: ## Build all services without starting (CPU-only, no CUDA wheels)
 	@DOCKER_BUILDKIT=1 docker compose build
 
 rebuild: ## Rebuild and restart all services
-	@./rebuild.sh
+	@./scripts/dev/rebuild.sh
 
 # ======================================
 # GPU COMMANDS (opt-in - see docs/GPU.md)

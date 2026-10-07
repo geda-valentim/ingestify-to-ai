@@ -522,7 +522,7 @@
           "Admin & Monitoring"
         ],
         "summary": "Bulk retry all failed pages of a job",
-        "description": "Retry all failed pages of a specific job\n\nThis is useful when multiple pages failed due to temporary issues\nand you want to retry them all at once instead of individually.\n\nArgs:\n    job_id: The job ID whose failed pages should be retried\n\nReturns:\n    Number of pages queued for retry",
+        "description": "Retry all failed pages of a specific job\n\nRequeues every FAILED page still under the retry limit\n(`MONITORING_MAX_RETRY_COUNT`), exactly like the per-page retry\n(`POST /jobs/{job_id}/pages/{n}/retry`): the original PDF is located first,\nthen the pages become pending and the job processing, under the job's row\nlock (the same lock the source purge takes).\n\nReturns:\n    Number of pages queued for retry\n\nErrors:\n    404: job not found\n    409 `SOURCE_NOT_AVAILABLE`: the original was deleted (purge_source /\n    DELETE /jobs/{id}/source); nothing was changed",
         "operationId": "retry_all_failed_pages_admin_jobs__job_id__retry_all_failed_post",
         "security": [
           {
@@ -5990,7 +5990,7 @@
           "Conversion"
         ],
         "summary": "Upload e converter arquivo",
-        "description": "Upload direto de arquivo para conversão\n\nEste endpoint é dedicado exclusivamente para upload de arquivos.\nUse os outros endpoints para converter de URL, Google Drive ou Dropbox.\n\n## Parâmetros:\n- `file`: Arquivo para upload\n- `name`: Nome de identificação opcional (se não fornecido, usa o nome do arquivo)\n- `docling_preset`: Quality/speed preset (apenas para PDFs):\n  - **fast** (padrão): Conversão rápida, apenas texto (~35s/MB)\n    - OCR: Desligado | Images: Desligadas | Tables: Ligadas\n  - **balanced**: Velocidade moderada, extrai imagens (~70-105s/MB)\n    - OCR: Desligado | Images: Ligadas | Tables: Ligadas\n  - **quality**: Máxima qualidade, inclui OCR para documentos escaneados (~350s/MB)\n    - OCR: Ligado | Images: Ligadas | Tables: Ligadas\n\n## Formatos suportados\nPDF, DOCX, DOC, HTML, PPTX, XLSX, RTF, ODT\n\n## Retorno\nRetorna imediatamente um `job_id` para consultar o progresso via `/jobs/{job_id}`,\ne onde o job ficou (`project`, `folder`)\n\n## Exemplos:\n```bash\n# Fast mode (default)\ncurl -X POST http://localhost:8000/upload       -H \"X-API-Key: your-api-key\"       -F \"file=@documento.pdf\"       -F \"project=Cliente X\"\n\n# Quality mode with OCR\ncurl -X POST http://localhost:8000/upload       -H \"X-API-Key: your-api-key\"       -F \"file=@documento_escaneado.pdf\"       -F \"docling_preset=quality\"\n```",
+        "description": "Upload direto de arquivo para conversão\n\nEste endpoint é dedicado exclusivamente para upload de arquivos.\nUse os outros endpoints para converter de URL, Google Drive ou Dropbox.\n\n## Parâmetros:\n- `file`: Arquivo para upload\n- `name`: Nome de identificação opcional (se não fornecido, usa o nome do arquivo)\n- `docling_preset`: Quality/speed preset (apenas para PDFs):\n  - **fast** (padrão): Conversão rápida, apenas texto (~35s/MB)\n    - OCR: Desligado | Images: Desligadas | Tables: Ligadas\n  - **balanced**: Velocidade moderada, extrai imagens (~70-105s/MB)\n    - OCR: Desligado | Images: Ligadas | Tables: Ligadas\n  - **quality**: Máxima qualidade, inclui OCR para documentos escaneados (~350s/MB)\n    - OCR: Ligado | Images: Ligadas | Tables: Ligadas\n- `purge_source`: Se `true`, apaga os arquivos de origem (o arquivo enviado e os\n  PDFs por página) quando o job termina — `completed`, ou `failed`/`partial` depois\n  das tentativas automáticas — e fica só o resultado. Veja \"Arquivos de origem\".\n\n## Arquivos de origem (`purge_source`)\n- O que é apagado: o arquivo enviado (MinIO `uploads/...` e cópia local) e, num\n  PDF de várias páginas, os PDFs por página (`/jobs/{job_id}/pages/{n}/pdf`\n  passa a responder 410 `SOURCE_PURGED`). O markdown (inteiro e por página) fica.\n- Quando: ao terminar `completed`, ou `failed`/`partial` depois de esgotados os\n  retries automáticos; nunca enquanto houver retry ou página na fila. Depois\n  disso o retry manual de página responde 409 `SOURCE_NOT_AVAILABLE`.\n- `GET /jobs/{job_id}` informa `source_available`, `source_deleted_at` e\n  `source_deletable`. Para apagar depois: `DELETE /jobs/{job_id}/source`.\n- Arquivo repetido no mesmo projeto: com `purge_source=true` a resposta traz o\n  job existente com `duplicate: true` e ele passa a apagar a origem (na hora, se\n  já terminou; `source_available` diz o resultado). Com `false`, um job existente\n  cuja origem foi (ou será) apagada não é reaproveitado: um job novo é criado.\n\n```bash\ncurl -X POST http://localhost:8000/upload \\\n  -H \"X-API-Key: your-api-key\" \\\n  -F \"file=@contrato.pdf\" \\\n  -F \"project=Cliente X\" \\\n  -F \"purge_source=true\"\n```\n\n## Formatos suportados\nPDF, DOCX, DOC, HTML, PPTX, XLSX, RTF, ODT\n\n## Retorno\nRetorna imediatamente um `job_id` para consultar o progresso via `/jobs/{job_id}`,\ne onde o job ficou (`project`, `folder`)\n\n## Exemplos:\n```bash\n# Fast mode (default)\ncurl -X POST http://localhost:8000/upload       -H \"X-API-Key: your-api-key\"       -F \"file=@documento.pdf\"       -F \"project=Cliente X\"\n\n# Quality mode with OCR\ncurl -X POST http://localhost:8000/upload       -H \"X-API-Key: your-api-key\"       -F \"file=@documento_escaneado.pdf\"       -F \"docling_preset=quality\"\n```",
         "operationId": "upload_and_convert_upload_post",
         "requestBody": {
           "content": {
@@ -6041,7 +6041,7 @@
           "Conversion"
         ],
         "summary": "Transcrever áudio ou vídeo (STT, legendas VTT/SRT)",
-        "description": "Transcrever áudio ou vídeo para texto usando Whisper (STT)\n\nAceita áudio ou vídeo (só a faixa de áudio do vídeo é transcrita).\nO job entra na fila própria de transcrição (`ingestify-audio`), consumida por\nworkers dedicados, e não disputa vaga com a conversão de documentos.\n\n## Autenticação\nObrigatória: header `X-API-Key: <chave>` ou `Authorization: Bearer <token JWT>`.\nSem ele a resposta é 401.\n\nTodos os formatos são gerados: Markdown, legendas WebVTT e SRT, texto puro e\nJSON com segmentos. Escolha o formato em `GET /jobs/{job_id}/result?format=vtt`\n(ou defina o padrão com `output_format`).\n\n## Parâmetros:\n- `file`: Arquivo de áudio ou vídeo para transcrição\n- `name`: Nome de identificação opcional\n- `tags`: Tags do job, separadas por vírgula (ex: `focus,aula`)\n- `language`: Código de idioma ISO 639-1 (ex: 'en', 'pt', 'es'). Auto-detecta se não fornecido\n- `include_timestamps`: Adicionar marcadores de tempo [MM:SS] na transcrição\n- `include_word_timestamps`: Adicionar timestamps em cada palavra (mais detalhado)\n- `output_format`: Formato padrão do resultado (`markdown`, `vtt`, `srt`, `txt`, `json`)\n- `purge_source`: Se `true`, apaga o arquivo enviado (disco e MinIO) quando o job\n  termina com sucesso; ficam só as transcrições. `DELETE /jobs/{job_id}` também\n  apaga o arquivo de origem e as transcrições\n\n## Projeto\nTodo job pertence a um projeto: envie `project` (nome; criado se não existir) ou\n`project_id`, e opcionalmente `folder`/`folder_id`. Uma API key vinculada a um\nprojeto dispensa o campo. Sem projeto: 422.\n\n## Arquivo repetido\nReenviar um arquivo idêntico (mesmo SHA-256) que já tem job **não falho** no mesmo\nprojeto devolve esse job em vez de criar outro: as tags novas são somadas às dele e o\n`output_format` enviado passa a ser o padrão do resultado. Se o job anterior\nfalhou, o reenvio cria um job novo; é assim que se tenta de novo.\n\n## Formatos suportados\n- Áudio: MP3, WAV, M4A, FLAC, OGG, OPUS, WEBM, WMA, AAC\n- Vídeo: MP4, M4V, MKV, MOV, AVI, WEBM, WMV, FLV, MPEG, TS, 3GP\n\n## Limite de tamanho\n- Áudio: até 50MB (MAX_AUDIO_FILE_SIZE_MB)\n- Vídeo: até 500MB (MAX_VIDEO_FILE_SIZE_MB)\n\n## Tempo limite\nDefinido pelo worker de transcrição (`TRANSCRIPTION_TIMEOUT_SECONDS`, padrão 3h),\nindependente do `CONVERSION_TIMEOUT_SECONDS` dos documentos. Um job que estoura o\ntempo falha sem novas tentativas automáticas.\n\n## Retorno\nRetorna imediatamente um `job_id` para consultar o progresso via `/jobs/{job_id}`\n\n## Erros\n- 401: sem autenticação\n- 413: arquivo acima do limite\n- 422: formato não suportado, `output_format` inválido ou `tags` inválidas\n- 503: transcrição desabilitada ou workers indisponíveis\n\n## Exemplos:\n```bash\ncurl -X POST http://localhost:8080/transcribe \\\n  -H \"X-API-Key: $INGESTIFY_API_KEY\" \\\n  -F \"file=@meeting.mp3\" \\\n  -F \"project=Reuniões\" \\\n  -F \"language=pt\" \\\n  -F \"include_timestamps=true\"\n```\n\nVídeo com legenda SRT como padrão, tags e descarte do arquivo ao terminar:\n```bash\ncurl -X POST http://localhost:8080/transcribe \\\n  -H \"Authorization: Bearer $TOKEN\" \\\n  -F \"file=@aula.mp4\" \\\n  -F \"language=pt\" \\\n  -F \"output_format=srt\" \\\n  -F \"tags=focus,aula\" \\\n  -F \"purge_source=true\"\n```\n\n## Resultado\nConsulte o status em `/jobs/{job_id}` até `completed` e busque o resultado:\n- `GET /jobs/{job_id}/result`: JSON com markdown e metadados (idioma, duração, device)\n- `GET /jobs/{job_id}/result?format=vtt`: legenda WebVTT (`text/vtt`)\n- `?format=srt`, `?format=txt`, `?format=json`: SRT, texto puro, segmentos",
+        "description": "Transcrever áudio ou vídeo para texto usando Whisper (STT)\n\nAceita áudio ou vídeo (só a faixa de áudio do vídeo é transcrita).\nO job entra na fila própria de transcrição (`ingestify-audio`), consumida por\nworkers dedicados, e não disputa vaga com a conversão de documentos.\n\n## Autenticação\nObrigatória: header `X-API-Key: <chave>` ou `Authorization: Bearer <token JWT>`.\nSem ele a resposta é 401.\n\nTodos os formatos são gerados: Markdown, legendas WebVTT e SRT, texto puro e\nJSON com segmentos. Escolha o formato em `GET /jobs/{job_id}/result?format=vtt`\n(ou defina o padrão com `output_format`).\n\n## Parâmetros:\n- `file`: Arquivo de áudio ou vídeo para transcrição\n- `name`: Nome de identificação opcional\n- `tags`: Tags do job, separadas por vírgula (ex: `focus,aula`)\n- `language`: Código de idioma ISO 639-1 (ex: 'en', 'pt', 'es'). Auto-detecta se não fornecido\n- `include_timestamps`: Adicionar marcadores de tempo [MM:SS] na transcrição\n- `include_word_timestamps`: Adicionar timestamps em cada palavra (mais detalhado)\n- `output_format`: Formato padrão do resultado (`markdown`, `vtt`, `srt`, `txt`, `json`)\n- `purge_source`: Se `true`, apaga o arquivo enviado (disco e MinIO) quando o job\n  termina (com sucesso, ou com falha depois das tentativas automáticas); ficam só\n  as transcrições. `GET /jobs/{job_id}` informa `source_deleted_at`. `DELETE /jobs/{job_id}` também\n  apaga o arquivo de origem e as transcrições\n\n## Projeto\nTodo job pertence a um projeto: envie `project` (nome; criado se não existir) ou\n`project_id`, e opcionalmente `folder`/`folder_id`. Uma API key vinculada a um\nprojeto dispensa o campo. Sem projeto: 422.\n\n## Arquivo repetido\nReenviar um arquivo idêntico (mesmo SHA-256) que já tem job **não falho** no mesmo\nprojeto devolve esse job em vez de criar outro: as tags novas são somadas às dele e o\n`output_format` enviado passa a ser o padrão do resultado. Se o job anterior\nfalhou, o reenvio cria um job novo; é assim que se tenta de novo.\n\n## Formatos suportados\n- Áudio: MP3, WAV, M4A, FLAC, OGG, OPUS, WEBM, WMA, AAC\n- Vídeo: MP4, M4V, MKV, MOV, AVI, WEBM, WMV, FLV, MPEG, TS, 3GP\n\n## Limite de tamanho\n- Áudio: até 50MB (MAX_AUDIO_FILE_SIZE_MB)\n- Vídeo: até 500MB (MAX_VIDEO_FILE_SIZE_MB)\n\n## Tempo limite\nDefinido pelo worker de transcrição (`TRANSCRIPTION_TIMEOUT_SECONDS`, padrão 3h),\nindependente do `CONVERSION_TIMEOUT_SECONDS` dos documentos. Um job que estoura o\ntempo falha sem novas tentativas automáticas.\n\n## Retorno\nRetorna imediatamente um `job_id` para consultar o progresso via `/jobs/{job_id}`\n\n## Erros\n- 401: sem autenticação\n- 413: arquivo acima do limite\n- 422: formato não suportado, `output_format` inválido ou `tags` inválidas\n- 503: transcrição desabilitada ou workers indisponíveis\n\n## Exemplos:\n```bash\ncurl -X POST http://localhost:8080/transcribe \\\n  -H \"X-API-Key: $INGESTIFY_API_KEY\" \\\n  -F \"file=@meeting.mp3\" \\\n  -F \"project=Reuniões\" \\\n  -F \"language=pt\" \\\n  -F \"include_timestamps=true\"\n```\n\nVídeo com legenda SRT como padrão, tags e descarte do arquivo ao terminar:\n```bash\ncurl -X POST http://localhost:8080/transcribe \\\n  -H \"Authorization: Bearer $TOKEN\" \\\n  -F \"file=@aula.mp4\" \\\n  -F \"language=pt\" \\\n  -F \"output_format=srt\" \\\n  -F \"tags=focus,aula\" \\\n  -F \"purge_source=true\"\n```\n\n## Resultado\nConsulte o status em `/jobs/{job_id}` até `completed` e busque o resultado:\n- `GET /jobs/{job_id}/result`: JSON com markdown e metadados (idioma, duração, device)\n- `GET /jobs/{job_id}/result?format=vtt`: legenda WebVTT (`text/vtt`)\n- `?format=srt`, `?format=txt`, `?format=json`: SRT, texto puro, segmentos",
         "operationId": "transcribe_audio_transcribe_post",
         "requestBody": {
           "content": {
@@ -6092,7 +6092,7 @@
           "Conversion"
         ],
         "summary": "Convert Document",
-        "description": "Conversão de documentos para Markdown\n\n## Opções de uso:\n\n### 1. Upload de arquivo (multipart/form-data)\n- `source_type`: \"file\"\n- `file`: Selecione o arquivo para upload\n- `source`: Deixe vazio\n\n### 2. URL pública\n- `source_type`: \"url\"\n- `source`: \"https://example.com/document.pdf\"\n- `file`: Deixe vazio\n\n### 3. Google Drive\n- `source_type`: \"gdrive\"\n- `source`: \"1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms\" (file ID)\n- header `X-Source-Token`: \"ya29.a0AfH6SMB...\" (OAuth2 token do Google)\n- `file`: Deixe vazio\n\n### 4. Dropbox\n- `source_type`: \"dropbox\"\n- `source`: \"/documents/report.pdf\" (path do arquivo)\n- header `X-Source-Token`: \"sl.B1a2c3...\" (access token do Dropbox)\n\nO header `Authorization` autentica no Ingestify e nunca é repassado ao\nprovedor nem colocado na mensagem do Celery (S-01).\n- `file`: Deixe vazio\n\n## Projeto (obrigatório) e pasta\n`project` (nome; criado se não existir) ou `project_id`, e opcionalmente\n`folder`/`folder_id`. Uma API key vinculada a um projeto dispensa o campo\n(só sem JWT). Sem projeto: 422. Um arquivo repetido só é reaproveitado\ndentro do mesmo projeto.\n\n## Formatos suportados\nPDF, DOCX, DOC, HTML, PPTX, XLSX, RTF, ODT\n\n## Retorno\nRetorna imediatamente um `job_id` para consultar o progresso via `/jobs/{job_id}`",
+        "description": "Conversão de documentos para Markdown\n\n## Opções de uso:\n\n### 1. Upload de arquivo (multipart/form-data)\n- `source_type`: \"file\"\n- `file`: Selecione o arquivo para upload\n- `source`: Deixe vazio\n\n### 2. URL pública\n- `source_type`: \"url\"\n- `source`: \"https://example.com/document.pdf\"\n- `file`: Deixe vazio\n\n### 3. Google Drive\n- `source_type`: \"gdrive\"\n- `source`: \"1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms\" (file ID)\n- header `X-Source-Token`: \"ya29.a0AfH6SMB...\" (OAuth2 token do Google)\n- `file`: Deixe vazio\n\n### 4. Dropbox\n- `source_type`: \"dropbox\"\n- `source`: \"/documents/report.pdf\" (path do arquivo)\n- header `X-Source-Token`: \"sl.B1a2c3...\" (access token do Dropbox)\n\nO header `Authorization` autentica no Ingestify e nunca é repassado ao\nprovedor nem colocado na mensagem do Celery (S-01).\n- `file`: Deixe vazio\n\n## Projeto (obrigatório) e pasta\n`project` (nome; criado se não existir) ou `project_id`, e opcionalmente\n`folder`/`folder_id`. Uma API key vinculada a um projeto dispensa o campo\n(só sem JWT). Sem projeto: 422. Um arquivo repetido só é reaproveitado\ndentro do mesmo projeto.\n\n## Arquivos de origem (`purge_source`)\nCom `purge_source=true` os arquivos de origem (o enviado, ou o baixado da URL,\ne os PDFs por página) são apagados quando o job termina: `completed`, ou\n`failed`/`partial` depois das tentativas automáticas. O resultado fica. Mesmas\nregras de `/upload` (inclusive para arquivo repetido).\nPara apagar depois: `DELETE /jobs/{job_id}/source`\n\n## Formatos suportados\nPDF, DOCX, DOC, HTML, PPTX, XLSX, RTF, ODT\n\n## Retorno\nRetorna imediatamente um `job_id` para consultar o progresso via `/jobs/{job_id}`",
         "operationId": "convert_document_convert_post",
         "security": [
           {
@@ -6257,7 +6257,7 @@
           "Conversion"
         ],
         "summary": "Deletar job",
-        "description": "Deletar job e todos os seus dados associados\n\nRemove completamente um job do sistema, incluindo:\n- Metadados do MySQL (job e pages)\n- Conteúdo do Elasticsearch (markdown)\n- Status temporário do Redis\n- Para transcrições: o áudio/vídeo enviado e as transcrições guardadas no MinIO\n\n**Atenção:** Esta operação é irreversível!\n\n## Para jobs MAIN com páginas:\n- Deleta o job principal\n- Deleta todos os jobs filhos (split, pages, merge)\n- Deleta todos os registros de páginas\n- Remove todo o conteúdo markdown\n\n## Permissões:\n- Apenas o dono do job (verificado no MySQL) pode deletá-lo\n\n## Retorno:\n- 200: Job deletado com sucesso\n- 404: Job não encontrado (também retornado quando o job pertence a outro\n  usuário, para não expor a existência do recurso)",
+        "description": "Deletar job e todos os seus dados associados\n\nRemove completamente um job do sistema, incluindo:\n- Metadados do MySQL (job e pages)\n- Conteúdo do Elasticsearch (markdown)\n- Status temporário do Redis\n- O arquivo original (documento, áudio ou vídeo) no MinIO e as cópias locais\n- Para transcrições: as transcrições guardadas no MinIO\n\n**Atenção:** Esta operação é irreversível!\n\n## Para jobs MAIN com páginas:\n- Deleta o job principal\n- Deleta todos os jobs filhos (split, pages, merge)\n- Deleta todos os registros de páginas\n- Remove todo o conteúdo markdown\n\n## Permissões:\n- Apenas o dono do job (verificado no MySQL) pode deletá-lo\n\n## Retorno:\n- 200: Job deletado com sucesso\n- 404: Job não encontrado (também retornado quando o job pertence a outro\n  usuário, para não expor a existência do recurso)",
         "operationId": "delete_job_jobs__job_id__delete",
         "security": [
           {
@@ -6284,6 +6284,58 @@
             "content": {
               "application/json": {
                 "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "x-access": "user"
+      }
+    },
+    "/jobs/{job_id}/source": {
+      "delete": {
+        "tags": [
+          "Conversion"
+        ],
+        "summary": "Apagar o arquivo original do job",
+        "description": "Apaga os arquivos de origem de um job — o arquivo enviado (documento, áudio\nou vídeo) e os PDFs por página de um PDF dividido — mantendo o job e o\nresultado (markdown, markdown por página, transcrições).\n\nRemove os objetos no MinIO (`uploads/...` ou `audio/...`, e `pages/{job_id}/`)\ne as cópias locais, e grava quando isso aconteceu. Depois disso\n`GET /jobs/{job_id}` responde `source_available: false` e `source_deleted_at`,\n`GET /jobs/{job_id}/pages/{n}/pdf` responde 410 `SOURCE_PURGED` e o retry de\npágina responde 409 `SOURCE_NOT_AVAILABLE`.\n\nPara apagar automaticamente quando o job terminar, envie `purge_source=true` em\n`/upload`, `/convert` ou `/transcribe`.\n\n## Retorno\n- 200: `{\"job_id\": \"...\", \"source_deleted\": true, \"source_deleted_at\": \"...\"}`\n- 404: job inexistente, de outro usuário, ou sem arquivos de origem\n- 409: `{\"code\": \"JOB_STILL_PROCESSING\"}`: o job ainda está na fila ou em processamento,\n  espera um retry automático, ou tem página na fila/em processamento (retry de página)\n- 503: `{\"code\": \"SOURCE_DELETE_FAILED\"}`: o armazenamento recusou; o que não foi\n  apagado continua referenciado (chamar de novo termina)",
+        "operationId": "delete_job_source_jobs__job_id__source_delete",
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SourceDeletedResponse"
+                }
               }
             }
           },
@@ -7809,6 +7861,12 @@
             ],
             "title": "Include Word Timestamps"
           },
+          "purge_source": {
+            "type": "boolean",
+            "title": "Purge Source",
+            "description": "Se true, apaga os arquivos de origem do job — o arquivo enviado (MinIO e cópia local) e, num PDF dividido, os PDFs por página — quando o job termina: `completed`, ou `failed`/`partial` depois de esgotadas as tentativas automáticas (nunca enquanto houver retry ou página na fila). O resultado (markdown, markdown por página) fica. Depois disso o retry manual de página não é mais possível. GET /jobs/{job_id} informa `source_available` e `source_deleted_at`. Arquivo repetido no mesmo projeto: com true o job existente é devolvido (`duplicate: true`) e passa a apagar a origem (na hora, se já terminou); com false um job existente cuja origem foi (ou será) apagada não é reaproveitado e um job novo é criado. Padrão false (mantém). Para apagar depois: DELETE /jobs/{job_id}/source",
+            "default": false
+          },
           "project": {
             "anyOf": [
               {
@@ -8103,7 +8161,7 @@
           "purge_source": {
             "type": "boolean",
             "title": "Purge Source",
-            "description": "Apagar o áudio/vídeo enviado assim que a transcrição terminar (guarda só o texto)",
+            "description": "Apagar o áudio/vídeo enviado quando a transcrição terminar (com sucesso, ou com falha depois das tentativas automáticas); guarda só o texto",
             "default": false
           },
           "diarize": {
@@ -8304,6 +8362,12 @@
               }
             ],
             "title": "Include Word Timestamps"
+          },
+          "purge_source": {
+            "type": "boolean",
+            "title": "Purge Source",
+            "description": "Se true, apaga os arquivos de origem do job — o arquivo enviado (MinIO e cópia local) e, num PDF dividido, os PDFs por página — quando o job termina: `completed`, ou `failed`/`partial` depois de esgotadas as tentativas automáticas (nunca enquanto houver retry ou página na fila). O resultado (markdown, markdown por página) fica. Depois disso o retry manual de página não é mais possível. GET /jobs/{job_id} informa `source_available` e `source_deleted_at`. Arquivo repetido no mesmo projeto: com true o job existente é devolvido (`duplicate: true`) e passa a apagar a origem (na hora, se já terminou); com false um job existente cuja origem foi (ou será) apagada não é reaproveitado e um job novo é criado. Padrão false (mantém). Para apagar depois: DELETE /jobs/{job_id}/source",
+            "default": false
           },
           "project": {
             "anyOf": [
@@ -10029,6 +10093,17 @@
           },
           "image": {
             "$ref": "#/components/schemas/FaceAnalysisResult"
+          },
+          "attempt": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attempt"
           }
         },
         "type": "object",
@@ -11817,6 +11892,17 @@
               }
             ],
             "title": "Image"
+          },
+          "attempt": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attempt"
           }
         },
         "type": "object",
@@ -11938,6 +12024,22 @@
               }
             ]
           },
+          "duplicate": {
+            "type": "boolean",
+            "title": "Duplicate",
+            "default": false
+          },
+          "source_available": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Available"
+          },
           "poll_url": {
             "type": "string",
             "title": "Poll Url"
@@ -11945,6 +12047,11 @@
           "result_url": {
             "type": "string",
             "title": "Result Url"
+          },
+          "attempt": {
+            "type": "integer",
+            "title": "Attempt",
+            "default": 1
           }
         },
         "type": "object",
@@ -12700,6 +12807,22 @@
                 "type": "null"
               }
             ]
+          },
+          "duplicate": {
+            "type": "boolean",
+            "title": "Duplicate",
+            "default": false
+          },
+          "source_available": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Available"
           }
         },
         "type": "object",
@@ -12913,6 +13036,28 @@
             "type": "array",
             "title": "Tags",
             "default": []
+          },
+          "source_available": {
+            "type": "boolean",
+            "title": "Source Available",
+            "default": false
+          },
+          "source_deleted_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Deleted At"
+          },
+          "source_deletable": {
+            "type": "boolean",
+            "title": "Source Deletable",
+            "default": false
           },
           "project": {
             "anyOf": [
@@ -14427,6 +14572,37 @@
         ],
         "title": "SetupStatus",
         "description": "Whether the installation still needs its root user (spec 0019)"
+      },
+      "SourceDeletedResponse": {
+        "properties": {
+          "job_id": {
+            "type": "string",
+            "title": "Job Id"
+          },
+          "source_deleted": {
+            "type": "boolean",
+            "title": "Source Deleted"
+          },
+          "source_deleted_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Deleted At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "job_id",
+          "source_deleted"
+        ],
+        "title": "SourceDeletedResponse",
+        "description": "Resposta de DELETE /jobs/{job_id}/source"
       },
       "SpendCap": {
         "properties": {

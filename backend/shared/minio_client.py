@@ -307,7 +307,7 @@ class MinIOClient:
            (`http://192.168.1.10:3000` -> `192.168.1.10:9000`) sem configuração.
         3. O default do settings (`127.0.0.1:9000`), que cobre tanto o
            docker-compose (a porta 9000 é publicada no host) quanto o
-           `run_api.sh` local.
+           `scripts/dev/run_api.sh` local.
         """
         settings = get_settings()
 
@@ -350,7 +350,7 @@ class MinIOClient:
         """
         settings = get_settings()
 
-        # Endpoint interno == endpoint do navegador (caso do run_api.sh local e
+        # Endpoint interno == endpoint do navegador (caso do scripts/dev/run_api.sh local e
         # dos testes): reaproveita o cliente principal, sem cliente extra.
         if endpoint == settings.minio_endpoint:
             return self.client

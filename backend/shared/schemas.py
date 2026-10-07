@@ -111,6 +111,12 @@ class JobCreatedResponse(BaseModel):
     message: str
     project: Optional[UploadProjectInfo] = None
     folder: Optional[UploadFolderInfo] = None
+    # true: o arquivo já tinha sido processado neste projeto e `job_id` é o job
+    # existente (nenhum job novo foi criado)
+    duplicate: bool = False
+    # Só em duplicatas: o original do job existente ainda existe depois deste
+    # pedido? (com purge_source=true num job já completed ele é apagado agora)
+    source_available: Optional[bool] = None
 
 
 class PageStatus(BaseModel):
@@ -174,6 +180,16 @@ class JobStatusResponse(BaseModel):
     name: Optional[str] = None
     tags: List[str] = []
 
+    # O arquivo original ainda existe (MinIO ou cópia local)? false depois de
+    # purge_source ou de DELETE /jobs/{job_id}/source, e para jobs filhos
+    source_available: bool = False
+    # Quando os arquivos de origem (original + PDFs das páginas) foram apagados
+    # (UTC; null se não foram)
+    source_deleted_at: Optional[datetime] = None
+    # DELETE /jobs/{job_id}/source pode rodar agora? (há arquivo e nada na fila:
+    # nem o job, nem retry automático, nem página pendente; lido do banco)
+    source_deletable: bool = False
+
     # Onde o job está (spec 0004). Jobs filhos herdam do job MAIN.
     project: Optional[ProjectRef] = None
     folder: Optional[FolderRef] = None
@@ -202,6 +218,13 @@ class JobStatusResponse(BaseModel):
     datalake: Optional[dict] = None
     engine: Optional[JobEngine] = None
     queue_reason: Optional[Literal["in_queue", "starting"]] = None
+
+
+class SourceDeletedResponse(BaseModel):
+    """Resposta de DELETE /jobs/{job_id}/source"""
+    job_id: str
+    source_deleted: bool
+    source_deleted_at: Optional[datetime] = None
 
 
 class TranscriptSegment(BaseModel):
@@ -747,6 +770,8 @@ class FaceAnalyzeResponse(BaseModel):
     status: str
     markdown: str
     image: FaceAnalysisResult
+    # Tentativa desta Idempotency-Key (1, 2, ...): um job FAILED deixa a mesma chave criar a próxima
+    attempt: Optional[int] = None
 
 
 class ImageFullOptions(BaseModel):
@@ -841,6 +866,8 @@ class ImageFullQueuedResponse(JobCreatedResponse):
     status: JobStatus
     poll_url: str
     result_url: str
+    # Tentativa desta Idempotency-Key (1, 2, ...): um job FAILED deixa a mesma chave criar a próxima
+    attempt: int = 1
 
 
 class ImageFullAnalyzeResponse(BaseModel):
@@ -848,6 +875,8 @@ class ImageFullAnalyzeResponse(BaseModel):
     status: str
     markdown: str
     image: ImageFullAnalysisResult | ImageFullV2Result
+    # Tentativa desta Idempotency-Key (1, 2, ...): um job FAILED deixa a mesma chave criar a próxima
+    attempt: Optional[int] = None
 
 
 from shared.datalake.schemas import Destination

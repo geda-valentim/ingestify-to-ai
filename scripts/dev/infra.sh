@@ -1,5 +1,7 @@
 #!/bin/bash
 
+cd "$(dirname "$0")/../.."  # scripts/dev/ -> project root
+
 # ======================================
 # Shared Infrastructure Manager
 # Quick commands for shared infra
@@ -114,17 +116,17 @@ show_help() {
     echo -e "${BLUE}Shared Infrastructure Manager${NC}"
     echo ""
     echo -e "${CYAN}Usage:${NC}"
-    echo -e "  ./infra.sh ${GREEN}start${NC}      - Start shared infrastructure"
-    echo -e "  ./infra.sh ${YELLOW}stop${NC}       - Stop shared infrastructure"
-    echo -e "  ./infra.sh ${CYAN}restart${NC}    - Restart infrastructure"
-    echo -e "  ./infra.sh ${BLUE}status${NC}     - Show status"
-    echo -e "  ./infra.sh ${CYAN}logs${NC}       - View logs"
-    echo -e "  ./infra.sh ${GREEN}test${NC}       - Test connectivity"
-    echo -e "  ./infra.sh ${RED}clean${NC}      - Remove all data (WARNING)"
+    echo -e "  ./scripts/dev/infra.sh ${GREEN}start${NC}      - Start shared infrastructure"
+    echo -e "  ./scripts/dev/infra.sh ${YELLOW}stop${NC}       - Stop shared infrastructure"
+    echo -e "  ./scripts/dev/infra.sh ${CYAN}restart${NC}    - Restart infrastructure"
+    echo -e "  ./scripts/dev/infra.sh ${BLUE}status${NC}     - Show status"
+    echo -e "  ./scripts/dev/infra.sh ${CYAN}logs${NC}       - View logs"
+    echo -e "  ./scripts/dev/infra.sh ${GREEN}test${NC}       - Test connectivity"
+    echo -e "  ./scripts/dev/infra.sh ${RED}clean${NC}      - Remove all data (WARNING)"
     echo ""
     echo -e "${YELLOW}Examples:${NC}"
-    echo -e "  ./infra.sh start"
-    echo -e "  ./infra.sh status"
+    echo -e "  ./scripts/dev/infra.sh start"
+    echo -e "  ./scripts/dev/infra.sh status"
     echo ""
 }
 

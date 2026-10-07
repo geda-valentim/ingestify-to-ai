@@ -113,26 +113,19 @@ def finish_transcription(
     from workers.tasks import _remove_job_files
 
     _remove_job_files(job_id)
-    if options.get('purge_source'):
-        purge_audio_source(job_id)
+    purge_audio_source(job_id, requested=bool(options.get('purge_source')))
 
 
-def purge_audio_source(job_id: str) -> None:
-    """Delete a transcription's uploaded media from MinIO, keeping only the transcripts (purge_source=true)"""
-    db = SessionLocal()
-    try:
-        job = db.query(Job).filter(Job.id == job_id).first()
-        if not job or not job.minio_upload_path:
-            return
-        minio_client = get_minio_client()
-        if minio_client.delete_file(minio_client.bucket_audio, job.minio_upload_path):
-            job.minio_upload_path = None
-            db.commit()
-            logger.info(f"[MAIN JOB {job_id}] Source media purged")
-    except Exception as e:
-        logger.error(f"[MAIN JOB {job_id}] Could not purge source media: {e}")
-    finally:
-        db.close()
+def purge_audio_source(job_id: str, requested: bool = True) -> None:
+    """Delete a completed transcription's uploaded media, keeping only the transcripts.
+
+    `requested` is the `purge_source` of the task options (/transcribe); without
+    it the durable option stored with the job (/upload, /convert) decides.
+    """
+    from shared.job_source import purge_source_if_requested
+
+    purge_source_if_requested(job_id, session_factory=SessionLocal, minio_factory=get_minio_client,
+                              requested=requested)
 
 
 def store_transcript_outputs(job_id: str, outputs: dict) -> None:
@@ -262,8 +255,7 @@ def _finish_strict(job_id, result, *, options, file_path, processing_seconds,
                                             completed_at=job.completed_at)
         from workers.tasks import _remove_job_files
         _remove_job_files(job_id)
-        if options.get('purge_source'):
-            purge_audio_source(job_id)
+        purge_audio_source(job_id, requested=bool(options.get('purge_source')))
     finally:
         if not published:
             for name in written:

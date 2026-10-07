@@ -7,7 +7,8 @@ detecção simples (`face_options.mode=detection`) ou detecção, movimentos e
 expressão estimada (`expressions`, padrão). Consulte
 `GET /images/faces/capabilities` para disponibilidade por etapa, modelos e schema.
 Ambas as criações exigem `Idempotency-Key`, localização de projeto e imagem;
-replay devolve o mesmo job. `/jobs/{id}/result` conserva o resultado após F5/Redis expirado.
+replay devolve o mesmo job enquanto ele não falhou (ver tentativas abaixo, em análise
+completa). `/jobs/{id}/result` conserva o resultado após F5/Redis expirado.
 
 MediaPipe fornece caixas/confiança/keypoints e landmarks/blendshapes. O modelo
 ONNX EmotiEffLib fixado oferece oito classes de expressão. Scores são estimativas
@@ -76,7 +77,10 @@ Todos exigem autenticação (JWT ou API key). Cada inferência precisa de um pro
 vinculada a projeto. `folder` / `folder_id` são opcionais. Não combine nome e ID do mesmo
 recurso; pasta deve pertencer ao projeto; IDs alheios respondem `404`. Com JWT e key
 juntos, vale o JWT e a vinculação da key não é usada. Imagens repetidas criam novos jobs;
-não há deduplicação nessas rotas.
+não há deduplicação nessas rotas. A deduplicação por checksum de `/upload`/`/convert`
+nunca devolve um job de imagem (é outra operação sobre os mesmos bytes), e a
+`Idempotency-Key` de `mode=full`/rostos cobre a operação inteira (modo, opções, tarefa):
+outra operação com a mesma chave é `409`.
 
 | Método e caminho | Entrada |
 |---|---|
@@ -328,7 +332,14 @@ A interface mostra cobertura por tarefa e permite selecionar camadas e baixar JS
 
 Use as rotas `/images/analyze` (JSON) ou `/images/analyze/upload` (multipart) com
 `mode=full` e header `Idempotency-Key` obrigatório, de 1 a 128 caracteres.
-Repetir chave e payload recupera o mesmo job; payload diferente retorna 409.
+Repetir chave e payload recupera o mesmo job; payload diferente (outro modo, outras
+opções) retorna 409. A chave vale por **tentativa**: enquanto a última tentativa está na
+fila, processando ou terminou sem `failed`, a mesma chave a devolve; se ela terminou
+`failed`, a mesma chave cria a tentativa seguinte (um job novo) em vez de devolver o job
+falho. A resposta traz `attempt` (1, 2, …). O contador fica em
+`image_analysis_submissions.attempt` (migração aditiva `a7d30021c5e9`); duas requisições
+simultâneas com a mesma chave depois de uma falha criam um único job (compare-and-set em
+`(id, attempt, job_id)`; a outra devolve o job vencedor).
 Chave de job excluído retorna 410 por pelo menos 24h e até confirmar a limpeza.
 Use outra chave para uma nova análise intencional.
 

@@ -81,6 +81,93 @@ def _remove_job_files(job_id: str) -> None:
             logger.error(f"[JOB {job_id}] Could not remove {directory}: {e}")
 
 
+def _purge_source_if_requested(job_id: str) -> None:
+    """
+    After a MAIN job settled (completed, or failed / partial after its last automatic
+    retry): delete its source files (original + split page PDFs) when it was created
+    with purge_source=true and nothing is pending. The option is read from the DB,
+    so a merge run by any worker, after any page retry, honours it. Never raises.
+    """
+    from shared.job_source import purge_source_if_requested
+
+    purge_source_if_requested(job_id, session_factory=SessionLocal, minio_factory=get_minio_client)
+
+
+def _will_retry(task) -> bool:
+    """Whether `raise task.retry(...)` now schedules another attempt of this task."""
+    request = task.request
+    if getattr(request, "called_directly", True):
+        return False  # .run() / a direct call: retry() just re-raises
+    return (request.retries or 0) < (task.max_retries or 0)
+
+
+def _catalog_error(code: str, technical) -> str:
+    """A job error message from shared.error_catalog, with the technical cause after it."""
+    from shared import error_catalog
+
+    message = error_catalog.describe(code)[0]
+    return f"{message} ({technical})" if technical else message
+
+
+def _retry_or_settle(task, *, countdown, exc=None, settle=None, **retry_kwargs):
+    """
+    `raise _retry_or_settle(...)` in place of `raise task.retry(...)`.
+
+    An attempt that will be retried records the job (or page) as waiting for it
+    (PENDING); if the retry then cannot be published (broker down), nothing would
+    ever run it and it would wait forever. `settle(error)`, given only when the
+    attempt was recorded as retrying, records the failure for good instead (and
+    lets purge_source apply); the publish error is re-raised.
+    """
+    from celery.exceptions import Retry
+
+    try:
+        return task.retry(exc=exc, countdown=countdown, **retry_kwargs)
+    except Retry:
+        raise
+    except Exception as publish_error:
+        if settle is not None and publish_error is not exc:
+            logger.error(f"Could not schedule the retry of {task.name}: {publish_error}")
+            try:
+                settle(_catalog_error("RETRY_NOT_QUEUED", exc or publish_error))
+            except Exception as e:  # noqa: BLE001 - the publish error is what matters
+                logger.error(f"Could not record the unscheduled retry of {task.name}: {e}")
+        raise
+
+
+def _record_main_failure(job_id: str, redis_client, error: str, *, retrying: bool) -> None:
+    """
+    A failed attempt of a MAIN job. When Celery will retry it, the job waits as
+    PENDING (queued) with the error, not FAILED: the DB is the durable record that
+    work is still due, so DELETE /jobs/{id}/source refuses (409) while a retry may
+    still read the original. The last attempt marks it FAILED.
+    """
+    now = datetime.utcnow()
+    redis_client.set_job_status(
+        job_id=job_id,
+        job_type="main",
+        status="queued" if retrying else "failed",
+        progress=0,
+        error=error,
+        completed_at=None if retrying else now,
+    )
+    db = SessionLocal()
+    try:
+        job = db.query(Job).filter(Job.id == job_id).first()
+        if job:
+            job.status = JobStatus.PENDING if retrying else JobStatus.FAILED
+            job.error_message = error
+            job.completed_at = None if retrying else now
+            db.commit()
+    except Exception as e:
+        logger.error(f"[MAIN JOB {job_id}] MySQL failure update error: {e}")
+    finally:
+        db.close()
+    if not retrying:
+        # Settled for good (no automatic retry left): purge_source applies now
+        _purge_source_if_requested(job_id)
+
+
 # ============================================
 # MAIN JOB - Ponto de entrada
 # ============================================
@@ -411,7 +498,9 @@ def _fail_transcription_attempt(job_id, options, redis_client, error, *, retry):
         redis_client.set_job_status(job_id=job_id, job_type='main', status='queued' if retry else 'failed',
                                    progress=0, error=error, completed_at=job.completed_at)
         db.commit()
-        return True
+    if not retry:
+        _purge_source_if_requested(job_id)
+    return True
 
 
 @celery_app.task(bind=True, max_retries=3, name="workers.tasks.process_conversion")
@@ -603,8 +692,10 @@ def process_conversion(
             finally:
                 db.close()
 
-            # Cleanup (work dir and the uploaded file; the original stays in MinIO)
+            # Cleanup (work dir and the uploaded file; the original stays in MinIO
+            # unless the job asked for purge_source)
             _remove_job_files(job_id)
+            _purge_source_if_requested(job_id)
 
             # Mark as completed in Redis
             redis_client.set_job_status(
@@ -634,29 +725,8 @@ def process_conversion(
         # A transcription that ran out of time will run out of time again: fail for good
         is_audio_job = bool(options.get('is_audio'))
 
-        # Update Redis
-        redis_client.set_job_status(
-            job_id=job_id,
-            job_type="main",
-            status="failed",
-            progress=0,
-            error=error_msg,
-            completed_at=datetime.utcnow(),
-        )
-
-        # Update MySQL
-        db = SessionLocal()
-        try:
-            job = db.query(Job).filter(Job.id == job_id).first()
-            if job:
-                job.status = JobStatus.FAILED
-                job.error_message = error_msg
-                job.completed_at = datetime.utcnow()
-                db.commit()
-        except Exception as e:
-            logger.error(f"[MAIN JOB {job_id}] MySQL update error on timeout: {e}")
-        finally:
-            db.close()
+        retrying = not is_audio_job and _will_retry(self)
+        _record_main_failure(job_id, redis_client, error_msg, retrying=retrying)
 
         # Cleanup temp files
         try:
@@ -669,8 +739,11 @@ def process_conversion(
         if is_audio_job:
             return {"job_id": job_id, "status": "failed", "error": error_msg}
 
-        # Retry with backoff
-        raise self.retry(countdown=60 * (2 ** self.request.retries))
+        # Retry with backoff (settled FAILED if the retry cannot be scheduled)
+        raise _retry_or_settle(
+            self, countdown=60 * (2 ** self.request.retries),
+            settle=(lambda error: _record_main_failure(job_id, redis_client, error, retrying=False))
+            if retrying else None)
 
     except Exception as exc:
         logger.error(f"[MAIN JOB {job_id}] Failed: {exc}", exc_info=True)
@@ -687,29 +760,8 @@ def process_conversion(
                     'callback_url': callback_url, 'auth_token': auth_token})
             return {"job_id": job_id, "status": "failed", "error": str(exc)}
 
-        # Update Redis
-        redis_client.set_job_status(
-            job_id=job_id,
-            job_type="main",
-            status="failed",
-            progress=0,
-            error=str(exc),
-            completed_at=datetime.utcnow(),
-        )
-
-        # Update MySQL: Mark job as failed
-        db = SessionLocal()
-        try:
-            job = db.query(Job).filter(Job.id == job_id).first()
-            if job:
-                job.status = JobStatus.FAILED
-                job.error_message = str(exc)
-                job.completed_at = datetime.utcnow()
-                db.commit()
-        except Exception as e:
-            logger.error(f"[MAIN JOB {job_id}] MySQL failure error: {e}")
-        finally:
-            db.close()
+        retrying = _will_retry(self)
+        _record_main_failure(job_id, redis_client, str(exc), retrying=retrying)
 
         # Cleanup on failure
         try:
@@ -719,7 +771,10 @@ def process_conversion(
         except Exception:
             pass
 
-        raise self.retry(exc=exc, countdown=60 * (2 ** self.request.retries))
+        raise _retry_or_settle(
+            self, exc=exc, countdown=60 * (2 ** self.request.retries),
+            settle=(lambda error: _record_main_failure(job_id, redis_client, error, retrying=False))
+            if retrying else None)
 
 
 # ============================================
@@ -787,30 +842,17 @@ def split_pdf_task(
         # dispatcher places it (spec 0003, 4.14); without one, nothing changes
         page_route = _page_route()
 
-        # Create PAGE records in MySQL and PAGE JOBS for each page
+        # Create PAGE records in MySQL and PAGE JOBS for each page. Idempotent: a
+        # split retry reuses the rows (and page job ids) an earlier attempt created
+        # (uq_pages_job_page), and does not run again a page that already started
         for page_num, page_file_path, minio_path in page_files:
-            page_job_id = str(uuid4())
+            page_job_id, dispatch = _upsert_split_page(split_job_id, parent_job_id, page_num, minio_path)
+            if not dispatch:
+                logger.info(f"[SPLIT JOB {split_job_id}] Page {page_num} already started ({page_job_id}), "
+                            f"not queued again")
+                continue
 
             logger.info(f"[SPLIT JOB {split_job_id}] Creating page job {page_job_id} for page {page_num}")
-
-            # Create Page record in MySQL
-            db = SessionLocal()
-            try:
-                from shared.models import Page as PageModel
-                page = PageModel(
-                    id=str(uuid4()),
-                    job_id=parent_job_id,
-                    page_number=page_num,
-                    page_job_id=page_job_id,
-                    minio_page_path=minio_path,
-                    status=JobStatus.PENDING
-                )
-                db.add(page)
-                db.commit()
-            except Exception as e:
-                logger.error(f"[SPLIT JOB {split_job_id}] MySQL page creation error: {e}")
-            finally:
-                db.close()
 
             # Add page job as child of main job (Redis); before a routed page can run,
             # so the merge trigger always sees every page
@@ -857,7 +899,69 @@ def split_pdf_task(
             completed_at=datetime.utcnow(),
         )
 
-        raise self.retry(exc=exc, countdown=30 * (2 ** self.request.retries))
+        def settle(error):
+            # No attempt left: the MAIN job fails for good (DB + Redis) and
+            # purge_source applies, instead of PROCESSING forever
+            _record_main_failure(parent_job_id, redis_client, error, retrying=False)
+
+        retrying = _will_retry(self)
+        if not retrying:
+            settle(_catalog_error("SPLIT_FAILED", exc))
+        raise _retry_or_settle(self, exc=exc, countdown=30 * (2 ** self.request.retries),
+                               settle=settle if retrying else None)
+
+
+def _upsert_split_page(split_job_id: str, parent_job_id: str, page_number: int, minio_path):
+    """
+    The Page row of one split page: created on the first attempt, reused by a split
+    retry (one row per (job, page number), uq_pages_job_page). Returns
+    (page job id, whether to queue it): a page an earlier attempt already started
+    (PROCESSING / COMPLETED / FAILED) is not queued again; a PENDING one is (its
+    queueing may be what failed), under the same page job id.
+    """
+    from sqlalchemy.exc import IntegrityError
+    from shared.models import Page as PageModel
+
+    db = SessionLocal()
+    try:
+        for _ in range(3):
+            # Looked up with a plain read, then locked by primary key: a locking read
+            # of a row that does not exist yet takes an InnoDB gap lock, and two
+            # sessions holding the same gap that both insert deadlock (1213) - a
+            # redelivered split, or another job's split whose rows share the gap
+            found = db.query(PageModel.id).filter(
+                PageModel.job_id == parent_job_id, PageModel.page_number == page_number,
+            ).order_by(PageModel.created_at).first()
+            page = None
+            if found is not None:
+                page = db.query(PageModel).filter(PageModel.id == found.id) \
+                    .with_for_update().populate_existing().first()
+                if page is None:  # deleted meanwhile (DELETE /jobs/{id}): look again
+                    db.rollback()
+                    continue
+            if page is not None:
+                if minio_path:
+                    page.minio_page_path = minio_path
+                page_job_id = page.page_job_id or str(uuid4())
+                page.page_job_id = page_job_id
+                dispatch = page.status == JobStatus.PENDING
+                db.commit()
+                return page_job_id, dispatch
+            page_job_id = str(uuid4())
+            db.add(PageModel(id=str(uuid4()), job_id=parent_job_id, page_number=page_number,
+                             page_job_id=page_job_id, minio_page_path=minio_path, status=JobStatus.PENDING))
+            try:
+                db.commit()
+                return page_job_id, True
+            except IntegrityError:
+                db.rollback()  # created concurrently: reuse it
+        raise RuntimeError(f"page {page_number} of job {parent_job_id}: no Page row")
+    except Exception as e:
+        db.rollback()
+        logger.error(f"[SPLIT JOB {split_job_id}] MySQL page creation error: {e}")
+        raise
+    finally:
+        db.close()
 
 
 def _page_route():
@@ -901,16 +1005,18 @@ def _submit_page(page_job_id: str, parent_job_id: str, page_number: int, options
 # PAGE JOB - Converte página individual
 # ============================================
 
-def _recount_parent_pages(db, parent_job_id: str):
-    """Recompute pages_completed / pages_failed on the parent job.
+def _recount_parent_pages(db, parent_job_id: str) -> bool:
+    """Recompute pages_completed / pages_failed on the parent job (and commit).
 
     Both counters are recomputed on every outcome: a retry that succeeds moves a
     page out of FAILED, so pages_failed is only correct if it is recounted too.
+    Returns True when this recount settled the MAIN job (PARTIAL).
     """
     from shared.engines.ledger import recount_parent_pages
 
-    recount_parent_pages(db, parent_job_id)
+    settled = recount_parent_pages(db, parent_job_id)
     db.commit()
+    return settled
 
 
 def _mark_page_failed(
@@ -919,30 +1025,41 @@ def _mark_page_failed(
     parent_job_id: str,
     page_number: int,
     error_msg: str,
+    retrying: bool = False,
 ):
-    """Record a page failure in Redis and MySQL."""
+    """
+    Record a page failure in Redis and MySQL.
+
+    `retrying`: Celery will run the page again, so it waits as PENDING (queued)
+    with the error instead of FAILED; the MAIN job is not settled and its original
+    cannot be deleted meanwhile. The last attempt marks it FAILED, and once every
+    page is terminal the MAIN job becomes PARTIAL (ledger.recount_parent_pages).
+    """
     redis_client = get_redis_client()
 
     redis_client.set_job_status(
         job_id=page_job_id,
         job_type="page",
-        status="failed",
+        status="queued" if retrying else "failed",
         parent_job_id=parent_job_id,
         page_number=page_number,
         error=error_msg,
-        completed_at=datetime.utcnow(),
+        completed_at=None if retrying else datetime.utcnow(),
     )
 
     db = SessionLocal()
     try:
         from shared.models import Page as PageModel
-        page = db.query(PageModel).filter(
+        # Every row of this page (uq_pages_job_page keeps it to one; a database
+        # not migrated yet may still hold an old split retry's duplicate)
+        pages = db.query(PageModel).filter(
             PageModel.job_id == parent_job_id,
             PageModel.page_number == page_number
-        ).first()
-        if page:
-            page.status = JobStatus.FAILED
+        ).all()
+        for page in pages:
+            page.status = JobStatus.PENDING if retrying else JobStatus.FAILED
             page.error_message = error_msg
+        if pages:
             db.commit()
 
         _recount_parent_pages(db, parent_job_id)
@@ -950,6 +1067,9 @@ def _mark_page_failed(
         logger.error(f"{log_prefix} MySQL failure update error: {e}")
     finally:
         db.close()
+    if not retrying:
+        # The last page to settle may have made the MAIN job PARTIAL
+        _purge_source_if_requested(parent_job_id)
 
 
 def _run_page_conversion(
@@ -1001,13 +1121,16 @@ def _run_page_conversion(
     db = SessionLocal()
     try:
         from shared.models import Page as PageModel
-        page = db.query(PageModel).filter(
+        # Every row of this page (uq_pages_job_page keeps it to one; a database
+        # not migrated yet may still hold an old split retry's duplicate)
+        pages = db.query(PageModel).filter(
             PageModel.job_id == parent_job_id,
             PageModel.page_number == page_number
-        ).first()
-        if page:
+        ).all()
+        for page in pages:
             page.status = JobStatus.PROCESSING
             page.page_job_id = page_job_id  # a retry runs under a new page job id
+        if pages:
             db.commit()
     except Exception as e:
         logger.error(f"{log_prefix} MySQL update error: {e}")
@@ -1076,27 +1199,35 @@ def _run_page_conversion(
             logger.error(f"{log_prefix} Failed to upload page {page_number} markdown to MinIO: {e}")
 
         # Update MySQL: Mark page as completed with markdown content
+        settled = False
         db = SessionLocal()
         try:
             from shared.models import Page as PageModel
-            page = db.query(PageModel).filter(
+            # Every row of this page (uq_pages_job_page keeps it to one; a database
+            # not migrated yet may still hold an old split retry's duplicate)
+            pages = db.query(PageModel).filter(
                 PageModel.job_id == parent_job_id,
                 PageModel.page_number == page_number
-            ).first()
-            if page:
+            ).all()
+            for page in pages:
                 page.status = JobStatus.COMPLETED
                 page.markdown_content = markdown_content
                 page.char_count = len(markdown_content)
                 page.has_elasticsearch_result = es_success
                 page.error_message = None
                 page.completed_at = datetime.utcnow()
+            if pages:
                 db.commit()
 
-            _recount_parent_pages(db, parent_job_id)
+            settled = _recount_parent_pages(db, parent_job_id)
         except Exception as e:
             logger.error(f"{log_prefix} MySQL completion error: {e}")
         finally:
             db.close()
+        if settled:
+            # The last page to settle was this completion and an earlier page failed
+            # for good: the MAIN job is PARTIAL now, purge_source applies
+            _purge_source_if_requested(parent_job_id)
 
         # Mark page job as completed in Redis
         redis_client.set_job_status(
@@ -1143,9 +1274,13 @@ def _run_page_conversion(
         if on_failure is not None:
             return on_failure(error_msg, True)
 
-        _mark_page_failed(log_prefix, page_job_id, parent_job_id, page_number, error_msg)
+        retrying = _will_retry(task)
+        _mark_page_failed(log_prefix, page_job_id, parent_job_id, page_number, error_msg, retrying=retrying)
 
-        raise task.retry(exc=SoftTimeLimitExceeded(), countdown=30 * (2 ** task.request.retries))
+        raise _retry_or_settle(
+            task, exc=SoftTimeLimitExceeded(), countdown=30 * (2 ** task.request.retries),
+            settle=(lambda error: _mark_page_failed(log_prefix, page_job_id, parent_job_id, page_number, error))
+            if retrying else None)
 
     except Exception as exc:
         logger.error(f"{log_prefix} Page {page_number} failed: {exc}", exc_info=True)
@@ -1153,9 +1288,13 @@ def _run_page_conversion(
         if on_failure is not None:
             return on_failure(str(exc), False)
 
-        _mark_page_failed(log_prefix, page_job_id, parent_job_id, page_number, str(exc))
+        retrying = _will_retry(task)
+        _mark_page_failed(log_prefix, page_job_id, parent_job_id, page_number, str(exc), retrying=retrying)
 
-        raise task.retry(exc=exc, countdown=30 * (2 ** task.request.retries))
+        raise _retry_or_settle(
+            task, exc=exc, countdown=30 * (2 ** task.request.retries),
+            settle=(lambda error: _mark_page_failed(log_prefix, page_job_id, parent_job_id, page_number, error))
+            if retrying else None)
 
     finally:
         if extracted_page_file is not None:
@@ -1436,8 +1575,11 @@ def merge_pages_task(
 
         logger.info(f"[MERGE JOB {merge_job_id}] Completed - main job {parent_job_id} finished")
 
-        # Cleanup temp files (pages, merged output and the uploaded file; the original stays in MinIO)
+        # Cleanup temp files (pages, merged output and the uploaded file; the original
+        # and the split per-page PDFs stay in MinIO unless the job asked for purge_source)
         _remove_job_files(parent_job_id)
+        # purge_source: deletes the original *and* the split per-page PDFs (MinIO + local)
+        _purge_source_if_requested(parent_job_id)
         logger.info(f"[MERGE JOB {merge_job_id}] Cleanup completed")
 
         return {"merge_job_id": merge_job_id, "pages_merged": total_pages}
@@ -1455,21 +1597,28 @@ def merge_pages_task(
             completed_at=datetime.utcnow(),
         )
 
-        # Update MySQL: Mark parent job as failed
+        # Update MySQL: the parent stays PROCESSING while Celery will run the merge
+        # again (its source files must not be purged meanwhile); FAILED after the last try
+        retrying = _will_retry(self)
         db = SessionLocal()
         try:
             job = db.query(Job).filter(Job.id == parent_job_id).first()
             if job:
-                job.status = JobStatus.FAILED
+                job.status = JobStatus.PROCESSING if retrying else JobStatus.FAILED
                 job.error_message = f"Merge failed: {str(exc)}"
-                job.completed_at = datetime.utcnow()
+                job.completed_at = None if retrying else datetime.utcnow()
                 db.commit()
         except Exception as e:
             logger.error(f"[MERGE JOB {merge_job_id}] MySQL failure error: {e}")
         finally:
             db.close()
+        if not retrying:
+            _purge_source_if_requested(parent_job_id)
 
-        raise self.retry(exc=exc, countdown=30 * (2 ** self.request.retries))
+        raise _retry_or_settle(
+            self, exc=exc, countdown=30 * (2 ** self.request.retries),
+            settle=(lambda error: _record_main_failure(parent_job_id, redis_client, error, retrying=False))
+            if retrying else None)
 
 
 # ============================================

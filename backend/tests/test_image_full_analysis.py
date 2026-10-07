@@ -526,3 +526,113 @@ def test_derived_inputs_keep_candidate_audit_and_text_boundaries():
     assert planned[0]['input']['input_truncated'] and len(planned[0]['input']['text_input'])<=2000
     explicit, _ = resolve_steps(results,{'queries':['user query']},100,100)
     assert explicit[0]['input']['source_step_id'] is None
+
+
+# ---------------------------------------------------------------------------
+# Idempotency-Key attempts: a FAILED job never pins its key
+# ---------------------------------------------------------------------------
+
+def _full_client(memory, monkeypatch):
+    factory, storage, user = memory
+    from shared.auth import get_current_active_user
+    from api import image_routes, image_full_routes
+    from workers import image_full_tasks
+    from shared.models import Project
+    with factory() as db:
+        project = Project(id=str(uuid4()), user_id=user.id, name='Images', name_key='images')
+        db.add(project); db.commit()
+    def db_dependency():
+        with factory() as db: yield db
+    app = FastAPI(); app.include_router(image_routes.router)
+    app.dependency_overrides[get_db] = db_dependency
+    app.dependency_overrides[get_current_active_user] = lambda: user
+    monkeypatch.setattr(image_full_routes, 'get_minio_client', lambda: storage)
+    monkeypatch.setattr(image_full_tasks, 'dispatch', lambda *args: None)
+    from PIL import Image
+    data = io.BytesIO(); Image.new('RGB', (8, 8)).save(data, 'PNG')
+    body = {'mode': 'full', 'image_base64': base64.b64encode(data.getvalue()).decode(),
+            'filename': 'image.png', 'project_id': project.id}
+    return TestClient(app), body
+
+
+def _set_status(memory, job_id, status):
+    with memory[0]() as db:
+        db.get(Job, job_id).status = status
+        db.commit()
+
+
+def test_same_key_replays_the_attempt_while_it_runs_and_after_success(memory, monkeypatch):
+    client, body = _full_client(memory, monkeypatch)
+    headers = {'Idempotency-Key': 'attempts-1'}
+    first = client.post('/images/analyze', json=body, headers=headers)
+    assert first.status_code == 202, first.text
+    assert first.json()['attempt'] == 1
+    job_id = first.json()['job_id']
+
+    _set_status(memory, job_id, JobStatus.PROCESSING)
+    running = client.post('/images/analyze', json=body, headers=headers).json()
+    assert (running['job_id'], running['attempt']) == (job_id, 1)
+
+    _set_status(memory, job_id, JobStatus.COMPLETED)
+    done = client.post('/images/analyze', json=body, headers=headers).json()
+    assert (done['job_id'], done['attempt']) == (job_id, 1)
+
+
+def test_same_key_after_a_failed_attempt_starts_the_next_attempt(memory, monkeypatch):
+    from shared.models import ImageAnalysisSubmission as Submission
+    client, body = _full_client(memory, monkeypatch)
+    headers = {'Idempotency-Key': 'attempts-2'}
+    first = client.post('/images/analyze', json=body, headers=headers).json()
+    _set_status(memory, first['job_id'], JobStatus.FAILED)
+
+    second = client.post('/images/analyze', json=body, headers=headers)
+    assert second.status_code == 202, second.text
+    assert second.json()['attempt'] == 2
+    assert second.json()['job_id'] != first['job_id']
+    # ...and that attempt is what the key replays now
+    again = client.post('/images/analyze', json=body, headers=headers).json()
+    assert (again['job_id'], again['attempt']) == (second.json()['job_id'], 2)
+    with memory[0]() as db:
+        row = db.query(Submission).one()
+        assert (row.attempt, row.job_id) == (2, second.json()['job_id'])
+        # The failed attempt's job is kept as it was
+        assert db.get(Job, first['job_id']).status == JobStatus.FAILED
+    # A different payload under the same key is still a conflict
+    assert client.post('/images/analyze', json={**body, 'full_options': {'queries': ['x']}},
+                       headers=headers).status_code == 409
+
+
+def test_concurrent_new_attempts_of_one_key_create_a_single_job(memory, monkeypatch):
+    """Two requests saw the same FAILED attempt: only one moves the key (compare-and-set);
+    the other replays the winner's job instead of creating a second one."""
+    from api import image_full_routes
+    from shared.models import ImageAnalysisSubmission as Submission
+    client, body = _full_client(memory, monkeypatch)
+    headers = {'Idempotency-Key': 'attempts-3'}
+    first = client.post('/images/analyze', json=body, headers=headers).json()
+    _set_status(memory, first['job_id'], JobStatus.FAILED)
+
+    real_lookup = image_full_routes.lookup
+    stale = {}
+
+    def racing_lookup(db, user_id, key_hash, request_hash):
+        previous = real_lookup(db, user_id, key_hash, request_hash)
+        if not stale and previous is not None and previous.failed:
+            # The other request wins between this lookup and the compare-and-set
+            stale['seen'] = previous
+            with memory[0]() as other:
+                winner = str(uuid4())
+                other.add(Job(id=winner, user_id=memory[2].id, source_type='image', filename='w.png',
+                              status=JobStatus.PENDING, job_type='MAIN'))
+                other.query(Submission).filter_by(id=previous.row.id).update({'attempt': 2, 'job_id': winner})
+                other.commit()
+                stale['winner'] = winner
+        return previous
+
+    monkeypatch.setattr(image_full_routes, 'lookup', racing_lookup)
+    second = client.post('/images/analyze', json=body, headers=headers)
+    assert second.status_code == 202, second.text
+    assert (second.json()['job_id'], second.json()['attempt']) == (stale['winner'], 2)
+    with memory[0]() as db:
+        assert db.query(Submission).one().job_id == stale['winner']
+        assert db.query(Job).filter(Job.source_type == 'image').count() == 2  # first + winner only

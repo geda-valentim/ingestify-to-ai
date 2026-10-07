@@ -1,3 +1,4 @@
+import logging
 from sqlalchemy import create_engine
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
@@ -5,6 +6,7 @@ from typing import Generator
 from shared.config import get_settings
 
 settings = get_settings()
+logger = logging.getLogger(__name__)
 
 # Create SQLAlchemy engine
 engine = create_engine(
@@ -110,6 +112,10 @@ _ADDED_COLUMNS = {
     "jobs": {
         "crawler_config": "JSON NULL",  # migrations/002_add_crawler_fields.sql
         "crawler_schedule": "JSON NULL",
+        # alembic b8f20022e1c4: source-file / dedup bookkeeping, out of JobConfiguration.options
+        "purge_source": "BOOLEAN NULL",
+        "source_deleted_at": "DATETIME NULL",
+        "operation_key": "VARCHAR(64) NULL",
     },
     "engine_feature_state": {
         "workers_seen_at": "DATETIME(6) NULL",  # alembic 5d2e8f1a6c47 (spec 0003, slice 3b)
@@ -117,12 +123,41 @@ _ADDED_COLUMNS = {
     "users": {
         "root_slot": "SMALLINT NULL",  # alembic f1c90019d3e4 (spec 0019); unique index below
     },
+    "image_analysis_submissions": {
+        "attempt": "INTEGER NOT NULL DEFAULT 1",  # alembic a7d30021c5e9 (attempt per Idempotency-Key)
+    },
 }
 
 # Unique indexes on _ADDED_COLUMNS, created separately: SQLite cannot ADD COLUMN ... UNIQUE.
 _ADDED_UNIQUE_INDEXES = {
     "uq_users_root_slot": ("users", "root_slot"),  # at most one root user (spec 0019)
+    # one row per page of a split PDF (alembic b8f20022e1c4)
+    "uq_pages_job_page": ("pages", "job_id, page_number"),
 }
+
+
+def duplicate_page_rows(conn) -> list:
+    """
+    Page rows that repeat a (job_id, page_number) already present: an old split
+    retry added a second row per page. The row kept per page is the COMPLETED one,
+    else the most recently updated. Returns the ids of the others.
+    """
+    from sqlalchemy import text
+
+    rows = conn.execute(text(
+        "SELECT p.id, p.job_id, p.page_number, p.status, p.updated_at FROM pages p "
+        "JOIN (SELECT job_id, page_number FROM pages GROUP BY job_id, page_number HAVING COUNT(*) > 1) d "
+        "ON d.job_id = p.job_id AND d.page_number = p.page_number"
+    )).fetchall()
+    groups: dict = {}
+    for row in rows:
+        groups.setdefault((row.job_id, row.page_number), []).append(row)
+    extra = []
+    for group in groups.values():
+        group.sort(key=lambda r: (str(r.status).upper().endswith("COMPLETED"), str(r.updated_at or "")),
+                   reverse=True)
+        extra.extend(r.id for r in group[1:])
+    return extra
 
 
 def _add_missing_columns(bind=None) -> None:
@@ -147,4 +182,9 @@ def _add_missing_columns(bind=None) -> None:
             indexes = {i["name"] for i in inspector.get_indexes(table)}
             indexes |= {u["name"] for u in inspector.get_unique_constraints(table)}
             if name not in indexes:
+                if name == "uq_pages_job_page" and duplicate_page_rows(conn):
+                    # Never delete rows at boot: the alembic migration cleans them up
+                    logger.warning("pages has duplicate (job_id, page_number) rows: run "
+                                   "`alembic upgrade head` to add uq_pages_job_page")
+                    continue
                 conn.execute(text(f"CREATE UNIQUE INDEX {name} ON {table} ({column})"))

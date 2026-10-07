@@ -246,7 +246,7 @@ DOCKER_BUILDKIT=1 docker compose \
 ### Make the GPU the default on a GPU host
 
 `make gpu` is the only command that passes the overlay. Every other start path — a plain
-`docker compose up`, `start.sh`, `rebuild.sh`, `make dev`, `make start` — loads only the base
+`docker compose up`, `scripts/dev/start.sh`, `scripts/dev/rebuild.sh`, `make dev`, `make start` — loads only the base
 file (and the override), **rebuilds the workers with CPU torch** and silently moves Docling and
 Whisper off the GPU. On a host that has one, pin the file set in `.env`:
 
@@ -265,7 +265,7 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compos
 ```
 
 > `DOCKER_BUILDKIT=1` matters: the pip cache mount in the Dockerfiles requires BuildKit.
-> `make build`, `make gpu`, `start.sh` and `rebuild.sh` all set it.
+> `make build`, `make gpu`, `scripts/dev/start.sh` and `scripts/dev/rebuild.sh` all set it.
 
 ### Choosing a different CUDA version
 
@@ -289,7 +289,7 @@ build:
 ```bash
 pip install -r backend/requirements-vision-cuda.txt
 export DEVICE=cuda
-./run_worker.sh
+./scripts/dev/run_worker.sh
 ```
 
 ---

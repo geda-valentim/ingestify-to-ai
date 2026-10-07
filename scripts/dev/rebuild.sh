@@ -1,5 +1,7 @@
 #!/bin/bash
 
+cd "$(dirname "$0")/../.."  # scripts/dev/ -> project root
+
 echo "======================================"
 echo "  Doc2MD - Rebuild and Start"
 echo "======================================"

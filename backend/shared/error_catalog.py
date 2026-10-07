@@ -53,6 +53,42 @@ _HOST_AGENT_HINT = (
 # code -> (message template, next steps). Templates may use {for_feature},
 # {host} and {since}; missing context renders as an empty string.
 CATALOG = {
+    # --- jobs ------------------------------------------------------------------
+    "JOB_STILL_PROCESSING": (
+        "O job (ou uma página dele) ainda está na fila, em processamento ou "
+        "aguardando uma nova tentativa. Aguarde ele terminar para apagar o arquivo original.",
+        ["retry"],
+    ),
+    "SOURCE_PURGED": (
+        "Os arquivos de origem deste job (o arquivo enviado e os PDFs das páginas) "
+        "foram apagados em {deleted_at}, a pedido (purge_source ou exclusão do "
+        "original). O resultado da conversão continua disponível.",
+        [],
+    ),
+    "SOURCE_NOT_AVAILABLE": (
+        "O arquivo original foi apagado; não é possível refazer esta página.",
+        [],
+    ),
+    "PAGES_FAILED": (
+        "{failed} de {total} páginas falharam. As demais foram convertidas; "
+        "refaça as páginas com falha para completar o documento.",
+        ["retry"],
+    ),
+    "SPLIT_FAILED": (
+        "Não foi possível dividir o PDF em páginas, nem depois das novas tentativas "
+        "automáticas. Envie o arquivo novamente.",
+        ["retry"],
+    ),
+    "RETRY_NOT_QUEUED": (
+        "A nova tentativa automática não pôde ser agendada (fila indisponível), então "
+        "o processamento foi encerrado com falha. Envie o arquivo novamente.",
+        ["retry"],
+    ),
+    "SOURCE_DELETE_FAILED": (
+        "Não foi possível apagar o arquivo original agora; ele foi mantido. "
+        "Tente novamente em instantes.",
+        ["retry"],
+    ),
     # --- setup / configuration -------------------------------------------------
     "RUNTIME_PROFILE_REQUIRED": (
         "Esta engine ainda não tem perfil de execução vinculado{for_feature}. "
@@ -543,6 +579,7 @@ def describe(code, *, feature=None, needs_connection=False, **context):
         for_feature=f" para {feature}" if feature else "",
         host=f" “{context['host']}”" if context.get("host") else "",
         since=_since(context.get("seen_at")) if "seen_at" in context else "",
+        **{k: context[k] for k in ("failed", "total", "deleted_at") if k in context},
     )
     message = template.format_map(values)
     steps = list(steps)

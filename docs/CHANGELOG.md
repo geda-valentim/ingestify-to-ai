@@ -2,6 +2,89 @@
 
 > **Registro histórico (2025-10).** Não é mantido; para mudanças posteriores use `git log`. Observação: `workers/tasks_old.py`, citado abaixo, não existe (há um `workers/tasks.py.backup`). Exceção: mudanças de comportamento intencionais que uma spec manda registrar aqui entram na seção abaixo.
 
+## 2026-10: Raiz do repositório enxuta
+
+- Scripts de desenvolvimento movidos para `scripts/dev/`: `start.sh`, `rebuild.sh`, `infra.sh`,
+  `run_api.sh`, `run_worker.sh`, `stop_api.sh`, `validate-frontend.sh`. Os alvos do `Makefile`
+  (`make start`, `make rebuild`, …) não mudam; os scripts funcionam de qualquer diretório.
+- Removidos testes manuais obsoletos da raiz: `test_auth.sh`, `test_pagination.sh`,
+  `test_upload_apikey.sh`, `test_conversion_flow.py` (cobertos pela suíte `pytest` e por `scripts/`).
+- Os `docker-compose*.yml` ficam na raiz: o host agent fixa o caminho e o hash de cada um.
+
+## 2026-10: Guardar ou apagar os arquivos de origem de documentos
+
+- `POST /upload` e `POST /convert` aceitam `purge_source` (form, padrão `false`; mesmo
+  nome e sentido do `/transcribe`). Com `true`, os **arquivos de origem** — o original
+  (MinIO `uploads/…` e cópias locais, inclusive o download de URL no diretório de
+  trabalho) e os PDFs por página de um PDF dividido (`pages/{job_id}/…`) — são apagados
+  quando o job MAIN termina de vez: `completed`, ou `failed`/`partial` **depois de
+  esgotadas as tentativas automáticas**; nunca com retry ou página pendente. O Markdown
+  fica. A opção e a data ficam nas colunas `jobs.purge_source` e `jobs.source_deleted_at`
+  (a opção pedida no próprio request também aparece na configuração solicitada). Falha ao
+  apagar não muda o job.
+- **Migração aditiva Alembic `b8f20022e1c4`** (head única; também no boot por
+  `_add_missing_columns`): colunas `jobs.purge_source`, `jobs.source_deleted_at`,
+  `jobs.operation_key` e índice único `uq_pages_job_page (job_id, page_number)`. A migração
+  remove antes linhas de página duplicadas (fica a `COMPLETED`, senão a mais recente); o
+  boot não apaga nada e pula o índice se houver duplicatas.
+- Contabilidade de purge/dedup (`operation_key`, `source_deleted_at`, `purge_source` vindo
+  de uma duplicata) **não aparece mais** em `GET /jobs/{id}.configuration` nem em
+  "Configuração solicitada"; os campos `source_*` de `GET /jobs/{id}` continuam.
+- Split que esgota as tentativas marca o job MAIN `failed` (mensagem `SPLIT_FAILED`) e
+  aplica `purge_source` (antes: `processing` para sempre, `DELETE /source` 409 para
+  sempre). Um retry do split reaproveita as linhas `pages` (e os page job ids) da
+  tentativa anterior e não reenfileira página que já começou.
+- Retry automático que não pôde ser publicado (broker fora) marca o job `failed` (ou a
+  página `failed`) com `RETRY_NOT_QUEUED`, em vez de `pending` para sempre.
+- Monitoramento: `detect_stuck_jobs` agora grava de fato no MySQL (antes alterava objetos
+  de uma sessão fechada); página travada → `failed`, recontagem do pai (`partial`) e
+  `purge_source`. `auto_retry_failed_pages` reenfileira de verdade pelo mesmo caminho do
+  retry manual (antes deixava a página `pending` sem fila); job sem original é pulado.
+- **Mudança de contrato:** `POST /admin/jobs/{job_id}/retry-all-failed` reenfileira cada
+  página `failed` (mesmo caminho do retry manual, sob o lock do job) e põe o job em
+  `processing`; resposta com `pages_retried` e `page_job_ids` (sai
+  `pages_marked_for_retry`/`note`); `404` para job inexistente; `409 SOURCE_NOT_AVAILABLE`
+  sem mudar nada se o original foi apagado.
+- `recount_parent_pages` lê o pai com `SELECT … FOR UPDATE` e as páginas com leitura
+  bloqueante: recontagens concorrentes não gravam contagens velhas.
+- Frontend: a lista de páginas e o aviso de fila tratam `partial` como estado final (antes
+  a página do job consultava para sempre).
+- **Mudança de comportamento:** depois do apagamento o retry manual de página responde
+  `409 SOURCE_NOT_AVAILABLE` sem mudar nada (antes: página presa em `pending` e `500`), e
+  `GET /jobs/{id}/pages/{n}/pdf` responde `410 SOURCE_PURGED` com a data.
+- Nova rota `DELETE /jobs/{job_id}/source` (`jobs.delete`): apaga os arquivos de origem
+  de um job terminado (documento ou áudio) e responde `{job_id, source_deleted: true,
+  source_deleted_at}`; `404` sem arquivos ou de outro usuário; `409 JOB_STILL_PROCESSING`
+  enquanto o job, um retry automático ou uma página está pendente.
+- `GET /jobs/{job_id}` ganha `source_available`, `source_deleted_at` e `source_deletable`
+  (todos do MySQL).
+- **Mudança de comportamento (status):** um PDF dividido cujas páginas terminaram todas,
+  com alguma falha definitiva, passa a **`partial`** ("N de M páginas falharam…") em vez
+  de ficar `processing` para sempre; o retry de página o reabre (`processing`). Entre
+  tentativas automáticas, `process_conversion` deixa o job `queued` (antes `failed`), a
+  página espera como `pending` (antes `failed`) e o merge mantém o job `processing`.
+- **Mudança de comportamento (deduplicação):** a chave inclui a operação (preset do
+  Docling numa conversão, perfil numa transcrição); jobs de imagem nunca são devolvidos;
+  jobs `failed` **ou `partial`** nunca são devolvidos (reenviar é a nova tentativa). Com
+  `purge_source=true` a duplicata passa a apagar a origem (na hora se já terminou); com
+  `false`, uma duplicata sem origem (ou que vai apagá-la) não é reaproveitada. A resposta
+  de `/upload`, `/convert` e `/transcribe` ganha `duplicate` e `source_available`.
+  Consequência: `/upload` (preset padrão `fast`) e `/convert` (sem preset) **não
+  deduplicam mais entre si** — o mesmo arquivo enviado aos dois cria dois jobs.
+- `DELETE /jobs/{job_id}` passa a apagar o original de qualquer job no bucket certo
+  (antes: só transcrições, e sempre no bucket de áudio) e os PDFs por página.
+- `/transcribe` grava `purge_source` também em `job_configurations` e apaga o áudio
+  também quando a transcrição falha de vez.
+- **Idempotency-Key por tentativa** (`/images/analyze` `mode=full` e rostos): uma chave
+  cuja última tentativa terminou `failed` cria a tentativa seguinte (job novo) em vez de
+  devolver o job falho; respostas trazem `attempt`. Migração aditiva Alembic
+  `a7d30021c5e9` (`image_analysis_submissions.attempt`, também em `_ADDED_COLUMNS`).
+- Frontend: caixa "Don't keep the original file after converting" no formulário de
+  arquivo; botão "Delete original file" habilitado por `source_deletable`; "Original files
+  deleted on …"; retry de página escondido (com explicação) sem original; aviso de
+  duplicata no upload. Não há a opção nas abas URL/Drive/Dropbox (não guardam original).
+- `scripts/dev/start.sh` mostra o próprio caminho (`./scripts/dev/start.sh`).
+
 ## 2026-10: Spec 0020 — perfis de execução padrão na instalação
 
 - O root cria e publica um perfil `Padrão — <modelo>` por modelo aprovado do catálogo e

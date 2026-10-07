@@ -16,7 +16,7 @@ export function engineKindLabel(status?: JobStatusResponse | null): string | nul
 
 /** Why a routed job still waits; null for jobs without routing. */
 export function queueReasonText(status?: JobStatusResponse | null): string | null {
-  if (!status?.queue_reason || status.status === "completed" || status.status === "failed" || status.status === "cancelled") {
+  if (!status?.queue_reason || ["completed", "partial", "failed", "cancelled"].includes(status.status)) {
     return null;
   }
   if (status.queue_reason === "in_queue") {

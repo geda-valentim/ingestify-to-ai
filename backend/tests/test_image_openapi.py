@@ -31,7 +31,11 @@ def test_facial_migrations_have_one_head_on_current_main_chain():
     scripts = ScriptDirectory.from_config(config)
     # The IAM bindings branch (spec 0014) keeps its original parent and is joined to
     # the facial chain by a merge revision, so DBs stamped a1c40014e7b2 still upgrade.
-    assert scripts.get_heads() == ['f1c90019d3e4']
+    # image_analysis_submissions.attempt follows spec 0019 as the single head.
+    # jobs source bookkeeping + uq_pages_job_page follow it as the single head.
+    assert scripts.get_heads() == ['b8f20022e1c4']
+    assert scripts.get_revision('b8f20022e1c4').down_revision == 'a7d30021c5e9'
+    assert scripts.get_revision('a7d30021c5e9').down_revision == 'f1c90019d3e4'
     # Spec 0019 (users.root_slot) follows spec 0018.
     assert scripts.get_revision('f1c90019d3e4').down_revision == 'd4e80018a2b6'
     # Spec 0018 (engine grants into IAM bindings) follows the merge revision.
