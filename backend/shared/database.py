@@ -114,6 +114,14 @@ _ADDED_COLUMNS = {
     "engine_feature_state": {
         "workers_seen_at": "DATETIME(6) NULL",  # alembic 5d2e8f1a6c47 (spec 0003, slice 3b)
     },
+    "users": {
+        "root_slot": "SMALLINT NULL",  # alembic f1c90019d3e4 (spec 0019); unique index below
+    },
+}
+
+# Unique indexes on _ADDED_COLUMNS, created separately: SQLite cannot ADD COLUMN ... UNIQUE.
+_ADDED_UNIQUE_INDEXES = {
+    "uq_users_root_slot": ("users", "root_slot"),  # at most one root user (spec 0019)
 }
 
 
@@ -133,3 +141,10 @@ def _add_missing_columns(bind=None) -> None:
             for column, ddl in columns.items():
                 if column not in present:
                     conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}"))
+        for name, (table, column) in _ADDED_UNIQUE_INDEXES.items():
+            if table not in existing_tables:
+                continue
+            indexes = {i["name"] for i in inspector.get_indexes(table)}
+            indexes |= {u["name"] for u in inspector.get_unique_constraints(table)}
+            if name not in indexes:
+                conn.execute(text(f"CREATE UNIQUE INDEX {name} ON {table} ({column})"))

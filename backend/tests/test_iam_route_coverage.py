@@ -37,6 +37,7 @@ PUBLIC_ROUTES = {
     "POST /auth/login",
     "POST /auth/register",
     "POST /auth/refresh",
+    "GET /auth/setup",  # spec 0019: whether the installation still needs its root user
 }
 # WebSockets authenticated by a single-use ticket instead of a user dependency
 # (CA1 "WS /live/{id}/stream com ticket"). The ticket is only issued by a route

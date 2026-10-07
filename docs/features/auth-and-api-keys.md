@@ -110,12 +110,25 @@ e e-mail da mesma conta compartilham o contador de falhas. Se o Redis cair, o li
   controle e IAM humano de engines exigem JWT e RBAC/ABAC atual, inclusive para leitura.
   `/auth/me` expõe as permissões para navegação: as de engines vêm só dos bindings
   `engines` vigentes. Veja [perfis e acesso](execution-profiles.md).
-- **Primeiro admin:** pelo shell do servidor ou do container, por e-mail ou id, nunca por
-  username (que qualquer um escolhe no cadastro):
+- **Usuário root ([spec 0019](../specs/0019-usuario-root-na-primeira-inicializacao.md)):** a
+  primeira conta cadastrada numa instalação sem root nasce **root**: admin de emergência
+  (bootstrap) do IAM, único (índice único em `users.root_slot`) e irrevogável pela aplicação
+  — não pode ser desativado nem perder o admin (`409 ROOT_IMMUTABLE`), e continua admin mesmo
+  com `is_admin` zerado por SQL. `GET /auth/setup` (público) diz se o root já existe e se o
+  token é exigido; a tela de cadastro usa isso. Com `ENVIRONMENT=production`, o root só nasce
+  com `ROOT_SETUP_TOKEN` (`403 ROOT_SETUP_TOKEN_REQUIRED` enquanto não estiver configurado;
+  `403 ROOT_SETUP_TOKEN_INVALID` com token ausente ou errado). Fora de produção o token é
+  opcional e, se configurado, obrigatório. Depois que o root existe, o token é ignorado;
+  remova-o do ambiente. Um deploy exposto feito só com o `docker-compose.yml` base roda com
+  `ENVIRONMENT=development`: configure o token nesse caso também.
+- **Outros admins:** pelo shell do servidor ou do container, por e-mail ou id, nunca por
+  username (que qualquer um escolhe no cadastro). Em instalações que já tinham usuários antes
+  da 0019, `--root` designa o root quando ainda não há nenhum (nunca o substitui):
 
   ```bash
   docker compose exec api python scripts/make_admin.py --email alice@example.com
   docker compose exec api python scripts/make_admin.py --id <uuid> --yes   # sem pergunta
+  docker compose exec api python scripts/make_admin.py --email alice@example.com --root
   ```
 
   O script mostra id, username e e-mail e pede confirmação. Ele recusa quando o e-mail
@@ -130,7 +143,8 @@ e e-mail da mesma conta compartilham o contador de falhas. Se o Redis cair, o li
 | `JWT_SECRET_KEY` | **obrigatória** | ≥ 32 caracteres; placeholders conhecidos são recusados. Gere com `openssl rand -hex 32` (ou `make ensure-jwt-secret`). A API não sobe sem ela. |
 | `JWT_ALGORITHM` | `HS256` | |
 | `JWT_EXPIRATION_MINUTES` | `60` | |
-| `ADMIN_USER_IDS` | vazio | Ninguém é admin por padrão. |
+| `ADMIN_USER_IDS` | vazio | Ninguém é admin por padrão (além do root). |
+| `ROOT_SETUP_TOKEN` | vazio | Spec 0019. Obrigatório em `production` para criar o root; opcional fora dela. Use uma vez e remova. |
 | `CORS_ALLOWED_ORIGINS` | `localhost`/`127.0.0.1` nas portas 3000, 8000, 8080 | Produção deve definir a origem real do frontend. |
 | `ENVIRONMENT` | `production` (o `docker-compose.yml` base define `development`; o `.prod.yml` volta a `production`) | Em `production`, erros 500 não expõem a mensagem da exceção e falhas de MySQL/Redis no startup derrubam a API. |
 | `AUTH_ENABLED` | `true` | **Sem efeito**: declarada, não lida por nenhum código. Não existe modo sem autenticação. |

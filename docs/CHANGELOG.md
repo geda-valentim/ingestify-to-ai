@@ -2,6 +2,18 @@
 
 > **Registro histórico (2025-10).** Não é mantido; para mudanças posteriores use `git log`. Observação: `workers/tasks_old.py`, citado abaixo, não existe (há um `workers/tasks.py.backup`). Exceção: mudanças de comportamento intencionais que uma spec manda registrar aqui entram na seção abaixo.
 
+## 2026-10: Spec 0019 — usuário root na primeira inicialização
+
+Ver [specs/0019](specs/0019-usuario-root-na-primeira-inicializacao.md).
+
+- **A primeira conta cadastrada numa instalação sem root vira root** (`users.root_slot = 1`,
+  `is_admin = true`), único por índice único e irrevogável pela aplicação. Migration
+  `f1c90019d3e4` (depois de `d4e80018a2b6`); a coluna também é criada no boot.
+- **Mudança de comportamento:** com `ENVIRONMENT=production` e sem `ROOT_SETUP_TOKEN`, o
+  cadastro fica fechado (`403 ROOT_SETUP_TOKEN_REQUIRED`) até o root existir.
+- `GET /auth/setup` (público), `is_root` em `/auth/me`, `make_admin.py --root`.
+- `PUT /admin/access/subjects/{id}/state` recusa desativar ou rebaixar o root (`409 ROOT_IMMUTABLE`).
+
 ## 2026-10: Spec 0018 — IAM: convergência do RBAC/ABAC de engines (0009)
 
 Ver [specs/0018](specs/0018-iam-convergencia-do-rbac-abac-de-engines.md) e a

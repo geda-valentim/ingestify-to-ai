@@ -244,6 +244,23 @@ async def startup_event():
         if not settings.redis_password:
             logger.warning("SECURITY: Redis has no password. Set REDIS_PASSWORD (Redis must only be reachable internally).")
 
+    # Spec 0019: say how the root user will be created (or why it cannot be yet)
+    try:
+        from shared.database import SessionLocal
+        from shared.root import root_exists, setup_token_required
+
+        with SessionLocal() as db:
+            if not root_exists(db):
+                if settings.environment.strip().lower() == "production" and not settings.root_setup_token:
+                    logger.warning("SETUP: no root user and no ROOT_SETUP_TOKEN: registration is closed until "
+                                   "ROOT_SETUP_TOKEN is set (or run scripts/make_admin.py --root).")
+                elif setup_token_required():
+                    logger.warning("SETUP: no root user yet: the first registration with ROOT_SETUP_TOKEN becomes root.")
+                else:
+                    logger.warning("SETUP: no root user yet: the first registered account becomes root.")
+    except Exception as e:  # the database may be down; init_db reports that on its own
+        logger.warning(f"SETUP: could not check for the root user: {e}")
+
     # Refuse to start with a missing or insecure JWT secret: anyone could forge tokens
     from shared.auth import validate_jwt_secret
     validate_jwt_secret(settings.jwt_secret_key)

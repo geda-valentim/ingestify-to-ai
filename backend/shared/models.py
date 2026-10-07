@@ -1,5 +1,5 @@
 from sqlalchemy import LargeBinary
-from sqlalchemy import Column, String, Boolean, DateTime, ForeignKey, Text, Integer, BigInteger, Enum, JSON, Index, UniqueConstraint
+from sqlalchemy import Column, String, Boolean, DateTime, ForeignKey, Text, Integer, BigInteger, SmallInteger, Enum, JSON, Index, UniqueConstraint
 from sqlalchemy.dialects import mysql
 from sqlalchemy.orm import relationship
 from datetime import datetime
@@ -23,6 +23,9 @@ def generate_uuid():
 # "mariadb" variant covers a mariadb+pymysql URL.
 _BINARY_KEY = mysql.VARCHAR(200, charset="utf8mb4", collation="utf8mb4_bin")
 KEY_TYPE = String(200).with_variant(_BINARY_KEY, "mysql").with_variant(_BINARY_KEY, "mariadb")
+
+# users.root_slot value of the installation's root user (spec 0019)
+ROOT_SLOT = 1
 
 # New tables state charset/collation explicitly instead of inheriting the schema
 # default, so create_all (dev/CI) and scripts/migrate_0004_projects.py agree.
@@ -63,12 +66,22 @@ class User(Base):
     is_active = Column(Boolean, default=True, nullable=False)
     # Admin flag - grants access to /admin/* endpoints. Promote users with scripts/make_admin.py
     is_admin = Column(Boolean, default=False, server_default="0", nullable=False)
+    # Spec 0019: 1 for the installation's single root user, NULL for everyone else. The
+    # unique index (many NULLs allowed) is what guarantees there is at most one root.
+    root_slot = Column(SmallInteger, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    __table_args__ = (UniqueConstraint("root_slot", name="uq_users_root_slot"),)
 
     # Relationships
     api_keys = relationship("APIKey", back_populates="user", cascade="all, delete-orphan")
     jobs = relationship("Job", back_populates="user", cascade="all, delete-orphan")
+
+    @property
+    def is_root(self) -> bool:
+        """The installation's root user (spec 0019): bootstrap that the app cannot revoke"""
+        return self.root_slot == ROOT_SLOT
 
     def __repr__(self):
         return f"<User(id={self.id}, username={self.username}, email={self.email})>"
