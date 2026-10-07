@@ -180,23 +180,28 @@ def recount_parent_pages(db: Session, parent_job_id: str) -> None:
     too: PARTIAL (the converted pages are kept, the failed ones can be retried),
     instead of PROCESSING forever. A page retry opens it again (PROCESSING); the
     merge completes it once every page is COMPLETED.
+
+    Concurrent recounts (two pages settling at once) serialize on the parent's row
+    lock (SELECT ... FOR UPDATE), and the pages are read with a locking read after
+    it, so each recount sees every page change committed before it: the last
+    writer's counts are correct (a plain read could return an older snapshot).
     """
-    parent = db.get(Job, parent_job_id)
+    parent = db.query(Job).filter(Job.id == parent_job_id).with_for_update().populate_existing().first()
     if parent is None:
         return
-    parent.pages_completed = db.query(Page).filter(Page.job_id == parent_job_id,
-                                                   Page.status == JobStatus.COMPLETED).count()
-    parent.pages_failed = db.query(Page).filter(Page.job_id == parent_job_id,
-                                                Page.status == JobStatus.FAILED).count()
-    settle_parent_with_failed_pages(db, parent)
+    statuses = [status for (status,) in db.query(Page.status).filter(Page.job_id == parent_job_id)
+                .with_for_update().all()]
+    parent.pages_completed = sum(1 for status in statuses if status == JobStatus.COMPLETED)
+    parent.pages_failed = sum(1 for status in statuses if status == JobStatus.FAILED)
+    settle_parent_with_failed_pages(db, parent, page_count=len(statuses))
 
 
-def settle_parent_with_failed_pages(db: Session, parent: Job) -> bool:
+def settle_parent_with_failed_pages(db: Session, parent: Job, page_count: Optional[int] = None) -> bool:
     """MAIN job -> PARTIAL once all its pages are terminal and some failed (no commit)."""
     total = parent.total_pages or 0
     if not total or not parent.pages_failed or parent.status not in (JobStatus.PENDING, JobStatus.PROCESSING):
         return False
-    pages = db.query(Page).filter(Page.job_id == parent.id).count()
+    pages = page_count if page_count is not None else db.query(Page).filter(Page.job_id == parent.id).count()
     if pages < total or parent.pages_completed + parent.pages_failed < pages:
         return False  # still splitting, or some page is queued / running / waiting for a retry
     from shared import error_catalog
@@ -229,7 +234,11 @@ def _job_pending(db: Session, d: JobDispatch) -> Optional[JobChange]:
 
 def _job_failed(db: Session, d: JobDispatch, message: str, now: datetime) -> Optional[JobChange]:
     if d.subject_type == "page":
-        # One page failing for good fails that page, never the whole document (as today)
+        # One page failing for good fails that page, never the whole document (as today).
+        # The parent's row lock first, the page after: the order every purge, page
+        # retry and recount takes them in
+        if d.job_id:
+            db.query(Job).filter(Job.id == d.job_id).with_for_update().first()
         page = _page(db, d.job_id, d.subject_id, page_number_of(d))
         if page is not None:
             page.status = JobStatus.FAILED

@@ -156,10 +156,9 @@ export default function JobStatusPage({ params }: PageProps) {
     queryFn: () => jobsApi.getPages(resolvedParams.id),
     enabled: status?.type === "main" && (status?.total_pages ?? 0) > 0 && !!token,
     refetchInterval: (query) => {
-      if (status?.status === "completed" || status?.status === "failed") {
-        return false;
-      }
-      return 3000;
+      // Settled jobs (partial included) have nothing left to poll for
+      const settled = ["completed", "partial", "failed", "cancelled"];
+      return status?.status && settled.includes(status.status) ? false : 3000;
     },
   });
 

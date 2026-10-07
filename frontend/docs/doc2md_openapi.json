@@ -522,7 +522,7 @@
           "Admin & Monitoring"
         ],
         "summary": "Bulk retry all failed pages of a job",
-        "description": "Retry all failed pages of a specific job\n\nThis is useful when multiple pages failed due to temporary issues\nand you want to retry them all at once instead of individually.\n\nArgs:\n    job_id: The job ID whose failed pages should be retried\n\nReturns:\n    Number of pages queued for retry",
+        "description": "Retry all failed pages of a specific job\n\nRequeues every FAILED page still under the retry limit\n(`MONITORING_MAX_RETRY_COUNT`), exactly like the per-page retry\n(`POST /jobs/{job_id}/pages/{n}/retry`): the original PDF is located first,\nthen the pages become pending and the job processing, under the job's row\nlock (the same lock the source purge takes).\n\nReturns:\n    Number of pages queued for retry\n\nErrors:\n    404: job not found\n    409 `SOURCE_NOT_AVAILABLE`: the original was deleted (purge_source /\n    DELETE /jobs/{id}/source); nothing was changed",
         "operationId": "retry_all_failed_pages_admin_jobs__job_id__retry_all_failed_post",
         "security": [
           {

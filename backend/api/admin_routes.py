@@ -20,10 +20,10 @@ from shared.queries import (
     get_stuck_pages,
     get_failed_pages_for_retry,
     get_system_stats,
-    get_job_with_pages,
 )
 from shared.models import Job, Page, JobStatus
-from shared.database import SessionLocal
+from shared.database import SessionLocal, get_db
+from sqlalchemy.orm import Session
 from shared.redis_client import get_redis_client
 from shared.auth import get_current_active_user
 from shared.iam.decide import is_bootstrap_admin
@@ -206,47 +206,53 @@ async def recover_stuck_jobs(
 @router.post("/jobs/{job_id}/retry-all-failed", summary="Bulk retry all failed pages of a job")
 async def retry_all_failed_pages(
     job_id: str,
-    admin_user=Depends(require("platform.jobs.recover"))
+    admin_user=Depends(require("platform.jobs.recover")),
+    db: Session = Depends(get_db),
 ) -> Dict[str, Any]:
     """
     Retry all failed pages of a specific job
 
-    This is useful when multiple pages failed due to temporary issues
-    and you want to retry them all at once instead of individually.
-
-    Args:
-        job_id: The job ID whose failed pages should be retried
+    Requeues every FAILED page still under the retry limit
+    (`MONITORING_MAX_RETRY_COUNT`), exactly like the per-page retry
+    (`POST /jobs/{job_id}/pages/{n}/retry`): the original PDF is located first,
+    then the pages become pending and the job processing, under the job's row
+    lock (the same lock the source purge takes).
 
     Returns:
         Number of pages queued for retry
+
+    Errors:
+        404: job not found
+        409 `SOURCE_NOT_AVAILABLE`: the original was deleted (purge_source /
+        DELETE /jobs/{id}/source); nothing was changed
     """
+    from shared import error_catalog, page_retry
+    from shared.iam.remote import remote_use_of
+    from shared.job_source import lock_job
+    from shared.minio_client import get_minio_client
+    from workers.celery_app import celery_app
+    from workers.tasks import process_page
+
+    logger.info(f"[ADMIN] Bulk retry requested for job {job_id} by {admin_user.email}")
     try:
-        logger.info(f"[ADMIN] Bulk retry requested for job {job_id} by {admin_user.email}")
-
-        # Get job and all its pages
-        result = get_job_with_pages(job_id)
-        if not result:
+        job = lock_job(db, job_id)
+        if job is None:
+            db.rollback()
             raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
-
-        job, pages = result
-
-        # Find failed pages
-        failed_pages = [p for p in pages if p.status == JobStatus.FAILED]
+        total_pages = db.query(Page).filter(Page.job_id == job_id).count()
+        failed_pages = page_retry.locked_failed_pages(db, job_id)
 
         if not failed_pages:
+            db.rollback()
             return {
                 "success": True,
                 "message": "No failed pages found for this job",
                 "pages_retried": 0,
             }
 
-        # Check retry limits
-        retryable_pages = [
-            p for p in failed_pages
-            if p.retry_count < settings.monitoring_max_retry_count
-        ]
-
+        retryable_pages = [p for p in failed_pages if (p.retry_count or 0) < settings.monitoring_max_retry_count]
         if not retryable_pages:
+            db.rollback()
             return {
                 "success": False,
                 "message": "All failed pages have exceeded max retry count",
@@ -254,56 +260,37 @@ async def retry_all_failed_pages(
                 "max_retry_count": settings.monitoring_max_retry_count,
             }
 
-        # Queue retry tasks for each page
-        retried_count = 0
-        errors = []
+        try:
+            queued, failed = page_retry.requeue_pages(
+                db, job, retryable_pages, user_id=job.user_id,
+                remote_use=remote_use_of(job.user_id, session_factory=SessionLocal),
+                enqueue=process_page.delay, celery=celery_app,
+                minio_factory=lambda: get_minio_client(), temp_root=settings.temp_storage_path,
+                today_queue=settings.celery_task_default_queue, redis_client=get_redis_client(),
+                session_factory=SessionLocal,
+            )
+        except page_retry.SourceNotAvailable:
+            raise HTTPException(status_code=409, detail=error_catalog.detail("SOURCE_NOT_AVAILABLE"))
 
-        for page in retryable_pages:
-            try:
-                # Increment retry count
-                db = SessionLocal()
-                try:
-                    page.retry_count += 1
-                    page.status = JobStatus.PENDING
-                    page.error_message = None
-                    db.commit()
-                except Exception as e:
-                    logger.error(f"Failed to update page {page.id}: {e}")
-                    db.rollback()
-                    errors.append(f"Page {page.page_number}: {str(e)}")
-                    continue
-                finally:
-                    db.close()
-
-                # Note: Actual re-queuing requires page file from MinIO
-                # For now, we just mark as pending and log
-                logger.warning(
-                    f"[ADMIN] Page {page.page_number} of job {job_id} marked for retry "
-                    f"(retry {page.retry_count}/{settings.monitoring_max_retry_count}). "
-                    f"Use individual page retry endpoint to actually re-queue."
-                )
-
-                retried_count += 1
-
-            except Exception as e:
-                logger.error(f"Error retrying page {page.id}: {e}")
-                errors.append(f"Page {page.page_number}: {str(e)}")
-
+        for page, new_id in queued:
+            logger.info(f"[ADMIN] Page {page.page_number} of job {job_id} requeued as {new_id} "
+                        f"(retry {page.retry_count}/{settings.monitoring_max_retry_count})")
         return {
-            "success": True,
+            "success": bool(queued),
             "job_id": job_id,
-            "total_pages": len(pages),
+            "total_pages": total_pages,
             "failed_pages": len(failed_pages),
             "retryable_pages": len(retryable_pages),
-            "pages_marked_for_retry": retried_count,
-            "errors": errors if errors else None,
+            "pages_retried": len(queued),
+            "page_job_ids": {page.page_number: new_id for page, new_id in queued},
+            "errors": [f"Page {page.page_number}: {error}" for page, error in failed] or None,
             "triggered_by": admin_user.email,
-            "note": "Pages marked as pending. Use individual page retry endpoints to re-queue with file download.",
         }
 
     except HTTPException:
         raise
     except Exception as e:
+        db.rollback()
         logger.error(f"Error bulk retrying pages for job {job_id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to retry pages")
 

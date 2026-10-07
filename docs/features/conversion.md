@@ -82,9 +82,14 @@ cria uma conversão independente.
   (`/convert` não tem preset: usa os defaults); numa transcrição, o perfil de
   processamento. O mesmo arquivo com outro preset é outro job. Jobs de imagem
   (`/images/describe`, `/images/ocr`, `/images/analyze`, rostos) nunca são devolvidos
-  pela deduplicação de documentos, mesmo com os mesmos bytes. A chave fica em
-  `job_configurations.options.operation_key`; um job criado antes dela responde a
-  qualquer conversão do mesmo arquivo, como antes.
+  pela deduplicação de documentos, mesmo com os mesmos bytes. A chave fica na coluna
+  `jobs.operation_key` (nunca na configuração solicitada); um job criado antes dela
+  responde a qualquer conversão do mesmo arquivo, como antes.
+- **`/upload` e `/convert` não deduplicam entre si.** O `/upload` sem `docling_preset`
+  usa o preset `fast`; o `/convert` não aceita preset (chave "sem preset", defaults
+  `DOCLING_*`). São operações diferentes: o mesmo arquivo enviado a um e depois ao outro
+  cria **dois jobs**. Só reenvios ao mesmo endpoint (com o mesmo preset) devolvem o job
+  existente.
 - **Tentativa.** Um job que terminou com falha (`failed`, ou `partial` — páginas que
   falharam depois das tentativas automáticas) nunca é devolvido: reenviar o arquivo é a
   nova tentativa e cria outro job.
@@ -123,12 +128,19 @@ nome e sentido do parâmetro do `/transcribe`):
   retry manual de página responde `409` `SOURCE_NOT_AVAILABLE` (a interface esconde o
   botão e explica).
 
-A escolha é gravada com o job no MySQL (tabela `job_configurations`, `operation:
-"conversion"`, `options.purge_source`), não só na mensagem do Celery: o merge depois de
-um retry, em qualquer worker, a respeita. A data do apagamento também fica ali
-(`options.source_deleted_at`), sem migração. Se o MinIO recusar o apagamento, o erro é
-registrado no log, o que não foi apagado continua referenciado e o status do job **não
-muda**.
+A escolha é gravada com o job no MySQL (coluna `jobs.purge_source`; quando veio no
+próprio pedido, também na configuração solicitada, `job_configurations.options.purge_source`),
+não só na mensagem do Celery: o merge depois de um retry, em qualquer worker, a respeita.
+Uma duplicata com `purge_source=true` grava só a coluna (não reescreve a configuração
+solicitada do job existente). A data do apagamento fica em `jobs.source_deleted_at`
+(migração Alembic `b8f20022e1c4`). Se o MinIO recusar o apagamento, o erro é registrado
+no log, o que não foi apagado continua referenciado e o status do job **não muda**.
+
+Todo apagamento (worker ao assentar o job, duplicata, `DELETE /jobs/{id}/source`) e todo
+retry de página (manual, `POST /admin/jobs/{id}/retry-all-failed`, auto-retry do
+monitoramento) usam o mesmo lock da linha do job MAIN (`SELECT … FOR UPDATE`): o
+apagamento reconfere sob o lock que nada está pendente e só faz commit depois de apagar
+tudo; o retry, se chegar depois, responde `409 SOURCE_NOT_AVAILABLE` sem mudar nada.
 
 Um reenvio do mesmo arquivo segue as regras da
 [deduplicação](#deduplicação-por-checksum-por-operação-e-por-tentativa).

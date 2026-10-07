@@ -74,6 +74,16 @@ CATALOG = {
         "refaça as páginas com falha para completar o documento.",
         ["retry"],
     ),
+    "SPLIT_FAILED": (
+        "Não foi possível dividir o PDF em páginas, nem depois das novas tentativas "
+        "automáticas. Envie o arquivo novamente.",
+        ["retry"],
+    ),
+    "RETRY_NOT_QUEUED": (
+        "A nova tentativa automática não pôde ser agendada (fila indisponível), então "
+        "o processamento foi encerrado com falha. Envie o arquivo novamente.",
+        ["retry"],
+    ),
     "SOURCE_DELETE_FAILED": (
         "Não foi possível apagar o arquivo original agora; ele foi mantido. "
         "Tente novamente em instantes.",

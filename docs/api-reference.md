@@ -582,14 +582,19 @@ Autorização: **Administrador (JWT ou API key)**. Operation ID: `retry_all_fail
 
 Retry all failed pages of a specific job
 
-This is useful when multiple pages failed due to temporary issues
-and you want to retry them all at once instead of individually.
-
-Args:
-    job_id: The job ID whose failed pages should be retried
+Requeues every FAILED page still under the retry limit
+(`MONITORING_MAX_RETRY_COUNT`), exactly like the per-page retry
+(`POST /jobs/{job_id}/pages/{n}/retry`): the original PDF is located first,
+then the pages become pending and the job processing, under the job's row
+lock (the same lock the source purge takes).
 
 Returns:
     Number of pages queued for retry
+
+Errors:
+    404: job not found
+    409 `SOURCE_NOT_AVAILABLE`: the original was deleted (purge_source /
+    DELETE /jobs/{id}/source); nothing was changed
 
 Parâmetros:
 

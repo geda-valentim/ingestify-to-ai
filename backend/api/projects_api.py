@@ -303,9 +303,6 @@ def resolve_upload_location(db: Session, user: User, plan: UploadPlan, path: str
 # Deduplication, scoped by project
 # ---------------------------------------------------------------------------
 
-OPERATION_KEY_OPTION = "operation_key"
-
-
 def conversion_operation_key(docling_preset: Optional[str]) -> str:
     """
     Dedup key of a document conversion: the operation and the options that change
@@ -320,16 +317,15 @@ def conversion_operation_key(docling_preset: Optional[str]) -> str:
 
 
 def save_operation_key(db: Session, job: Job, key: str) -> None:
-    """Persist the dedup key with the job (JobConfiguration.options; no commit)."""
-    from shared.job_source import _set_option
-
-    _set_option(db, job, OPERATION_KEY_OPTION, key)
+    """
+    Persist the dedup key with the job (`Job.operation_key`; no commit). Never in
+    JobConfiguration.options: that is the configuration the user requested.
+    """
+    job.operation_key = key
 
 
 def _operation_key_of(job: Job) -> Optional[str]:
-    row = getattr(job, "configuration_row", None)
-    options = getattr(row, "options", None) if row is not None else None
-    return options.get(OPERATION_KEY_OPTION) if isinstance(options, dict) else None
+    return getattr(job, "operation_key", None)
 
 
 def find_duplicate_job(db: Session, user_id: str, checksum: str, location: UploadLocation,

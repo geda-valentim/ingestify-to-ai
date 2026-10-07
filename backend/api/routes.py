@@ -10,10 +10,9 @@ from shared.job_source import (
     apply_purge_to_duplicate,
     delete_source,
     has_pending_work,
-    local_source_dirs,
+    lock_job,
     save_purge_option,
     source_available,
-    source_bucket,
     source_deleted_at,
 )
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Header, Body, Depends, Request, Query
@@ -59,6 +58,7 @@ from shared.utils import sanitize_upload_filename
 from shared.tags import set_job_tags
 from shared.iam.remote import can_use_remote
 from shared.engines import dispatch as engine_dispatch
+from shared import page_retry
 from shared.transcription import is_media_filename
 from api.transcription_options import admission as transcription_admission, media_input_kind
 from api.tag_routes import TAGS_FORM_DESCRIPTION, add_tags_to_existing_job, parse_tags_or_422
@@ -1746,15 +1746,16 @@ async def delete_job_source(
     # have no original of their own
     db_job = owned_job if (owned_job is not None and owned_job.id == job_id) else None
     if db_job is not None:
-        # Same row lock as the page retry: a retry cannot start between the check
-        # below and the delete
-        db_job = db.query(Job).filter(Job.id == job_id).with_for_update().populate_existing().first()
+        # Same row lock as the page retry and the worker purge: held from the check
+        # below until delete_source's single commit, after every file is gone
+        db_job = lock_job(db, job_id)
     if db_job is None or not source_available(db_job):
+        db.rollback()
         raise HTTPException(status_code=404, detail="Arquivo original não encontrado")
 
     # Anything queued or running may still read the original: the MAIN job
     # (also while a Celery retry waits, PENDING), or a page (retry included)
-    if has_pending_work(db, db_job):
+    if has_pending_work(db, db_job, locked=True):
         db.rollback()
         raise HTTPException(status_code=409, detail=error_catalog.detail("JOB_STILL_PROCESSING"))
 
@@ -2673,11 +2674,11 @@ async def retry_failed_page(
 
     # Lock the MAIN job row: DELETE /jobs/{id}/source takes the same lock, so the
     # original cannot be deleted between finding it here and the retry being queued
-    db_job = db.query(Job).filter(Job.id == job_id).with_for_update().populate_existing().first()
+    db_job = lock_job(db, job_id)
     if db_job is None:
         raise HTTPException(status_code=404, detail="Job principal não encontrado")
     try:
-        db.refresh(db_page)
+        db.refresh(db_page, with_for_update=True)
     except Exception:  # a page migrated from Redis whose row could not be saved
         pass
     if db_page.status != DBJobStatus.FAILED:
@@ -2696,80 +2697,30 @@ async def retry_failed_page(
         db.rollback()
         raise HTTPException(status_code=503, detail="Sistema de processamento indisponível")
 
-    # Find (or restore) the original PDF first: nothing is changed when it is gone
+    # Same path as the admin bulk retry and the monitoring auto-retry: the original
+    # is located first (nothing is changed when it is gone), then the page waits
+    # for its retry and the MAIN job is open again, all under the job's row lock
     settings = get_settings()
-    pdf_path = _retry_source_pdf(db_job, settings)
-    if pdf_path is None:
-        db.rollback()
-        raise HTTPException(status_code=409, detail=error_catalog.detail("SOURCE_NOT_AVAILABLE"))
-
-    import uuid
-
-    new_page_job_id = str(uuid.uuid4())
-    previous = (db_job.status, db_job.completed_at, db_job.error_message)
-
-    # The page waits for its retry, and the MAIN job is open again until it
-    # settles (completed after the merge, or partial if the page fails again)
-    db_page.status = DBJobStatus.PENDING
-    db_page.page_job_id = new_page_job_id
-    db_page.error_message = None
-    db_page.retry_count += 1
-    db_job.status = DBJobStatus.PROCESSING
-    db_job.completed_at = None
-    db_job.error_message = None
     try:
-        db.commit()
+        queued, failed = page_retry.requeue_pages(
+            db, db_job, [db_page], user_id=current_user.id,
+            remote_use=lambda: can_use_remote(current_user, session_factory=SessionLocal),
+            enqueue=process_page.delay, celery=_engine_celery(),
+            minio_factory=lambda: get_minio_client(), temp_root=settings.temp_storage_path,
+            today_queue=settings.celery_task_default_queue, redis_client=redis_client,
+            session_factory=SessionLocal,
+        )
+    except page_retry.SourceNotAvailable:
+        raise HTTPException(status_code=409, detail=error_catalog.detail("SOURCE_NOT_AVAILABLE"))
     except Exception as e:
         db.rollback()
         logger.error(f"Could not queue the retry of page {page_number} of job {job_id}: {e}")
         raise HTTPException(503, detail={"code": "DATABASE_UNAVAILABLE"}) from None
-
-    logger.info(f"Retry attempt {db_page.retry_count}/3 for page {page_number}")
-
-    try:
-        redis_client.set_job_status(
-            job_id=new_page_job_id,
-            job_type="page",
-            status="queued",
-            progress=0,
-            parent_job_id=job_id,
-            page_number=page_number,
-        )
-        redis_client.set_job_owner(new_page_job_id, current_user.id)
-        redis_client.update_job_progress(job_id, (redis_client.get_job_status(job_id) or {}).get("progress") or 0,
-                                         status="processing", error=None)
-
-        # Enqueue retry task: through the document_conversion route when there is one
-        # (spec 0003, 4.14); without a route, exactly as before
-        def enqueue():
-            process_page.delay(
-                job_id=new_page_job_id,
-                parent_job_id=job_id,
-                pdf_path=pdf_path,
-                page_number=page_number,
-            )
-
-        engine_dispatch.submit(
-            feature="document_conversion", job_id=job_id, subject_type="page", subject_id=new_page_job_id,
-            user_id=current_user.id,
-            remote_use=lambda: can_use_remote(current_user, session_factory=SessionLocal),
-            payload=engine_dispatch.page_payload(
-                page_job_id=new_page_job_id, parent_job_id=job_id, page_number=page_number, options={},
-                source_pdf_path=pdf_path, today_queue=settings.celery_task_default_queue),
-            today=enqueue, celery=_engine_celery(), session_factory=SessionLocal,
-        )
-    except Exception as e:
-        logger.error(f"Error retrying page {page_number} of job {job_id}: {e}", exc_info=True)
-        db.rollback()
-        # Nothing was queued: put the page and the MAIN job back as they were
-        try:
-            db_page.status = DBJobStatus.FAILED
-            db_page.retry_count = max((db_page.retry_count or 1) - 1, 0)
-            db_job.status, db_job.completed_at, db_job.error_message = previous
-            db.commit()
-        except Exception:
-            db.rollback()
+    if failed or not queued:
+        # Nothing was queued: the page and the MAIN job were put back as they were
         raise HTTPException(status_code=500, detail="Erro ao reprocessar página")
+    new_page_job_id = queued[0][1]
+    db.refresh(db_page)
 
     logger.info(f"Page {page_number} of job {job_id} enqueued for retry with new job_id {new_page_job_id}")
 
@@ -2795,40 +2746,6 @@ def _raise_if_source_purged(job: Optional[Job]) -> None:
         "deleted_at": deleted_at.strftime("%d/%m/%Y %H:%M") + " UTC"})
     body["source_deleted_at"] = deleted_at.isoformat() + "Z"
     raise HTTPException(status_code=410, detail=body)
-
-
-def _retry_source_pdf(db_job: Job, settings) -> Optional[str]:
-    """
-    The original PDF a page retry extracts its page from: a local copy (the upload
-    copy, or a URL download in the work dir), else restored from MinIO into
-    {temp}/uploads/{job_id}/. None when the original is gone (purge_source /
-    DELETE /jobs/{id}/source) or is not a PDF.
-    """
-    for directory in local_source_dirs(db_job.id):
-        try:
-            found = sorted(p for p in directory.glob("*.pdf") if p.is_file()) if directory.is_dir() else []
-        except OSError:
-            found = []
-        if found:
-            return str(found[0])
-
-    if not db_job.minio_upload_path:
-        return None
-    restored = Path(settings.temp_storage_path) / "uploads" / db_job.id / Path(db_job.minio_upload_path).name
-    if restored.suffix.lower() != ".pdf":
-        return None
-    try:
-        restored.parent.mkdir(parents=True, exist_ok=True)
-        minio_client = get_minio_client()
-        minio_client.download_file(
-            source_bucket(minio_client, db_job.minio_upload_path), db_job.minio_upload_path,
-            file_path=str(restored),
-        )
-    except Exception as e:
-        logger.warning(f"Could not restore original PDF of job {db_job.id} from MinIO: {e}")
-        restored.unlink(missing_ok=True)  # never leave a partial download behind as "the original"
-        return None
-    return str(restored) if restored.is_file() else None
 
 
 @router.get("/jobs/{job_id}/pages/{page_number}/pdf", summary="URL temporária do PDF de uma página")

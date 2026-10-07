@@ -143,6 +143,13 @@ class Job(Base):
     minio_upload_path = Column(String(500))  # Path to uploaded file in MinIO
     minio_result_path = Column(String(500))  # Path to result markdown in MinIO
 
+    # Source-file and dedup bookkeeping (shared/job_source.py, api/projects_api.py).
+    # Kept out of JobConfiguration.options, which is the *requested* configuration
+    # shown to the user (alembic b8f20022e1c4).
+    purge_source = Column(Boolean, nullable=True)  # delete the source files once settled
+    source_deleted_at = Column(DateTime, nullable=True)  # when they were deleted (UTC)
+    operation_key = Column(String(64), nullable=True)  # dedup key of a document conversion
+
     # Job status
     status = Column(Enum(JobStatus), default=JobStatus.PENDING, nullable=False, index=True)
     progress = Column(Integer, default=0)  # 0-100
@@ -284,6 +291,9 @@ class AppMigration(Base):
 class Page(Base):
     """Page model - stores metadata about individual PDF pages"""
     __tablename__ = "pages"
+    # One row per page of a job: a split retry reuses the rows instead of adding
+    # PENDING duplicates (alembic b8f20022e1c4; shared.database boot path)
+    __table_args__ = (UniqueConstraint("job_id", "page_number", name="uq_pages_job_page"),)
 
     id = Column(String(36), primary_key=True, default=generate_uuid)
     job_id = Column(String(36), ForeignKey("jobs.id", ondelete="CASCADE"), nullable=False, index=True)

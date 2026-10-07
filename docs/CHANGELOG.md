@@ -19,8 +19,36 @@
   trabalho) e os PDFs por página de um PDF dividido (`pages/{job_id}/…`) — são apagados
   quando o job MAIN termina de vez: `completed`, ou `failed`/`partial` **depois de
   esgotadas as tentativas automáticas**; nunca com retry ou página pendente. O Markdown
-  fica. A opção e a data ficam em `job_configurations.options` (sem migração). Falha ao
+  fica. A opção e a data ficam nas colunas `jobs.purge_source` e `jobs.source_deleted_at`
+  (a opção pedida no próprio request também aparece na configuração solicitada). Falha ao
   apagar não muda o job.
+- **Migração aditiva Alembic `b8f20022e1c4`** (head única; também no boot por
+  `_add_missing_columns`): colunas `jobs.purge_source`, `jobs.source_deleted_at`,
+  `jobs.operation_key` e índice único `uq_pages_job_page (job_id, page_number)`. A migração
+  remove antes linhas de página duplicadas (fica a `COMPLETED`, senão a mais recente); o
+  boot não apaga nada e pula o índice se houver duplicatas.
+- Contabilidade de purge/dedup (`operation_key`, `source_deleted_at`, `purge_source` vindo
+  de uma duplicata) **não aparece mais** em `GET /jobs/{id}.configuration` nem em
+  "Configuração solicitada"; os campos `source_*` de `GET /jobs/{id}` continuam.
+- Split que esgota as tentativas marca o job MAIN `failed` (mensagem `SPLIT_FAILED`) e
+  aplica `purge_source` (antes: `processing` para sempre, `DELETE /source` 409 para
+  sempre). Um retry do split reaproveita as linhas `pages` (e os page job ids) da
+  tentativa anterior e não reenfileira página que já começou.
+- Retry automático que não pôde ser publicado (broker fora) marca o job `failed` (ou a
+  página `failed`) com `RETRY_NOT_QUEUED`, em vez de `pending` para sempre.
+- Monitoramento: `detect_stuck_jobs` agora grava de fato no MySQL (antes alterava objetos
+  de uma sessão fechada); página travada → `failed`, recontagem do pai (`partial`) e
+  `purge_source`. `auto_retry_failed_pages` reenfileira de verdade pelo mesmo caminho do
+  retry manual (antes deixava a página `pending` sem fila); job sem original é pulado.
+- **Mudança de contrato:** `POST /admin/jobs/{job_id}/retry-all-failed` reenfileira cada
+  página `failed` (mesmo caminho do retry manual, sob o lock do job) e põe o job em
+  `processing`; resposta com `pages_retried` e `page_job_ids` (sai
+  `pages_marked_for_retry`/`note`); `404` para job inexistente; `409 SOURCE_NOT_AVAILABLE`
+  sem mudar nada se o original foi apagado.
+- `recount_parent_pages` lê o pai com `SELECT … FOR UPDATE` e as páginas com leitura
+  bloqueante: recontagens concorrentes não gravam contagens velhas.
+- Frontend: a lista de páginas e o aviso de fila tratam `partial` como estado final (antes
+  a página do job consultava para sempre).
 - **Mudança de comportamento:** depois do apagamento o retry manual de página responde
   `409 SOURCE_NOT_AVAILABLE` sem mudar nada (antes: página presa em `pending` e `500`), e
   `GET /jobs/{id}/pages/{n}/pdf` responde `410 SOURCE_PURGED` com a data.
@@ -41,6 +69,8 @@
   `purge_source=true` a duplicata passa a apagar a origem (na hora se já terminou); com
   `false`, uma duplicata sem origem (ou que vai apagá-la) não é reaproveitada. A resposta
   de `/upload`, `/convert` e `/transcribe` ganha `duplicate` e `source_available`.
+  Consequência: `/upload` (preset padrão `fast`) e `/convert` (sem preset) **não
+  deduplicam mais entre si** — o mesmo arquivo enviado aos dois cria dois jobs.
 - `DELETE /jobs/{job_id}` passa a apagar o original de qualquer job no bucket certo
   (antes: só transcrições, e sempre no bucket de áudio) e os PDFs por página.
 - `/transcribe` grava `purge_source` também em `job_configurations` e apaga o áudio

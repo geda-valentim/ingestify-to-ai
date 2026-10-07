@@ -49,7 +49,7 @@ estas rotas. Não há UI no frontend para as rotas abaixo.
 | `GET /admin/stats` (`platform.stats.read`) | Contagem de jobs/páginas por status, travados, info do Redis e a configuração de monitoramento. |
 | `GET /admin/jobs/stuck?threshold_minutes=&limit=100` (`platform.jobs.read`) | Lista jobs e páginas travados em `PROCESSING`. |
 | `POST /admin/jobs/recover-stuck` (`platform.jobs.recover`) | Executa `detect_stuck_jobs` na hora (síncrono). |
-| `POST /admin/jobs/{job_id}/retry-all-failed` (`platform.jobs.recover`) | Marca para retry as páginas `failed` do job com `retry_count < MONITORING_MAX_RETRY_COUNT` (ver lacunas). |
+| `POST /admin/jobs/{job_id}/retry-all-failed` (`platform.jobs.recover`) | Reenfileira as páginas `failed` do job com `retry_count < MONITORING_MAX_RETRY_COUNT`, pelo mesmo caminho do retry manual (`POST /jobs/{id}/pages/{n}/retry`), sob o lock da linha do job; job vai a `processing`. `404` job inexistente; `409 SOURCE_NOT_AVAILABLE` (nada muda) se o original foi apagado. Resposta: `pages_retried`, `page_job_ids`, `errors`. |
 | `POST /admin/cleanup` (`platform.jobs.cleanup`) | Executa `cleanup_old_jobs` na hora. |
 | `GET /admin/health/monitoring` (`platform.monitoring.read`) | Tasks agendadas e registradas no Celery. |
 | `GET /admin/broker/unacked` (`platform.monitoring.read`) | Mensagens que o broker guarda como entregues e não confirmadas, mais o resultado da última checagem de órfãs. |
@@ -66,7 +66,10 @@ completa e horários em [storage-and-retention.md](storage-and-retention.md#tare
 
 - **Jobs travados:** um job MAIN é considerado travado quando está em `PROCESSING` com
   `started_at` mais antigo que o limite; uma página, quando está em `PROCESSING` com
-  `created_at` mais antigo que o limite. Ambos viram `FAILED` no MySQL e no Redis.
+  `created_at` mais antigo que o limite. Ambos viram `FAILED` no MySQL e no Redis (relidos
+  sob o lock da linha do job, só se ainda `PROCESSING`). Uma página travada recalcula o
+  job pai (que vira `partial` quando todas as páginas terminaram); nos dois casos
+  `purge_source` é aplicado se o job assentou de vez.
 
 - **Mensagens órfãs no broker** (`check_broker_unacked`, a cada
   `MONITORING_CHECK_INTERVAL_MINUTES`): com `acks_late`, a mensagem de uma task fica no hash
@@ -96,12 +99,9 @@ completa e horários em [storage-and-retention.md](storage-and-retention.md#tare
 
 ## Limites e lacunas conhecidas
 
-- **Retry automático e em massa não reenfileiram nada.** `auto_retry_failed_pages` e
-  `POST /admin/jobs/{id}/retry-all-failed` incrementam `retry_count` e voltam a página
-  para `PENDING`, mas apenas logam que "o reenfileiramento automático ainda não foi
-  implementado". A página fica parada em `PENDING`; o caminho que funciona é
-  `POST /jobs/{id}/pages/{n}/retry` ([jobs-api.md](jobs-api.md#páginas)). O log sugere
-  `POST /admin/jobs/{id}/pages/{n}/retry`, rota que **não existe**.
+- `auto_retry_failed_pages` e `POST /admin/jobs/{id}/retry-all-failed` reenfileiram pelo
+  mesmo caminho do retry manual (`shared/page_retry.py`); um job cujo original foi apagado
+  (`purge_source`) é pulado pelo auto-retry e suas páginas ficam `failed`.
 - O limite de "travado" conta desde o início do job, não desde o último progresso: um PDF
   grande que leve mais de 30 min no total é marcado `FAILED` mesmo progredindo.
 - Não há métricas Prometheus nem endpoint `/metrics`.

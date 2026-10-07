@@ -20,12 +20,25 @@ per-page markdown, transcripts, Elasticsearch) are always kept.
 `purge_source=true` deletes the source files once the job is settled for good:
 COMPLETED, or FAILED / PARTIAL after every automatic retry ran (never while a
 Celery retry, a page or a backlog item is still pending: `has_pending_work`).
-The choice is stored with the job (a `JobConfiguration` row), never only in the
-Celery message, so whichever worker settles the job honours it.
+The choice is stored with the job (`Job.purge_source`; when it was part of the
+request also in its requested configuration, `JobConfiguration.options`), never
+only in the Celery message, so whichever worker settles the job honours it.
 
 When they are deleted (automatically or by `DELETE /jobs/{id}/source`) the job
-records `source_deleted_at` in the same row; `GET /jobs/{id}` reports it and the
-page-PDF endpoint answers 410 `SOURCE_PURGED`. A page retry is then impossible.
+records `Job.source_deleted_at`; `GET /jobs/{id}` reports it and the page-PDF
+endpoint answers 410 `SOURCE_PURGED`. A page retry is then impossible.
+
+Bookkeeping (`purge_source` added by a duplicate request, `source_deleted_at`,
+the dedup `operation_key`) lives in `jobs` columns, never in
+`JobConfiguration.options`: that is the configuration the user requested, shown
+as such by `GET /jobs/{id}` and the UI.
+
+Locking: every purge (worker hook, duplicate request, `DELETE /jobs/{id}/source`)
+and every page retry take the MAIN job's row lock (`lock_job`, SELECT ... FOR
+UPDATE) and decide under it. A purge re-checks `purge_due` / `has_pending_work`
+under the lock and deletes everything before its single commit, so a page retry
+(which commits its page PENDING under the same lock) either runs before it and
+makes it refuse, or after it and finds no source (409 SOURCE_NOT_AVAILABLE).
 """
 import logging
 import shutil
@@ -39,7 +52,6 @@ from shared.models import Job, JobStatus
 logger = logging.getLogger(__name__)
 
 PURGE_OPTION = "purge_source"
-DELETED_AT_OPTION = "source_deleted_at"
 # JobConfiguration.operation for a conversion request that carries options
 CONVERSION_OPERATION = "conversion"
 
@@ -49,7 +61,7 @@ class SourceDeleteError(RuntimeError):
 
 
 # ---------------------------------------------------------------------------
-# Durable options (JobConfiguration.options)
+# Durable options
 # ---------------------------------------------------------------------------
 
 def _options(job: Optional[Job]) -> dict:
@@ -58,8 +70,8 @@ def _options(job: Optional[Job]) -> dict:
     return options if isinstance(options, dict) else {}
 
 
-def _set_option(db, job: Job, key: str, value) -> None:
-    """Set one option on the job's configuration row, creating it if needed (no commit)."""
+def _set_requested_option(db, job: Job, key: str, value) -> None:
+    """Add one option the request asked for to the job's configuration row (no commit)."""
     row = getattr(job, "configuration_row", None)
     if row is None:
         from shared.job_configuration import save_configuration
@@ -72,27 +84,41 @@ def _set_option(db, job: Job, key: str, value) -> None:
 
 
 def save_purge_option(db, job: Job) -> None:
-    """Persist `purge_source=true` with the job (no commit: the caller commits with the job)."""
-    _set_option(db, job, PURGE_OPTION, True)
+    """
+    The request that creates the job asked for `purge_source=true` (no commit: the
+    caller commits with the job). Durable on the job, and part of its requested
+    configuration.
+    """
+    job.purge_source = True
+    _set_requested_option(db, job, PURGE_OPTION, True)
 
 
-record_purge_option = save_purge_option
+def record_purge_option(db, job: Job) -> None:
+    """
+    A later request (a duplicate with `purge_source=true`) asked for it: durable on
+    the job only; the job's requested configuration is not rewritten (no commit).
+    """
+    job.purge_source = True
 
 
 def purge_requested(job: Optional[Job]) -> bool:
-    """Whether the job was created with `purge_source=true` (durable, from the DB)."""
-    return bool(_options(job).get(PURGE_OPTION))
+    """Whether the job is to delete its source files once settled (durable, from the DB)."""
+    if job is None:
+        return False
+    return bool(getattr(job, "purge_source", None)) or bool(_options(job).get(PURGE_OPTION))
 
 
 def source_deleted_at(job: Optional[Job]) -> Optional[datetime]:
     """When the source files were deleted (UTC), or None."""
-    value = _options(job).get(DELETED_AT_OPTION)
-    if not value:
-        return None
-    try:
-        return datetime.fromisoformat(str(value).rstrip("Z"))
-    except ValueError:
-        return None
+    return getattr(job, "source_deleted_at", None) if job is not None else None
+
+
+def lock_job(db, job_id: str) -> Optional[Job]:
+    """
+    The MAIN job's row, locked (SELECT ... FOR UPDATE) and re-read: purges and page
+    retries serialize on it. Held until the session commits or rolls back.
+    """
+    return db.query(Job).filter(Job.id == job_id).with_for_update().populate_existing().first()
 
 
 # ---------------------------------------------------------------------------
@@ -138,7 +164,7 @@ def source_available(job: Optional[Job]) -> bool:
     return bool(job.minio_upload_path) or _has_page_pdfs(job) or _has_local_copy(job.id)
 
 
-def has_pending_work(db, job: Job) -> bool:
+def has_pending_work(db, job: Job, *, locked: bool = False) -> bool:
     """
     Whether something queued or running may still read the job's source files.
 
@@ -146,15 +172,22 @@ def has_pending_work(db, job: Job) -> bool:
     (a Celery retry of `process_conversion` waits as PENDING, see workers.tasks),
     or any of its pages PENDING/PROCESSING (a page retry, or a page whose Celery
     retry is scheduled).
+
+    `locked`: the caller holds the job's row lock and is about to delete; the pages
+    are read with a locking read too, so a page retry committed just before is seen
+    (a plain read may return the transaction's older snapshot).
     """
     from shared.models import Page
 
     if job.status in (JobStatus.PENDING, JobStatus.PROCESSING):
         return True
-    return db.query(Page.id).filter(
+    query = db.query(Page.id).filter(
         Page.job_id == job.id,
         Page.status.in_([JobStatus.PENDING, JobStatus.PROCESSING]),
-    ).first() is not None
+    )
+    if locked:
+        query = query.with_for_update()
+    return query.first() is not None
 
 
 # ---------------------------------------------------------------------------
@@ -164,15 +197,32 @@ def has_pending_work(db, job: Job) -> bool:
 def delete_source(db, job: Job, minio_factory: Callable) -> bool:
     """
     Delete a job's source files: the original (MinIO object + local copies) and
-    the split per-page PDFs (MinIO + local). Records `source_deleted_at`. Commits.
+    the split per-page PDFs (MinIO + local). Records `source_deleted_at`.
+
+    The caller holds the job's row lock (`lock_job`) and checked `has_pending_work`
+    under it. Everything is deleted before the one commit at the end, so the lock
+    is held for the whole delete: a page retry cannot queue in between and then
+    lose the local copy it was handed.
 
     Returns False when there was nothing to delete. Raises SourceDeleteError when
-    MinIO refused; what was already deleted is recorded (`minio_upload_path`,
-    `Page.minio_page_path` cleared) and what was not stays referenced, so nothing
-    is orphaned and calling again finishes the job.
+    MinIO refused; what was already deleted is recorded and committed
+    (`minio_upload_path`, `Page.minio_page_path` cleared), what was not stays
+    referenced (local copies included), so nothing is orphaned and calling again
+    finishes the job.
     """
+    from shared.models import Page
+
     found = False
     minio = None
+
+    def failed(e) -> SourceDeleteError:
+        # Record what is already gone (releases the lock: nothing else is deleted)
+        try:
+            db.commit()
+        except Exception:  # noqa: BLE001
+            db.rollback()
+        return SourceDeleteError(str(e))
+
     if job.minio_upload_path:
         found = True
         minio = minio_factory()
@@ -180,25 +230,24 @@ def delete_source(db, job: Job, minio_factory: Callable) -> bool:
         try:
             deleted = minio.delete_file(source_bucket(minio, object_name), object_name)
         except Exception as e:  # noqa: BLE001 - reported to the caller as one error
-            raise SourceDeleteError(str(e)) from e
+            raise failed(e) from e
         if not deleted:
-            raise SourceDeleteError(f"MinIO did not delete {object_name}")
+            raise failed(f"MinIO did not delete {object_name}")
         job.minio_upload_path = None
-        db.commit()
 
-    pages = [page for page in (job.pages or []) if page.minio_page_path]
+    pages = db.query(Page).filter(Page.job_id == job.id, Page.minio_page_path.isnot(None)) \
+        .populate_existing().all()
     if pages:
         found = True
         minio = minio or minio_factory()
         try:
             deleted = minio.delete_folder(minio.bucket_pages, f"pages/{job.id}/")
         except Exception as e:  # noqa: BLE001
-            raise SourceDeleteError(str(e)) from e
+            raise failed(e) from e
         if not deleted:
-            raise SourceDeleteError(f"MinIO did not delete pages/{job.id}/")
+            raise failed(f"MinIO did not delete pages/{job.id}/")
         for page in pages:
             page.minio_page_path = None
-        db.commit()
 
     for directory in local_source_dirs(job.id):
         if directory.exists():
@@ -206,18 +255,18 @@ def delete_source(db, job: Job, minio_factory: Callable) -> bool:
             shutil.rmtree(directory, ignore_errors=True)
 
     if found:
-        _set_option(db, job, DELETED_AT_OPTION, datetime.utcnow().isoformat())
-        db.commit()
+        job.source_deleted_at = datetime.utcnow()
+    db.commit()
     return found
 
 
-def purge_due(db, job: Optional[Job]) -> bool:
+def purge_due(db, job: Optional[Job], *, locked: bool = False) -> bool:
     """The job is settled for good: COMPLETED, or FAILED / PARTIAL with nothing pending."""
     if job is None:
         return False
     if job.status == JobStatus.COMPLETED:
-        return True
-    return job.status in (JobStatus.FAILED, JobStatus.PARTIAL) and not has_pending_work(db, job)
+        return not has_pending_work(db, job, locked=locked)
+    return job.status in (JobStatus.FAILED, JobStatus.PARTIAL) and not has_pending_work(db, job, locked=locked)
 
 
 def purge_source_if_requested(job_id: str, *, session_factory, minio_factory: Callable,
@@ -233,10 +282,14 @@ def purge_source_if_requested(job_id: str, *, session_factory, minio_factory: Ca
     try:
         db = session_factory()
         try:
-            job = db.query(Job).filter(Job.id == job_id).first()
-            if not purge_due(db, job):
+            # Decided under the job's row lock: a page retry queued meanwhile has
+            # committed its page PENDING (purge_due is then False), or waits for us
+            job = lock_job(db, job_id)
+            if not purge_due(db, job, locked=True):
+                db.rollback()
                 return False
             if not (requested or purge_requested(job)):
+                db.rollback()
                 return False
             if delete_source(db, job, minio_factory):
                 logger.info(f"[MAIN JOB {job_id}] Source files purged (purge_source, job {job.status.value})")
@@ -276,24 +329,46 @@ def apply_purge_to_duplicate(db, job: Job, minio_factory: Callable) -> str:
     """
     A duplicate request with `purge_source=true`: record the option on the existing
     job (so whichever worker settles it honours it) and, when it is already settled
-    with nothing pending, delete its source files now. Never raises.
+    with nothing pending, delete its source files now, under the job's row lock.
+    Never raises.
     """
+    job_id = job.id
     try:
-        if not purge_requested(job):
-            record_purge_option(db, job)
-            db.commit()
+        locked = lock_job(db, job_id)
     except Exception as e:  # noqa: BLE001 - the request still returns the existing job
         db.rollback()
-        logger.error(f"[MAIN JOB {job.id}] Could not record purge_source on the duplicate: {e}")
-    if not source_available(job):
+        logger.error(f"[MAIN JOB {job_id}] Could not lock the duplicate: {e}")
+        return DUPLICATE_SCHEDULED if source_available(job) else DUPLICATE_ALREADY_GONE
+    if locked is None:
+        db.rollback()
         return DUPLICATE_ALREADY_GONE
-    if not purge_due(db, job):
+    job = locked
+    try:
+        if not getattr(job, "purge_source", None):
+            record_purge_option(db, job)
+            db.flush()
+    except Exception as e:  # noqa: BLE001
+        db.rollback()
+        logger.error(f"[MAIN JOB {job_id}] Could not record purge_source on the duplicate: {e}")
+        return DUPLICATE_SCHEDULED if source_available(job) else DUPLICATE_ALREADY_GONE
+    if not source_available(job):
+        db.commit()
+        return DUPLICATE_ALREADY_GONE
+    if not purge_due(db, job, locked=True):
+        db.commit()  # the option is recorded: the worker that settles the job purges
         return DUPLICATE_SCHEDULED
     try:
-        delete_source(db, job, minio_factory)
+        delete_source(db, job, minio_factory)  # commits the option with the delete
     except Exception as e:  # noqa: BLE001 - never fail the request over the purge
         db.rollback()
-        logger.error(f"[MAIN JOB {job.id}] Could not purge the duplicate's source files, keeping them: {e}")
+        try:  # keep the option even though the delete failed (DELETE /jobs/{id}/source later)
+            again = lock_job(db, job_id)
+            if again is not None:
+                record_purge_option(db, again)
+            db.commit()
+        except Exception:  # noqa: BLE001
+            db.rollback()
+        logger.error(f"[MAIN JOB {job_id}] Could not purge the duplicate's source files, keeping them: {e}")
         return DUPLICATE_KEPT
-    logger.info(f"[MAIN JOB {job.id}] Source files purged (purge_source on a duplicate request)")
+    logger.info(f"[MAIN JOB {job_id}] Source files purged (purge_source on a duplicate request)")
     return DUPLICATE_PURGED
