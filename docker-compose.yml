@@ -128,6 +128,7 @@ services:
       - MINIO_ACCESS_KEY=${MINIO_ROOT_USER:?MINIO_ROOT_USER is required - set it in .env (see .env.example)}
       - MINIO_SECRET_KEY=${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD is required - set it in .env (see .env.example)}
       - JWT_SECRET_KEY=${JWT_SECRET_KEY:?JWT_SECRET_KEY is required - generate one with 'openssl rand -hex 32' and set it in .env}
+      - DATALAKE_ENCRYPTION_KEY=${DATALAKE_ENCRYPTION_KEY:-}
       - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
       # Projects (spec 0004). UPLOAD_FALLBACK_PROJECT is the emergency valve:
       # empty (default) means an upload with no project in the request and no
@@ -146,6 +147,9 @@ services:
       # Vision (Florence-2) - API-side knobs only. The model itself lives in
       # worker-vision; see the worker-vision service and docs/GPU.md.
       - ENABLE_IMAGE_DESCRIPTION=${ENABLE_IMAGE_DESCRIPTION:-true}
+      - FACE_ANALYSIS_ENABLED=${FACE_ANALYSIS_ENABLED:-false}
+      - FACE_MODEL_CACHE_DIR=${FACE_MODEL_CACHE_DIR:-/models/faces}
+      - VISION_FULL_TASK_TIMEOUT_SECONDS=${VISION_FULL_TASK_TIMEOUT_SECONDS:-900}
       - VISION_QUEUE=${VISION_QUEUE:-ingestify-vision}
       - VISION_REQUEST_TIMEOUT_SECONDS=${VISION_REQUEST_TIMEOUT_SECONDS:-60}
       - VISION_MAX_IMAGE_SIZE_MB=${VISION_MAX_IMAGE_SIZE_MB:-10}
@@ -206,6 +210,7 @@ services:
       - MINIO_ACCESS_KEY=${MINIO_ROOT_USER:?MINIO_ROOT_USER is required - set it in .env (see .env.example)}
       - MINIO_SECRET_KEY=${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD is required - set it in .env (see .env.example)}
       - JWT_SECRET_KEY=${JWT_SECRET_KEY:?JWT_SECRET_KEY is required - generate one with 'openssl rand -hex 32' and set it in .env}
+      - DATALAKE_ENCRYPTION_KEY=${DATALAKE_ENCRYPTION_KEY:-}
       - MINIO_SECURE=false
       - MINIO_BUCKET_UPLOADS=ingestify-uploads
       - MINIO_BUCKET_PAGES=ingestify-pages
@@ -301,6 +306,7 @@ services:
       - MINIO_ACCESS_KEY=${MINIO_ROOT_USER:?MINIO_ROOT_USER is required - set it in .env (see .env.example)}
       - MINIO_SECRET_KEY=${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD is required - set it in .env (see .env.example)}
       - JWT_SECRET_KEY=${JWT_SECRET_KEY:?JWT_SECRET_KEY is required - generate one with 'openssl rand -hex 32' and set it in .env}
+      - DATALAKE_ENCRYPTION_KEY=${DATALAKE_ENCRYPTION_KEY:-}
       - MINIO_SECURE=false
       - MINIO_BUCKET_UPLOADS=ingestify-uploads
       - MINIO_BUCKET_PAGES=ingestify-pages
@@ -311,6 +317,9 @@ services:
       - DEVICE=${DEVICE:-auto}
       # Vision (Florence-2)
       - ENABLE_IMAGE_DESCRIPTION=${ENABLE_IMAGE_DESCRIPTION:-true}
+      - FACE_ANALYSIS_ENABLED=${FACE_ANALYSIS_ENABLED:-false}
+      - FACE_MODEL_CACHE_DIR=${FACE_MODEL_CACHE_DIR:-/models/faces}
+      - VISION_FULL_TASK_TIMEOUT_SECONDS=${VISION_FULL_TASK_TIMEOUT_SECONDS:-900}
       - VISION_PROVIDER=${VISION_PROVIDER:-florence2}
       - VISION_MODEL_ID=${VISION_MODEL_ID:-florence-community/Florence-2-base-ft}
       - VISION_MODEL_REVISION=${VISION_MODEL_REVISION:-0b03b6f15a4a211370fb204aee4e7dd48887ea37}
@@ -339,6 +348,7 @@ services:
       - ./backend/workers:/app/workers
       - ./backend/shared:/app/shared
       - hf_cache:/models/huggingface
+      - face_cache:${FACE_MODEL_CACHE_DIR:-/models/faces}:ro
     deploy:
       replicas: 1
     restart: unless-stopped
@@ -404,6 +414,7 @@ services:
       - MINIO_ACCESS_KEY=${MINIO_ROOT_USER:?MINIO_ROOT_USER is required - set it in .env (see .env.example)}
       - MINIO_SECRET_KEY=${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD is required - set it in .env (see .env.example)}
       - JWT_SECRET_KEY=${JWT_SECRET_KEY:?JWT_SECRET_KEY is required - generate one with 'openssl rand -hex 32' and set it in .env}
+      - DATALAKE_ENCRYPTION_KEY=${DATALAKE_ENCRYPTION_KEY:-}
       - MINIO_SECURE=false
       - MINIO_BUCKET_UPLOADS=ingestify-uploads
       - MINIO_BUCKET_AUDIO=ingestify-audio
@@ -462,6 +473,7 @@ services:
       - MINIO_ACCESS_KEY=${MINIO_ROOT_USER:?MINIO_ROOT_USER is required - set it in .env (see .env.example)}
       - MINIO_SECRET_KEY=${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD is required - set it in .env (see .env.example)}
       - JWT_SECRET_KEY=${JWT_SECRET_KEY:?JWT_SECRET_KEY is required - generate one with 'openssl rand -hex 32' and set it in .env}
+      - DATALAKE_ENCRYPTION_KEY=${DATALAKE_ENCRYPTION_KEY:-}
       - MINIO_SECURE=false
       # Monitoring settings
       - MONITORING_ENABLED=true
@@ -514,6 +526,8 @@ volumes:
   # and never baked into an image. Prefetch with `make vision-download`.
   hf_cache:
     name: ingestify-hf-cache
+  face_cache:
+    name: ingestify-face-cache
 
 networks:
   ingestify-network:

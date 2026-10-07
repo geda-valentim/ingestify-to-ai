@@ -9,8 +9,9 @@ user with data, another user with data and a user with none, under every
 IAM_MODE (the predicate has no shadow: it *is* the legacy filter in all modes).
 
 The listings: GET /jobs, /search, /projects (and its job/folder/key counts),
-/projects/resolve, /tags and /api-keys. There is no /datalakes route in this
-codebase yet.
+/projects/resolve, /tags, /api-keys and /datalakes (merged with #48; the face
+and Full Analysis routes of #48 add no listing: their jobs are listed by
+GET /jobs, which the fixture covers with image jobs too).
 """
 
 import uuid
@@ -24,12 +25,12 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 import workers.celery_app  # noqa: F401  (import order used by the worker; avoids a circular import)
-from api import apikey_routes, projects_api, routes, tag_routes
+from api import apikey_routes, datalake_routes, projects_api, routes, tag_routes
 from api.iam_deps import visible
 from shared.auth import get_current_active_user
 from shared.config import get_settings
 from shared.database import Base, get_db
-from shared.models import APIKey, Folder, Job, JobStatus, JobTag, LiveSession, Project, User
+from shared.models import APIKey, DatalakeConnection, Folder, Job, JobStatus, JobTag, LiveSession, Project, User
 from shared.projects import name_key
 from shared.tags import set_job_tags
 
@@ -97,6 +98,16 @@ def world(db):
             APIKey(id=key_id(owner, 1), user_id=owner, key_hash=f"h-{owner}-1", name="bound", project_id=proj.id),
             APIKey(id=key_id(owner, 2), user_id=owner, key_hash=f"h-{owner}-2", name="free"),
         ])
+        # Datalake connections with the same names for both users (GET /datalakes
+        # orders by name), one disabled: the listing shows disabled ones too.
+        db.add_all([
+            DatalakeConnection(id=f"{owner}-dl{n}", user_id=owner, name=name, provider="s3",
+                               config={}, enabled=n != 2, credentials_encrypted=b"sealed")
+            for n, name in ((1, "Lake"), (2, "Archive"))
+        ])
+        # An image job (Full Analysis / faces), listed by GET /jobs like any MAIN job.
+        db.add(Job(id=f"{owner}-image", user_id=owner, name="img", filename="img.png", status=JobStatus.COMPLETED,
+                   job_type="MAIN", source_type="image", project_id=proj.id, created_at=datetime(2026, 3, 1)))
     # An orphan (user_id NULL after a user deletion) is nobody's, before and after.
     db.add(Job(id="orphan", user_id=None, name="o", filename="o.pdf", status=JobStatus.COMPLETED, job_type="MAIN"))
     db.commit()
@@ -132,6 +143,7 @@ def client(db, world, fake_redis, monkeypatch):
     app.include_router(projects_api.router)
     app.include_router(tag_routes.router)
     app.include_router(routes.router)
+    app.include_router(datalake_routes.router)
     app.dependency_overrides[get_db] = lambda: db
     app.dependency_overrides[get_current_active_user] = lambda: db.get(User, app.state.user)
     tc = TestClient(app)
@@ -230,6 +242,12 @@ def legacy_keys(db, uid):
     return {k.id for k in db.query(APIKey).filter(APIKey.user_id == uid)}
 
 
+def legacy_datalakes(db, uid):
+    """GET /datalakes at origin/main: ids in the order the route returned them."""
+    return [c.id for c in db.query(DatalakeConnection)
+            .filter(DatalakeConnection.user_id == uid).order_by(DatalakeConnection.name).all()]
+
+
 # -- CA4 ------------------------------------------------------------------------------
 
 
@@ -295,6 +313,14 @@ def test_api_keys_listing_returns_the_legacy_ids(client, db, mode, uid):
     assert bound == {k: (f"{uid}-p1" if k == key_id(uid, 1) else None) for k in legacy_keys(db, uid)}
 
 
+@pytest.mark.parametrize("uid", USERS)
+def test_datalakes_listing_returns_the_legacy_ids(client, db, mode, uid):
+    body = _ok(client(uid).get("/datalakes"))
+    assert [c["id"] for c in body["connections"]] == legacy_datalakes(db, uid)
+    # Credentials never leave the listing, before and after.
+    assert all("credentials_encrypted" not in c for c in body["connections"])
+
+
 def test_users_with_data_see_disjoint_sets_and_carol_sees_nothing(client, db, mode):
     """Sanity of the fixture itself: the comparisons above are not vacuous."""
     for uid in (ALICE, BOB):
@@ -304,6 +330,8 @@ def test_users_with_data_see_disjoint_sets_and_carol_sees_nothing(client, db, mo
     assert _ok(client(CAROL).get("/projects"))["projects"] == []
     assert _ok(client(CAROL).get("/tags"))["tags"] == []
     assert _ok(client(CAROL).get("/api-keys/")) == []
+    assert legacy_datalakes(db, ALICE) and not set(legacy_datalakes(db, ALICE)) & set(legacy_datalakes(db, BOB))
+    assert _ok(client(CAROL).get("/datalakes"))["connections"] == []
 
 
 # -- the SQL itself is unchanged -------------------------------------------------------
@@ -318,6 +346,7 @@ def _sql(clause):
     (Job, "search.query", ()),
     (Project, "projects.read", (Job, APIKey, Folder)),
     (APIKey, "api_keys.read", (Project,)),
+    (DatalakeConnection, "datalakes.read", ()),
 ])
 def test_scope_predicates_compile_to_the_legacy_filters(mode, model, perm, related):
     import asyncio

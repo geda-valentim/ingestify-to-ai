@@ -2,8 +2,9 @@
 Offline equivalence of the data decisions, legacy vs IAM (spec 0014 CA3, §4.11 step 3).
 
 For every (user, resource) pair of a database — MAIN jobs, child jobs known
-through `pages.page_job_id` or `parent_job_id`, projects, folders and API keys —
-this compares, for `read`, `update` and `delete`:
+through `pages.page_job_id` or `parent_job_id`, projects, folders, API keys and
+datalake connections — this compares, for `read`, `update` and `delete` (and
+`datalakes.use` for connections):
 
 - **legacy**: the owner rules as they stood before 0014 (`api/deps.py` and the
   inline `APIKey.user_id == current_user.id` lookups of `apikey_routes.py` at the
@@ -21,7 +22,20 @@ Redis: offline there is no Redis, so both sides receive the same `redis_status`
 does not know); by default both answer "unknown". Absent data never authorizes,
 on either side.
 
-There is no datalake table in this codebase yet, so datalakes are not walked.
+Resources merged with #48 (faces, image full analysis, datalakes):
+
+- `datalake_connections` is an owned table of its own: walked like projects,
+  against the inline `id == ... AND user_id == ...` lookup of
+  `shared/datalake/service.owned_connection` at origin/main (`28c485f`).
+- `image_analysis_runs` (Full Analysis and faces) and `job_datalake_exports`
+  are keyed by their job: their routes decide on the job. Every run is walked
+  once more for `POST /images/{job_id}/cancel`, whose legacy rule was the inline
+  `Job.id == job_id AND Job.user_id == me` (no parent walk, no child jobs).
+  Export retries (`datalake_exports.retry`) decide on the job like any job route.
+- `image_analysis_submissions` is never authorized by id: it is the
+  idempotency record of one user's own submissions, looked up by
+  (`user_id`, key hash) of the caller. There is no decision to compare.
+- Faces have no owned table: their results are steps of the image run.
 """
 
 import argparse
@@ -34,7 +48,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from shared.iam.decide import Decider, JobRef, principal_for_user
 from shared.iam.ownership import JobAccess
-from shared.models import APIKey, Folder, Job, Page, Project, User
+from shared.models import APIKey, DatalakeConnection, Folder, ImageAnalysisRun, Job, Page, Project, User
 
 ACTIONS = ("read", "update", "delete")
 
@@ -126,6 +140,19 @@ def legacy_api_key_allowed(db: Session, key_id: str, user: User) -> bool:
     return key is not None
 
 
+def legacy_datalake_allowed(db: Session, connection_id: str, user: User) -> bool:
+    """`service.owned_connection` at origin/main, before it moved to shared.iam.ownership."""
+    row = db.query(DatalakeConnection).filter(DatalakeConnection.id == connection_id,
+                                              DatalakeConnection.user_id == user.id).first()
+    return row is not None
+
+
+def legacy_image_cancel_allowed(db: Session, job_id: str, user: User) -> bool:
+    """`POST /images/{job_id}/cancel` at origin/main: the job's own row, owned inline."""
+    job = db.query(Job).filter(Job.id == job_id, Job.user_id == user.id).first()
+    return job is not None
+
+
 def legacy_active(user: User) -> bool:
     """`get_current_active_user` refused an inactive user before any owner check."""
     return bool(user.is_active)
@@ -138,7 +165,7 @@ def legacy_active(user: User) -> bool:
 @dataclass(frozen=True)
 class Divergence:
     user_id: str
-    kind: str  # job | project | folder | api_key
+    kind: str  # job | project | folder | api_key | datalake | image_cancel
     resource_id: str
     permission: str
     legacy: bool
@@ -170,6 +197,8 @@ def _job_ids(db: Session, extra_job_ids: Iterable[str]) -> List[str]:
 
 # API keys have one mutation permission (`api_keys.manage`) for update and delete.
 _API_KEY_PERMISSION = {"read": "api_keys.read", "update": "api_keys.manage", "delete": "api_keys.manage"}
+# Datalake connections also have `use` (test, destination of a job).
+DATALAKE_PERMISSIONS = ("datalakes.read", "datalakes.update", "datalakes.delete", "datalakes.use")
 
 
 def run(
@@ -192,6 +221,8 @@ def run(
     project_ids = sorted(row[0] for row in db.query(Project.id))
     folder_ids = sorted(row[0] for row in db.query(Folder.id))
     key_ids = sorted(row[0] for row in db.query(APIKey.id))
+    connection_ids = sorted(row[0] for row in db.query(DatalakeConnection.id))
+    run_job_ids = sorted(row[0] for row in db.query(ImageAnalysisRun.job_id))
 
     def job_access(s: Session, job_id: str, user_id: Optional[str]) -> JobAccess:
         return ownership.job_access(s, job_id, user_id, redis_status=redis_status, owner_matches=owner_matches)
@@ -206,13 +237,13 @@ def run(
         principal = principal_for_user(user)
         active = legacy_active(user)
 
-        def compare(kind, resource_id, legacy_ok, resource, permission_of):
+        def compare(kind, resource_id, legacy_ok, resource, permission_of, permissions=None, allowed=None):
             nonlocal pairs, decisions
             pairs += 1
             legacy = active and legacy_ok
-            for action in ACTIONS:
-                permission = permission_of(action)
-                iam = decider.decide(principal, permission, resource).allow
+            for permission in permissions or [permission_of(a) for a in ACTIONS]:
+                decision = decider.decide(principal, permission, resource)
+                iam = allowed(decision) if allowed else decision.allow
                 decisions += 1
                 if legacy != iam:
                     divergences.append(Divergence(str(user.id), kind, str(resource_id), permission, legacy, iam))
@@ -229,6 +260,15 @@ def run(
         for key_id in key_ids:
             compare("api_key", key_id, legacy_api_key_allowed(db, key_id, user),
                     db.get(APIKey, key_id), _API_KEY_PERMISSION.get)
+        for connection_id in connection_ids:
+            compare("datalake", connection_id, legacy_datalake_allowed(db, connection_id, user),
+                    db.get(DatalakeConnection, connection_id), None, permissions=DATALAKE_PERMISSIONS)
+        for job_id in run_job_ids:
+            # As the route answers: authorized(Job, "jobs.cancel"), then only the job's
+            # own row has a run (a child authorized through its MAIN job is a 404).
+            compare("image_cancel", job_id, legacy_image_cancel_allowed(db, job_id, user),
+                    JobRef(job_id), None, permissions=("jobs.cancel",),
+                    allowed=lambda d, job_id=job_id: d.allow and d.target is not None and d.target.id == job_id)
 
     return Report(pairs=pairs, decisions=decisions, divergences=divergences)
 

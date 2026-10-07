@@ -124,7 +124,7 @@ def test_counts_ignore_the_status_filter_but_total_does_not(client, db):
     assert body["total"] == 1
     assert ids_of(body) == ["f1"]
     assert body["counts"] == {"all": 3, "queued": 1, "processing": 0, "completed": 1,
-                              "failed": 1, "cancelled": 0}
+                              "failed": 1, "cancelled": 0, "partial": 0}
 
 
 def ids_of(body):

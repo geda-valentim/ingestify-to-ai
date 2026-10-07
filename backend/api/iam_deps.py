@@ -49,7 +49,7 @@ from api import deps
 from shared.auth import get_current_active_user
 from shared.config import get_settings
 from shared.database import get_db
-from shared.iam import catalog
+from shared.iam import catalog, ownership
 from shared.iam.decide import (
     PLATFORM,
     Decider,
@@ -60,11 +60,13 @@ from shared.iam.decide import (
     principal_for_user,
     report_divergence,
 )
-from shared.models import AdminAudit, APIKey, Folder, Job, Page, Project, User
+from shared.models import AdminAudit, APIKey, DatalakeConnection, Folder, Job, Page, Project, User
 
 logger = logging.getLogger(__name__)
 
 # Same text as `admin_routes.require_admin`: converting a route changes no contract (CA12).
+# The 404 of `datalake_routes.connection_or_404` (missing and someone else's alike).
+DATALAKE_NOT_FOUND_DETAIL = "Conexão não encontrada"
 PLATFORM_DENIED_DETAIL = "Acesso negado: privilégios de administrador necessários"
 SESSION_REQUIRED_DETAIL = "This change requires a login session (JWT); API keys are not accepted"
 
@@ -247,7 +249,8 @@ class _Loader:
 _LOADERS: Dict[type, _Loader] = {
     Job: _Loader(
         param="job_id",
-        family=("jobs",),
+        # `datalake_exports.retry` acts on the job's export row, keyed by the job.
+        family=("jobs", "datalake_exports"),
         legacy=lambda db, job_id, user: deps.resolve_owned_job(db, job_id, user),
         # A JobRef, so child jobs (SPLIT/PAGE/MERGE, no row of their own) resolve.
         resource=lambda db, job_id: JobRef(job_id),
@@ -275,7 +278,22 @@ _LOADERS: Dict[type, _Loader] = {
         not_found=lambda: HTTPException(status_code=404, detail=deps.API_KEY_NOT_FOUND_DETAIL),
         annotation=UUID,
     ),
+    DatalakeConnection: _Loader(
+        param="connection_id",
+        family=("datalakes",),
+        legacy=lambda db, connection_id, user: _owned_connection_or_404(db, connection_id, user),
+        resource=lambda db, connection_id: ownership.row_by_id(db, DatalakeConnection, connection_id),
+        not_found=lambda: HTTPException(status_code=404, detail=DATALAKE_NOT_FOUND_DETAIL),
+    ),
 }
+
+
+def _owned_connection_or_404(db: Session, connection_id: str, user: User) -> DatalakeConnection:
+    """The legacy `connection_or_404`: the caller's own connection, else 404."""
+    row = ownership.owned_row(db, DatalakeConnection, connection_id, user.id)
+    if row is None:
+        raise HTTPException(status_code=404, detail=DATALAKE_NOT_FOUND_DETAIL)
+    return row
 
 
 def _check_data_permission(model: type, permission: str, families: Tuple[str, ...]) -> catalog.Permission:
@@ -287,7 +305,8 @@ def _check_data_permission(model: type, permission: str, families: Tuple[str, ..
     return perm
 
 
-def authorized(model: type, permission: str, *, param: Optional[str] = None):
+def authorized(model: type, permission: str, *, param: Optional[str] = None,
+               not_found: Optional[Callable[[], HTTPException]] = None):
     """
     Loads `model` by its path parameter and decides `permission` on it (§4.4 step 4).
 
@@ -295,6 +314,9 @@ def authorized(model: type, permission: str, *, param: Optional[str] = None):
     `get_owned_project` / `get_owned_folder` (and the inline API key lookup)
     returned, and denies with the same 404 (identical for missing and someone
     else's).
+
+    `not_found` replaces that 404 for a route whose legacy inline check answered
+    with its own detail (e.g. `POST /images/{job_id}/cancel`); every mode raises it.
     """
     if model not in _LOADERS:
         raise ValueError(f"authorized() does not know how to load {model.__name__}")
@@ -351,7 +373,14 @@ def authorized(model: type, permission: str, *, param: Optional[str] = None):
 
     def bound(**kwargs):
         kwargs["resource_id"] = kwargs.pop(name)
-        return inner(**kwargs)
+        if not_found is None:
+            return inner(**kwargs)
+        try:
+            return inner(**kwargs)
+        except HTTPException as exc:
+            if exc.status_code == 404:
+                raise not_found() from None
+            raise
 
     bound.__signature__ = sig.replace(parameters=params)
     return _declare(bound, Declaration("authorized", permission, model), f"authorized[{model.__name__}:{permission}]")
@@ -391,6 +420,7 @@ _VISIBLE_FAMILIES: Dict[type, Tuple[str, ...]] = {
     Project: ("projects",),
     Folder: ("folders",),
     APIKey: ("api_keys",),
+    DatalakeConnection: ("datalakes",),
 }
 
 

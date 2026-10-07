@@ -86,4 +86,7 @@ Rascunho ──▶ Em revisão ──▶ Aprovada ──▶ Implementada
 | 0016 | IAM: organizações pessoais | Reservada (0013) | 2026-10-06 |
 | 0017 | IAM: compartilhamento, grupos e organizações de time | Reservada (0013) | 2026-10-06 |
 
+| 0011 | [Full Analysis de imagens](0011-full-analysis.md) | Implementada | 2026-10-06 |
+| 0012 | [Detecção facial e expressões](0012-deteccao-facial-e-expressoes.md) | Implementada; ativação opt-in | 2026-10-06 |
+
 <!-- Adicione uma linha aqui ao criar cada spec. -->

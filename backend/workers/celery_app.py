@@ -167,3 +167,12 @@ if settings.engines_remote_beat:
 # This is needed because Beat scheduler needs to see these tasks
 if settings.monitoring_enabled:
     import workers.monitoring  # noqa: F401
+
+
+# Durable image/facial batches and storage delivery.
+import workers.image_full_tasks  # noqa: E402,F401
+import workers.datalake_tasks  # noqa: E402,F401
+celery_app.conf.beat_schedule.update({
+    "image-analysis-reconcile": {"task": "workers.image_full_tasks.reconcile", "schedule": 5.0},
+    "datalake-delivery-reconcile": {"task": "workers.datalake_tasks.reconcile", "schedule": 60.0},
+})

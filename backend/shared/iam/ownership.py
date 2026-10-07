@@ -45,6 +45,26 @@ def owns(resource, user_id: Optional[str]) -> bool:
     return owner_id is not None and user_id is not None and owner_id == user_id
 
 
+def row_by_id(db: Session, model: type, row_id) -> Optional[object]:
+    """A row by primary key; None for an empty id or a missing row."""
+    if not row_id:
+        return None
+    return db.get(model, str(row_id))
+
+
+def owned_row(db: Session, model: type, row_id, user_id: Optional[str]):
+    """
+    The row of `model` named `row_id` when it belongs to `user_id`, else None.
+
+    Equivalent to the legacy `filter(Model.id == row_id, Model.user_id == user_id)`
+    (missing and someone else's are the same None), for owned rows with a
+    `user_id` column that callers reach by an id from a body or a job, not from a
+    route path (e.g. a datalake connection named in an upload's destination).
+    """
+    row = row_by_id(db, model, row_id)
+    return row if owns(row, user_id) else None
+
+
 def resolve_owner_id(db: Session, job: Optional[Job]) -> Optional[str]:
     """
     The authoritative owner of a job in MySQL, walking `parent_job_id` while

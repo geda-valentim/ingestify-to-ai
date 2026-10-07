@@ -79,8 +79,11 @@ permissão `engines.remote.use`, verificada no momento do dispatch.
   `read/update/delete`; qualquer divergência falha. Executado no CI contra a fixture de
   integração e uma vez contra snapshot do dev antes de `enforce`.
   *Implementação:* a lógica (com cópia congelada da regra legada do merge-base) está em
-  `backend/shared/iam/equivalence.py`; o CI a roda em `tests/test_iam_equivalence.py`. Não há
-  tabela de datalakes neste código ainda, então datalakes não são percorridos. Offline não há
+  `backend/shared/iam/equivalence.py`; o CI a roda em `tests/test_iam_equivalence.py`. Desde o
+  merge de #48 as conexões de datalake são percorridas (`datalakes.read/update/delete/use`) e cada
+  `image_analysis_runs` é comparado para `POST /images/{job_id}/cancel` (`jobs.cancel`);
+  `image_analysis_submissions` não é decidido por id (é o registro de idempotência do próprio
+  usuário) e não entra. Offline não há
   Redis: os dois lados recebem o mesmo "desconhecido" para o vínculo pai/filho e o dono em cache.
 - [ ] CA4. Para cada listagem convertida (`GET /jobs`, `/search`, `/projects`, `/tags`,
   `/datalakes`, `/api-keys`, contagens de `projects_api`), um teste compara o conjunto de
