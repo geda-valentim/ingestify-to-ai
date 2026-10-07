@@ -12,6 +12,9 @@ export function GET() {
     "## Agent integration",
     `- [Ingestify for agents](${DOCS_ORIGIN}/agents): HTTP tool workflows for ingesting, tracking, reading and searching data.`,
     "",
+    "## Business use",
+    `- [Ingestify for Business](${DOCS_ORIGIN}/business): English overview for integrators, AI products and data teams; processing capabilities, storage destinations and customer-based partitioning.`,
+    "",
     "## Documentation",
     `- [Overview](${DOCS_ORIGIN}/docs): English documentation index.`,
     ...DOCS_TOPICS.map(

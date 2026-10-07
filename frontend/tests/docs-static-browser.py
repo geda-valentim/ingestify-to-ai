@@ -7,9 +7,20 @@ import os
 from html.parser import HTMLParser
 from urllib.parse import urlsplit
 from xml.etree import ElementTree
-from playwright.async_api import async_playwright
+from playwright.async_api import async_playwright, expect
 
 URL = os.environ.get('LANDING_URL', 'http://127.0.0.1:3108').rstrip('/')
+
+PLATFORM_GUIDES = {
+    'platform-start': ('documents', '/convert'),
+    'platform-projects-jobs': ('projects', '/jobs'),
+    'platform-documents': ('documents', '/convert'),
+    'platform-transcription': ('transcription', '/live'),
+    'platform-images': ('images', '/convert'),
+    'platform-datalakes': ('datalakes', '/datalakes'),
+    'platform-partitioning': ('datalakes', '/datalakes'),
+    'administration-overview': ('compute', '/admin'),
+}
 
 class ArticleHTML(HTMLParser):
     def __init__(self):
@@ -21,10 +32,16 @@ class ArticleHTML(HTMLParser):
         self.canonical = None
         self.description = None
         self.languages = set()
+        self.links = set()
+        self.main_links = set()
     def handle_starttag(self, tag, attrs):
         a = dict(attrs)
         if tag in ('script', 'style', 'template'):
             self.skip += 1
+        if tag == 'a' and a.get('href'):
+            self.links.add(a['href'])
+            if self.in_main:
+                self.main_links.add(a['href'])
         if tag == 'main' and a.get('id') == 'docs-content':
             self.in_main = True
         if tag == 'h1' and self.in_main:
@@ -57,7 +74,15 @@ async def main():
         ns = {'s':'http://www.sitemaps.org/schemas/sitemap/0.9'}
         paths = [urlsplit(item.text).path for item in tree.findall('s:url/s:loc', ns)]
         docs = [path for path in paths if '/docs' in path]
-        assert len(docs) == 32 and len(set(docs)) == 32, docs
+        index = await nojs.request.get(URL+'/docs')
+        article = ArticleHTML(); article.feed(await index.text())
+        english = {urlsplit(link).path for link in article.links if link.startswith('/docs')}
+        index_text = ' '.join(article.text)
+        for audience in ('Use the platform', 'Integrate with the API', 'Administer'):
+            assert audience in index_text, audience
+        assert all('/docs/'+guide in english for guide in PLATFORM_GUIDES), english
+        expected = english | {'/pt'+path for path in english}
+        assert set(docs) == expected and len(docs) == len(expected), docs
         for path in docs:
             response = await nojs.request.get(URL+path)
             assert response.status == 200, (path,response.status)
@@ -69,11 +94,44 @@ async def main():
             assert 'BAILOUT_TO_CLIENT_SIDE_RENDERING' not in html, path
             assert urlsplit(article.canonical).path == path, (path,article.canonical)
             assert article.description and {'en','pt-BR','x-default'} <= article.languages
+            slug = path.rsplit('/', 1)[-1]
+            prefix = '/pt/docs' if path.startswith('/pt/') else '/docs'
+            if slug in PLATFORM_GUIDES:
+                api_topic, action = PLATFORM_GUIDES[slug]
+                assert f'data-platform-guide="{slug}"' in html, path
+                assert action in article.main_links, (path, action)
+                assert prefix+'/'+api_topic in article.main_links, (path, api_topic)
+                for label in ('Antes de começar', 'Resultado esperado', 'Problemas comuns') if prefix.startswith('/pt/') else ('Before you start', 'Expected outcome', 'Common problems'):
+                    assert label in text, (path, label)
+                assert '<ol' in html and len(text) > 1500, (path, len(text))
+            for guide, (api_topic, _) in PLATFORM_GUIDES.items():
+                if slug == api_topic:
+                    assert prefix+'/'+guide in article.main_links, (path, guide)
+            if slug == 'platform-images':
+                for term in ('Full Analysis', 'Regiões', 'Download JSON', 'Download Markdown', 'partial', '15', '18'):
+                    assert term in text, (path, term)
+            if slug in ('platform-partitioning', 'datalakes'):
+                for term in ('customer_id', 'JSONL' if slug == 'platform-partitioning' else 'jsonl', 'partition_values', 'America/Sao_Paulo'):
+                    assert term in text, (path, term)
+            if slug == 'datalakes':
+                for route in ('POST /datalakes/discover', 'POST /datalakes/buckets', 'POST /datalakes/partition-preview', '/images/analyze/upload'):
+                    assert route in text, (path, route)
+                assert "file=@meeting.mp3" not in text, path
             if path.endswith('/transcription'):
                 assert 'import requests' in text and 'const API' in text and 'curl -X POST' in text
+            if path.endswith('/images'):
+                import json
+                from pathlib import Path
+                schema = json.loads((Path(__file__).resolve().parents[1]/'docs/doc2md_openapi.json').read_text())
+                image_routes={method.upper()+' '+route for route,item in schema['paths'].items() if route.startswith('/images/') for method in item if method in {'get','post'}}
+                assert all(endpoint in text for endpoint in image_routes), (path,image_routes)
+                for term in ('Full Analysis','mode=full','Idempotency-Key','full_options.queries','full_options.regions','full_options.deadline_seconds','partition_values','cancel_requested','generation_metadata','analysis_modes','full_profile','full_limits','?format=json','partial','409','410','504'):
+                    assert term in text, (path,term)
+                assert 'import base64' in text and '"mode": "full"' in text, path
             if path.endswith('/results'):
                 assert 'WEBVTT' in text and 'application/json' in text
-        print('32 documentation pages contain article HTML, one H1, canonical, description and language alternates.',flush=True)
+        print('Three documentation audiences, bilingual platform guides, real screen actions and reciprocal API links passed.', flush=True)
+        print(f'{len(docs)} documentation pages contain article HTML, one H1, canonical, description and language alternates.',flush=True)
         for old, new in [('/docs?lang=pt','/pt/docs'),('/docs?lang=en','/docs'),('/docs/images?lang=pt','/pt/docs/images'),('/pt/docs/images?lang=en','/docs/images')]:
             response = await nojs.request.get(URL+old,max_redirects=0)
             assert response.status == 308, (old,response.status)
@@ -89,16 +147,23 @@ async def main():
         page = await nojs.new_page()
         await page.goto(URL+'/docs/transcription',wait_until='load')
         assert await page.locator('#docs-content h1').is_visible()
-        await page.locator('summary').filter(has_text='Python').click()
-        assert await page.locator('details[open] pre').filter(has_text='import requests').is_visible()
+        assert await page.locator('[data-docs-code-examples] pre').filter(has_text='import requests').is_visible()
+        assert await page.locator('[data-docs-code-examples] pre').filter(has_text='const API').is_visible()
         assert await page.evaluate('document.documentElement.scrollWidth<=innerWidth')
         await page.get_by_role('link',name='Português',exact=True).click()
         await page.wait_for_url(URL+'/pt/docs/transcription')
         assert 'Transcrição' in await page.locator('#docs-content h1').inner_text()
         await page.locator('summary').filter(has_text='Explorar tópicos').click()
-        await page.get_by_role('navigation',name='Tópicos da documentação').get_by_role('link',name='Imagens: descrição e OCR').click()
+        await page.get_by_role('navigation',name='Tópicos da documentação').locator('a[href="/pt/docs/images"]').click()
         await page.wait_for_url(URL+'/pt/docs/images')
         assert await page.locator('#docs-content h1').is_visible()
+        await page.goto(URL+'/pt/docs/platform-images',wait_until='load')
+        assert await page.locator('[data-platform-guide="platform-images"]').is_visible()
+        assert await page.locator('#docs-content a[href="/pt/docs/images"]').is_visible()
+        assert await page.evaluate('document.documentElement.scrollWidth<=innerWidth')
+        await page.locator('#docs-content a[href="/pt/docs/images"]').click()
+        await page.wait_for_url(URL+'/pt/docs/images')
+        assert await page.locator('#docs-content a[href="/pt/docs/platform-images"]').is_visible()
         print('No-JS language switch, mobile topic navigation, and native code examples passed.',flush=True)
         await nojs.close()
         interactive = await browser.new_context(viewport={'width':1440,'height':900},permissions=['clipboard-read','clipboard-write'])
@@ -108,12 +173,32 @@ async def main():
             await page.goto(URL+old,wait_until='networkidle')
             await page.wait_for_url(URL+new)
         await page.goto(URL+'/docs/transcription',wait_until='networkidle')
-        example = page.locator('details').filter(has=page.locator('summary',has_text='curl'))
-        await example.get_by_role('button').click()
+        example = page.get_by_role('tabpanel',name='curl',exact=True)
+        await example.get_by_role('button',name='Copy code',exact=True).click()
         assert await page.evaluate('navigator.clipboard.readText()') == await example.locator('code').inner_text()
         await page.get_by_role('link',name='Português',exact=True).click()
         await page.wait_for_url(URL+'/pt/docs/transcription')
         assert await page.locator('html').get_attribute('lang') == 'pt-BR'
+        for width in (1440,390):
+            await page.set_viewport_size({'width':width,'height':900})
+            for prefix in ('/docs','/pt/docs'):
+                for topic,labels in [('transcription',['curl','Python','JavaScript']),('results',['markdown','vtt','srt','txt','json'])]:
+                    await page.goto(URL+prefix+'/'+topic,wait_until='networkidle')
+                    examples = page.locator('[data-docs-code-examples]')
+                    assert await examples.locator('details').count() == 0
+                    for label in labels:
+                        tab = examples.get_by_role('tab',name=label,exact=True)
+                        await tab.click()
+                        assert await tab.get_attribute('aria-selected') == 'true'
+                        panel = examples.get_by_role('tabpanel',name=label,exact=True)
+                        assert await examples.locator('[role="tabpanel"]:visible').count() == 1
+                        await panel.get_by_role('button').click()
+                        assert await page.evaluate('navigator.clipboard.readText()') == await panel.locator('pre code').inner_text()
+                    await examples.get_by_role('tab',name=labels[0],exact=True).focus()
+                    await page.keyboard.press('ArrowRight')
+                    await expect(examples.get_by_role('tab',name=labels[1],exact=True)).to_have_attribute('aria-selected','true')
+                    assert await page.evaluate('document.documentElement.scrollWidth<=innerWidth')
+        print('Language and format tabs, keyboard navigation, and active-example copying passed in both languages on desktop and mobile.',flush=True)
         assert not errors, errors
         await browser.close()
         print('Legacy query/hash links, copy button, hydration, sitemap, robots and llms.txt passed.')

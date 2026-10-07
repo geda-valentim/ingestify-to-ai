@@ -1,7 +1,53 @@
 "use client";
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { Check, Copy } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+
+export function CodeExamples({
+  examples,
+  label,
+  copyLabel,
+}: {
+  examples: { label: string; code: string; note?: ReactNode }[];
+  label: string;
+  copyLabel: string;
+}) {
+  return (
+    <Tabs defaultValue={examples[0].label} data-docs-code-examples className="min-w-0">
+      <div className="overflow-x-auto">
+        <TabsList aria-label={label} className="justify-start">
+          {examples.map((example) => (
+            <TabsTrigger key={example.label} value={example.label}>
+              {example.label}
+            </TabsTrigger>
+          ))}
+        </TabsList>
+      </div>
+      {examples.map((example) => (
+        <TabsContent
+          key={example.label}
+          value={example.label}
+          forceMount
+          className="mt-3 data-[state=inactive]:hidden"
+        >
+          <h3 data-code-example-label className="hidden mb-2 text-sm font-medium">
+            {example.label}
+          </h3>
+          <CodeBlock code={example.code} copyLabel={copyLabel} />
+          {example.note && <p className="pt-2 text-sm text-muted-foreground">{example.note}</p>}
+        </TabsContent>
+      ))}
+      <noscript>
+        <style>{`
+          [data-docs-code-examples] [role="tablist"] { display: none; }
+          [data-docs-code-examples] [role="tabpanel"] { display: block !important; }
+          [data-docs-code-examples] [data-code-example-label] { display: block; }
+        `}</style>
+      </noscript>
+    </Tabs>
+  );
+}
 
 export function CodeBlock({
   code,

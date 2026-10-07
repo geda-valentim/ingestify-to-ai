@@ -43,19 +43,6 @@
 .landing button {
   cursor: pointer;
 }
-.landing-header {
-  height: 72px;
-  position: sticky;
-  top: 0;
-  z-index: 30;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0 var(--gutter);
-  background: #fffffff2;
-  border-bottom: 1px solid var(--line);
-  backdrop-filter: blur(18px);
-}
 .landing-brand {
   display: inline-flex;
   align-items: center;
@@ -63,21 +50,6 @@
   font-size: 25px;
   font-weight: 600;
   letter-spacing: -1.1px;
-}
-.landing-header nav {
-  display: flex;
-  align-items: center;
-  gap: 28px;
-  font-size: 13px;
-}
-.motion-toggle {
-  font-size: 10px;
-  color: #666;
-  border-bottom: 1px solid #ccc;
-  padding-bottom: 2px;
-}
-.motion-toggle > svg {
-  display: none;
 }
 .landing-button {
   display: inline-flex;
@@ -933,9 +905,6 @@
   }
 }
 @media (max-width: 1050px) {
-  .landing-header nav {
-    gap: 20px;
-  }
   .landing-story-copy {
     width: 49%;
   }
@@ -1009,31 +978,8 @@
   .landing {
     --gutter: 22px;
   }
-  .landing-header nav {
-    gap: 14px;
-  }
-  .landing-header nav > a:first-of-type,
-  .landing-github {
-    display: none;
-  }
-  .landing-header .landing-button {
-    white-space: nowrap;
-    gap: 10px;
-    font-size: 11px;
-    padding: 8px 12px;
-  }
   .landing-brand {
     font-size: 23px;
-  }
-  .motion-toggle {
-    border: 0;
-    padding: 8px;
-  }
-  .motion-toggle > span {
-    display: none;
-  }
-  .motion-toggle > svg {
-    display: block;
   }
   .landing-story {
     height: 750svh;
@@ -1458,25 +1404,6 @@
     font-size: 26px;
   }
 }
-@media (max-width: 359px) {
-  .landing-header {
-    padding-inline: 16px;
-  }
-  .landing-header nav {
-    gap: 7px;
-  }
-  .landing-header .landing-brand {
-    font-size: 20px;
-    gap: 6px;
-  }
-  .landing-header .landing-button {
-    padding: 8px 9px;
-  }
-  .landing-header .landing-button svg {
-    display: none;
-  }
-}
-
 @media (min-width: 768px) and (max-height: 740px) {
   .landing-story-copy,
   .landing-story-copy.is-bridge {
@@ -2053,11 +1980,5 @@
   }
   .lake-adapter-preview > span:last-child {
     flex-basis: 100%;
-  }
-}
-
-@media (max-width: 767px) {
-  .landing-header .landing-agents {
-    display: none;
   }
 }
