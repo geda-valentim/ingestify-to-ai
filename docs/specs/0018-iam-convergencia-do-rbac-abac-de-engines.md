@@ -84,14 +84,18 @@ sua semântica de decisão. As famílias nunca se enxergam (§4.3).
   `grant_rows(db, user_id)`). O diff dos testes contém só essas trocas.
 - [ ] CA4. Equivalência: para um conjunto de grants legados — ativos, revogados,
   expirados, delegados, pai revogado, pai expirado, dono do grant inativo, dono do pai
-  inativo, ciclo de `parent_id`, `condition_ref` ausente (→ nega), vários grants do
-  mesmo papel com subconjuntos de permissões distintos — e uma matriz de pedidos
+  inativo, ciclo de `parent_id`, vários grants do mesmo papel com subconjuntos de
+  permissões distintos — e uma matriz de pedidos
   (ator × permissão × engine/perfil/feature/runtime/recursos, mais `navigation`,
   `visible_catalog`, `scoped_query` e `_delegator`), a decisão nova é idêntica à de uma
   **cópia congelada** de `policy.grants`/`active_grant` anterior à 0018 lendo
   `RoleGrant`, mantida em `shared/iam/engine_equivalence.py` (não importa o código
   novo). A mesma comparação é exposta como script contra o snapshot de dev e é gate
-  antes do deploy.
+  antes do deploy. `condition_ref` ausente, pendente, `permissions` vazias ou sujeito
+  não-usuário ficam **fora** da equivalência: a migração recusa esses grants (CA1) e,
+  no lado legado, `authorize` lança `AttributeError` enquanto `navigation` ainda conta
+  o grant, de modo que não há decisão legada a igualar. Só o lado novo é testado, como
+  defesa em profundidade: o binding malformado não contribui nada (→ nega).
 - [ ] CA5. Escrever binding de papel `engines` trava o epoch da 0009 (`FOR UPDATE`)
   antes de ler ou alterar qualquer binding ou usuário e o incrementa na mesma
   transação; bindings de papel `platform` não tocam o epoch (0013 §4 regra 2).

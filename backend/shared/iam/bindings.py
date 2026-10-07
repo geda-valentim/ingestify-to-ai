@@ -67,6 +67,16 @@ def view(b: IamBinding, now: Optional[datetime] = None) -> dict:
     )
 
 
+def _engines(b: IamBinding) -> bool:
+    """
+    An engines binding (spec 0018): an engines role, or a copied 0009 grant —
+    which always carries `condition_ref` (NOT NULL in access_role_grants), even
+    when its role has left `ENGINE_ROLES`. Never the platform family's to list
+    or revoke: its revocation goes with the 0009 epoch.
+    """
+    return catalog.family(b.role) == catalog.ENGINES_FAMILY or b.condition_ref is not None
+
+
 def _audit(db, actor: Principal, action: str, b: IamBinding, before, after, ip):
     db.add(
         AdminAudit(
@@ -201,7 +211,7 @@ def revoke(
 
     b = db.get(IamBinding, str(binding_id))
     # Engines bindings (spec 0018) are not this family's to see or revoke.
-    if b is None or catalog.family(b.role) == catalog.ENGINES_FAMILY:
+    if b is None or _engines(b):
         raise IamError("BINDING_NOT_FOUND", 404)
     if b.revoked_at is not None:
         raise IamError("ALREADY_REVOKED", 409)
@@ -243,6 +253,7 @@ def list_bindings(db: Session, actor, *, include_inactive: bool = False, decider
         IamBinding.scope_type == "platform",
         # Engines bindings (spec 0018) are never listed to the platform family.
         IamBinding.role.notin_(list(catalog.ENGINE_ROLES)),
+        IamBinding.condition_ref.is_(None),
     )
     if not include_inactive:
         q = q.filter(IamBinding.revoked_at.is_(None), IamBinding.expires_at > now)
