@@ -456,6 +456,7 @@ def test_permissions_catalog_is_served_to_any_session(people, client):
     body = call(client, "GET", "/iam/permissions", people.alice).json()
     assert {p["name"] for p in body["permissions"]} == set(catalog.PERMISSIONS)
     assert {r["key"] for r in body["roles"]} == set(catalog.ROLES)
+    assert body["mode"] == "enforce"
 
 
 @pytest.mark.parametrize("who,expected", [

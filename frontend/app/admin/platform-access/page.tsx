@@ -75,10 +75,11 @@ export default function PlatformAccessPage() {
     setError(null);
     try {
       await fn();
-      await bindings.refetch();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Falha ao salvar");
     } finally {
+      // Also after a 409: the row comes back with its current version and state.
+      await bindings.refetch();
       setBusy(false);
     }
   }
@@ -91,8 +92,15 @@ export default function PlatformAccessPage() {
           Papéis de plataforma concedem administração entre usuários
           (estatísticas, recuperação de jobs, routing, auditoria) e o uso de
           engines remotas. Cada concessão tem validade UTC de no máximo{" "}
-          {MAX_DAYS} dias e vale a partir da próxima requisição.
+          {MAX_DAYS} dias e, com IAM_MODE=enforce, vale a partir da próxima
+          requisição.
         </p>
+        {catalog.data?.mode && catalog.data.mode !== "enforce" && (
+          <p role="status" className="text-sm mt-2 rounded-md border bg-muted/40 p-3">
+            IAM_MODE={catalog.data.mode}: as concessões ficam registradas mas
+            não têm efeito até IAM_MODE=enforce.
+          </p>
+        )}
         <p className="text-sm mt-2">
           Estes papéis não abrem engines nem perfis de execução: esses seguem os
           grants de Acesso. O bootstrap da plataforma não aparece aqui.

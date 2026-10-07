@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import {
   AlertCircle,
   AlertTriangle,
@@ -17,6 +18,8 @@ import {
   Terminal,
 } from "lucide-react";
 import { ApiError } from "@/lib/api";
+import { canOpenAdminSection } from "@/lib/admin-nav";
+import { useAuthStore } from "@/lib/store/auth";
 import { cn, parseApiDate } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import {
@@ -285,6 +288,30 @@ function CommandLine({ command }: { command: string }) {
         )}
       </Button>
     </div>
+  );
+}
+
+/**
+ * A link into /admin/engines, or plain text for a viewer who cannot open that
+ * section (e.g. platform_operator on Routing/Status, spec 0014 §4.10).
+ */
+export function EngineLink({
+  href,
+  className,
+  children,
+}: {
+  href: string;
+  className?: string;
+  children: React.ReactNode;
+}) {
+  const user = useAuthStore((s) => s.user);
+  if (!canOpenAdminSection(user, "/admin/engines")) {
+    return <span className={className}>{children}</span>;
+  }
+  return (
+    <Link href={href} className={className}>
+      {children}
+    </Link>
   );
 }
 

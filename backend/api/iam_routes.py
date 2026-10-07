@@ -31,6 +31,7 @@ from api.iam_deps import (
     request_principal,
     require,
 )
+from shared.config import get_settings
 from shared.iam import bindings, catalog
 from shared.iam.decide import Decider
 from shared.models import User
@@ -79,7 +80,8 @@ def _iam_error(e: bindings.IamError) -> HTTPException:
 
 @router.get("/iam/permissions", summary="The permission catalog and the managed roles")
 async def list_permissions(user: User = Depends(authenticated())):
-    return catalog.describe()
+    # `mode` lets the UI say that bindings are inert until IAM_MODE=enforce (§4.11).
+    return {**catalog.describe(), "mode": get_settings().iam_mode}
 
 
 @router.post("/iam/check", response_model=List[PermissionCheckResult], summary="Which platform permissions the caller holds")
