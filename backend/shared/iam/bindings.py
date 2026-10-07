@@ -93,13 +93,20 @@ def _require_manager(decider: Decider, actor, permission: str, *, writes: bool =
     return principal
 
 
-def _subject_exists(db: Session, subject_type: str, subject_id: str) -> bool:
+def _lock_subject(db: Session, subject_type: str, subject_id: str) -> bool:
+    """
+    Whether the subject exists, locking its row (FOR UPDATE) until the grant
+    commits: two concurrent grants for the same subject serialize here, so the
+    second one sees the first binding and gets BINDING_EXISTS.
+    """
     if subject_type == "user":
-        return db.get(User, subject_id) is not None
-    from shared.access.models import ServicePrincipal
-
-    row = db.get(ServicePrincipal, subject_id)
-    return row is not None and row.active is True
+        model = User
+    else:
+        from shared.access.models import ServicePrincipal as model
+    row = db.query(model).filter(model.id == subject_id).populate_existing().with_for_update().first()
+    if row is None:
+        return False
+    return subject_type == "user" or row.active is True
 
 
 def grant(
@@ -127,7 +134,7 @@ def grant(
         raise IamError("INVALID_SUBJECT", 422, "subject_id is required")
     if subject_type == principal.subject_type and subject_id == principal.subject_id:
         raise IamError("SELF_GRANT", 422, "Nobody grants a role to themselves")
-    if not _subject_exists(db, subject_type, subject_id):
+    if not _lock_subject(db, subject_type, subject_id):
         raise IamError("SUBJECT_NOT_FOUND", 422, "The subject does not exist")
 
     held = decider.platform_permissions(principal)
@@ -154,6 +161,8 @@ def grant(
             IamBinding.revoked_at.is_(None),
             IamBinding.expires_at > now,
         )
+        # A locking read sees the latest commit, not this transaction's snapshot.
+        .with_for_update()
         .first()
     )
     if existing is not None:
