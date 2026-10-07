@@ -27,6 +27,7 @@ from shared.database import SessionLocal
 from shared.redis_client import get_redis_client
 from shared.auth import get_current_active_user
 from shared.admin import is_effective_admin
+from api.iam_deps import require
 from workers.monitoring import detect_stuck_jobs, auto_retry_failed_pages, cleanup_old_jobs
 from uuid import uuid4
 
@@ -39,6 +40,10 @@ router = APIRouter(prefix="/admin", tags=["Admin & Monitoring"])
 def require_admin(current_user=Depends(get_current_active_user)):
     """
     Dependency that restricts an endpoint to administrators.
+
+    Only the 0009 engine routes still use it (spec 0014 §2); every route of this
+    module declares its platform permission with `require(...)` (§4.7), decided
+    by `shared.iam` under IAM_MODE. Removed in 0014 §8 item 7.
 
     A user is an admin if EITHER the `users.is_admin` column is true (set with
     scripts/make_admin.py) OR their ID is listed in ADMIN_USER_IDS
@@ -57,7 +62,7 @@ def require_admin(current_user=Depends(get_current_active_user)):
 
 
 @router.get("/stats", summary="Get system statistics")
-async def get_stats(admin_user=Depends(require_admin)) -> Dict[str, Any]:
+async def get_stats(admin_user=Depends(require("platform.stats.read"))) -> Dict[str, Any]:
     """
     Get comprehensive system statistics for monitoring dashboard
 
@@ -100,7 +105,7 @@ async def get_stats(admin_user=Depends(require_admin)) -> Dict[str, Any]:
 async def list_stuck_jobs(
     threshold_minutes: int = None,
     limit: int = 100,
-    admin_user=Depends(require_admin)
+    admin_user=Depends(require("platform.jobs.read"))
 ) -> Dict[str, Any]:
     """
     List all jobs currently stuck in processing state
@@ -156,7 +161,7 @@ async def list_stuck_jobs(
 @router.post("/jobs/recover-stuck", summary="Manually trigger stuck job recovery")
 async def recover_stuck_jobs(
     threshold_minutes: int = None,
-    admin_user=Depends(require_admin)
+    admin_user=Depends(require("platform.jobs.recover"))
 ) -> Dict[str, Any]:
     """
     Manually trigger the stuck job detection and recovery process
@@ -201,7 +206,7 @@ async def recover_stuck_jobs(
 @router.post("/jobs/{job_id}/retry-all-failed", summary="Bulk retry all failed pages of a job")
 async def retry_all_failed_pages(
     job_id: str,
-    admin_user=Depends(require_admin)
+    admin_user=Depends(require("platform.jobs.recover"))
 ) -> Dict[str, Any]:
     """
     Retry all failed pages of a specific job
@@ -306,7 +311,7 @@ async def retry_all_failed_pages(
 @router.post("/cleanup", summary="Manually trigger cleanup of old jobs")
 async def trigger_cleanup(
     days_old: int = None,
-    admin_user=Depends(require_admin)
+    admin_user=Depends(require("platform.jobs.cleanup"))
 ) -> Dict[str, Any]:
     """
     Manually trigger cleanup of old completed/failed jobs from Redis
@@ -346,7 +351,7 @@ async def trigger_cleanup(
 
 
 @router.get("/health/monitoring", summary="Check monitoring system health")
-async def monitoring_health(admin_user=Depends(require_admin)) -> Dict[str, Any]:
+async def monitoring_health(admin_user=Depends(require("platform.monitoring.read"))) -> Dict[str, Any]:
     """
     Check if the monitoring system (Celery Beat) is functioning
 
@@ -385,7 +390,7 @@ async def monitoring_health(admin_user=Depends(require_admin)) -> Dict[str, Any]
 
 
 @router.get("/broker/unacked", summary="List unacknowledged broker messages")
-async def list_broker_unacked(admin_user=Depends(require_admin)) -> Dict[str, Any]:
+async def list_broker_unacked(admin_user=Depends(require("platform.monitoring.read"))) -> Dict[str, Any]:
     """
     Messages the Celery broker holds as delivered but not yet acknowledged.
 
@@ -408,7 +413,7 @@ async def list_broker_unacked(admin_user=Depends(require_admin)) -> Dict[str, An
 
 
 @router.post("/broker/unacked/{delivery_tag}/requeue", summary="Requeue an orphaned broker message")
-async def requeue_broker_unacked(delivery_tag: str, admin_user=Depends(require_admin)) -> Dict[str, Any]:
+async def requeue_broker_unacked(delivery_tag: str, admin_user=Depends(require("platform.broker.requeue"))) -> Dict[str, Any]:
     """
     Put an orphaned message back at the head of its queue, so its task runs again now
     instead of after the visibility timeout.

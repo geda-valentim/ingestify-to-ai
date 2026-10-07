@@ -12,11 +12,12 @@ from shared.auth import (
     authenticate_user,
     bearer_scheme,
     create_access_token,
-    get_current_active_user,
     verify_token,
 )
 from shared.config import get_settings
 from shared import rate_limit
+from api.iam_deps import authenticated, platform_view, request_decider, request_principal
+from shared.iam.decide import Decider
 
 settings = get_settings()
 router = APIRouter()
@@ -197,8 +198,11 @@ async def refresh_token(
 
 
 @router.get("/me", response_model=UserResponse)
-async def get_current_user_info(
-    current_user: User = Depends(get_current_active_user), db: Session = Depends(get_db)
+def get_current_user_info(
+    request: Request,
+    current_user: User = Depends(authenticated()),
+    db: Session = Depends(get_db),
+    decider: Decider = Depends(request_decider),
 ):
     """
     Get information about the currently authenticated user
@@ -213,17 +217,25 @@ async def get_current_user_info(
     ```
 
     ## Returns:
-    User object with id, email, username, is_active, created_at
+    User object with id, email, username, is_active, created_at, is_admin, and:
+    - `permissions`: flat list, the 0009 engine permissions plus the platform/IAM
+      permissions the caller holds under the current IAM_MODE (spec 0014 CA12)
+    - `bootstrap`: emergency access (the is_admin column or ADMIN_USER_IDS)
+    - `platform_roles`: managed roles held through active bindings
 
     ## Errors:
     - 401: Not authenticated or invalid token/API key
     """
     from shared.access.policy import navigation
 
+    # Plain `def` (threadpool): navigation and the bindings lookup are blocking DB I/O.
     access = navigation(db, current_user)
+    platform = platform_view(decider, request_principal(request, current_user))
     return UserResponse.for_user(current_user).model_copy(
         update={
-            "permissions": access["permissions"],
+            "permissions": sorted(set(access["permissions"]) | platform.permissions),
             "engine_access_enabled": access["enabled"],
+            "bootstrap": platform.bootstrap,
+            "platform_roles": list(platform.roles),
         }
     )

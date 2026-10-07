@@ -60,21 +60,6 @@ DOCS_PATHS = {"/openapi.json", "/docs", "/docs/oauth2-redirect", "/redoc"}
 # Routes still on their legacy guard. Converted in spec 0014 §8 items 3 and 4;
 # this set may only shrink (and may not grow: see PENDING_MAX).
 PENDING_ROUTES = {
-    # Session-only routes (§4.9): a declaration for "any authenticated user" comes with /iam/*.
-    "GET /auth/me",
-    # §8.3: administrative routes (§4.7)
-    "GET /admin/stats",
-    "GET /admin/jobs/stuck",
-    "POST /admin/jobs/recover-stuck",
-    "POST /admin/jobs/{job_id}/retry-all-failed",
-    "POST /admin/cleanup",
-    "GET /admin/health/monitoring",
-    "GET /admin/broker/unacked",
-    "POST /admin/broker/unacked/{delivery_tag}/requeue",
-    "GET /admin/routing",
-    "PUT /admin/routing/{feature}",
-    "DELETE /admin/routing/{feature}",
-    "GET /admin/engines/status",
     # §8.4: data routes by id and listings
     "POST /api-keys/",
     "GET /api-keys/",
@@ -111,9 +96,34 @@ PENDING_ROUTES = {
 
 # Exact sizes, so the allowlists cannot grow unnoticed (a removal that is later
 # re-added would otherwise pass). Lower these in each slice that converts.
-PENDING_MAX = 44
+PENDING_MAX = 31
 ADMIN_ALLOWLIST_MAX = 21
 OWNER_ALLOWLIST_MAX = 16
+
+# The only routes that may declare authenticated(): they describe the caller to
+# themselves and read nobody else's data (0014 §4.9 "sessão").
+AUTHENTICATED_ROUTES = {"GET /auth/me", "GET /iam/permissions", "POST /iam/check"}
+
+# The administrative routes of §4.7 and §4.9, with the permission each declares and
+# whether it also demands a login session. Pinned so a route cannot drift to a
+# weaker permission unnoticed.
+PLATFORM_ROUTES = {
+    "GET /admin/stats": ("platform.stats.read", False),
+    "GET /admin/jobs/stuck": ("platform.jobs.read", False),
+    "POST /admin/jobs/recover-stuck": ("platform.jobs.recover", False),
+    "POST /admin/jobs/{job_id}/retry-all-failed": ("platform.jobs.recover", False),
+    "POST /admin/cleanup": ("platform.jobs.cleanup", False),
+    "GET /admin/health/monitoring": ("platform.monitoring.read", False),
+    "GET /admin/broker/unacked": ("platform.monitoring.read", False),
+    "POST /admin/broker/unacked/{delivery_tag}/requeue": ("platform.broker.requeue", False),
+    "GET /admin/routing": ("platform.routing.read", False),
+    "GET /admin/engines/status": ("platform.routing.read", False),
+    "PUT /admin/routing/{feature}": ("platform.routing.update", True),
+    "DELETE /admin/routing/{feature}": ("platform.routing.update", True),
+    "GET /admin/iam/bindings": ("iam.bindings.read", False),
+    "POST /admin/iam/bindings": ("iam.bindings.manage", True),
+    "POST /admin/iam/bindings/{binding_id}/revoke": ("iam.bindings.manage", True),
+}
 
 # What a route marked engine_access() must still be guarded by (0009, unchanged).
 ENGINE_GUARDS = {"access_session", "require_admin", "require_admin_session"}
@@ -218,6 +228,29 @@ def test_engine_access_marks_only_routes_still_under_a_0009_guard():
     assert not unguarded, f"engine_access() is a marker, not a guard: {unguarded}"
 
 
+def test_authenticated_is_only_for_self_describing_routes():
+    routes, _, _ = _inventory()
+    declared = {k for k, decls in routes.items() if any(d.kind == "authenticated" for d in decls)}
+    assert declared == AUTHENTICATED_ROUTES
+
+
+def test_admin_routes_declare_their_platform_permission():
+    routes, _, _ = _inventory()
+    wrong = {}
+    for key, (permission, session) in PLATFORM_ROUTES.items():
+        got = [(d.kind, d.permission, d.session) for d in routes[key]]
+        if got != [("require", permission, session)]:
+            wrong[key] = got
+    assert not wrong, f"administrative routes off their §4.7 permission: {wrong}"
+    # No other /admin route is left on require(): the rest are 0009 engine routes.
+    others = sorted(
+        k for k, decls in routes.items()
+        if k.split(" ", 1)[1].startswith("/admin/") and k not in PLATFORM_ROUTES
+        and [d.kind for d in decls] != ["engine_access"]
+    )
+    assert not others, f"/admin routes neither in PLATFORM_ROUTES nor engine_access: {others}"
+
+
 def test_the_0009_routes_are_in_the_inventory():
     routes, _, _ = _inventory()
     for key in (
@@ -253,9 +286,9 @@ ADMIN_ALLOWLIST = {
     ("api/access_routes.py", "target.is_admin = body.is_admin"): (1, "0009 subject state: edits the bootstrap column, decides nothing"),
     ("api/access_routes.py", '{"is_active": target.is_active, "is_admin": target.is_admin},'): (1, "0009 subject state: audit payload"),
     ("api/access_routes.py", "return dict(id=target.id, is_active=target.is_active, is_admin=target.is_admin)"): (1, "0009 subject state: response"),
-    ("api/admin_routes.py", "from shared.admin import is_effective_admin"): (1, PENDING + " (§8.3 require_admin)"),
-    ("api/admin_routes.py", "A user is an admin if EITHER the `users.is_admin` column is true (set with"): (1, PENDING + " (§8.3 require_admin docstring)"),
-    ("api/admin_routes.py", "if not is_effective_admin(current_user, settings):"): (1, PENDING + " (§8.3 require_admin)"),
+    ("api/admin_routes.py", "from shared.admin import is_effective_admin"): (1, PENDING + " (§8.7: require_admin now guards only the 0009 engine routes)"),
+    ("api/admin_routes.py", "A user is an admin if EITHER the `users.is_admin` column is true (set with"): (1, PENDING + " (§8.7: require_admin docstring)"),
+    ("api/admin_routes.py", "if not is_effective_admin(current_user, settings):"): (1, PENDING + " (§8.7: require_admin now guards only the 0009 engine routes)"),
     ("api/engine_admin_routes.py", "from shared.admin import is_effective_admin"): (1, "0009 credential re-auth (CA13: unchanged)"),
     ("api/engine_admin_routes.py", "if is_effective_admin(db.get(User, actor)):"): (1, "0009 credential re-auth (CA13: unchanged)"),
     ("api/image_routes.py", "from shared.admin import is_effective_admin"): (1, PENDING + " (§8.5 engines.remote.use)"),

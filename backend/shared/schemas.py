@@ -324,8 +324,13 @@ class UserResponse(BaseModel):
     # Effective admin rule (users.is_admin OR ADMIN_USER_IDS); the API fills it in,
     # so the frontend can show admin-only screens
     is_admin: bool = False
+    # Flat list: the 0009 engine permissions plus the platform/IAM ones (spec 0014 CA12)
     permissions: list[str] = []
     engine_access_enabled: bool = False
+    # Emergency access (users.is_admin / ADMIN_USER_IDS), never a binding (spec 0014 CA8)
+    bootstrap: bool = False
+    # Managed platform roles held through active bindings (empty unless IAM_MODE=enforce)
+    platform_roles: list[str] = []
 
     class Config:
         from_attributes = True
