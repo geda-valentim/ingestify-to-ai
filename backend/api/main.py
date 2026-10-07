@@ -18,6 +18,7 @@ from api.engine_admin_routes import router as engine_admin_router
 from api.engine_control_routes import router as engine_control_router, host_router as engine_host_router
 from api.routing_admin_routes import router as routing_admin_router
 from api.projects_api import router as projects_router
+from api.iam_routes import router as iam_router
 
 # Configure logging
 logging.basicConfig(
@@ -338,6 +339,7 @@ app.include_router(engine_admin_router)  # /admin/engines, /admin/gpus (spec 000
 from api.access_routes import router as access_router
 
 app.include_router(access_router)
+app.include_router(iam_router)  # /iam/*, /admin/iam/* (spec 0014 §4.9)
 app.include_router(engine_control_router)
 app.include_router(engine_host_router)
 app.include_router(projects_router)  # GET /projects, /projects/resolve, /projects/{id}/folders/resolve

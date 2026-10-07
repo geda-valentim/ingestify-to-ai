@@ -6,7 +6,8 @@ Admin API for feature routes and the dispatcher (spec 0003, Appendix B).
     DELETE /admin/routing/{feature}   remove it: the route drains back to today's path (202)
     GET    /admin/engines/status      in flight / capacity, backlog per feature, the dispatcher lease
 
-Reads need an admin; changes need an admin's login session (JWT) and are audited.
+Reads need `platform.routing.read`; changes need `platform.routing.update` and a
+login session (JWT), and are audited (spec 0014 §4.7).
 A remote step needs its engines active, healthy, deployed and budgeted, and a
 live worker-remote (409 otherwise).
 """
@@ -19,8 +20,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from api.admin_routes import require_admin
-from api.engine_admin_routes import _alive_by_feature, _remote_worker_alive, fingerprint_of, require_admin_session
+from api.engine_admin_routes import _alive_by_feature, _remote_worker_alive, fingerprint_of
+from api.iam_deps import require
 from shared.auth import verify_password
 from shared.database import get_db
 from shared.engines import dispatch, routing
@@ -32,6 +33,14 @@ from shared.models import DispatcherLease, Engine, EngineUsage, FeatureRoute, Jo
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/admin", tags=["Admin - Engines"])
+
+ROUTING_READ = require("platform.routing.read")
+# Same rule and detail as the 0009 `require_admin_session` it replaces (CA12).
+ROUTING_UPDATE = require(
+    "platform.routing.update",
+    session=True,
+    session_detail="Engine changes require a login session (JWT); API keys are not accepted",
+)
 
 
 class RouteUpdate(routing.RouteSpec):
@@ -75,7 +84,7 @@ def _lease_view(db: Session, now: datetime) -> Dict[str, Any]:
 
 
 @router.get("/routing", summary="Feature routes and their backlog")
-async def list_routes(admin_user=Depends(require_admin), db: Session = Depends(get_db)) -> List[Dict[str, Any]]:
+async def list_routes(admin_user=Depends(ROUTING_READ), db: Session = Depends(get_db)) -> List[Dict[str, Any]]:
     now = datetime.utcnow()
     engines = {e.id: e for e in db.query(Engine)}
     routes = {r.feature: r for r in db.query(FeatureRoute)}
@@ -89,7 +98,7 @@ async def list_routes(admin_user=Depends(require_admin), db: Session = Depends(g
 
 @router.put("/routing/{feature}", summary="Create or replace a feature's route")
 async def put_route(feature: str, body: RouteUpdate, request: Request,
-                    admin_user=Depends(require_admin_session), db: Session = Depends(get_db)) -> Dict[str, Any]:
+                    admin_user=Depends(ROUTING_UPDATE), db: Session = Depends(get_db)) -> Dict[str, Any]:
     if body.remote_allowed_for == "all":
         current = db.query(FeatureRoute).filter(FeatureRoute.feature == feature).first()
         if current is None or current.remote_allowed_for != "all":
@@ -122,7 +131,7 @@ async def put_route(feature: str, body: RouteUpdate, request: Request,
 
 
 @router.delete("/routing/{feature}", status_code=202, summary="Remove a route (it drains back to today's path)")
-async def delete_route(feature: str, request: Request, admin_user=Depends(require_admin_session),
+async def delete_route(feature: str, request: Request, admin_user=Depends(ROUTING_UPDATE),
                        db: Session = Depends(get_db)) -> Dict[str, Any]:
     try:
         route = routing.drain_route(db, feature, actor_user_id=str(admin_user.id), auth_method="jwt",
@@ -137,7 +146,7 @@ async def delete_route(feature: str, request: Request, admin_user=Depends(requir
 
 
 @router.get("/engines/status", summary="Dispatcher, in-flight work and backlog")
-async def engines_status(admin_user=Depends(require_admin), db: Session = Depends(get_db)) -> Dict[str, Any]:
+async def engines_status(admin_user=Depends(ROUTING_READ), db: Session = Depends(get_db)) -> Dict[str, Any]:
     now = datetime.utcnow()
     live = _alive_by_feature()
     capacity = []

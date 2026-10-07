@@ -16,6 +16,9 @@ Every HTTP/WS route declares **exactly one** of these (CA1, enforced by
                                                decided by `access_session` /
                                                `require_admin_session` and
                                                `shared.access.policy`
+    authenticated()                            any active user, about themselves
+                                               only (`/auth/me`, `/iam/*`): the
+                                               "sessão" of 0014 §4.9
 
 ## IAM_MODE (0014 §4.11)
 
@@ -71,7 +74,7 @@ SESSION_REQUIRED_DETAIL = "This change requires a login session (JWT); API keys 
 
 @dataclass(frozen=True)
 class Declaration:
-    kind: str  # require | authorized | visible | engine_access
+    kind: str  # require | authorized | visible | engine_access | authenticated
     permission: Optional[str] = None
     model: Optional[type] = None
     session: bool = False
@@ -396,3 +399,52 @@ def engine_access(note: str = "0009"):
         return None
 
     return _declare(dependency, Declaration("engine_access", note), f"engine_access[{note}]")
+
+
+# ============================================
+# authenticated() — "sessão" (0014 §4.9)
+# ============================================
+
+def authenticated():
+    """
+    Any active user, for routes that only describe the caller to themselves
+    (`/auth/me`, `/iam/permissions`, `/iam/check`). It reads no one else's data
+    and grants nothing, so there is no permission to decide. Returns the user.
+    """
+
+    async def dependency(user: User = Depends(get_current_active_user)) -> User:
+        return user
+
+    return _declare(dependency, Declaration("authenticated"), "authenticated")
+
+
+@dataclass(frozen=True)
+class PlatformView:
+    """What the caller holds at platform level right now, as IAM_MODE answers it."""
+
+    bootstrap: bool
+    roles: Tuple[str, ...]
+    permissions: frozenset
+
+
+def platform_view(decider: Decider, principal: Principal, mode: Optional[str] = None) -> PlatformView:
+    """
+    The platform permissions and roles that *count* under the current mode.
+
+    - `enforce`: bootstrap or the active bindings (`Decider.platform_permissions`).
+    - `off` / `shadow`: the legacy rule answers, so only bootstrap holds platform
+      power and bindings are inert: reported roles are empty, never misleading.
+
+    Never audits: describing a permission is not exercising it (CA8 audits uses).
+    """
+    mode = mode or _mode()
+    if principal is None or not principal.active:
+        return PlatformView(False, (), frozenset())
+    if mode == "enforce":
+        return PlatformView(
+            principal.bootstrap,
+            tuple(decider.platform_roles(principal)),
+            decider.platform_permissions(principal),
+        )
+    held = catalog.ROLES[catalog.BOOTSTRAP_ROLE].permissions if principal.bootstrap else frozenset()
+    return PlatformView(principal.bootstrap, (), held)

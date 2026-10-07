@@ -28,8 +28,13 @@ export interface UserResponse {
   created_at: string;
   /** Effective admin (users.is_admin or ADMIN_USER_IDS). Absent in sessions saved by older builds. */
   is_admin?: boolean;
+  /** Flat list: 0009 engine permissions plus platform/IAM ones (spec 0014). */
   permissions?: string[];
   engine_access_enabled?: boolean;
+  /** Emergency access (is_admin column or ADMIN_USER_IDS), never a binding. */
+  bootstrap?: boolean;
+  /** Managed platform roles held through active bindings (IAM_MODE=enforce only). */
+  platform_roles?: string[];
 }
 
 export interface Token {
