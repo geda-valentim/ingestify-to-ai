@@ -25,6 +25,17 @@ ROLES = {
     'access_admin': ['access.grants.manage'],
     'connection_manager': READ + ['engine_connections.credentials.manage'],
 }
+# Platform (0014) roles served next to the engines ones by GET /iam/permissions
+# (spec 0018); only what the Acesso page needs.
+PLATFORM_ROLES = {
+    'platform_auditor': ['iam.bindings.read', 'platform.stats.read'],
+    'remote_engine_user': ['engines.remote.use'],
+}
+CATALOG = {'permissions': [], 'mode': 'enforce',
+           'roles': [{'key': k, 'family': 'platform', 'permissions': v, 'description': k}
+                     for k, v in PLATFORM_ROLES.items()]
+                    + [{'key': k, 'family': 'engines', 'permissions': sorted(v), 'description': k}
+                       for k, v in ROLES.items()]}
 USER = {'id': 'fixture-admin', 'username': 'fixture-admin', 'email': 'admin@example.test',
         'is_active': True, 'is_admin': True, 'engine_access_enabled': True,
         'permissions': sorted(set(sum(ROLES.values(), [])))}
@@ -95,7 +106,7 @@ class Fixture:
                                           if f'execution_profiles.{action}' in self.user['permissions']]
         self.desired = None
         self.policies = []
-        self.grants = []
+        self.bindings = []
         self.attributes = []
         self.resources = [{'key': 'vm:allocation', 'owner_engine_id': ENGINE['id'],
                            'version': 0, 'consumers': [], 'qualified': False}]
@@ -200,7 +211,7 @@ class Fixture:
             else: raise AssertionError(f'Unexpected profile mutation {path}')
             p['version'] += 1
             return reply(p)
-        if path == '/admin/access/roles': return reply(ROLES)
+        if path == '/iam/permissions': return reply(CATALOG)
         if path == '/admin/access/subjects': return reply([self.user])
         if path == '/admin/access/policies':
             if method == 'POST':
@@ -214,19 +225,29 @@ class Fixture:
             p['version'] += 1
             p['revisions'].insert(0, {'id': 'policy-r2', 'revision': 2, 'constraints': body['constraints']})
             return reply(p)
-        if path == '/admin/access/grants':
+        if path == '/admin/iam/bindings':
             if method == 'POST':
-                g = copy.deepcopy(body)
-                g.update(id='grant-one' if not self.grants else 'grant-two',
-                         version=0, parent_id=None, revoked_at=None)
-                g['expires_at'] = g['expires_at'].removesuffix('Z')
-                self.grants.append(g)
-                return reply(g, 201)
-            return reply(self.grants)
-        if path == '/admin/access/grants/grant-one/revoke':
-            assert body['version'] == self.grants[0]['version']
-            self.grants[0].update(revoked_at='2026-10-06T12:00:00', version=1)
-            return reply(self.grants[0])
+                role = next(r for r in CATALOG['roles'] if r['key'] == body['role'])
+                engines = role['family'] == 'engines'
+                b = {'id': f'binding-{len(self.bindings) + 1}', 'family': role['family'],
+                     'subject_type': body['subject_type'], 'subject_id': body['subject_id'],
+                     'role': body['role'], 'scope_type': 'global', 'scope_id': None,
+                     'permissions': (body.get('permissions') or role['permissions']) if engines else None,
+                     'condition_ref': body.get('condition_ref'), 'delegation': body.get('delegation'),
+                     'parent_id': None, 'granted_by': self.user['id'],
+                     'expires_at': body['expires_at'].removesuffix('Z'), 'revoked_at': None,
+                     'revoked_by': None, 'version': 0, 'created_at': '2026-10-06T12:00:00', 'active': True}
+                self.bindings.append(b)
+                return reply(b, 201)
+            inactive = query.get('include_inactive') == ['true']
+            return reply({'bindings': [b for b in self.bindings if inactive or b['active']]})
+        if path.startswith('/admin/iam/bindings/') and path.endswith('/revoke'):
+            b = next(b for b in self.bindings if b['id'] == path.split('/')[4])
+            assert body['version'] == b['version']
+            b.update(revoked_at='2026-10-06T12:00:00', revoked_by=self.user['id'],
+                     version=b['version'] + 1, active=False)
+            return reply(b)
+        if path == '/admin/access/installation-principals': return reply([])
         if path == '/admin/access/engine-attributes': return reply(self.attributes)
         if path == '/admin/access/engine-attributes/vm-test':
             self.attributes = [{'engine_id': 'vm-test', 'environment': body['environment'], 'version': body['version']+1}]
@@ -337,16 +358,29 @@ def navigation_check(browser, url, api_url):
     expected = {'observer': ['Home', 'Engines', 'Perfis de execução'],
                 'profile_editor': ['Home', 'Perfis de execução'],
                 'runtime_configurator': ['Home', 'Engines', 'Perfis de execução'],
-                'access_admin': ['Home', 'Acesso']}
+                'access_admin': ['Home', 'Acesso'],
+                'platform_auditor': ['Home', 'Acesso']}
+    # Admin > Acesso tabs per family authority (spec 0018 CA11).
+    access_tabs = {'access_admin': ['Concessões', 'Políticas'],
+                   'platform_auditor': ['Concessões']}
     for role, tabs in expected.items():
-        user = {**USER, 'is_admin': False, 'permissions': ROLES[role]}
+        user = {**USER, 'is_admin': False, 'permissions': ROLES.get(role) or PLATFORM_ROLES[role]}
         f = Fixture(browser, api_url, user=user, seed=True)
         p = f.page
-        p.goto(url + ('/admin/access' if role == 'access_admin' else '/admin/execution-profiles'))
+        p.goto(url + ('/admin/access' if role in access_tabs else '/admin/execution-profiles'))
         nav = p.get_by_role('navigation', name='Compute sections')
         expect(nav).to_be_visible()
         assert nav.get_by_role('link').all_text_contents() == tabs
-        if role != 'access_admin':
+        if role in access_tabs:
+            expect(p.get_by_role('tab', name='Concessões', exact=True)).to_be_visible()
+            assert p.get_by_role('tab').all_text_contents() == access_tabs[role]
+            expect(p.get_by_role('button', name='Conceder papel', exact=True)).to_have_count(
+                1 if role == 'access_admin' else 0)
+        if role == 'access_admin':
+            # The engines delegate is offered only engines roles.
+            options = p.get_by_label('Papel', exact=True).locator('option').all_text_contents()
+            assert options == list(ROLES), options
+        if role not in access_tabs:
             expect(p.get_by_role('button', name='Novo perfil', exact=True)).to_have_count(1 if role == 'profile_editor' else 0)
             p.get_by_role('button', name='VM publicado third-provider', exact=False).click()
             expect(p.get_by_text('Revisão 1 · Publicada', exact=True)).to_be_visible()
@@ -364,13 +398,19 @@ def navigation_check(browser, url, api_url):
         p.goto(url + '/admin/gpus')
         expect(p.get_by_role('navigation', name='Compute sections')).to_have_count(0)
         f.finish()
-    print('Delegated navigation: observer, editor, configurator and access_admin passed')
+    print('Delegated navigation: observer, editor, configurator, access_admin and platform_auditor passed')
 
 
 def access_check(browser, url, api_url, mobile):
     f = Fixture(browser, api_url, mobile=mobile)
     p = f.page
-    p.goto(url + '/admin/access')
+    # The former platform page is a redirect to the single Acesso page (spec 0018 CA11).
+    p.goto(url + '/admin/platform-access')
+    expect(p).to_have_url(url + '/admin/access')
+    expect(p.get_by_role('tab', name='Concessões', exact=True)).to_have_attribute('aria-selected', 'true')
+    assert p.get_by_role('tab').all_text_contents() == [
+        'Concessões', 'Políticas', 'Atributos de engine', 'Recursos', 'Principais de instalação']
+    p.get_by_role('tab', name='Políticas', exact=True).click()
     p.get_by_label('Nome da política', exact=True).fill('Dev VM')
     for key in ('engine_ids', 'adapters', 'features', 'environments', 'model_ids'):
         p.locator('#scope-' + key).fill(', '.join(CONSTRAINTS[key]))
@@ -379,6 +419,7 @@ def access_check(browser, url, api_url, mobile):
     p.get_by_role('button', name='Criar política', exact=True).click()
     expect(p.get_by_text('Dev VM', exact=True)).to_be_visible()
     assert f.writes[-1] == ('/admin/access/policies', {'name': 'Dev VM', 'constraints': CONSTRAINTS})
+    p.get_by_role('tab', name='Concessões', exact=True).click()
     p.get_by_label('ID do usuário', exact=True).fill('operator-user')
     p.get_by_label('Papel', exact=True).select_option('engine_operator')
     p.get_by_label('Revisão da política', exact=True).select_option('policy-r1')
@@ -386,21 +427,28 @@ def access_check(browser, url, api_url, mobile):
     p.get_by_label('Válido até', exact=False).fill(expiry.strftime('%Y-%m-%dT%H:%M'))
     p.get_by_role('button', name='Conceder papel', exact=True).click()
     expect(p.get_by_role('button', name='Revogar', exact=True)).to_be_visible()
-    grant = f.writes[-1][1]
-    assert grant['user_id'] == 'operator-user' and grant['policy_revision_id'] == 'policy-r1'
-    assert grant['permissions'] == ROLES['engine_operator'] and grant['delegation'] is None
+    path, grant = f.writes[-1]
+    assert path == '/admin/iam/bindings'
+    assert {k: grant[k] for k in ('subject_type', 'subject_id', 'role', 'condition_ref')} == {
+        'subject_type': 'user', 'subject_id': 'operator-user', 'role': 'engine_operator',
+        'condition_ref': 'policy-r1'}
+    assert 'permissions' not in grant, 'unchanged permissions must be left to the role'
+    assert 'delegation' not in grant
     assert grant['expires_at'].endswith('Z')
     expected_expiry = datetime.fromisoformat(expiry.strftime('%Y-%m-%dT%H:%M')).replace(
         tzinfo=timezone(timedelta(hours=-3))).astimezone(timezone.utc)
     assert grant['expires_at'] == expected_expiry.strftime('%Y-%m-%dT%H:%M:00.000Z')
+    expect(p.get_by_text('Política Dev VM · r1', exact=True)).to_be_visible()
+    p.get_by_role('tab', name='Políticas', exact=True).click()
     p.get_by_role('button', name='Nova revisão', exact=True).click()
     p.locator('#scope-max_replicas').fill('1')
     p.get_by_role('button', name='Salvar nova revisão', exact=True).click()
     expect(p.get_by_text('r2, r1 · policy-one', exact=True)).to_be_visible()
-    assert f.grants[0]['policy_revision_id'] == 'policy-r1', 'policy revision migrated existing grant'
+    assert f.bindings[0]['condition_ref'] == 'policy-r1', 'policy revision migrated existing grant'
+    p.get_by_role('tab', name='Concessões', exact=True).click()
     p.get_by_role('button', name='Revogar', exact=True).click()
     expect(p.get_by_role('button', name='Revogar', exact=True)).to_have_count(0)
-    assert f.writes[-1] == ('/admin/access/grants/grant-one/revoke', {'version': 0})
+    assert f.writes[-1] == ('/admin/iam/bindings/binding-1/revoke', {'version': 0})
     p.get_by_label('ID do usuário', exact=True).fill('access-user')
     p.get_by_label('Papel', exact=True).select_option('access_admin')
     p.get_by_label('Revisão da política', exact=True).select_option('policy-r2')
@@ -410,15 +458,30 @@ def access_check(browser, url, api_url, mobile):
         p.locator('#delegation-' + key).fill(', '.join(CONSTRAINTS[key]))
     p.get_by_label('Validade máxima concedível (s)', exact=True).fill('600')
     p.get_by_role('button', name='Conceder papel', exact=True).click()
-    expect(p.get_by_text('Usuário access-user · política policy-r2', exact=True)).to_be_visible()
-    grant = f.writes[-1][1]
-    assert grant['permissions'] == ['access.grants.manage'], 'access_admin acquired execution rights from envelope'
+    expect(p.get_by_text('Usuário access-user', exact=True)).to_be_visible()
+    expect(p.get_by_text('Política Dev VM · r2 · com envelope de delegação', exact=True)).to_be_visible()
+    path, grant = f.writes[-1]
+    assert path == '/admin/iam/bindings' and grant['role'] == 'access_admin'
+    assert grant['condition_ref'] == 'policy-r2'
+    assert 'permissions' not in grant, 'access_admin acquired execution rights from envelope'
+    assert f.bindings[-1]['permissions'] == ['access.grants.manage']
     assert grant['delegation']['permissions'] == ['engine_operations.execute.scale']
     assert grant['delegation']['max_grant_seconds'] == 600
     assert grant['delegation']['constraints']['engine_ids'] == ['vm-test']
+    # A platform role carries no 0009 condition, permissions or delegation.
+    p.get_by_label('ID do usuário', exact=True).fill('auditor-user')
+    p.get_by_label('Papel', exact=True).select_option('platform_auditor')
+    expect(p.get_by_label('Revisão da política', exact=True)).to_have_count(0)
+    p.get_by_role('button', name='Conceder papel', exact=True).click()
+    expect(p.get_by_text('Usuário auditor-user', exact=True)).to_be_visible()
+    path, grant = f.writes[-1]
+    assert path == '/admin/iam/bindings' and grant['role'] == 'platform_auditor'
+    assert set(grant) == {'subject_type', 'subject_id', 'role', 'expires_at'}, grant
+    p.get_by_role('tab', name='Atributos de engine', exact=True).click()
     p.get_by_label('Ambiente VM de teste', exact=True).select_option('development')
     expect(p.get_by_label('Ambiente VM de teste', exact=True)).to_have_value('development')
     assert f.writes[-1] == ('/admin/access/engine-attributes/vm-test', {'environment': 'development', 'version': 0})
+    p.get_by_role('tab', name='Recursos', exact=True).click()
     p.get_by_role('button', name='Adicionar consumidor', exact=True).click()
     p.get_by_label('Engine consumidor 1 vm:allocation', exact=True).fill('vm-test')
     p.get_by_label('Feature consumidor 1 vm:allocation', exact=True).fill('transcription')
@@ -428,8 +491,10 @@ def access_check(browser, url, api_url, mobile):
     assert f.writes[-1] == ('/admin/access/resources', {'key': 'vm:allocation', 'version': 0,
                                                      'consumers': [{'engine_id': 'vm-test', 'feature': 'transcription'}],
                                                      'qualified': True})
+    assert not any(path.startswith('/admin/access/grants') for path, _ in f.writes), 'deprecated grant alias used'
     f.finish()
-    print(f'Access {"mobile" if mobile else "desktop"}: constraints, pinned grant, revision, revocation, classification and scope passed')
+    print(f'Access {"mobile" if mobile else "desktop"}: redirect, tabs, constraints, pinned binding, revision, '
+          'revocation, platform role, classification and scope passed')
 
 
 def token_renewal_check(browser, url, api_url):
