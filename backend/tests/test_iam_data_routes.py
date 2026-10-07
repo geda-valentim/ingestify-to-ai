@@ -6,6 +6,7 @@ included. The pre-existing route tests run in the default `off`; this file pins
 that `enforce` answers identically.
 """
 
+import logging
 import uuid
 
 import pytest
@@ -16,7 +17,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 import workers.celery_app  # noqa: F401  (import order used by the worker; avoids a circular import)
-from api import apikey_routes, deps, live_routes, projects_api, routes, tag_routes
+from api import apikey_routes, deps, image_routes, live_routes, projects_api, routes, tag_routes
 from shared.auth import get_current_active_user
 from shared.config import get_settings
 from shared.database import Base, get_db
@@ -80,7 +81,19 @@ def mode(request, monkeypatch):
 
 
 @pytest.fixture
-def client(db, fake_redis, monkeypatch, mode):
+def no_shadow_noise(caplog, mode):
+    """In shadow the new path is evaluated and swallowed: it must neither raise nor diverge."""
+    caplog.set_level(logging.WARNING, logger="shared.iam")
+    caplog.set_level(logging.WARNING, logger="api.iam_deps")
+    yield
+    if mode == "shadow":
+        noise = [r.getMessage() for r in caplog.records
+                 if r.getMessage().startswith(("iam_shadow_divergence", "iam_shadow_error"))]
+        assert not noise, noise
+
+
+@pytest.fixture
+def client(db, fake_redis, monkeypatch, mode, no_shadow_noise):
     monkeypatch.setattr(routes, "get_redis_client", lambda: fake_redis)
     monkeypatch.setattr(deps, "_redis_owner_matches", lambda job_id, user_id: False)
     monkeypatch.setattr(deps, "_redis_job_status", lambda job_id: None)
@@ -90,6 +103,7 @@ def client(db, fake_redis, monkeypatch, mode):
     app.include_router(tag_routes.router)
     app.include_router(routes.router)
     app.include_router(live_routes.router)
+    app.include_router(image_routes.router)
     app.dependency_overrides[get_db] = lambda: db
     app.dependency_overrides[get_current_active_user] = lambda: db.get(User, app.state.user)
     tc = TestClient(app)
@@ -141,6 +155,11 @@ def test_api_key_create_is_open_to_every_active_user(client):
     ("get", "/jobs/job-a-p1", None),          # a child job resolves to its MAIN owner
     ("get", "/jobs/job-a/pages", None),
     ("get", "/jobs/job-a/pages/1/status", None),
+    ("get", "/jobs/job-a/result", None),
+    ("get", "/jobs/job-a/transcript/partial", None),
+    ("get", "/jobs/job-a/pages/1/result", None),
+    ("get", "/jobs/job-a/pages/1/pdf", None),
+    ("post", "/jobs/job-a/pages/1/retry", None),
     ("put", "/jobs/job-a/tags", {"tags": ["y"]}),
     ("delete", "/jobs/job-a", None),
 ])
@@ -162,7 +181,33 @@ def test_owner_reads_and_tags_the_job(client, db):
 
 def test_page_retry_shares_one_authorization_with_its_page(client):
     # Someone else's page: 404 from the job authorization, never a page leak.
-    assert _detail(client(BOB).post("/jobs/job-a/pages/1/retry")) == (404, deps.JOB_NOT_FOUND_DETAIL)
+    for uid in (BOB, ROOT):
+        assert _detail(client(uid).post("/jobs/job-a/pages/1/retry")) == (404, deps.JOB_NOT_FOUND_DETAIL)
+    # The owner gets past the authorization: the page is completed, so the route
+    # itself answers (not the job 404, not a 401/403).
+    r = client(ALICE).post("/jobs/job-a/pages/1/retry")
+    assert r.status_code not in (401, 403) and _detail(r) != (404, deps.JOB_NOT_FOUND_DETAIL), r.text
+
+
+# -- self-service `require(...)` ---------------------------------------------------------
+
+
+@pytest.mark.parametrize("path", [
+    "/upload",                     # documents.convert
+    "/convert",                    # documents.convert
+    "/transcribe",                 # audio.transcribe
+    "/images/describe",            # images.analyze
+    "/images/describe/upload",     # images.analyze
+    "/images/ocr",                 # images.analyze
+    "/images/ocr/upload",          # images.analyze
+    "/transcribe/live/sessions",   # live.sessions.create
+])
+def test_self_service_routes_admit_every_active_user(client, path):
+    # The permission is decided before the body is validated: an empty request from
+    # an active user gets past it (422 or later), never 401/403, in every mode.
+    for uid in (BOB, ROOT):
+        r = client(uid).post(path)
+        assert r.status_code not in (401, 403), (uid, path, r.text)
 
 
 # -- projects / folders --------------------------------------------------------------
@@ -179,13 +224,22 @@ def test_folder_resolve_is_owner_only(client):
 # -- live sessions -------------------------------------------------------------------
 
 
-def test_live_session_status_and_cancel_are_owner_only(client):
+def test_live_session_status_and_cancel_are_owner_only(client, monkeypatch):
+    # Only the authorization is under test: the lifecycle (its own MySQL session,
+    # the live store) is stubbed and just records who got through.
+    terminated = []
+    monkeypatch.setattr(live_routes, "get_store", lambda: None)
+    monkeypatch.setattr(live_routes, "terminate", lambda job_id, *a, **k: terminated.append(job_id))
     assert client(ALICE).get("/transcribe/live/sessions/job-a").json()["state"] == "completed"
     for uid in (BOB, ROOT):
         assert _detail(client(uid).get("/transcribe/live/sessions/job-a")) == (404, deps.JOB_NOT_FOUND_DETAIL)
         assert _detail(client(uid).delete("/transcribe/live/sessions/job-a")) == (404, deps.JOB_NOT_FOUND_DETAIL)
     # A job of the owner without a live session is the live 404, as before.
     assert _detail(client(BOB).get("/transcribe/live/sessions/job-b")) == (404, "Sessão não encontrada")
+    # The owner gets past the authorization on cancel too (the session is already done).
+    assert terminated == []
+    r = client(ALICE).delete("/transcribe/live/sessions/job-a")
+    assert r.status_code == 200 and terminated == ["job-a"], r.text
 
 
 def test_ws_ticket_owner_check_is_the_legacy_rule(db):
