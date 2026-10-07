@@ -58,7 +58,7 @@ que a API ainda está com esse valor; habilitar exige o bootstrap abaixo.
 
 O bootstrap habilita a infraestrutura de controle. A disponibilidade de ações
 continua dependente do perfil, credenciais e capacidades do adapter. Os gates
-de qualificação da [spec 0007](../specs/0007-operacao-de-engines-pelo-admin.md)
+de qualificação da spec 0007
 continuam aplicáveis, inclusive aos perfis WhisperX.
 
 ## Diagnosticar `HOST_AGENT_NOT_READY`

@@ -36,12 +36,12 @@ Com `IAM_MODE=off` (padrão) ou `shadow`, exigem um usuário admin: `users.is_ad
 `python scripts/make_admin.py --email …`;
 ver [auth-and-api-keys.md](auth-and-api-keys.md#autorização-de-recursos)) ou
 id listado em `ADMIN_USER_IDS`. Outros usuários recebem `403`. Com `IAM_MODE=enforce`
-([spec 0014](../specs/0014-iam-nucleo-de-decisao-e-papeis-de-plataforma.md)), cada rota exige a
+(spec 0014), cada rota exige a
 permissão de plataforma indicada abaixo, concedida por um binding de plataforma
 (`platform_admin`, `platform_operator`, `platform_auditor`) em **Admin → Acesso**
 (`/admin/access`, aba Concessões); o admin de bootstrap continua com todas. Papéis de
 engines, administrados na mesma tela desde a
-[spec 0018](../specs/0018-iam-convergencia-do-rbac-abac-de-engines.md), não dão acesso a
+spec 0018, não dão acesso a
 estas rotas. Não há UI no frontend para as rotas abaixo.
 
 | Método e caminho | O que faz |

@@ -385,8 +385,7 @@ def resolve_whisper_device() -> str:
             "audio: transcription now runs on %s because WHISPER_DEVICE is "
             "unset and DEVICE=%s. This CHANGED: WHISPER_DEVICE used not to "
             "exist and audio was hardcoded to cpu. Set WHISPER_DEVICE=cpu to "
-            "keep the old behaviour. See docs/specs/"
-            "0002-dispositivo-unico-e-migracao-do-whisper.md.",
+            "keep the old behaviour. See docs/GPU.md.",
             device,
             settings.device,
         )

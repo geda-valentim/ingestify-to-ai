@@ -3,7 +3,7 @@
 A captura de microfone envia áudio PCM durante a sessão e recebe legendas antes
 do EOF. `POST /transcribe` e seus jobs de arquivo continuam com o contrato atual.
 A live permanece **desabilitada por padrão**; a implementação não autoriza sua
-ativação em produção antes dos gates da [spec 0005](../specs/0005-transcricao-ao-vivo.md).
+ativação em produção antes dos gates da spec 0005.
 
 ## Uso
 
@@ -126,7 +126,7 @@ Não há WER humano nem comparação Voxtral sem os respectivos testes/corpus re
 
 ## Falantes durante a captura — protocolo 2, opt-in
 
-A [spec 0006](../specs/0006-whisperx-e-identificacao-de-falantes.md) acrescenta
+A spec 0006 acrescenta
 identificação incremental de vozes. O padrão continua protocolo 1, sem falantes.
 Na tela Live, a opção **Identificar falantes durante a captura** solicita
 `protocol: 2` e `diarize: true` na criação da sessão. Sem prontidão, a API responde

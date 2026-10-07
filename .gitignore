@@ -105,3 +105,27 @@ yarn-error.log*
 
 # Engine private keys (spec 0003) - never committed
 secrets/
+
+# Private planning, specs, reviews and commercial strategy (versioned in geda-valentim/ingestify-private-docs)
+/docs/specs/
+/docs/product/
+/docs/crawler/
+/docs/landing/*.md
+/docs/landing/**/*.md
+/docs/landing/image-prompts.json
+/docs/CRAWLER.md
+/docs/CRAWLER_INTEGRATION_PLAN.md
+/docs/CODE_REVIEW.md
+/docs/SECURITY_REVIEW*.md
+/docs/security-history-review.md
+/frontend/PROJECT_SUMMARY.md
+/frontend/CHECKLIST.md
+/docs-private/
+# these names are private anywhere in the tree
+RF.md
+RNF.md
+SPECS.md
+STATUS.md
+TASKS.md
+WEBSCRAPPING_PRD.md
+LANDING_PAGE_BRIEF.md

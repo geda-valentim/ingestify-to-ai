@@ -1,6 +1,6 @@
 # Validação de perfis de execução e RBAC/ABAC
 
-Data: **2026-10-06**. Escopo: implementação da [spec 0009](../specs/0009-perfis-de-execucao-e-controle-de-acesso.md)
+Data: **2026-10-06**. Escopo: implementação da spec 0009
 na branch `feat/runtime-profiles-access`, baseada em `main` `68f8350`.
 Uso: [guia funcional](../features/execution-profiles.md). Implantação:
 [runbook](../runbooks/execution-profiles-access.md).

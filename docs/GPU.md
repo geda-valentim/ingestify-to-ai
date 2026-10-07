@@ -537,7 +537,7 @@ enumerates what the device can actually compute), then a `ctypes.CDLL` of `libcu
 itself. It deliberately does **not** use `get_cuda_device_count()`: that binds to
 `cudaGetDeviceCount()` and only counts visible GPUs, so on any host with an NVIDIA driver it
 returns ≥ 1 and would never fire. See
-[spec 0002](specs/0002-dispositivo-unico-e-migracao-do-whisper.md). Look for:
+spec 0002. Look for:
 
 ```
 WARNING audio: falling back to cpu - libcudnn_ops.so.9 cannot be loaded (...).
@@ -624,7 +624,7 @@ WARNING audio: transcription now runs on cuda because WHISPER_DEVICE is unset an
 ```
 
 You will see at most one of the two. Full rationale in
-[spec 0002](specs/0002-dispositivo-unico-e-migracao-do-whisper.md).
+spec 0002.
 
 `WHISPER_COMPUTE_TYPE` changed the same way: empty now derives `float16` on CUDA and `int8` on
 CPU, which closes the trap where flipping only the device leaves CTranslate2 on a CPU-shaped

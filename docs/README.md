@@ -14,8 +14,6 @@ A documentação pública distingue **Usar a plataforma**, **Integrar pela API**
 
 | Documento | Estado | Conteúdo |
 | --- | --- | --- |
-| [product/unstructured-comparison.md](product/unstructured-comparison.md) | análise | Comparação com fontes oficiais, capacidades implementadas e oportunidades a validar. |
-| [product/commercial-strategy.md](product/commercial-strategy.md) | proposta | Públicos, piloto pago, modelo comercial, funcionalidades prioritárias e critérios de validação. |
 | [Ingestify for Business](https://dev.ingestify.ai/business) | apresentação do produto | Capacidades disponíveis, casos de uso e links para começar pela interface ou API. |
 
 ## Funcionalidades
@@ -34,7 +32,7 @@ A documentação pública distingue **Usar a plataforma**, **Integrar pela API**
 | [features/engines.md](features/engines.md) | **Guia Compute do operador**: execução CPU/GPU, provider × motor, telas admin, diagnóstico, chaves, capacidade/VRAM, deploy Modal, rotas, orçamentos, benchmark e legendas parciais de arquivos. |
 | [features/execution-profiles.md](features/execution-profiles.md) | Biblioteca de perfis versionados, vinculação ao runtime existente e RBAC/ABAC por engine/recurso. Implementado com ativação opt-in; [validação](benchmarks/execution-profiles-validation.md). |
 | [features/crawler.md](features/crawler.md) | **Planejado / não implementado**: o que existe de código dormente e onde está o plano. |
-| Transcrição de áudio/vídeo (`POST /transcribe`) | Documentada à parte. Dispositivo e GPU do Whisper: [GPU.md](GPU.md) e [spec 0002](specs/0002-dispositivo-unico-e-migracao-do-whisper.md). |
+| Transcrição de áudio/vídeo (`POST /transcribe`) | Documentada à parte. Dispositivo e GPU do Whisper: [GPU.md](GPU.md) e spec 0002. |
 | [features/whisperx.md](features/whisperx.md) | Canário WhisperX: perfis duráveis, falantes em arquivos, protocolo Modal 4, imagem isolada, gates e rollback. |
 | [features/live-transcription.md](features/live-transcription.md) | Piloto opt-in de microfone: protocolo WebSocket, legendas provisórias/confirmadas, persistência, ativação e rollback. Desabilitado por padrão; [resultados e limites do piloto](benchmarks/live-transcribe-pilot.md). |
 
@@ -44,10 +42,6 @@ A documentação pública distingue **Usar a plataforma**, **Integrar pela API**
 |---|---|---|
 | [../CLAUDE.md](../CLAUDE.md) | parcial | Visão geral do monorepo, padrões e chaves Redis. Desatualizado em dois pontos: cita `docker-compose.dev.yml` (não existe) e diz que `domain/`, `application/`, `infrastructure/` foram removidos (o crawler os recolocou, dormentes). |
 | [ARCHITECTURE_JOBS.md](ARCHITECTURE_JOBS.md) | parcial | Hierarquia de jobs MAIN/SPLIT/PAGE/MERGE. Fórmula de progresso, estados e filas corrigidos em 2026-10-04. |
-| [specs/0001-remover-clean-architecture-morta.md](specs/0001-remover-clean-architecture-morta.md) | atual (com ressalva) | Decisão de remover as camadas Clean Architecture. Ressalva: o merge `f1b5917` recolocou arquivos do crawler nessas pastas. |
-| [specs/0002-dispositivo-unico-e-migracao-do-whisper.md](specs/0002-dispositivo-unico-e-migracao-do-whisper.md) | atual | `DEVICE` único para Docling, Whisper e Florence-2. |
-| [specs/0003-motores-de-execucao-roteamento-e-orcamento.md](specs/0003-motores-de-execucao-roteamento-e-orcamento.md) | em implementação | Motores de execução, rotas por feature com orçamento (local + Modal). Fatias 0a–8 feitas, 4d pendente; operação em [features/engines.md](features/engines.md). |
-| [specs/0009-perfis-de-execucao-e-controle-de-acesso.md](specs/0009-perfis-de-execucao-e-controle-de-acesso.md) | implementado; habilitado no dev | Perfis publicados, papéis, escopos, delegação e autorização antes dos efeitos. |
 
 ## Operação e deploy
 
@@ -76,29 +70,12 @@ A documentação pública distingue **Usar a plataforma**, **Integrar pela API**
 Atalhos: `make start` (detecta infraestrutura compartilhada), `make dev`, `make prod`,
 `make gpu`, `make scale n=10`, `make test`. Lista completa: `make help`.
 
-## Revisões e specs
-
-| Doc | Estado | Conteúdo |
-|---|---|---|
-| [SECURITY_REVIEW.md](SECURITY_REVIEW.md) | atual | Revisão de segurança de 2026-10-03 (âncoras de linha corrigidas em 2026-10-04). |
-| [CODE_REVIEW.md](CODE_REVIEW.md) | histórico | Revisão de 2026-08-24; vários achados já corrigidos (anotados no texto). |
-| [specs/README.md](specs/README.md) | atual | Convenção de specs (uma decisão por arquivo). Modelo: [specs/_TEMPLATE.md](specs/_TEMPLATE.md). |
-
 ## Histórico e planejamento (não usar como referência)
 
 | Doc | Estado | Observação |
 |---|---|---|
-| [SPECS.md](SPECS.md) | histórico | Especificação original "Doc2MD" (out/2025). |
-| [RF.md](RF.md) | histórico | Requisitos funcionais originais; várias marcações não batem com o código. |
-| [RNF.md](RNF.md) | histórico | Requisitos não funcionais originais. |
-| [STATUS.md](STATUS.md) | histórico | Status de out/2025. |
-| [TASKS.md](TASKS.md) | histórico | Plano de implementação original (nenhuma caixa marcada). |
 | [TEST_RESULTS.md](TEST_RESULTS.md) | histórico | Snapshot de testes de 2025-10-01. |
 | [CHANGELOG.md](CHANGELOG.md) | histórico | Changelog de out/2025; para o resto, `git log`. |
-| [WEBSCRAPPING_PRD.md](WEBSCRAPPING_PRD.md) | planejado | PRD do scraper; idêntico a `crawler/CRAWLER.md`. |
-| [crawler/CRAWLER.md](crawler/CRAWLER.md) | planejado | PRD do crawler. |
-| [crawler/CRAWLER_INTEGRATION_PLAN.md](crawler/CRAWLER_INTEGRATION_PLAN.md) | planejado | Plano de integração em camadas. |
-| [crawler/sprint-1-foundation.md](crawler/sprint-1-foundation.md) … [sprint-6-testing.md](crawler/sprint-6-testing.md) | planejado | Checklists de sprint; só 1–2 parcialmente feitas. |
 
 Fora de `docs/`: [../backend/docs/TEST_RESULTS.md](../backend/docs/TEST_RESULTS.md) (histórico:
 resultados de testes das camadas Clean Architecture) e [../frontend/docs/doc2md_openapi.json](../frontend/docs/doc2md_openapi.json)
@@ -108,8 +85,8 @@ resultados de testes das camadas Clean Architecture) e [../frontend/docs/doc2md_
 ## Onde escrever
 
 Regras do [CLAUDE.md](../CLAUDE.md): docs gerais em `docs/`, específicos de backend em
-`backend/docs/`, de frontend em `frontend/docs/`. Decisões novas viram uma spec em
-[specs/](specs/). Ao documentar uma funcionalidade, verifique no código e registre a data
+`backend/docs/`, de frontend em `frontend/docs/`. Decisões novas viram uma spec privada
+(`docs/specs/`, ignorada pelo git; versionada no repositório privado de docs). Ao documentar uma funcionalidade, verifique no código e registre a data
 da verificação no topo do arquivo, como em `features/`.
 
 ### Guias públicos de engines e perfis
@@ -120,4 +97,3 @@ da verificação no topo do arquivo, como em `features/`.
 [perfis](https://dev.ingestify.ai/pt/docs/execution-profiles) e
 [acesso RBAC/ABAC](https://dev.ingestify.ai/pt/docs/engine-access).
 Cada guia inclui requisitos funcionais, pré-condições, recursos, configuração, aplicações, API e erros.
-Rastreabilidade: [RF012](RF.md#rf012---engines-operações-perfis-e-acesso).

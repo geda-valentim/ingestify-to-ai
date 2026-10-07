@@ -4,8 +4,8 @@ Revision ID: b5d10003a1f0
 Revises: 5d2e8f1a6c47
 Create Date: 2026-10-01 12:00:00.000000
 
-FORBIDDEN IN PRODUCTION. Production is not stamped (docs/CODE_REVIEW.md
-§ 11.2): `alembic upgrade head` there would try to re-apply e399267560a7,
+FORBIDDEN IN PRODUCTION. Production is not stamped (internal code
+review § 11.2): `alembic upgrade head` there would try to re-apply e399267560a7,
 7c2f4a1d9b30 and the engines revisions b3e1c0d9a7f2/5d2e8f1a6c47 (whose tables
 and column production got from create_all/_ADDED_COLUMNS) and fail.
 Production runs scripts/migrate_0004_projects.py directly. This revision only exists so dev databases managed by Alembic

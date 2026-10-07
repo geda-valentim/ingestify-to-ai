@@ -177,7 +177,7 @@ O Docling roda em `DEVICE` (`auto` | `cpu` | `cuda` | `cuda:N`, default `auto`),
 em [backend/shared/device.py](../../backend/shared/device.py). `DOCLING_DEVICE` é
 ignorado. No overlay `docker-compose.gpu.yml` o serviço `worker` vira **um** processo
 (`replicas: 1`, `--concurrency=1`) com `DEVICE=cuda`. Detalhes, VRAM e troubleshooting:
-[../GPU.md](../GPU.md) e [../specs/0002-dispositivo-unico-e-migracao-do-whisper.md](../specs/0002-dispositivo-unico-e-migracao-do-whisper.md).
+[../GPU.md](../GPU.md).
 
 ## Configuração
 

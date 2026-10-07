@@ -11,7 +11,7 @@
 > [backend/api/routing_admin_routes.py](../../backend/api/routing_admin_routes.py),
 > [backend/api/engine_admin_routes.py](../../backend/api/engine_admin_routes.py),
 > [scripts/engines.py](../../scripts/engines.py).
-> Desenho completo e motivos: [specs/0003](../specs/0003-motores-de-execucao-roteamento-e-orcamento.md).
+> Desenho completo e motivos: specs/0003.
 
 **Índice**: [Compute: o que configura](#compute-o-que-configura) · [Diagnóstico rápido](#diagnóstico-rápido) ·
 [Sem rota, nada muda](#sem-rota-nada-muda) · [Conceitos](#conceitos) ·
@@ -73,7 +73,7 @@ As legendas parciais abaixo pertencem a uma transcrição de **arquivo já envia
 A captura contínua de microfone foi implementada como piloto opt-in no
 [PR #22](https://github.com/geda-valentim/ingestify-to-ai/pull/22), com worker GPU e
 ativação separados. Ela permanece desabilitada por padrão; os critérios de produção da
-[spec 0005](../specs/0005-transcricao-ao-vivo.md) continuam pendentes.
+spec 0005 continuam pendentes.
 
 ## Diagnóstico rápido
 
@@ -89,7 +89,7 @@ Configure as opções de runtime em **Compute → Perfis de execução**
 **Engine → Configuração → Perfil de execução**. Vincular altera apenas o desejado;
 aplicar exige uma prévia e execução separadas. Administre papéis e escopos em
 **Admin → Acesso** (`/admin/access`), a mesma tela dos papéis de plataforma desde a
-[spec 0018](../specs/0018-iam-convergencia-do-rbac-abac-de-engines.md). Veja o [guia de perfis e acesso](execution-profiles.md)
+spec 0018. Veja o [guia de perfis e acesso](execution-profiles.md)
 e o [runbook de migração/ativação](../runbooks/execution-profiles-access.md).
 
 | Tela | O que interpretar |
@@ -602,4 +602,4 @@ O índice público em [/docs/compute](https://dev.ingestify.ai/pt/docs/compute) 
 - [Perfis](https://dev.ingestify.ai/pt/docs/execution-profiles): PRF-01 a PRF-06, campos, revisões, catálogo e vínculo.
 - [Acesso](https://dev.ingestify.ai/pt/docs/engine-access): ACL-01 a ACL-08, papéis, ABAC, grants, delegação, consumidores, revogação e principal CLI.
 
-Versões em inglês usam os mesmos paths sem `/pt`. Rastreabilidade em [RF012](../RF.md#rf012---engines-operações-perfis-e-acesso).
+Versões em inglês usam os mesmos paths sem `/pt`. Rastreabilidade em RF012.

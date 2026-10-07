@@ -301,6 +301,5 @@ docker compose logs worker -f
 ## 📖 Related Documentation
 
 - **[../docs/ARCHITECTURE_JOBS.md](../docs/ARCHITECTURE_JOBS.md)** - Job hierarchy architecture
-- **[../docs/SPECS.md](../docs/SPECS.md)** - API specifications
 - **[../docs/DOCKER_OPTIMIZATION.md](../docs/DOCKER_OPTIMIZATION.md)** - Docker optimization guide
 - **[../CLAUDE.md](../CLAUDE.md)** - Claude Code development guide

@@ -95,7 +95,7 @@ e e-mail da mesma conta compartilham o contador de falhas. Se o Redis cair, o li
   (`shared/admin.py:is_effective_admin`) para as rotas admin e para o campo `is_admin` de
   `GET /auth/me` e `POST /auth/register`. Nas rotas administrativas gerais, quem não é
   admin recebe `403`. Com `IAM_MODE=enforce`
-  ([spec 0014](../specs/0014-iam-nucleo-de-decisao-e-papeis-de-plataforma.md)), bindings de
+  (spec 0014), bindings de
   plataforma (`platform_admin`, `platform_operator`, `platform_auditor`,
   `remote_engine_user`) concedem as permissões de plataforma sem tornar ninguém admin.
   Endpoints gerais em [monitoring-and-admin.md](monitoring-and-admin.md).
@@ -110,7 +110,7 @@ e e-mail da mesma conta compartilham o contador de falhas. Se o Redis cair, o li
   controle e IAM humano de engines exigem JWT e RBAC/ABAC atual, inclusive para leitura.
   `/auth/me` expõe as permissões para navegação: as de engines vêm só dos bindings
   `engines` vigentes. Veja [perfis e acesso](execution-profiles.md).
-- **Usuário root ([spec 0019](../specs/0019-usuario-root-na-primeira-inicializacao.md)):** a
+- **Usuário root (spec 0019):** a
   primeira conta cadastrada numa instalação **sem nenhum usuário** nasce **root**: admin de emergência
   (bootstrap) do IAM, único (índice único em `users.root_slot`) e irrevogável pela aplicação
   — não pode ser desativado nem perder o admin (`409 ROOT_IMMUTABLE`), e continua admin mesmo

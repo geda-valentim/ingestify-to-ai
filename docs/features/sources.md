@@ -62,7 +62,7 @@ curl -X POST http://localhost:8000/convert \
 ```
 
 `Authorization` (ou `X-API-Key`) autentica no Ingestify e **nunca** é repassado ao provedor nem
-colocado na mensagem do Celery (correção do S-01, [SECURITY_REVIEW.md](../SECURITY_REVIEW.md)). O
+colocado na mensagem do Celery (correção do S-01 da revisão de segurança). O
 token do provedor vai no header próprio `X-Source-Token` (`400` se ausente nessas fontes); a API o
 guarda numa chave Redis de vida curta (`job:{id}:source_token`, 6 h), o worker o lê na hora do
 download e a apaga assim que o download dá certo (uma falha de download a mantém para o retry).

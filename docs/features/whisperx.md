@@ -2,7 +2,7 @@
 
 Atualizado em 2026-10-05. Implementação atrás de configuração explícita; o provider
 padrão continua `faster-whisper` até passar pelos gates da
-[spec 0006](../specs/0006-whisperx-e-identificacao-de-falantes.md).
+spec 0006.
 
 ## Contrato de arquivos
 

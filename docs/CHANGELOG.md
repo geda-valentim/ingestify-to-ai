@@ -35,7 +35,7 @@
 
 ## 2026-10: Spec 0019 — usuário root na primeira inicialização
 
-Ver [specs/0019](specs/0019-usuario-root-na-primeira-inicializacao.md).
+Ver specs/0019.
 
 - **A primeira conta cadastrada numa instalação sem nenhum usuário vira root** (`users.root_slot = 1`,
   `is_admin = true`), único por índice único e irrevogável pela aplicação. Migration
@@ -49,7 +49,7 @@ Ver [specs/0019](specs/0019-usuario-root-na-primeira-inicializacao.md).
 
 ## 2026-10: Spec 0018 — IAM: convergência do RBAC/ABAC de engines (0009)
 
-Ver [specs/0018](specs/0018-iam-convergencia-do-rbac-abac-de-engines.md) e a
+Ver specs/0018 e a
 [seção 6 do runbook](runbooks/execution-profiles-access.md#6-convergência-no-iam-spec-0018).
 
 - **Grants de engines viram `iam_bindings`** da família `engines`, com o **mesmo id** do grant
@@ -99,7 +99,7 @@ Ver [specs/0018](specs/0018-iam-convergencia-do-rbac-abac-de-engines.md) e a
 
 ## 2026-10: Spec 0014 — IAM: núcleo de decisão e papéis de plataforma
 
-Ver [specs/0014](specs/0014-iam-nucleo-de-decisao-e-papeis-de-plataforma.md).
+Ver specs/0014.
 
 - **`IAM_MODE`** (`off` | `shadow` | `enforce`, padrão `off`). Em `off` as rotas da API decidem
   pela regra legada (`is_effective_admin`, dono do recurso) e os bindings ficam inertes; `shadow`

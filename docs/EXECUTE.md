@@ -196,12 +196,7 @@ docker compose logs worker
 ## 📖 Documentação Completa
 
 - [QUICKSTART.md](QUICKSTART.md) - Guia rápido
-- [STATUS.md](STATUS.md) - Status atual do projeto
 - [README.md](README.md) - Documentação geral da API
-- [SPECS.md](SPECS.md) - Especificações técnicas
-- [RF.md](RF.md) - Requisitos funcionais
-- [RNF.md](RNF.md) - Requisitos não-funcionais
-- [TASKS.md](TASKS.md) - Roadmap de implementação
 
 ## 🎯 Próximos Passos
 

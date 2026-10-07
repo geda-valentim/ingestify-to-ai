@@ -28,8 +28,7 @@ backend/
 > **Nota histórica:** o repositório já teve `domain/`, `application/`, `infrastructure/`
 > e `presentation/` seguindo Clean Architecture. Essas camadas nunca foram ligadas —
 > nenhum módulo vivo as importava, e nem eram copiadas para as imagens Docker. Foram
-> removidas em 2026-08-26 após duas análises independentes; ver
-> [docs/specs/0001-remover-clean-architecture-morta.md](docs/specs/0001-remover-clean-architecture-morta.md).
+> removidas em 2026-08-26 após duas análises independentes (spec 0001, privada).
 > Para recuperá-las: `git show 9b6b876:backend/domain/...`
 
 ### Four-Tier System (Infraestrutura)
@@ -214,12 +213,7 @@ doc2md/                          # Monorepo root
 │   └── Dockerfile.frontend
 │
 ├── docs/                        # 📚 Documentation
-│   ├── SPECS.md                 # API specifications
-│   ├── RF.md                    # Functional requirements
-│   ├── RNF.md                   # Non-functional requirements
 │   ├── ARCHITECTURE_JOBS.md     # Job hierarchy deep dive
-│   ├── TASKS.md                 # Implementation tasks
-│   ├── STATUS.md                # Project status
 │   ├── EXECUTE.md               # Execution guide
 │   ├── CHANGELOG.md             # Version history
 │   ├── DOCKER_OPTIMIZATION.md   # Docker tuning guide
@@ -332,10 +326,7 @@ Each source type (file, url, gdrive, dropbox) has a dedicated handler implementi
 ## Documentation
 
 - **[README.md](README.md)** - Main project documentation, architecture overview
-- **[docs/SPECS.md](docs/SPECS.md)** - Detailed API specifications
 - **[docs/ARCHITECTURE_JOBS.md](docs/ARCHITECTURE_JOBS.md)** - Deep dive into hierarchical job system
-- **[docs/RF.md](docs/RF.md)** - Functional requirements
-- **[docs/RNF.md](docs/RNF.md)** - Non-functional requirements (performance, security)
 - **[docs/DOCKER_OPTIMIZATION.md](docs/DOCKER_OPTIMIZATION.md)** - Docker performance tuning
 - **[scripts/README.md](scripts/README.md)** - Testing and utility scripts guide
 
@@ -552,7 +543,7 @@ docker compose logs mysql
 **IMPORTANT: All documentation (.md) files MUST be created in the respective `/docs` folders:**
 
 - **General project documentation** → `/docs/` (root level)
-  - Examples: SPECS.md, RF.md, RNF.md, ARCHITECTURE_JOBS.md, TASKS.md, etc.
+  - Examples: ARCHITECTURE_JOBS.md, api-reference.md, features/, runbooks/, etc.
 
 - **Frontend-specific documentation** → `/frontend/docs/`
   - Examples: Component guides, frontend architecture, UI patterns, etc.
@@ -563,6 +554,14 @@ docker compose logs mysql
 - **Subdirectory documentation** → `{subdirectory}/docs/`
   - Examples: `/backend/api/docs/`, `/backend/workers/docs/`, etc.
   - Each major module can have its own docs folder for detailed documentation
+
+**Private planning docs are not versioned in this repository.** `docs/specs/`, `docs/product/`,
+`docs/crawler/`, `docs/landing/*.md`, `docs/landing/image-prompts.json`, `docs/CODE_REVIEW.md`,
+`docs/SECURITY_REVIEW*.md`, `docs/security-history-review.md`, `frontend/PROJECT_SUMMARY.md`,
+`frontend/CHECKLIST.md` and any `RF.md`/`RNF.md`/`SPECS.md`/`STATUS.md`/`TASKS.md`/
+`WEBSCRAPPING_PRD.md`/`LANDING_PAGE_BRIEF.md` are git-ignored. They are versioned in the private
+repository `geda-valentim/ingestify-private-docs`. Never `git add -f` them and do not link to them
+from public docs.
 
 **Never create .md files directly in the root or in subdirectories without using the appropriate `/docs` folder.**
 

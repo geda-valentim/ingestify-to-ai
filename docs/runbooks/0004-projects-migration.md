@@ -1,7 +1,7 @@
 # Runbook: spec 0004 migration (projects and folders)
 
 The design and the reasons behind each step are in
-[spec 0004 § 4.3](../specs/0004-projects-and-folders.md). This page lists the commands only.
+spec 0004 § 4.3. This page lists the commands only.
 The owner runs it. The script prints each step and stops at the first `FAIL`.
 
 **Never** run `alembic upgrade` in production: the database is not stamped there.

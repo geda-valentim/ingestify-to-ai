@@ -3,7 +3,7 @@
 Verificado contra o código em **2026-10-07**. Use junto do [bootstrap de controle](engine-control-bootstrap.md). O código é
 opt-in; este runbook não inicia engines/modelos nem cria grants automaticamente.
 
-> **Desde a [spec 0018](../specs/0018-iam-convergencia-do-rbac-abac-de-engines.md)** os grants
+> **Desde a spec 0018** os grants
 > de engines são `iam_bindings` da família `engines`, administrados em **Admin → Acesso**
 > (`/admin/access`) e por `/admin/iam/bindings`; o flag é `IAM_MODE`. Instalações que já
 > rodam a 0009 seguem a [seção 6](#6-convergência-no-iam-spec-0018) antes de atualizar.
@@ -67,7 +67,7 @@ ENGINE_INSTALLATION_PRINCIPAL_ID=installation:dev
 ```
 
 `IAM_MODE=enforce` também liga as decisões de plataforma da
-[0014](../specs/0014-iam-nucleo-de-decisao-e-papeis-de-plataforma.md); rode antes o gate
+0014; rode antes o gate
 dela, `docker compose run --rm --no-deps api python -m shared.iam.equivalence` (fora do
 container, `python scripts/iam_equivalence.py`). Para ligar só engines, mantendo a plataforma no legado,
 use `IAM_MODE=off` com `ENGINE_ACCESS_ENABLED=true` (alias depreciado, ver seção 6.3).
@@ -343,7 +343,7 @@ OpenAPI. O frontend já não os chama. Migre automações para `/admin/iam/bindi
 | `POST /admin/access/grants/{id}/revoke` | `POST /admin/iam/bindings/{id}/revoke` (já revogado → `409 ALREADY_REVOKED`) |
 
 A rota unificada responde `{code, message}` e usa os códigos da tabela da
-[spec 0018 §4.5](../specs/0018-iam-convergencia-do-rbac-abac-de-engines.md#45-api). As
+spec 0018 §4.5. As
 duas exigem sessão JWT; para engines, também na leitura.
 
 ## Registro do dev (2026-10-06)

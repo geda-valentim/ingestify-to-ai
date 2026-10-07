@@ -1,11 +1,11 @@
 # Perfis de execução e acesso a Compute
 
-Implementação da [spec 0009](../specs/0009-perfis-de-execucao-e-controle-de-acesso.md),
+Implementação da spec 0009,
 verificada contra o código em **2026-10-07**; opt-in com `IAM_MODE=enforce` (ou o alias
 depreciado `ENGINE_ACCESS_ENABLED=true`). Ativação e migração:
 [runbook](../runbooks/execution-profiles-access.md).
 
-Desde a [spec 0018](../specs/0018-iam-convergencia-do-rbac-abac-de-engines.md) os grants
+Desde a spec 0018 os grants
 abaixo são `iam_bindings` da **família `engines`**, administrados com os de plataforma
 numa só tela e numa só API; a decisão da 0009 não mudou. Controles físicos continuam
 exigindo a configuração da [spec 0007](../runbooks/engine-control-bootstrap.md).
@@ -307,4 +307,4 @@ Guias completos de [perfis](https://dev.ingestify.ai/pt/docs/execution-profiles)
 [operações](https://dev.ingestify.ai/pt/docs/engine-operations) e
 [engines](https://dev.ingestify.ai/pt/docs/engines) incluem requisitos identificados,
 pré-condições, campos/limites, contratos da API, diagnóstico e exemplos.
-Os mesmos IDs PRF/ACL/OPS/ENG estão em [RF012](../RF.md#rf012---engines-operações-perfis-e-acesso).
+Os mesmos IDs PRF/ACL/OPS/ENG estão em RF012.

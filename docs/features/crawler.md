@@ -30,17 +30,14 @@ Observações:
   não existe.
 - Os Dockerfiles copiam só `api/`, `shared/`, `workers/` e `tests/`: as camadas
   `domain/`, `application/` e `infrastructure/` **nem chegam às imagens**.
-- A spec [0001](../specs/0001-remover-clean-architecture-morta.md) removeu essas camadas em
+- A spec 0001 removeu essas camadas em
   2026-08-26 (`9a6310d`); o merge do crawler, feito num ramo paralelo, recolocou nelas
   apenas os arquivos do crawler. O `CLAUDE.md` ainda descreve as camadas como removidas.
 
 ## Onde está o planejamento
 
-| Documento | Conteúdo | Estado |
-|---|---|---|
-| [crawler/CRAWLER.md](../crawler/CRAWLER.md) | PRD original do scraper agendado. | Plano. Idêntico byte a byte a [../WEBSCRAPPING_PRD.md](../WEBSCRAPPING_PRD.md). |
-| [crawler/CRAWLER_INTEGRATION_PLAN.md](../crawler/CRAWLER_INTEGRATION_PLAN.md) | Desenho em Clean Architecture, rollout de 12 semanas. | Plano. |
-| [crawler/sprint-1-foundation.md](../crawler/sprint-1-foundation.md) … [sprint-6-testing.md](../crawler/sprint-6-testing.md) | Checklists por sprint. | Sprints 1–2 parcialmente feitas; 3 quase nada; 4–6 não iniciadas. |
+O PRD, o plano de integração e os checklists de sprint são documentos de planejamento
+privados, mantidos fora do repositório público.
 
 Arquivos citados por sprint que existem hoje (levantamento de 2026-10-04): sprint 1, 8 de
 10; sprint 2, 13 de 24; sprint 3, 3 de 26; sprint 4, 2 de 15; sprint 5, 0 de 13;
@@ -60,7 +57,7 @@ sprint 6, 0 de 3.
 
 ## Para levar adiante
 
-Decidir (numa spec nova em [../specs/](../specs/)) se o crawler continua; se sim, onde ele
+Decidir (numa spec nova) se o crawler continua; se sim, onde ele
 vive dado que a arquitetura em camadas foi abandonada pela spec 0001, e o que falta: router,
 tasks/fila/agendamento, robots.txt, UI. Se não, remover o código dormente, as colunas e o
 bucket.
