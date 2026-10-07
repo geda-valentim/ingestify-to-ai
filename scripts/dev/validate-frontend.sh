@@ -6,7 +6,7 @@ set -e
 
 echo "🔍 Validating frontend TypeScript..."
 
-cd "$(dirname "$0")/frontend"
+cd "$(dirname "$0")/../../frontend"
 
 # Check if node_modules exists
 if [ ! -d "node_modules" ]; then

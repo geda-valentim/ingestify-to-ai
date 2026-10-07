@@ -9,7 +9,7 @@ Ingestify supports **two modes** of operation:
 1. **Standalone Mode** - Each project runs its own infrastructure (Redis, MinIO, Elasticsearch)
 2. **Shared Mode** - Multiple projects share a single infrastructure instance
 
-The `start.sh` script automatically detects which mode to use, making the project fully portable between machines without manual configuration.
+The `scripts/dev/start.sh` script automatically detects which mode to use, making the project fully portable between machines without manual configuration.
 
 ## Why Shared Infrastructure?
 
@@ -33,8 +33,8 @@ The `start.sh` script automatically detects which mode to use, making the projec
 ### Option 1: Auto-Detection (Recommended)
 
 ```bash
-# Just run start.sh - it figures out everything automatically
-./start.sh
+# Just run scripts/dev/start.sh - it figures out everything automatically
+./scripts/dev/start.sh
 
 # Or use make
 make start
@@ -55,11 +55,11 @@ make infra-start
 # Or: docker compose -f docker-compose.infra.yml up -d
 
 # Terminal 2: Start ingestify (will detect and use shared infra)
-./start.sh
+./scripts/dev/start.sh
 
 # Terminal 3: Start another project (also uses shared infra)
 cd /path/to/other-project
-./start.sh
+./scripts/dev/start.sh
 ```
 
 ### Option 3: Standalone Mode
@@ -73,7 +73,7 @@ docker compose --profile infra up -d --build
 
 ### Detection Logic
 
-The `start.sh` script checks for these containers:
+The `scripts/dev/start.sh` script checks for these containers:
 
 - `shared-redis`
 - `shared-minio`
@@ -165,15 +165,15 @@ make infra-start
 
 # Step 2: Start project A
 cd ~/projects/ingestify-to-ai
-./start.sh  # ✅ Uses shared infrastructure
+./scripts/dev/start.sh  # ✅ Uses shared infrastructure
 
 # Step 3: Start project B (different terminal)
 cd ~/projects/ingestify-v2
-./start.sh  # ✅ Uses same shared infrastructure
+./scripts/dev/start.sh  # ✅ Uses same shared infrastructure
 
 # Step 4: Start project C
 cd ~/projects/ingestify-enterprise
-./start.sh  # ✅ All three share Redis/MinIO/Elasticsearch
+./scripts/dev/start.sh  # ✅ All three share Redis/MinIO/Elasticsearch
 ```
 
 ### Switching Machines
@@ -181,13 +181,13 @@ cd ~/projects/ingestify-enterprise
 **On Desktop:**
 ```bash
 cd ~/ingestify-to-ai
-./start.sh  # Detects no shared infra → starts local
+./scripts/dev/start.sh  # Detects no shared infra → starts local
 ```
 
 **On Laptop:**
 ```bash
 cd ~/ingestify-to-ai
-./start.sh  # Also detects nothing → starts local
+./scripts/dev/start.sh  # Also detects nothing → starts local
 ```
 
 **Zero configuration needed!** The script adapts automatically.
@@ -358,7 +358,7 @@ steps:
 
   - name: Run Tests
     run: |
-      ./start.sh
+      ./scripts/dev/start.sh
       make test
 
   - name: Cleanup
@@ -415,7 +415,7 @@ steps:
    ```
 
 4. **Use make commands** for consistency
-   - `make start` instead of `./start.sh`
+   - `make start` instead of `./scripts/dev/start.sh`
    - `make logs` instead of `docker compose logs -f`
 
 5. **Backup shared data** before cleanup

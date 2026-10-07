@@ -2,7 +2,7 @@
 # Ensure JWT_SECRET_KEY is available for the API.
 # Keeps an existing value (environment or .env) so sessions stay valid across
 # restarts; otherwise generates a new secret and saves it to .env in the repo root.
-# docker compose and run_api.sh (pydantic) both read .env from the repo root.
+# docker compose and scripts/dev/run_api.sh (pydantic) both read .env from the repo root.
 
 set -e
 

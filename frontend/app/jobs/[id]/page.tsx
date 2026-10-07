@@ -284,14 +284,14 @@ export default function JobStatusPage({ params }: PageProps) {
       setSourceDialogOpen(false);
       queryClient.invalidateQueries({ queryKey: ["job-status", resolvedParams.id] });
       toast({
-        title: "Arquivo original apagado",
-        description: "O job e o resultado da conversão foram mantidos.",
+        title: "Original file deleted",
+        description: "The job and its conversion result were kept.",
       });
     },
     onError: (error: unknown) => {
       setSourceDialogOpen(false);
       toast({
-        title: "Não foi possível apagar o arquivo original",
+        title: "Could not delete the original file",
         description: formatApiError(error),
         variant: "destructive",
       });
@@ -705,11 +705,11 @@ export default function JobStatusPage({ params }: PageProps) {
                   className="w-full"
                   onClick={() => setSourceDialogOpen(true)}
                   disabled={["queued", "pending", "processing"].includes(status.status) || deleteSourceMutation.isPending}
-                  title={["queued", "pending", "processing"].includes(status.status) ? "Disponível quando o job terminar" : undefined}
+                  title={["queued", "pending", "processing"].includes(status.status) ? "Available when the job finishes" : undefined}
                   size="sm"
                 >
                   <Trash2 className="h-4 w-4 mr-2" />
-                  Apagar arquivo original
+                  Delete original file
                 </Button>
               )}
             </div>
@@ -1058,11 +1058,11 @@ export default function JobStatusPage({ params }: PageProps) {
         <AlertDialog open={sourceDialogOpen} onOpenChange={setSourceDialogOpen}>
           <AlertDialogContent>
             <AlertDialogHeader>
-              <AlertDialogTitle>Apagar o arquivo original?</AlertDialogTitle>
+              <AlertDialogTitle>Delete the original file?</AlertDialogTitle>
               <AlertDialogDescription>
-                O arquivo enviado será apagado de forma permanente. O job, o resultado da conversão
-                e os PDFs por página continuam disponíveis, mas não será mais possível refazer
-                páginas que falharam.
+                The uploaded file will be permanently deleted. The job, the conversion result
+                and the per-page PDFs stay available, but failed pages can no longer
+                be retried.
               </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>
@@ -1081,7 +1081,7 @@ export default function JobStatusPage({ params }: PageProps) {
                     Apagando...
                   </>
                 ) : (
-                  "Apagar arquivo original"
+                  "Delete original file"
                 )}
               </AlertDialogAction>
             </AlertDialogFooter>

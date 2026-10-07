@@ -49,7 +49,7 @@ A documentação pública distingue **Usar a plataforma**, **Integrar pela API**
 |---|---|---|
 | [runbooks/execution-profiles-access.md](runbooks/execution-profiles-access.md) | atual | Migração 0009, ativação de acesso, qualificação de recursos, principal da CLI e rollback. |
 | [GPU.md](GPU.md) | atual | CPU vs GPU, pré-requisitos NVIDIA, VRAM, pesos de modelos, troubleshooting. (inglês) |
-| [SHARED_INFRASTRUCTURE.md](SHARED_INFRASTRUCTURE.md) | atual | Redis/MinIO/Elasticsearch compartilhados entre projetos (`start.sh`, `docker-compose.infra.yml`). (inglês) |
+| [SHARED_INFRASTRUCTURE.md](SHARED_INFRASTRUCTURE.md) | atual | Redis/MinIO/Elasticsearch compartilhados entre projetos (`scripts/dev/start.sh`, `docker-compose.infra.yml`). (inglês) |
 | [DOCKER_OPTIMIZATION.md](DOCKER_OPTIMIZATION.md) | parcial | Otimização de build. As menções a `docker-compose.dev.yml` são históricas. |
 | [PYTHON_313_COMPATIBILITY.md](PYTHON_313_COMPATIBILITY.md) | parcial | Compatibilidade com Python 3.13 (já adotado nas imagens). (inglês) |
 | [CHANGELOG_PYTHON313.md](CHANGELOG_PYTHON313.md) | histórico | Registro da migração para Python 3.13. (inglês) |

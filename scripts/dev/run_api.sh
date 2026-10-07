@@ -4,6 +4,8 @@
 
 # First, stop any existing API server
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+ROOT_DIR="$( cd "$SCRIPT_DIR/../.." && pwd )"  # scripts/dev/ -> project root
+cd "$ROOT_DIR"
 if [ -f "$SCRIPT_DIR/stop_api.sh" ]; then
     echo "🛑 Stopping existing API server..."
     bash "$SCRIPT_DIR/stop_api.sh"
@@ -48,14 +50,11 @@ echo ""
 mkdir -p /tmp/ingestify
 
 # Run API
-SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-cd "$SCRIPT_DIR"
-
 # The API refuses to start without JWT_SECRET_KEY (read from .env by the app)
 ./scripts/ensure_jwt_secret.sh
 
 # Add backend directory to PYTHONPATH so imports work correctly
-export PYTHONPATH="$SCRIPT_DIR/backend:$PYTHONPATH"
+export PYTHONPATH="$ROOT_DIR/backend:$PYTHONPATH"
 
 # Set environment variables for local development
 export ENVIRONMENT="${ENVIRONMENT:-development}"

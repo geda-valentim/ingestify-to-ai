@@ -348,11 +348,11 @@ function ConversionWorkspace() {
                       />
                       <div className="space-y-1">
                         <Label htmlFor="purgeSourceFile" className="font-normal">
-                          Não guardar o arquivo original após converter
+                          Don't keep the original file after converting
                         </Label>
                         <p className="text-xs text-muted-foreground">
-                          O arquivo é apagado quando a conversão termina com sucesso; fica só o resultado.
-                          Se alguma página falhar, ele é mantido até o retry concluir.
+                          The file is deleted once the conversion succeeds; only the result is kept.
+                          If a page fails, it is kept until the retry completes.
                         </p>
                       </div>
                     </div>

@@ -2,6 +2,15 @@
 
 > **Registro histórico (2025-10).** Não é mantido; para mudanças posteriores use `git log`. Observação: `workers/tasks_old.py`, citado abaixo, não existe (há um `workers/tasks.py.backup`). Exceção: mudanças de comportamento intencionais que uma spec manda registrar aqui entram na seção abaixo.
 
+## 2026-10: Raiz do repositório enxuta
+
+- Scripts de desenvolvimento movidos para `scripts/dev/`: `start.sh`, `rebuild.sh`, `infra.sh`,
+  `run_api.sh`, `run_worker.sh`, `stop_api.sh`, `validate-frontend.sh`. Os alvos do `Makefile`
+  (`make start`, `make rebuild`, …) não mudam; os scripts funcionam de qualquer diretório.
+- Removidos testes manuais obsoletos da raiz: `test_auth.sh`, `test_pagination.sh`,
+  `test_upload_apikey.sh`, `test_conversion_flow.py` (cobertos pela suíte `pytest` e por `scripts/`).
+- Os `docker-compose*.yml` ficam na raiz: o host agent fixa o caminho e o hash de cada um.
+
 ## 2026-10: Guardar ou apagar o arquivo original de documentos
 
 - `POST /upload` e `POST /convert` aceitam `purge_source` (form, padrão `false`; mesmo
@@ -15,8 +24,8 @@
   original ou de outro usuário, `409 JOB_STILL_PROCESSING` enquanto processa.
 - `GET /jobs/{job_id}` ganha `source_available`.
 - Transcrições criadas por `/upload` ou `/convert` também respeitam `purge_source`.
-- Frontend: caixa "Não guardar o arquivo original após converter" no formulário de
-  conversão e botão "Apagar arquivo original" (com diálogo de confirmação) na página do job.
+- Frontend: caixa "Don't keep the original file after converting" no formulário de
+  conversão e botão "Delete original file" (com diálogo de confirmação) na página do job.
 
 ## 2026-10: Spec 0020 — perfis de execução padrão na instalação
 

@@ -1,5 +1,7 @@
 #!/bin/bash
 
+cd "$(dirname "$0")/../.."  # scripts/dev/ -> project root
+
 # ======================================
 # Ingestify Smart Startup Script
 # Auto-detects shared infrastructure

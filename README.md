@@ -303,13 +303,13 @@ O Ingestify agora suporta **auto-detecção de infraestrutura compartilhada**! I
 
 ```bash
 # Simplesmente execute - o script detecta tudo automaticamente!
-./start.sh
+./scripts/dev/start.sh
 
 # Ou use o Makefile
 make start
 ```
 
-O script `start.sh` detecta automaticamente:
+O script `scripts/dev/start.sh` detecta automaticamente:
 - ✅ Se existe infraestrutura compartilhada rodando → reutiliza
 - ✅ Se não existe → inicia infraestrutura local
 - ✅ Configura tudo automaticamente sem perguntar nada!
@@ -319,25 +319,25 @@ O script `start.sh` detecta automaticamente:
 ```bash
 # Terminal 1: Inicie a infraestrutura compartilhada UMA VEZ
 make infra-start
-# Ou: ./infra.sh start
+# Ou: ./scripts/dev/infra.sh start
 
 # Terminal 2: Inicie o Ingestify (detecta e usa infra compartilhada)
-./start.sh
+./scripts/dev/start.sh
 
 # Terminal 3: Inicie outro projeto (também usa a mesma infra!)
 cd /path/to/outro-projeto
-./start.sh
+./scripts/dev/start.sh
 ```
 
 ### Comandos Úteis
 
 ```bash
 # Gerenciar infraestrutura compartilhada
-./infra.sh start      # Iniciar
-./infra.sh stop       # Parar
-./infra.sh status     # Ver status
-./infra.sh test       # Testar conectividade
-./infra.sh logs       # Ver logs
+./scripts/dev/infra.sh start      # Iniciar
+./scripts/dev/infra.sh stop       # Parar
+./scripts/dev/infra.sh status     # Ver status
+./scripts/dev/infra.sh test       # Testar conectividade
+./scripts/dev/infra.sh logs       # Ver logs
 
 # Ou use o Makefile
 make infra-start      # Iniciar infraestrutura
@@ -514,10 +514,10 @@ source venv/bin/activate  # Linux/Mac
 pip install -r backend/requirements.txt
 
 # Executar API (porta 8080)
-./run_api.sh
+./scripts/dev/run_api.sh
 
 # Executar worker (terminal separado)
-./run_worker.sh
+./scripts/dev/run_worker.sh
 ```
 
 > **Tem uma GPU NVIDIA?** Não use o comando acima — leia **[docs/GPU.md](docs/GPU.md)**

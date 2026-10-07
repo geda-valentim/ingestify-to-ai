@@ -178,7 +178,7 @@ class TestPresignedUrlHost:
         assert built["region"] == "us-east-1"
 
     def test_same_endpoint_reuses_the_primary_client(self, settings, monkeypatch):
-        """run_api.sh runs with internal == browser endpoint: no second client."""
+        """scripts/dev/run_api.sh runs with internal == browser endpoint: no second client."""
         monkeypatch.setattr(
             minio_module,
             "Minio",

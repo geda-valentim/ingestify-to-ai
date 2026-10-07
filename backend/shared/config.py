@@ -372,7 +372,7 @@ class Settings(BaseSettings):
     # CORS
     # Comma-separated list of origins allowed to call the API from a browser.
     # Defaults cover local development only (Next.js frontend on :3000 and the
-    # API's own docs on :8000 in Docker / :8080 via run_api.sh).
+    # API's own docs on :8000 in Docker / :8080 via scripts/dev/run_api.sh).
     # Production MUST override this with the real frontend origin(s).
     cors_allowed_origins: str = (
         "http://localhost:3000,http://127.0.0.1:3000,"
