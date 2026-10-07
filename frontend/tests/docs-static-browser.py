@@ -7,7 +7,7 @@ import os
 from html.parser import HTMLParser
 from urllib.parse import urlsplit
 from xml.etree import ElementTree
-from playwright.async_api import async_playwright
+from playwright.async_api import async_playwright, expect
 
 URL = os.environ.get('LANDING_URL', 'http://127.0.0.1:3108').rstrip('/')
 
@@ -105,8 +105,8 @@ async def main():
         page = await nojs.new_page()
         await page.goto(URL+'/docs/transcription',wait_until='load')
         assert await page.locator('#docs-content h1').is_visible()
-        await page.locator('summary').filter(has_text='Python').click()
-        assert await page.locator('details[open] pre').filter(has_text='import requests').is_visible()
+        assert await page.locator('[data-docs-code-examples] pre').filter(has_text='import requests').is_visible()
+        assert await page.locator('[data-docs-code-examples] pre').filter(has_text='const API').is_visible()
         assert await page.evaluate('document.documentElement.scrollWidth<=innerWidth')
         await page.get_by_role('link',name='Português',exact=True).click()
         await page.wait_for_url(URL+'/pt/docs/transcription')
@@ -124,12 +124,32 @@ async def main():
             await page.goto(URL+old,wait_until='networkidle')
             await page.wait_for_url(URL+new)
         await page.goto(URL+'/docs/transcription',wait_until='networkidle')
-        example = page.locator('details').filter(has=page.locator('summary',has_text='curl'))
-        await example.get_by_role('button').click()
+        example = page.get_by_role('tabpanel',name='curl',exact=True)
+        await example.get_by_role('button',name='Copy code',exact=True).click()
         assert await page.evaluate('navigator.clipboard.readText()') == await example.locator('code').inner_text()
         await page.get_by_role('link',name='Português',exact=True).click()
         await page.wait_for_url(URL+'/pt/docs/transcription')
         assert await page.locator('html').get_attribute('lang') == 'pt-BR'
+        for width in (1440,390):
+            await page.set_viewport_size({'width':width,'height':900})
+            for prefix in ('/docs','/pt/docs'):
+                for topic,labels in [('transcription',['curl','Python','JavaScript']),('results',['markdown','vtt','srt','txt','json'])]:
+                    await page.goto(URL+prefix+'/'+topic,wait_until='networkidle')
+                    examples = page.locator('[data-docs-code-examples]')
+                    assert await examples.locator('details').count() == 0
+                    for label in labels:
+                        tab = examples.get_by_role('tab',name=label,exact=True)
+                        await tab.click()
+                        assert await tab.get_attribute('aria-selected') == 'true'
+                        panel = examples.get_by_role('tabpanel',name=label,exact=True)
+                        assert await examples.locator('[role="tabpanel"]:visible').count() == 1
+                        await panel.get_by_role('button').click()
+                        assert await page.evaluate('navigator.clipboard.readText()') == await panel.locator('pre code').inner_text()
+                    await examples.get_by_role('tab',name=labels[0],exact=True).focus()
+                    await page.keyboard.press('ArrowRight')
+                    await expect(examples.get_by_role('tab',name=labels[1],exact=True)).to_have_attribute('aria-selected','true')
+                    assert await page.evaluate('document.documentElement.scrollWidth<=innerWidth')
+        print('Language and format tabs, keyboard navigation, and active-example copying passed in both languages on desktop and mobile.',flush=True)
         assert not errors, errors
         await browser.close()
         print('Legacy query/hash links, copy button, hydration, sitemap, robots and llms.txt passed.')
