@@ -461,7 +461,15 @@ não vai a produção.
   `bca96be`) em `tests/test_iam_access_grant_aliases.py`; regras por família em
   `tests/test_iam_bindings_api.py`. A tela de plataforma filtra a família `platform`
   até a fatia 4.
-- [ ] 4. Tela única de Acesso (CA11).
+- [x] 4. Tela única de Acesso (CA11). `frontend/app/admin/access/page.tsx` com abas
+  Concessões (`components/admin/access-bindings.tsx`: todos os bindings por
+  `/admin/iam/bindings`, filtro por família, formulário das duas famílias com
+  condição, subconjunto de permissões e delegação só para `access_admin`),
+  Políticas, Atributos de engine, Recursos e Principais de instalação
+  (`components/admin/access-panels.tsx`); `admin/platform-access/` redireciona;
+  item único "Acesso" em `lib/admin-nav.ts` (`iam.bindings.read` ou
+  `access.grants.manage`). O cliente deixa de chamar os aliases
+  `/admin/access/grants*`.
 - [ ] 5. Documentação de features/runbook (deploy em uma etapa, flag, rollback),
   CHANGELOG, status das specs.
 

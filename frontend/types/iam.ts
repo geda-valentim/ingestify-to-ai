@@ -1,3 +1,4 @@
+import type { Constraints } from "./access";
 /** Spec 0014 §4.9: platform roles granted through IAM bindings. */
 export interface IamRole {
   key: string;
@@ -20,7 +21,7 @@ export interface IamCatalog {
 /** The 0009 delegation envelope of an `access_admin` engines binding. */
 export interface IamDelegation {
   permissions: string[];
-  constraints: Record<string, unknown>;
+  constraints: Constraints;
   max_grant_seconds: number;
 }
 export interface IamBinding {

@@ -13,7 +13,6 @@ import {
   Server,
   SlidersHorizontal,
   Shield,
-  ShieldCheck,
 } from "lucide-react";
 import { authApi } from "@/lib/api";
 import { useAuthStore } from "@/lib/store/auth";
@@ -32,11 +31,6 @@ const TABS = [
     icon: SlidersHorizontal,
   },
   { href: "/admin/access", label: "Acesso", icon: Shield },
-  {
-    href: "/admin/platform-access",
-    label: "Acesso à plataforma",
-    icon: ShieldCheck,
-  },
   { href: "/admin/gpus", label: "GPUs", icon: MemoryStick },
   { href: "/admin/routing", label: "Routing", icon: Route },
   { href: "/admin/status", label: "Status", icon: Activity },
