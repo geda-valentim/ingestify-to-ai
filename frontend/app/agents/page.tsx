@@ -120,6 +120,7 @@ export default function AgentsPage() {
             For agents
           </Link>
           <Link href="/docs">Docs</Link>
+          <Link href="/business" className={styles.desktopLink}>Business</Link>
           <a
             href={GITHUB}
             aria-label="Ingestify on GitHub"
@@ -440,6 +441,7 @@ export default function AgentsPage() {
         <p>Data Engineering + AI-ready conversion.</p>
         <nav aria-label="Footer links">
           <Link href="/">Platform</Link>
+          <Link href="/business">Business</Link>
           <Link href="/docs">Docs</Link>
           <a href={GITHUB}>GitHub</a>
           <Link href="/login">Sign in</Link>

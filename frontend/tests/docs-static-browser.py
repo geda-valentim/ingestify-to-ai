@@ -11,6 +11,17 @@ from playwright.async_api import async_playwright, expect
 
 URL = os.environ.get('LANDING_URL', 'http://127.0.0.1:3108').rstrip('/')
 
+PLATFORM_GUIDES = {
+    'platform-start': ('documents', '/convert'),
+    'platform-projects-jobs': ('projects', '/jobs'),
+    'platform-documents': ('documents', '/convert'),
+    'platform-transcription': ('transcription', '/live'),
+    'platform-images': ('images', '/convert'),
+    'platform-datalakes': ('datalakes', '/datalakes'),
+    'platform-partitioning': ('datalakes', '/datalakes'),
+    'administration-overview': ('compute', '/admin'),
+}
+
 class ArticleHTML(HTMLParser):
     def __init__(self):
         super().__init__()
@@ -22,12 +33,15 @@ class ArticleHTML(HTMLParser):
         self.description = None
         self.languages = set()
         self.links = set()
+        self.main_links = set()
     def handle_starttag(self, tag, attrs):
         a = dict(attrs)
         if tag in ('script', 'style', 'template'):
             self.skip += 1
         if tag == 'a' and a.get('href'):
             self.links.add(a['href'])
+            if self.in_main:
+                self.main_links.add(a['href'])
         if tag == 'main' and a.get('id') == 'docs-content':
             self.in_main = True
         if tag == 'h1' and self.in_main:
@@ -63,6 +77,10 @@ async def main():
         index = await nojs.request.get(URL+'/docs')
         article = ArticleHTML(); article.feed(await index.text())
         english = {urlsplit(link).path for link in article.links if link.startswith('/docs')}
+        index_text = ' '.join(article.text)
+        for audience in ('Use the platform', 'Integrate with the API', 'Administer'):
+            assert audience in index_text, audience
+        assert all('/docs/'+guide in english for guide in PLATFORM_GUIDES), english
         expected = english | {'/pt'+path for path in english}
         assert set(docs) == expected and len(docs) == len(expected), docs
         for path in docs:
@@ -76,6 +94,29 @@ async def main():
             assert 'BAILOUT_TO_CLIENT_SIDE_RENDERING' not in html, path
             assert urlsplit(article.canonical).path == path, (path,article.canonical)
             assert article.description and {'en','pt-BR','x-default'} <= article.languages
+            slug = path.rsplit('/', 1)[-1]
+            prefix = '/pt/docs' if path.startswith('/pt/') else '/docs'
+            if slug in PLATFORM_GUIDES:
+                api_topic, action = PLATFORM_GUIDES[slug]
+                assert f'data-platform-guide="{slug}"' in html, path
+                assert action in article.main_links, (path, action)
+                assert prefix+'/'+api_topic in article.main_links, (path, api_topic)
+                for label in ('Antes de começar', 'Resultado esperado', 'Problemas comuns') if prefix.startswith('/pt/') else ('Before you start', 'Expected outcome', 'Common problems'):
+                    assert label in text, (path, label)
+                assert '<ol' in html and len(text) > 1500, (path, len(text))
+            for guide, (api_topic, _) in PLATFORM_GUIDES.items():
+                if slug == api_topic:
+                    assert prefix+'/'+guide in article.main_links, (path, guide)
+            if slug == 'platform-images':
+                for term in ('Full Analysis', 'Regiões', 'Download JSON', 'Download Markdown', 'partial', '15', '18'):
+                    assert term in text, (path, term)
+            if slug in ('platform-partitioning', 'datalakes'):
+                for term in ('customer_id', 'JSONL' if slug == 'platform-partitioning' else 'jsonl', 'partition_values', 'America/Sao_Paulo'):
+                    assert term in text, (path, term)
+            if slug == 'datalakes':
+                for route in ('POST /datalakes/discover', 'POST /datalakes/buckets', 'POST /datalakes/partition-preview', '/images/analyze/upload'):
+                    assert route in text, (path, route)
+                assert "file=@meeting.mp3" not in text, path
             if path.endswith('/transcription'):
                 assert 'import requests' in text and 'const API' in text and 'curl -X POST' in text
             if path.endswith('/images'):
@@ -89,6 +130,7 @@ async def main():
                 assert 'import base64' in text and '"mode": "full"' in text, path
             if path.endswith('/results'):
                 assert 'WEBVTT' in text and 'application/json' in text
+        print('Three documentation audiences, bilingual platform guides, real screen actions and reciprocal API links passed.', flush=True)
         print(f'{len(docs)} documentation pages contain article HTML, one H1, canonical, description and language alternates.',flush=True)
         for old, new in [('/docs?lang=pt','/pt/docs'),('/docs?lang=en','/docs'),('/docs/images?lang=pt','/pt/docs/images'),('/pt/docs/images?lang=en','/docs/images')]:
             response = await nojs.request.get(URL+old,max_redirects=0)
@@ -115,6 +157,13 @@ async def main():
         await page.get_by_role('navigation',name='Tópicos da documentação').locator('a[href="/pt/docs/images"]').click()
         await page.wait_for_url(URL+'/pt/docs/images')
         assert await page.locator('#docs-content h1').is_visible()
+        await page.goto(URL+'/pt/docs/platform-images',wait_until='load')
+        assert await page.locator('[data-platform-guide="platform-images"]').is_visible()
+        assert await page.locator('#docs-content a[href="/pt/docs/images"]').is_visible()
+        assert await page.evaluate('document.documentElement.scrollWidth<=innerWidth')
+        await page.locator('#docs-content a[href="/pt/docs/images"]').click()
+        await page.wait_for_url(URL+'/pt/docs/images')
+        assert await page.locator('#docs-content a[href="/pt/docs/platform-images"]').is_visible()
         print('No-JS language switch, mobile topic navigation, and native code examples passed.',flush=True)
         await nojs.close()
         interactive = await browser.new_context(viewport={'width':1440,'height':900},permissions=['clipboard-read','clipboard-write'])
