@@ -6,6 +6,7 @@ import openapi from "@/docs/doc2md_openapi.json";
 import { IMAGE_COPY } from "./images-copy";
 import { GenerationGuide } from "./generation-guide";
 import { FullAnalysisGuide } from "./full-analysis-guide";
+import { FacesGuide } from "./faces-guide";
 
 export function ImagesGuide({ lang }: { lang: DocsLang }) {
   const pt = lang === "pt";
@@ -38,6 +39,7 @@ export function ImagesGuide({ lang }: { lang: DocsLang }) {
       <P small>{t.imageOptions}</P>
       <P small>{t.imageTasks}</P>
       <FullAnalysisGuide lang={lang} />
+      <FacesGuide lang={lang} />
       <Subheading>
         {lang === "pt"
           ? "Catálogo completo de tarefas"

@@ -1,3 +1,4 @@
+import type { FaceAnalysisResult, ImageFullV2Result, FaceOptions } from "./faces";
 // Generated from OpenAPI spec
 
 export type JobStatus = "partial" | "queued" | "processing" | "completed" | "failed" | "cancelled";
@@ -234,7 +235,7 @@ export interface ConversionResult {
   metadata: DocumentMetadata;
   exports?: Partial<Record<DocumentFormat, string>>;
   assets?: { name: string; url: string; content_type: string; object_name: string }[];
-  image?: ImageJobResult | ImageFullAnalysisResult | null;
+  image?: ImageJobResult | ImageFullAnalysisResult | ImageFullV2Result | FaceAnalysisResult | null;
 }
 
 export type CaptionTask = "<CAPTION>" | "<DETAILED_CAPTION>" | "<MORE_DETAILED_CAPTION>";
@@ -322,6 +323,7 @@ export interface ImageFullAnalysisResult extends Omit<ImageJobResult, "operation
 }
 
 export interface VisionCapabilities {
+  full_profiles?: { profile: "image-full-v1" | "image-full-v2"; ready: boolean; families: number; max_calls: number; max_faces: number }[];
   analysis_modes?: string[];
   full_limits?: { max_queries: number; max_regions: number; max_calls: number; deadline_seconds: number };
   enabled: boolean;
@@ -500,13 +502,14 @@ export interface UploadRequest extends UploadLocation {
   file: File;
   name?: string;
   tags?: string[];
-  image_operation?: "describe" | "ocr" | "analyze" | "full";
+  image_operation?: "describe" | "ocr" | "analyze" | "full" | "faces";
+  face_options?: FaceOptions;
   image_engine?: "vision" | "docling";
   image_task?: VisionTask;
   image_text_input?: string;
   image_region?: number[];
   image_generation?: Record<string, unknown>;
-  image_full_options?: { queries?: string[]; regions?: number[][]; deadline_seconds?: number };
+  image_full_options?: { profile?: "image-full-v1" | "image-full-v2"; faces?: FaceOptions; queries?: string[]; regions?: number[][]; deadline_seconds?: number };
   image_idempotency_key?: string;
   audio_decoding?: Record<string, unknown>;
   audio_operation?: "transcribe" | "detect_language" | "inspect";

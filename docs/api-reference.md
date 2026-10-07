@@ -2,7 +2,7 @@
 
 Gerado do OpenAPI da aplicação por `scripts/generate_api_docs.py`. Não edite este arquivo à mão.
 
-API `1.0.0`: **146 operações HTTP** e **1 WebSocket(s)**.
+API `1.0.0`: **149 operações HTTP** e **1 WebSocket(s)**.
 
 Base pública de desenvolvimento: `https://dev.ingestify.ai/api`. Os caminhos abaixo são relativos à base.
 
@@ -42,6 +42,9 @@ Guia publicado: [PT](https://dev.ingestify.ai/pt/docs/api-reference) / [EN](http
 | GET | `/admin/health/monitoring` | Administrador (JWT ou API key) | Check monitoring system health |
 | GET | `/admin/broker/unacked` | Administrador (JWT ou API key) | List unacknowledged broker messages |
 | POST | `/admin/broker/unacked/{delivery_tag}/requeue` | Administrador (JWT ou API key) | Requeue an orphaned broker message |
+| GET | `/images/faces/capabilities` | JWT ou API key | Modelos, parâmetros e prontidão da análise facial |
+| POST | `/images/faces` | JWT ou API key | Detectar rostos e analisar expressões em uma imagem base64 |
+| POST | `/images/faces/upload` | JWT ou API key | Upload de imagem para detecção facial e expressões |
 | POST | `/images/describe` | JWT ou API key | Descrever imagem (JSON base64) |
 | POST | `/images/analyze` | JWT ou API key | Executar tarefa de visão (JSON base64) |
 | POST | `/images/analyze/upload` | JWT ou API key | Executar tarefa de visão (multipart) |
@@ -49,7 +52,7 @@ Guia publicado: [PT](https://dev.ingestify.ai/pt/docs/api-reference) / [EN](http
 | POST | `/images/ocr` | JWT ou API key | OCR de imagem (JSON base64) |
 | POST | `/images/ocr/upload` | JWT ou API key | OCR de imagem (multipart) |
 | GET | `/images/capabilities` | JWT ou API key | Estado do subsistema de visão |
-| POST | `/images/{job_id}/cancel` | JWT ou API key | Cancelar Full Analysis de imagem |
+| POST | `/images/{job_id}/cancel` | JWT ou API key | Cancelar análise composta de imagem |
 | GET | `/tags` | JWT ou API key | Listar as tags do usuário |
 | PUT | `/jobs/{job_id}/tags` | JWT ou API key | Definir as tags de um job |
 | GET | `/admin/routing` | Administrador (JWT ou API key) | Feature routes and their backlog |
@@ -730,6 +733,89 @@ Respostas declaradas:
 
 ## Vision
 
+### GET /images/faces/capabilities
+
+Modelos, parâmetros e prontidão da análise facial
+
+Autorização: **JWT ou API key**. Operation ID: `capabilities_images_faces_capabilities_get`.
+
+Respostas declaradas:
+
+| Status | Content-Type | Esquema | Descrição |
+| --- | --- | --- | --- |
+| 200 | application/json | objeto livre | Successful Response |
+
+### POST /images/faces
+
+Detectar rostos e analisar expressões em uma imagem base64
+
+Autorização: **JWT ou API key**. Operation ID: `analyze_images_faces_post`.
+
+Parâmetros:
+
+| Nome | Local | Obrigatório | Tipo | Padrões/limites | Descrição |
+| --- | --- | --- | --- | --- | --- |
+| `idempotency-key` | header | sim | string | minLength=1; maxLength=128 |  |
+
+Corpo obrigatório: sim.
+
+Content-Type: `application/json`. Esquema: [FaceAnalyzeRequest](#model-faceanalyzerequest).
+
+| Campo | Obrigatório | Tipo | Padrões/limites | Descrição |
+| --- | --- | --- | --- | --- |
+| `image_base64` | sim | string |  | Imagem em base64. Um prefixo `data:image/png;base64,` é aceito e removido. Formatos: PNG, JPEG, WEBP, BMP, GIF, TIFF. |
+| `tags` | não | array de string / null |  | Tags do job (ex.: ["cliente-x", "nf"]). Viram minúsculas; até 20 de até 50 caracteres. |
+| `filename` | não | string / null |  | Nome de identificação opcional. |
+| `project` | não | string / null |  | Nome do projeto (get-or-add). Obrigatório, a menos que a API key esteja vinculada a um projeto. |
+| `project_id` | não | string / null |  | ID de um projeto existente (alternativa a `project`). |
+| `folder` | não | string / null |  | Nome da pasta no projeto (opcional, get-or-add, sem '/'). |
+| `folder_id` | não | string / null |  | ID de uma pasta existente do projeto. |
+| `face_options` | não | [FaceRequestOptions](#model-facerequestoptions) |  |  |
+| `wait` | não | boolean | default=false |  |
+| `datalake` | não | [Destination](#model-destination) / null |  |  |
+
+Respostas declaradas:
+
+| Status | Content-Type | Esquema | Descrição |
+| --- | --- | --- | --- |
+| 202 | application/json | [FaceAnalyzeResponse](#model-faceanalyzeresponse) / [ImageFullQueuedResponse](#model-imagefullqueuedresponse) | Successful Response |
+| 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
+
+### POST /images/faces/upload
+
+Upload de imagem para detecção facial e expressões
+
+Autorização: **JWT ou API key**. Operation ID: `upload_images_faces_upload_post`.
+
+Parâmetros:
+
+| Nome | Local | Obrigatório | Tipo | Padrões/limites | Descrição |
+| --- | --- | --- | --- | --- | --- |
+| `idempotency-key` | header | sim | string | minLength=1; maxLength=128 |  |
+
+Corpo obrigatório: sim.
+
+Content-Type: `multipart/form-data`. Esquema: [Body_upload_images_faces_upload_post](#model-body_upload_images_faces_upload_post).
+
+| Campo | Obrigatório | Tipo | Padrões/limites | Descrição |
+| --- | --- | --- | --- | --- |
+| `file` | sim | string (binary) |  |  |
+| `face_options` | não | string / null |  |  |
+| `wait` | não | boolean | default=false |  |
+| `project` | não | string / null |  |  |
+| `project_id` | não | string / null |  |  |
+| `folder` | não | string / null |  |  |
+| `folder_id` | não | string / null |  |  |
+| `tags` | não | string / null |  |  |
+| `datalake` | não | string / null |  |  |
+
+Respostas declaradas:
+
+| Status | Content-Type | Esquema | Descrição |
+| --- | --- | --- | --- |
+| 202 | application/json | [FaceAnalyzeResponse](#model-faceanalyzeresponse) / [ImageFullQueuedResponse](#model-imagefullqueuedresponse) | Successful Response |
+| 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
+
 ### POST /images/describe
 
 Descrever imagem (JSON base64)
@@ -1022,7 +1108,7 @@ Respostas declaradas:
 
 ### POST /images/{job_id}/cancel
 
-Cancelar Full Analysis de imagem
+Cancelar análise composta de imagem
 
 Autorização: **JWT ou API key**. Operation ID: `cancel_full_image_images__job_id__cancel_post`.
 
@@ -12989,6 +13075,123 @@ Esquema JSON completo:
 }
 ```
 
+<a id="model-body_upload_images_faces_upload_post"></a>
+
+### Body_upload_images_faces_upload_post
+
+| Campo | Obrigatório | Tipo | Padrões/limites | Descrição |
+| --- | --- | --- | --- | --- |
+| `file` | sim | string (binary) |  |  |
+| `face_options` | não | string / null |  |  |
+| `wait` | não | boolean | default=false |  |
+| `project` | não | string / null |  |  |
+| `project_id` | não | string / null |  |  |
+| `folder` | não | string / null |  |  |
+| `folder_id` | não | string / null |  |  |
+| `tags` | não | string / null |  |  |
+| `datalake` | não | string / null |  |  |
+
+Esquema JSON completo:
+
+```json
+{
+  "properties": {
+    "file": {
+      "type": "string",
+      "format": "binary",
+      "title": "File"
+    },
+    "face_options": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Face Options"
+    },
+    "wait": {
+      "type": "boolean",
+      "title": "Wait",
+      "default": false
+    },
+    "project": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Project"
+    },
+    "project_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Project Id"
+    },
+    "folder": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Folder"
+    },
+    "folder_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Folder Id"
+    },
+    "tags": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Tags"
+    },
+    "datalake": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Datalake"
+    }
+  },
+  "type": "object",
+  "required": [
+    "file"
+  ],
+  "title": "Body_upload_images_faces_upload_post"
+}
+```
+
 <a id="model-budgetupdate"></a>
 
 ### BudgetUpdate
@@ -13748,7 +13951,7 @@ Esquema JSON completo:
 | --- | --- | --- | --- | --- |
 | `markdown` | sim | string |  |  |
 | `metadata` | sim | [DocumentMetadata](#model-documentmetadata) |  |  |
-| `image` | não | [ImageJobResult](#model-imagejobresult) / [ImageFullAnalysisResult](#model-imagefullanalysisresult) / null |  |  |
+| `image` | não | [ImageJobResult](#model-imagejobresult) / [ImageFullAnalysisResult](#model-imagefullanalysisresult) / [ImageFullV2Result](#model-imagefullv2result) / [FaceAnalysisResult](#model-faceanalysisresult) / null |  |  |
 | `exports` | não | object / null |  |  |
 | `assets` | não | array de object / null |  |  |
 
@@ -13771,6 +13974,12 @@ Esquema JSON completo:
         },
         {
           "$ref": "#/components/schemas/ImageFullAnalysisResult"
+        },
+        {
+          "$ref": "#/components/schemas/ImageFullV2Result"
+        },
+        {
+          "$ref": "#/components/schemas/FaceAnalysisResult"
         },
         {
           "type": "null"
@@ -19519,6 +19728,944 @@ Esquema JSON completo:
 }
 ```
 
+<a id="model-faceanalysisresult"></a>
+
+### FaceAnalysisResult
+
+| Campo | Obrigatório | Tipo | Padrões/limites | Descrição |
+| --- | --- | --- | --- | --- |
+| `detection` | sim | object | additionalProperties=true |  |
+| `faces` | não | array de [FaceRecord](#model-facerecord) |  |  |
+| `models` | não | array de [FaceModelInfo](#model-facemodelinfo) |  |  |
+| `request` | sim | object | additionalProperties=true |  |
+| `coverage` | sim | object | additionalProperties=true |  |
+| `steps` | sim | array de [FaceStepResult](#model-facestepresult) |  |  |
+| `operation` | não | string | default="face_analysis"; const="face_analysis" |  |
+| `schema_version` | não | string | default="face-result-v1"; const="face-result-v1" |  |
+| `profile` | não | string | default="image-faces-v1"; const="image-faces-v1" |  |
+| `analysis_status` | sim | string | enum=["completed", "partial", "failed", "cancelled"] |  |
+| `width` | sim | integer |  |  |
+| `height` | sim | integer |  |  |
+| `image_base64` | não | string / null |  |  |
+| `image_mime_type` | não | string | default="image/png" |  |
+| `duration_ms` | não | integer | default=0 |  |
+| `calls_started` | não | integer | default=0 |  |
+| `calls_by_provider` | não | object | additionalProperties={"type": "integer"} |  |
+| `reason_code` | não | string / null |  |  |
+| `source_sha256` | não | string | default="" |  |
+| `frame_policy` | não | string | default="first_frame" |  |
+
+Esquema JSON completo:
+
+```json
+{
+  "properties": {
+    "detection": {
+      "additionalProperties": true,
+      "type": "object",
+      "title": "Detection"
+    },
+    "faces": {
+      "items": {
+        "$ref": "#/components/schemas/FaceRecord"
+      },
+      "type": "array",
+      "title": "Faces"
+    },
+    "models": {
+      "items": {
+        "$ref": "#/components/schemas/FaceModelInfo"
+      },
+      "type": "array",
+      "title": "Models"
+    },
+    "request": {
+      "additionalProperties": true,
+      "type": "object",
+      "title": "Request"
+    },
+    "coverage": {
+      "additionalProperties": true,
+      "type": "object",
+      "title": "Coverage"
+    },
+    "steps": {
+      "items": {
+        "$ref": "#/components/schemas/FaceStepResult"
+      },
+      "type": "array",
+      "title": "Steps"
+    },
+    "operation": {
+      "type": "string",
+      "const": "face_analysis",
+      "title": "Operation",
+      "default": "face_analysis"
+    },
+    "schema_version": {
+      "type": "string",
+      "const": "face-result-v1",
+      "title": "Schema Version",
+      "default": "face-result-v1"
+    },
+    "profile": {
+      "type": "string",
+      "const": "image-faces-v1",
+      "title": "Profile",
+      "default": "image-faces-v1"
+    },
+    "analysis_status": {
+      "type": "string",
+      "enum": [
+        "completed",
+        "partial",
+        "failed",
+        "cancelled"
+      ],
+      "title": "Analysis Status"
+    },
+    "width": {
+      "type": "integer",
+      "title": "Width"
+    },
+    "height": {
+      "type": "integer",
+      "title": "Height"
+    },
+    "image_base64": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Image Base64"
+    },
+    "image_mime_type": {
+      "type": "string",
+      "title": "Image Mime Type",
+      "default": "image/png"
+    },
+    "duration_ms": {
+      "type": "integer",
+      "title": "Duration Ms",
+      "default": 0
+    },
+    "calls_started": {
+      "type": "integer",
+      "title": "Calls Started",
+      "default": 0
+    },
+    "calls_by_provider": {
+      "additionalProperties": {
+        "type": "integer"
+      },
+      "type": "object",
+      "title": "Calls By Provider"
+    },
+    "reason_code": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Reason Code"
+    },
+    "source_sha256": {
+      "type": "string",
+      "title": "Source Sha256",
+      "default": ""
+    },
+    "frame_policy": {
+      "type": "string",
+      "title": "Frame Policy",
+      "default": "first_frame"
+    }
+  },
+  "type": "object",
+  "required": [
+    "detection",
+    "request",
+    "coverage",
+    "steps",
+    "analysis_status",
+    "width",
+    "height"
+  ],
+  "title": "FaceAnalysisResult"
+}
+```
+
+<a id="model-faceanalyzerequest"></a>
+
+### FaceAnalyzeRequest
+
+| Campo | Obrigatório | Tipo | Padrões/limites | Descrição |
+| --- | --- | --- | --- | --- |
+| `image_base64` | sim | string |  | Imagem em base64. Um prefixo `data:image/png;base64,` é aceito e removido. Formatos: PNG, JPEG, WEBP, BMP, GIF, TIFF. |
+| `tags` | não | array de string / null |  | Tags do job (ex.: ["cliente-x", "nf"]). Viram minúsculas; até 20 de até 50 caracteres. |
+| `filename` | não | string / null |  | Nome de identificação opcional. |
+| `project` | não | string / null |  | Nome do projeto (get-or-add). Obrigatório, a menos que a API key esteja vinculada a um projeto. |
+| `project_id` | não | string / null |  | ID de um projeto existente (alternativa a `project`). |
+| `folder` | não | string / null |  | Nome da pasta no projeto (opcional, get-or-add, sem '/'). |
+| `folder_id` | não | string / null |  | ID de uma pasta existente do projeto. |
+| `face_options` | não | [FaceRequestOptions](#model-facerequestoptions) |  |  |
+| `wait` | não | boolean | default=false |  |
+| `datalake` | não | [Destination](#model-destination) / null |  |  |
+
+Esquema JSON completo:
+
+```json
+{
+  "properties": {
+    "image_base64": {
+      "type": "string",
+      "title": "Image Base64",
+      "description": "Imagem em base64. Um prefixo `data:image/png;base64,` é aceito e removido. Formatos: PNG, JPEG, WEBP, BMP, GIF, TIFF."
+    },
+    "tags": {
+      "anyOf": [
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Tags",
+      "description": "Tags do job (ex.: [\"cliente-x\", \"nf\"]). Viram minúsculas; até 20 de até 50 caracteres."
+    },
+    "filename": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Filename",
+      "description": "Nome de identificação opcional."
+    },
+    "project": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Project",
+      "description": "Nome do projeto (get-or-add). Obrigatório, a menos que a API key esteja vinculada a um projeto."
+    },
+    "project_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Project Id",
+      "description": "ID de um projeto existente (alternativa a `project`)."
+    },
+    "folder": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Folder",
+      "description": "Nome da pasta no projeto (opcional, get-or-add, sem '/')."
+    },
+    "folder_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Folder Id",
+      "description": "ID de uma pasta existente do projeto."
+    },
+    "face_options": {
+      "$ref": "#/components/schemas/FaceRequestOptions"
+    },
+    "wait": {
+      "type": "boolean",
+      "title": "Wait",
+      "default": false
+    },
+    "datalake": {
+      "anyOf": [
+        {
+          "$ref": "#/components/schemas/Destination"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "additionalProperties": false,
+  "type": "object",
+  "required": [
+    "image_base64"
+  ],
+  "title": "FaceAnalyzeRequest"
+}
+```
+
+<a id="model-faceanalyzeresponse"></a>
+
+### FaceAnalyzeResponse
+
+| Campo | Obrigatório | Tipo | Padrões/limites | Descrição |
+| --- | --- | --- | --- | --- |
+| `job_id` | sim | string |  |  |
+| `status` | sim | string |  |  |
+| `markdown` | sim | string |  |  |
+| `image` | sim | [FaceAnalysisResult](#model-faceanalysisresult) |  |  |
+
+Esquema JSON completo:
+
+```json
+{
+  "properties": {
+    "job_id": {
+      "type": "string",
+      "title": "Job Id"
+    },
+    "status": {
+      "type": "string",
+      "title": "Status"
+    },
+    "markdown": {
+      "type": "string",
+      "title": "Markdown"
+    },
+    "image": {
+      "$ref": "#/components/schemas/FaceAnalysisResult"
+    }
+  },
+  "type": "object",
+  "required": [
+    "job_id",
+    "status",
+    "markdown",
+    "image"
+  ],
+  "title": "FaceAnalyzeResponse"
+}
+```
+
+<a id="model-facemodelinfo"></a>
+
+### FaceModelInfo
+
+| Campo | Obrigatório | Tipo | Padrões/limites | Descrição |
+| --- | --- | --- | --- | --- |
+| `operation` | sim | string |  |  |
+| `provider` | sim | string |  |  |
+| `model_id` | sim | string |  |  |
+| `revision` | sim | string |  |  |
+| `sha256` | sim | string |  |  |
+| `runtime` | sim | string |  |  |
+| `runtime_version` | sim | string |  |  |
+| `device` | não | string | default="cpu"; const="cpu" |  |
+| `license` | sim | string |  |  |
+| `license_url` | sim | string |  |  |
+| `source_url` | sim | string |  |  |
+| `preprocessing` | não | object | additionalProperties=true |  |
+| `labels` | não | array de string |  |  |
+
+Esquema JSON completo:
+
+```json
+{
+  "properties": {
+    "operation": {
+      "type": "string",
+      "title": "Operation"
+    },
+    "provider": {
+      "type": "string",
+      "title": "Provider"
+    },
+    "model_id": {
+      "type": "string",
+      "title": "Model Id"
+    },
+    "revision": {
+      "type": "string",
+      "title": "Revision"
+    },
+    "sha256": {
+      "type": "string",
+      "title": "Sha256"
+    },
+    "runtime": {
+      "type": "string",
+      "title": "Runtime"
+    },
+    "runtime_version": {
+      "type": "string",
+      "title": "Runtime Version"
+    },
+    "device": {
+      "type": "string",
+      "const": "cpu",
+      "title": "Device",
+      "default": "cpu"
+    },
+    "license": {
+      "type": "string",
+      "title": "License"
+    },
+    "license_url": {
+      "type": "string",
+      "title": "License Url"
+    },
+    "source_url": {
+      "type": "string",
+      "title": "Source Url"
+    },
+    "preprocessing": {
+      "additionalProperties": true,
+      "type": "object",
+      "title": "Preprocessing"
+    },
+    "labels": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array",
+      "title": "Labels"
+    }
+  },
+  "type": "object",
+  "required": [
+    "operation",
+    "provider",
+    "model_id",
+    "revision",
+    "sha256",
+    "runtime",
+    "runtime_version",
+    "license",
+    "license_url",
+    "source_url"
+  ],
+  "title": "FaceModelInfo"
+}
+```
+
+<a id="model-facerecord"></a>
+
+### FaceRecord
+
+| Campo | Obrigatório | Tipo | Padrões/limites | Descrição |
+| --- | --- | --- | --- | --- |
+| `face_id` | sim | string |  |  |
+| `bbox` | sim | array de number | minItems=4; maxItems=4 |  |
+| `bbox_normalized` | sim | array de number | minItems=4; maxItems=4 |  |
+| `detection_confidence` | sim | number | minimum=0.0; maximum=1.0 |  |
+| `keypoints` | não | array de object |  |  |
+| `crop` | sim | array de integer | minItems=4; maxItems=4 |  |
+| `movements` | não | object | additionalProperties=true |  |
+| `expression` | não | object | additionalProperties=true |  |
+
+Esquema JSON completo:
+
+```json
+{
+  "properties": {
+    "face_id": {
+      "type": "string",
+      "title": "Face Id"
+    },
+    "bbox": {
+      "items": {
+        "type": "number"
+      },
+      "type": "array",
+      "maxItems": 4,
+      "minItems": 4,
+      "title": "Bbox"
+    },
+    "bbox_normalized": {
+      "items": {
+        "type": "number"
+      },
+      "type": "array",
+      "maxItems": 4,
+      "minItems": 4,
+      "title": "Bbox Normalized"
+    },
+    "detection_confidence": {
+      "type": "number",
+      "maximum": 1.0,
+      "minimum": 0.0,
+      "title": "Detection Confidence"
+    },
+    "keypoints": {
+      "items": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "type": "array",
+      "title": "Keypoints"
+    },
+    "crop": {
+      "items": {
+        "type": "integer"
+      },
+      "type": "array",
+      "maxItems": 4,
+      "minItems": 4,
+      "title": "Crop"
+    },
+    "movements": {
+      "additionalProperties": true,
+      "type": "object",
+      "title": "Movements"
+    },
+    "expression": {
+      "additionalProperties": true,
+      "type": "object",
+      "title": "Expression"
+    }
+  },
+  "type": "object",
+  "required": [
+    "face_id",
+    "bbox",
+    "bbox_normalized",
+    "detection_confidence",
+    "crop"
+  ],
+  "title": "FaceRecord"
+}
+```
+
+<a id="model-facerequestoptions"></a>
+
+### FaceRequestOptions
+
+| Campo | Obrigatório | Tipo | Padrões/limites | Descrição |
+| --- | --- | --- | --- | --- |
+| `mode` | não | string | default="expressions"; enum=["detection", "expressions"] |  |
+| `max_faces` | não | integer | default=5; minimum=1.0; maximum=10.0 |  |
+| `min_detection_confidence` | não | number | default=0.5; minimum=0.0; maximum=1.0 |  |
+| `min_suppression_threshold` | não | number | default=0.3; minimum=0.0; maximum=1.0 |  |
+| `min_face_presence_confidence` | não | number | default=0.5; minimum=0.0; maximum=1.0 |  |
+| `min_expression_score` | não | number | default=0.5; minimum=0.0; maximum=1.0 |  |
+| `deadline_seconds` | não | integer | default=300; minimum=1.0; maximum=300.0 |  |
+
+Esquema JSON completo:
+
+```json
+{
+  "properties": {
+    "mode": {
+      "type": "string",
+      "enum": [
+        "detection",
+        "expressions"
+      ],
+      "title": "Mode",
+      "default": "expressions"
+    },
+    "max_faces": {
+      "type": "integer",
+      "maximum": 10.0,
+      "minimum": 1.0,
+      "title": "Max Faces",
+      "default": 5
+    },
+    "min_detection_confidence": {
+      "type": "number",
+      "maximum": 1.0,
+      "minimum": 0.0,
+      "title": "Min Detection Confidence",
+      "default": 0.5
+    },
+    "min_suppression_threshold": {
+      "type": "number",
+      "maximum": 1.0,
+      "minimum": 0.0,
+      "title": "Min Suppression Threshold",
+      "default": 0.3
+    },
+    "min_face_presence_confidence": {
+      "type": "number",
+      "maximum": 1.0,
+      "minimum": 0.0,
+      "title": "Min Face Presence Confidence",
+      "default": 0.5
+    },
+    "min_expression_score": {
+      "type": "number",
+      "maximum": 1.0,
+      "minimum": 0.0,
+      "title": "Min Expression Score",
+      "default": 0.5
+    },
+    "deadline_seconds": {
+      "type": "integer",
+      "maximum": 300.0,
+      "minimum": 1.0,
+      "title": "Deadline Seconds",
+      "default": 300
+    }
+  },
+  "additionalProperties": false,
+  "type": "object",
+  "title": "FaceRequestOptions"
+}
+```
+
+<a id="model-facestepresult"></a>
+
+### FaceStepResult
+
+| Campo | Obrigatório | Tipo | Padrões/limites | Descrição |
+| --- | --- | --- | --- | --- |
+| `kind` | não | string | default="face"; const="face" |  |
+| `step_id` | sim | string |  |  |
+| `operation` | sim | string | enum=["face_detection", "face_movements", "face_expression_classification"] |  |
+| `face_id` | não | string / null |  |  |
+| `input` | não | object | additionalProperties=true |  |
+| `status` | sim | string | enum=["pending", "running", "succeeded", "failed", "skipped", "not_applicable"] |  |
+| `reason_code` | não | string / null |  |  |
+| `output` | não | object | additionalProperties=true |  |
+| `attempts` | não | integer | default=0 |  |
+| `duration_ms` | não | integer | default=0 |  |
+| `truncated` | não | boolean | default=false |  |
+
+Esquema JSON completo:
+
+```json
+{
+  "properties": {
+    "kind": {
+      "type": "string",
+      "const": "face",
+      "title": "Kind",
+      "default": "face"
+    },
+    "step_id": {
+      "type": "string",
+      "title": "Step Id"
+    },
+    "operation": {
+      "type": "string",
+      "enum": [
+        "face_detection",
+        "face_movements",
+        "face_expression_classification"
+      ],
+      "title": "Operation"
+    },
+    "face_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Face Id"
+    },
+    "input": {
+      "additionalProperties": true,
+      "type": "object",
+      "title": "Input"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "running",
+        "succeeded",
+        "failed",
+        "skipped",
+        "not_applicable"
+      ],
+      "title": "Status"
+    },
+    "reason_code": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Reason Code"
+    },
+    "output": {
+      "additionalProperties": true,
+      "type": "object",
+      "title": "Output"
+    },
+    "attempts": {
+      "type": "integer",
+      "title": "Attempts",
+      "default": 0
+    },
+    "duration_ms": {
+      "type": "integer",
+      "title": "Duration Ms",
+      "default": 0
+    },
+    "truncated": {
+      "type": "boolean",
+      "title": "Truncated",
+      "default": false
+    }
+  },
+  "type": "object",
+  "required": [
+    "step_id",
+    "operation",
+    "status"
+  ],
+  "title": "FaceStepResult"
+}
+```
+
+<a id="model-facialblock"></a>
+
+### FacialBlock
+
+| Campo | Obrigatório | Tipo | Padrões/limites | Descrição |
+| --- | --- | --- | --- | --- |
+| `detection` | sim | object | additionalProperties=true |  |
+| `faces` | não | array de [FaceRecord](#model-facerecord) |  |  |
+| `models` | não | array de [FaceModelInfo](#model-facemodelinfo) |  |  |
+| `request` | sim | object | additionalProperties=true |  |
+| `coverage` | sim | object | additionalProperties=true |  |
+| `steps` | sim | array de [FaceStepResult](#model-facestepresult) |  |  |
+
+Esquema JSON completo:
+
+```json
+{
+  "properties": {
+    "detection": {
+      "additionalProperties": true,
+      "type": "object",
+      "title": "Detection"
+    },
+    "faces": {
+      "items": {
+        "$ref": "#/components/schemas/FaceRecord"
+      },
+      "type": "array",
+      "title": "Faces"
+    },
+    "models": {
+      "items": {
+        "$ref": "#/components/schemas/FaceModelInfo"
+      },
+      "type": "array",
+      "title": "Models"
+    },
+    "request": {
+      "additionalProperties": true,
+      "type": "object",
+      "title": "Request"
+    },
+    "coverage": {
+      "additionalProperties": true,
+      "type": "object",
+      "title": "Coverage"
+    },
+    "steps": {
+      "items": {
+        "$ref": "#/components/schemas/FaceStepResult"
+      },
+      "type": "array",
+      "title": "Steps"
+    }
+  },
+  "type": "object",
+  "required": [
+    "detection",
+    "request",
+    "coverage",
+    "steps"
+  ],
+  "title": "FacialBlock"
+}
+```
+
+<a id="model-florencev2stepresult"></a>
+
+### FlorenceV2StepResult
+
+| Campo | Obrigatório | Tipo | Padrões/limites | Descrição |
+| --- | --- | --- | --- | --- |
+| `step_id` | sim | string |  |  |
+| `task` | sim | string | enum=["<CAPTION>", "<DETAILED_CAPTION>", "<MORE_DETAILED_CAPTION>", "<OCR>", "<OCR_WITH_REGION>", "<OD>", "<DENSE_REGION_CAPTION>", "<REGION_PROPOSAL>", "<CAPTION_TO_PHRASE_GROUNDING>", "<REFERRING_EXPRESSION_SEGMENTATION>", "<REGION_TO_SEGMENTATION>", "<OPEN_VOCABULARY_DETECTION>", "<REGION_TO_CATEGORY>", "<REGION_TO_DESCRIPTION>", "<REGION_TO_OCR>"] |  |
+| `input` | não | object | additionalProperties=true |  |
+| `status` | sim | string | enum=["pending", "running", "succeeded", "failed", "skipped", "not_applicable"] |  |
+| `reason_code` | não | string / null |  |  |
+| `text` | não | string | default="" |  |
+| `output` | não | object / string | default="" |  |
+| `regions` | não | array de [ImageRegion](#model-imageregion) |  |  |
+| `lines` | não | array de [OcrLine](#model-ocrline) |  |  |
+| `duration_ms` | não | integer | default=0 |  |
+| `truncated` | não | boolean | default=false |  |
+| `generation_metadata` | não | object | additionalProperties=true |  |
+| `attempts` | não | integer | default=0 |  |
+| `kind` | não | string | default="florence"; const="florence" |  |
+
+Esquema JSON completo:
+
+```json
+{
+  "properties": {
+    "step_id": {
+      "type": "string",
+      "title": "Step Id"
+    },
+    "task": {
+      "type": "string",
+      "enum": [
+        "<CAPTION>",
+        "<DETAILED_CAPTION>",
+        "<MORE_DETAILED_CAPTION>",
+        "<OCR>",
+        "<OCR_WITH_REGION>",
+        "<OD>",
+        "<DENSE_REGION_CAPTION>",
+        "<REGION_PROPOSAL>",
+        "<CAPTION_TO_PHRASE_GROUNDING>",
+        "<REFERRING_EXPRESSION_SEGMENTATION>",
+        "<REGION_TO_SEGMENTATION>",
+        "<OPEN_VOCABULARY_DETECTION>",
+        "<REGION_TO_CATEGORY>",
+        "<REGION_TO_DESCRIPTION>",
+        "<REGION_TO_OCR>"
+      ],
+      "title": "Task"
+    },
+    "input": {
+      "additionalProperties": true,
+      "type": "object",
+      "title": "Input"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "running",
+        "succeeded",
+        "failed",
+        "skipped",
+        "not_applicable"
+      ],
+      "title": "Status"
+    },
+    "reason_code": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Reason Code"
+    },
+    "text": {
+      "type": "string",
+      "title": "Text",
+      "default": ""
+    },
+    "output": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "string"
+        }
+      ],
+      "title": "Output",
+      "default": ""
+    },
+    "regions": {
+      "items": {
+        "$ref": "#/components/schemas/ImageRegion"
+      },
+      "type": "array",
+      "title": "Regions"
+    },
+    "lines": {
+      "items": {
+        "$ref": "#/components/schemas/OcrLine"
+      },
+      "type": "array",
+      "title": "Lines"
+    },
+    "duration_ms": {
+      "type": "integer",
+      "title": "Duration Ms",
+      "default": 0
+    },
+    "truncated": {
+      "type": "boolean",
+      "title": "Truncated",
+      "default": false
+    },
+    "generation_metadata": {
+      "additionalProperties": true,
+      "type": "object",
+      "title": "Generation Metadata"
+    },
+    "attempts": {
+      "type": "integer",
+      "title": "Attempts",
+      "default": 0
+    },
+    "kind": {
+      "type": "string",
+      "const": "florence",
+      "title": "Kind",
+      "default": "florence"
+    }
+  },
+  "type": "object",
+  "required": [
+    "step_id",
+    "task",
+    "status"
+  ],
+  "title": "FlorenceV2StepResult"
+}
+```
+
 <a id="model-folderref"></a>
 
 ### FolderRef
@@ -19548,6 +20695,72 @@ Esquema JSON completo:
     "name"
   ],
   "title": "FolderRef"
+}
+```
+
+<a id="model-fullfaceoptions"></a>
+
+### FullFaceOptions
+
+| Campo | Obrigatório | Tipo | Padrões/limites | Descrição |
+| --- | --- | --- | --- | --- |
+| `mode` | não | string | default="expressions"; const="expressions" |  |
+| `max_faces` | não | integer | default=5; minimum=1.0; maximum=5.0 |  |
+| `min_detection_confidence` | não | number | default=0.5; minimum=0.0; maximum=1.0 |  |
+| `min_suppression_threshold` | não | number | default=0.3; minimum=0.0; maximum=1.0 |  |
+| `min_face_presence_confidence` | não | number | default=0.5; minimum=0.0; maximum=1.0 |  |
+| `min_expression_score` | não | number | default=0.5; minimum=0.0; maximum=1.0 |  |
+
+Esquema JSON completo:
+
+```json
+{
+  "properties": {
+    "mode": {
+      "type": "string",
+      "const": "expressions",
+      "title": "Mode",
+      "default": "expressions"
+    },
+    "max_faces": {
+      "type": "integer",
+      "maximum": 5.0,
+      "minimum": 1.0,
+      "title": "Max Faces",
+      "default": 5
+    },
+    "min_detection_confidence": {
+      "type": "number",
+      "maximum": 1.0,
+      "minimum": 0.0,
+      "title": "Min Detection Confidence",
+      "default": 0.5
+    },
+    "min_suppression_threshold": {
+      "type": "number",
+      "maximum": 1.0,
+      "minimum": 0.0,
+      "title": "Min Suppression Threshold",
+      "default": 0.3
+    },
+    "min_face_presence_confidence": {
+      "type": "number",
+      "maximum": 1.0,
+      "minimum": 0.0,
+      "title": "Min Face Presence Confidence",
+      "default": 0.5
+    },
+    "min_expression_score": {
+      "type": "number",
+      "maximum": 1.0,
+      "minimum": 0.0,
+      "title": "Min Expression Score",
+      "default": 0.5
+    }
+  },
+  "additionalProperties": false,
+  "type": "object",
+  "title": "FullFaceOptions"
 }
 ```
 
@@ -21063,7 +22276,7 @@ Esquema JSON completo:
 | `job_id` | sim | string |  |  |
 | `status` | sim | string |  |  |
 | `markdown` | sim | string |  |  |
-| `image` | sim | [ImageFullAnalysisResult](#model-imagefullanalysisresult) |  |  |
+| `image` | sim | [ImageFullAnalysisResult](#model-imagefullanalysisresult) / [ImageFullV2Result](#model-imagefullv2result) |  |  |
 
 Esquema JSON completo:
 
@@ -21083,7 +22296,15 @@ Esquema JSON completo:
       "title": "Markdown"
     },
     "image": {
-      "$ref": "#/components/schemas/ImageFullAnalysisResult"
+      "anyOf": [
+        {
+          "$ref": "#/components/schemas/ImageFullAnalysisResult"
+        },
+        {
+          "$ref": "#/components/schemas/ImageFullV2Result"
+        }
+      ],
+      "title": "Image"
     }
   },
   "type": "object",
@@ -21103,6 +22324,8 @@ Esquema JSON completo:
 
 | Campo | Obrigatório | Tipo | Padrões/limites | Descrição |
 | --- | --- | --- | --- | --- |
+| `profile` | não | string | default="image-full-v1"; enum=["image-full-v1", "image-full-v2"] |  |
+| `faces` | não | [FullFaceOptions](#model-fullfaceoptions) / null |  |  |
 | `queries` | não | array de string / null |  |  |
 | `regions` | não | array de array de number / null |  |  |
 | `generation` | não | [VisionGenerationOptions](#model-visiongenerationoptions) |  |  |
@@ -21113,6 +22336,25 @@ Esquema JSON completo:
 ```json
 {
   "properties": {
+    "profile": {
+      "type": "string",
+      "enum": [
+        "image-full-v1",
+        "image-full-v2"
+      ],
+      "title": "Profile",
+      "default": "image-full-v1"
+    },
+    "faces": {
+      "anyOf": [
+        {
+          "$ref": "#/components/schemas/FullFaceOptions"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "queries": {
       "anyOf": [
         {
@@ -21382,6 +22624,249 @@ Esquema JSON completo:
     "status"
   ],
   "title": "ImageFullStepResult"
+}
+```
+
+<a id="model-imagefullv2result"></a>
+
+### ImageFullV2Result
+
+| Campo | Obrigatório | Tipo | Padrões/limites | Descrição |
+| --- | --- | --- | --- | --- |
+| `operation` | sim | string | const="full_analysis" |  |
+| `schema_version` | não | string | default="image-full-result-v2"; const="image-full-result-v2" |  |
+| `profile` | não | string | default="image-full-v2"; const="image-full-v2" |  |
+| `analysis_status` | sim | string | enum=["completed", "partial", "failed", "cancelled"] |  |
+| `task` | não | string | default="full" |  |
+| `task_label` | não | string | default="Full Analysis" |  |
+| `image_base64` | não | string / null |  |  |
+| `image_mime_type` | não | string | default="image/png" |  |
+| `width` | sim | integer |  |  |
+| `height` | sim | integer |  |  |
+| `model` | sim | [VisionModelInfo](#model-visionmodelinfo) |  |  |
+| `duration_ms` | sim | integer |  |  |
+| `description` | não | string | default="" |  |
+| `text` | não | string | default="" |  |
+| `lines` | não | array de [OcrLine](#model-ocrline) |  |  |
+| `regions` | não | array de [ImageRegion](#model-imageregion) |  |  |
+| `request` | não | object / null |  |  |
+| `coverage` | sim | object | additionalProperties=true |  |
+| `resolved_inputs` | não | object | additionalProperties=true |  |
+| `results` | sim | array de [FlorenceV2StepResult](#model-florencev2stepresult) / [FaceStepResult](#model-facestepresult) |  |  |
+| `calls_started` | não | integer | default=0 |  |
+| `reason_code` | não | string / null |  |  |
+| `source_sha256` | não | string | default="" |  |
+| `frame_policy` | não | string | default="first_frame" |  |
+| `models` | sim | array de [FaceModelInfo](#model-facemodelinfo) / object |  |  |
+| `faces` | sim | [FacialBlock](#model-facialblock) |  |  |
+| `calls_by_provider` | não | object | additionalProperties={"type": "integer"} |  |
+
+Esquema JSON completo:
+
+```json
+{
+  "properties": {
+    "operation": {
+      "type": "string",
+      "const": "full_analysis",
+      "title": "Operation"
+    },
+    "schema_version": {
+      "type": "string",
+      "const": "image-full-result-v2",
+      "title": "Schema Version",
+      "default": "image-full-result-v2"
+    },
+    "profile": {
+      "type": "string",
+      "const": "image-full-v2",
+      "title": "Profile",
+      "default": "image-full-v2"
+    },
+    "analysis_status": {
+      "type": "string",
+      "enum": [
+        "completed",
+        "partial",
+        "failed",
+        "cancelled"
+      ],
+      "title": "Analysis Status"
+    },
+    "task": {
+      "type": "string",
+      "title": "Task",
+      "default": "full"
+    },
+    "task_label": {
+      "type": "string",
+      "title": "Task Label",
+      "default": "Full Analysis"
+    },
+    "image_base64": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Image Base64"
+    },
+    "image_mime_type": {
+      "type": "string",
+      "title": "Image Mime Type",
+      "default": "image/png"
+    },
+    "width": {
+      "type": "integer",
+      "title": "Width"
+    },
+    "height": {
+      "type": "integer",
+      "title": "Height"
+    },
+    "model": {
+      "$ref": "#/components/schemas/VisionModelInfo"
+    },
+    "duration_ms": {
+      "type": "integer",
+      "title": "Duration Ms"
+    },
+    "description": {
+      "type": "string",
+      "title": "Description",
+      "default": ""
+    },
+    "text": {
+      "type": "string",
+      "title": "Text",
+      "default": ""
+    },
+    "lines": {
+      "items": {
+        "$ref": "#/components/schemas/OcrLine"
+      },
+      "type": "array",
+      "title": "Lines"
+    },
+    "regions": {
+      "items": {
+        "$ref": "#/components/schemas/ImageRegion"
+      },
+      "type": "array",
+      "title": "Regions"
+    },
+    "request": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Request"
+    },
+    "coverage": {
+      "additionalProperties": true,
+      "type": "object",
+      "title": "Coverage"
+    },
+    "resolved_inputs": {
+      "additionalProperties": true,
+      "type": "object",
+      "title": "Resolved Inputs"
+    },
+    "results": {
+      "items": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/FlorenceV2StepResult"
+          },
+          {
+            "$ref": "#/components/schemas/FaceStepResult"
+          }
+        ],
+        "discriminator": {
+          "propertyName": "kind",
+          "mapping": {
+            "face": "#/components/schemas/FaceStepResult",
+            "florence": "#/components/schemas/FlorenceV2StepResult"
+          }
+        }
+      },
+      "type": "array",
+      "title": "Results"
+    },
+    "calls_started": {
+      "type": "integer",
+      "title": "Calls Started",
+      "default": 0
+    },
+    "reason_code": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Reason Code"
+    },
+    "source_sha256": {
+      "type": "string",
+      "title": "Source Sha256",
+      "default": ""
+    },
+    "frame_policy": {
+      "type": "string",
+      "title": "Frame Policy",
+      "default": "first_frame"
+    },
+    "models": {
+      "items": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/FaceModelInfo"
+          },
+          {
+            "additionalProperties": true,
+            "type": "object"
+          }
+        ]
+      },
+      "type": "array",
+      "title": "Models"
+    },
+    "faces": {
+      "$ref": "#/components/schemas/FacialBlock"
+    },
+    "calls_by_provider": {
+      "additionalProperties": {
+        "type": "integer"
+      },
+      "type": "object",
+      "title": "Calls By Provider"
+    }
+  },
+  "type": "object",
+  "required": [
+    "operation",
+    "analysis_status",
+    "width",
+    "height",
+    "model",
+    "duration_ms",
+    "coverage",
+    "results",
+    "models",
+    "faces"
+  ],
+  "title": "ImageFullV2Result"
 }
 ```
 
@@ -25647,6 +27132,8 @@ alguma coisa descreve o processo que realmente carrega o modelo.
 | `generation_schema` | não | object | additionalProperties=true |  |
 | `generation_defaults` | não | object | additionalProperties=true |  |
 | `analysis_modes` | não | array de string | default=["single", "full"] |  |
+| `full_profiles` | não | array de object |  |  |
+| `faces` | não | object / null |  |  |
 | `full_profile` | não | string | default="image-full-v1" |  |
 | `full_limits` | não | object | default={"max_queries": 3, "max_regions": 4, "max_calls": 32, "deadline_seconds": 900}; additionalProperties=true |  |
 
@@ -25774,6 +27261,26 @@ Esquema JSON completo:
         "single",
         "full"
       ]
+    },
+    "full_profiles": {
+      "items": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "type": "array",
+      "title": "Full Profiles"
+    },
+    "faces": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Faces"
     },
     "full_profile": {
       "type": "string",

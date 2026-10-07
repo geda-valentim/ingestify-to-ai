@@ -831,6 +831,176 @@
         "x-access": "admin"
       }
     },
+    "/images/faces/capabilities": {
+      "get": {
+        "tags": [
+          "Vision"
+        ],
+        "summary": "Modelos, parâmetros e prontidão da análise facial",
+        "operationId": "capabilities_images_faces_capabilities_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "x-access": "user"
+      }
+    },
+    "/images/faces": {
+      "post": {
+        "tags": [
+          "Vision"
+        ],
+        "summary": "Detectar rostos e analisar expressões em uma imagem base64",
+        "operationId": "analyze_images_faces_post",
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "idempotency-key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FaceAnalyzeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/FaceAnalyzeResponse"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ImageFullQueuedResponse"
+                    }
+                  ],
+                  "title": "Response Analyze Images Faces Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "x-access": "user"
+      }
+    },
+    "/images/faces/upload": {
+      "post": {
+        "tags": [
+          "Vision"
+        ],
+        "summary": "Upload de imagem para detecção facial e expressões",
+        "operationId": "upload_images_faces_upload_post",
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "idempotency-key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_upload_images_faces_upload_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/FaceAnalyzeResponse"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ImageFullQueuedResponse"
+                    }
+                  ],
+                  "title": "Response Upload Images Faces Upload Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "x-access": "user"
+      }
+    },
     "/images/describe": {
       "post": {
         "tags": [
@@ -1305,7 +1475,7 @@
         "tags": [
           "Vision"
         ],
-        "summary": "Cancelar Full Analysis de imagem",
+        "summary": "Cancelar análise composta de imagem",
         "operationId": "cancel_full_image_images__job_id__cancel_post",
         "security": [
           {
@@ -16073,6 +16243,102 @@
         ],
         "title": "Body_upload_and_convert_upload_post"
       },
+      "Body_upload_images_faces_upload_post": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "format": "binary",
+            "title": "File"
+          },
+          "face_options": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Face Options"
+          },
+          "wait": {
+            "type": "boolean",
+            "title": "Wait",
+            "default": false
+          },
+          "project": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project"
+          },
+          "project_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project Id"
+          },
+          "folder": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Folder"
+          },
+          "folder_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Folder Id"
+          },
+          "tags": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tags"
+          },
+          "datalake": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Datalake"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file"
+        ],
+        "title": "Body_upload_images_faces_upload_post"
+      },
       "BudgetUpdate": {
         "properties": {
           "limit_usd": {
@@ -16679,6 +16945,12 @@
               },
               {
                 "$ref": "#/components/schemas/ImageFullAnalysisResult"
+              },
+              {
+                "$ref": "#/components/schemas/ImageFullV2Result"
+              },
+              {
+                "$ref": "#/components/schemas/FaceAnalysisResult"
               },
               {
                 "type": "null"
@@ -17545,6 +17817,743 @@
         ],
         "title": "Execute"
       },
+      "FaceAnalysisResult": {
+        "properties": {
+          "detection": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Detection"
+          },
+          "faces": {
+            "items": {
+              "$ref": "#/components/schemas/FaceRecord"
+            },
+            "type": "array",
+            "title": "Faces"
+          },
+          "models": {
+            "items": {
+              "$ref": "#/components/schemas/FaceModelInfo"
+            },
+            "type": "array",
+            "title": "Models"
+          },
+          "request": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Request"
+          },
+          "coverage": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Coverage"
+          },
+          "steps": {
+            "items": {
+              "$ref": "#/components/schemas/FaceStepResult"
+            },
+            "type": "array",
+            "title": "Steps"
+          },
+          "operation": {
+            "type": "string",
+            "const": "face_analysis",
+            "title": "Operation",
+            "default": "face_analysis"
+          },
+          "schema_version": {
+            "type": "string",
+            "const": "face-result-v1",
+            "title": "Schema Version",
+            "default": "face-result-v1"
+          },
+          "profile": {
+            "type": "string",
+            "const": "image-faces-v1",
+            "title": "Profile",
+            "default": "image-faces-v1"
+          },
+          "analysis_status": {
+            "type": "string",
+            "enum": [
+              "completed",
+              "partial",
+              "failed",
+              "cancelled"
+            ],
+            "title": "Analysis Status"
+          },
+          "width": {
+            "type": "integer",
+            "title": "Width"
+          },
+          "height": {
+            "type": "integer",
+            "title": "Height"
+          },
+          "image_base64": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Image Base64"
+          },
+          "image_mime_type": {
+            "type": "string",
+            "title": "Image Mime Type",
+            "default": "image/png"
+          },
+          "duration_ms": {
+            "type": "integer",
+            "title": "Duration Ms",
+            "default": 0
+          },
+          "calls_started": {
+            "type": "integer",
+            "title": "Calls Started",
+            "default": 0
+          },
+          "calls_by_provider": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Calls By Provider"
+          },
+          "reason_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason Code"
+          },
+          "source_sha256": {
+            "type": "string",
+            "title": "Source Sha256",
+            "default": ""
+          },
+          "frame_policy": {
+            "type": "string",
+            "title": "Frame Policy",
+            "default": "first_frame"
+          }
+        },
+        "type": "object",
+        "required": [
+          "detection",
+          "request",
+          "coverage",
+          "steps",
+          "analysis_status",
+          "width",
+          "height"
+        ],
+        "title": "FaceAnalysisResult"
+      },
+      "FaceAnalyzeRequest": {
+        "properties": {
+          "image_base64": {
+            "type": "string",
+            "title": "Image Base64",
+            "description": "Imagem em base64. Um prefixo `data:image/png;base64,` é aceito e removido. Formatos: PNG, JPEG, WEBP, BMP, GIF, TIFF."
+          },
+          "tags": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tags",
+            "description": "Tags do job (ex.: [\"cliente-x\", \"nf\"]). Viram minúsculas; até 20 de até 50 caracteres."
+          },
+          "filename": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Filename",
+            "description": "Nome de identificação opcional."
+          },
+          "project": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project",
+            "description": "Nome do projeto (get-or-add). Obrigatório, a menos que a API key esteja vinculada a um projeto."
+          },
+          "project_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project Id",
+            "description": "ID de um projeto existente (alternativa a `project`)."
+          },
+          "folder": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Folder",
+            "description": "Nome da pasta no projeto (opcional, get-or-add, sem '/')."
+          },
+          "folder_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Folder Id",
+            "description": "ID de uma pasta existente do projeto."
+          },
+          "face_options": {
+            "$ref": "#/components/schemas/FaceRequestOptions"
+          },
+          "wait": {
+            "type": "boolean",
+            "title": "Wait",
+            "default": false
+          },
+          "datalake": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Destination"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "image_base64"
+        ],
+        "title": "FaceAnalyzeRequest"
+      },
+      "FaceAnalyzeResponse": {
+        "properties": {
+          "job_id": {
+            "type": "string",
+            "title": "Job Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "markdown": {
+            "type": "string",
+            "title": "Markdown"
+          },
+          "image": {
+            "$ref": "#/components/schemas/FaceAnalysisResult"
+          }
+        },
+        "type": "object",
+        "required": [
+          "job_id",
+          "status",
+          "markdown",
+          "image"
+        ],
+        "title": "FaceAnalyzeResponse"
+      },
+      "FaceModelInfo": {
+        "properties": {
+          "operation": {
+            "type": "string",
+            "title": "Operation"
+          },
+          "provider": {
+            "type": "string",
+            "title": "Provider"
+          },
+          "model_id": {
+            "type": "string",
+            "title": "Model Id"
+          },
+          "revision": {
+            "type": "string",
+            "title": "Revision"
+          },
+          "sha256": {
+            "type": "string",
+            "title": "Sha256"
+          },
+          "runtime": {
+            "type": "string",
+            "title": "Runtime"
+          },
+          "runtime_version": {
+            "type": "string",
+            "title": "Runtime Version"
+          },
+          "device": {
+            "type": "string",
+            "const": "cpu",
+            "title": "Device",
+            "default": "cpu"
+          },
+          "license": {
+            "type": "string",
+            "title": "License"
+          },
+          "license_url": {
+            "type": "string",
+            "title": "License Url"
+          },
+          "source_url": {
+            "type": "string",
+            "title": "Source Url"
+          },
+          "preprocessing": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Preprocessing"
+          },
+          "labels": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Labels"
+          }
+        },
+        "type": "object",
+        "required": [
+          "operation",
+          "provider",
+          "model_id",
+          "revision",
+          "sha256",
+          "runtime",
+          "runtime_version",
+          "license",
+          "license_url",
+          "source_url"
+        ],
+        "title": "FaceModelInfo"
+      },
+      "FaceRecord": {
+        "properties": {
+          "face_id": {
+            "type": "string",
+            "title": "Face Id"
+          },
+          "bbox": {
+            "items": {
+              "type": "number"
+            },
+            "type": "array",
+            "maxItems": 4,
+            "minItems": 4,
+            "title": "Bbox"
+          },
+          "bbox_normalized": {
+            "items": {
+              "type": "number"
+            },
+            "type": "array",
+            "maxItems": 4,
+            "minItems": 4,
+            "title": "Bbox Normalized"
+          },
+          "detection_confidence": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Detection Confidence"
+          },
+          "keypoints": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Keypoints"
+          },
+          "crop": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array",
+            "maxItems": 4,
+            "minItems": 4,
+            "title": "Crop"
+          },
+          "movements": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Movements"
+          },
+          "expression": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Expression"
+          }
+        },
+        "type": "object",
+        "required": [
+          "face_id",
+          "bbox",
+          "bbox_normalized",
+          "detection_confidence",
+          "crop"
+        ],
+        "title": "FaceRecord"
+      },
+      "FaceRequestOptions": {
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": [
+              "detection",
+              "expressions"
+            ],
+            "title": "Mode",
+            "default": "expressions"
+          },
+          "max_faces": {
+            "type": "integer",
+            "maximum": 10.0,
+            "minimum": 1.0,
+            "title": "Max Faces",
+            "default": 5
+          },
+          "min_detection_confidence": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Min Detection Confidence",
+            "default": 0.5
+          },
+          "min_suppression_threshold": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Min Suppression Threshold",
+            "default": 0.3
+          },
+          "min_face_presence_confidence": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Min Face Presence Confidence",
+            "default": 0.5
+          },
+          "min_expression_score": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Min Expression Score",
+            "default": 0.5
+          },
+          "deadline_seconds": {
+            "type": "integer",
+            "maximum": 300.0,
+            "minimum": 1.0,
+            "title": "Deadline Seconds",
+            "default": 300
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "FaceRequestOptions"
+      },
+      "FaceStepResult": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "const": "face",
+            "title": "Kind",
+            "default": "face"
+          },
+          "step_id": {
+            "type": "string",
+            "title": "Step Id"
+          },
+          "operation": {
+            "type": "string",
+            "enum": [
+              "face_detection",
+              "face_movements",
+              "face_expression_classification"
+            ],
+            "title": "Operation"
+          },
+          "face_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Face Id"
+          },
+          "input": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Input"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "running",
+              "succeeded",
+              "failed",
+              "skipped",
+              "not_applicable"
+            ],
+            "title": "Status"
+          },
+          "reason_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason Code"
+          },
+          "output": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Output"
+          },
+          "attempts": {
+            "type": "integer",
+            "title": "Attempts",
+            "default": 0
+          },
+          "duration_ms": {
+            "type": "integer",
+            "title": "Duration Ms",
+            "default": 0
+          },
+          "truncated": {
+            "type": "boolean",
+            "title": "Truncated",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "step_id",
+          "operation",
+          "status"
+        ],
+        "title": "FaceStepResult"
+      },
+      "FacialBlock": {
+        "properties": {
+          "detection": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Detection"
+          },
+          "faces": {
+            "items": {
+              "$ref": "#/components/schemas/FaceRecord"
+            },
+            "type": "array",
+            "title": "Faces"
+          },
+          "models": {
+            "items": {
+              "$ref": "#/components/schemas/FaceModelInfo"
+            },
+            "type": "array",
+            "title": "Models"
+          },
+          "request": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Request"
+          },
+          "coverage": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Coverage"
+          },
+          "steps": {
+            "items": {
+              "$ref": "#/components/schemas/FaceStepResult"
+            },
+            "type": "array",
+            "title": "Steps"
+          }
+        },
+        "type": "object",
+        "required": [
+          "detection",
+          "request",
+          "coverage",
+          "steps"
+        ],
+        "title": "FacialBlock"
+      },
+      "FlorenceV2StepResult": {
+        "properties": {
+          "step_id": {
+            "type": "string",
+            "title": "Step Id"
+          },
+          "task": {
+            "type": "string",
+            "enum": [
+              "<CAPTION>",
+              "<DETAILED_CAPTION>",
+              "<MORE_DETAILED_CAPTION>",
+              "<OCR>",
+              "<OCR_WITH_REGION>",
+              "<OD>",
+              "<DENSE_REGION_CAPTION>",
+              "<REGION_PROPOSAL>",
+              "<CAPTION_TO_PHRASE_GROUNDING>",
+              "<REFERRING_EXPRESSION_SEGMENTATION>",
+              "<REGION_TO_SEGMENTATION>",
+              "<OPEN_VOCABULARY_DETECTION>",
+              "<REGION_TO_CATEGORY>",
+              "<REGION_TO_DESCRIPTION>",
+              "<REGION_TO_OCR>"
+            ],
+            "title": "Task"
+          },
+          "input": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Input"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "running",
+              "succeeded",
+              "failed",
+              "skipped",
+              "not_applicable"
+            ],
+            "title": "Status"
+          },
+          "reason_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason Code"
+          },
+          "text": {
+            "type": "string",
+            "title": "Text",
+            "default": ""
+          },
+          "output": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "title": "Output",
+            "default": ""
+          },
+          "regions": {
+            "items": {
+              "$ref": "#/components/schemas/ImageRegion"
+            },
+            "type": "array",
+            "title": "Regions"
+          },
+          "lines": {
+            "items": {
+              "$ref": "#/components/schemas/OcrLine"
+            },
+            "type": "array",
+            "title": "Lines"
+          },
+          "duration_ms": {
+            "type": "integer",
+            "title": "Duration Ms",
+            "default": 0
+          },
+          "truncated": {
+            "type": "boolean",
+            "title": "Truncated",
+            "default": false
+          },
+          "generation_metadata": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Generation Metadata"
+          },
+          "attempts": {
+            "type": "integer",
+            "title": "Attempts",
+            "default": 0
+          },
+          "kind": {
+            "type": "string",
+            "const": "florence",
+            "title": "Kind",
+            "default": "florence"
+          }
+        },
+        "type": "object",
+        "required": [
+          "step_id",
+          "task",
+          "status"
+        ],
+        "title": "FlorenceV2StepResult"
+      },
       "FolderRef": {
         "properties": {
           "id": {
@@ -17562,6 +18571,54 @@
           "name"
         ],
         "title": "FolderRef"
+      },
+      "FullFaceOptions": {
+        "properties": {
+          "mode": {
+            "type": "string",
+            "const": "expressions",
+            "title": "Mode",
+            "default": "expressions"
+          },
+          "max_faces": {
+            "type": "integer",
+            "maximum": 5.0,
+            "minimum": 1.0,
+            "title": "Max Faces",
+            "default": 5
+          },
+          "min_detection_confidence": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Min Detection Confidence",
+            "default": 0.5
+          },
+          "min_suppression_threshold": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Min Suppression Threshold",
+            "default": 0.3
+          },
+          "min_face_presence_confidence": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Min Face Presence Confidence",
+            "default": 0.5
+          },
+          "min_expression_score": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Min Expression Score",
+            "default": 0.5
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "FullFaceOptions"
       },
       "GpusUpdate": {
         "properties": {
@@ -18795,7 +19852,15 @@
             "title": "Markdown"
           },
           "image": {
-            "$ref": "#/components/schemas/ImageFullAnalysisResult"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ImageFullAnalysisResult"
+              },
+              {
+                "$ref": "#/components/schemas/ImageFullV2Result"
+              }
+            ],
+            "title": "Image"
           }
         },
         "type": "object",
@@ -18809,6 +19874,25 @@
       },
       "ImageFullOptions": {
         "properties": {
+          "profile": {
+            "type": "string",
+            "enum": [
+              "image-full-v1",
+              "image-full-v2"
+            ],
+            "title": "Profile",
+            "default": "image-full-v1"
+          },
+          "faces": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FullFaceOptions"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "queries": {
             "anyOf": [
               {
@@ -19033,6 +20117,210 @@
           "status"
         ],
         "title": "ImageFullStepResult"
+      },
+      "ImageFullV2Result": {
+        "properties": {
+          "operation": {
+            "type": "string",
+            "const": "full_analysis",
+            "title": "Operation"
+          },
+          "schema_version": {
+            "type": "string",
+            "const": "image-full-result-v2",
+            "title": "Schema Version",
+            "default": "image-full-result-v2"
+          },
+          "profile": {
+            "type": "string",
+            "const": "image-full-v2",
+            "title": "Profile",
+            "default": "image-full-v2"
+          },
+          "analysis_status": {
+            "type": "string",
+            "enum": [
+              "completed",
+              "partial",
+              "failed",
+              "cancelled"
+            ],
+            "title": "Analysis Status"
+          },
+          "task": {
+            "type": "string",
+            "title": "Task",
+            "default": "full"
+          },
+          "task_label": {
+            "type": "string",
+            "title": "Task Label",
+            "default": "Full Analysis"
+          },
+          "image_base64": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Image Base64"
+          },
+          "image_mime_type": {
+            "type": "string",
+            "title": "Image Mime Type",
+            "default": "image/png"
+          },
+          "width": {
+            "type": "integer",
+            "title": "Width"
+          },
+          "height": {
+            "type": "integer",
+            "title": "Height"
+          },
+          "model": {
+            "$ref": "#/components/schemas/VisionModelInfo"
+          },
+          "duration_ms": {
+            "type": "integer",
+            "title": "Duration Ms"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description",
+            "default": ""
+          },
+          "text": {
+            "type": "string",
+            "title": "Text",
+            "default": ""
+          },
+          "lines": {
+            "items": {
+              "$ref": "#/components/schemas/OcrLine"
+            },
+            "type": "array",
+            "title": "Lines"
+          },
+          "regions": {
+            "items": {
+              "$ref": "#/components/schemas/ImageRegion"
+            },
+            "type": "array",
+            "title": "Regions"
+          },
+          "request": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request"
+          },
+          "coverage": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Coverage"
+          },
+          "resolved_inputs": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Resolved Inputs"
+          },
+          "results": {
+            "items": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/FlorenceV2StepResult"
+                },
+                {
+                  "$ref": "#/components/schemas/FaceStepResult"
+                }
+              ],
+              "discriminator": {
+                "propertyName": "kind",
+                "mapping": {
+                  "face": "#/components/schemas/FaceStepResult",
+                  "florence": "#/components/schemas/FlorenceV2StepResult"
+                }
+              }
+            },
+            "type": "array",
+            "title": "Results"
+          },
+          "calls_started": {
+            "type": "integer",
+            "title": "Calls Started",
+            "default": 0
+          },
+          "reason_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason Code"
+          },
+          "source_sha256": {
+            "type": "string",
+            "title": "Source Sha256",
+            "default": ""
+          },
+          "frame_policy": {
+            "type": "string",
+            "title": "Frame Policy",
+            "default": "first_frame"
+          },
+          "models": {
+            "items": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/FaceModelInfo"
+                },
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Models"
+          },
+          "faces": {
+            "$ref": "#/components/schemas/FacialBlock"
+          },
+          "calls_by_provider": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Calls By Provider"
+          }
+        },
+        "type": "object",
+        "required": [
+          "operation",
+          "analysis_status",
+          "width",
+          "height",
+          "model",
+          "duration_ms",
+          "coverage",
+          "results",
+          "models",
+          "faces"
+        ],
+        "title": "ImageFullV2Result"
       },
       "ImageJobResult": {
         "properties": {
@@ -22268,6 +23556,26 @@
               "single",
               "full"
             ]
+          },
+          "full_profiles": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Full Profiles"
+          },
+          "faces": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Faces"
           },
           "full_profile": {
             "type": "string",

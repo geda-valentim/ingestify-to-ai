@@ -10,6 +10,7 @@
 # ---------------------------------------------------------------------------
 
 -r requirements-cpu.txt
+-r requirements-faces.txt
 
 # 4.56 is the first release shipping a NATIVE Florence2ForConditionalGeneration.
 # That native class is what lets us load the sha-pinned, weights-only

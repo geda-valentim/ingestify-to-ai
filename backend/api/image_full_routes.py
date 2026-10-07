@@ -39,18 +39,32 @@ def submit(request, http_request, image_bytes, filename, current_user, db, tags,
     settings = get_settings()
     key = http_request.headers.get('Idempotency-Key')
     if not key or not key.strip() or len(key) > 128:
-        raise HTTPException(422, 'Idempotency-Key é obrigatória para Full Analysis (1..128 caracteres)')
+        raise HTTPException(422, 'Idempotency-Key é obrigatória para análise composta (1..128 caracteres)')
     mime = _validate_image_bytes(image_bytes)
     name = _safe_filename(filename, mime)
     key_hash = hashlib.sha256(key.encode()).hexdigest()
-    raw_options = request.full_options.model_dump(mode='json')
+    standalone_faces = hasattr(request, 'face_options')
+    mode = 'faces' if standalone_faces else 'full'
+    raw_options = request.face_options.effective() if standalone_faces else request.full_options.model_dump(mode='json')
     request_hash = fingerprint({'image_sha256': hashlib.sha256(image_bytes).hexdigest(), 'filename': name,
-        'options': raw_options, 'location': {'project': request.project, 'project_id': request.project_id,
+        'mode': mode, 'options': raw_options, 'location': {'project': request.project, 'project_id': request.project_id,
         'folder': request.folder, 'folder_id': request.folder_id}, 'tags': tags,
         'datalake': request.datalake.model_dump(mode='json') if request.datalake else None})
     previous = replay(db, current_user.id, key_hash, request_hash)
     if previous:
         return previous
+    face_models = []
+    if standalone_faces or raw_options.get('profile') == 'image-full-v2':
+        from api.face_routes import require_faces
+        face_models = require_faces(raw_options['mode'] if standalone_faces else 'expressions')['models']
+        if not standalone_faces:
+            from api.image_routes import _read_capabilities_heartbeat
+            try:
+                native = _read_capabilities_heartbeat() or {}
+            except Exception:
+                native = {}
+            if not native.get('dependencies_installed') or not native.get('model_downloaded'):
+                raise HTTPException(503, 'Florence não está pronto para Full Analysis v2')
     try:
         destination = prepare_destination(db, current_user.id, request.datalake)
     except LookupError as exc:
@@ -62,13 +76,17 @@ def submit(request, http_request, image_bytes, filename, current_user, db, tags,
     storage = get_minio_client()
     source_path = f'images/{job_id}/source'
     options = dict(raw_options)
-    options['generation']['max_new_tokens'] = options['generation']['max_new_tokens'] or settings.vision_max_new_tokens
-    options['generation']['num_beams'] = options['generation']['num_beams'] or settings.vision_num_beams
+    if not standalone_faces:
+        options['generation']['max_new_tokens'] = options['generation']['max_new_tokens'] or settings.vision_max_new_tokens
+        options['generation']['num_beams'] = options['generation']['num_beams'] or settings.vision_num_beams
     now = datetime.utcnow()
-    deadline_seconds = min(options['deadline_seconds'], settings.vision_full_task_timeout_seconds, 900)
-    configuration = {'mode': 'full', 'full_options': options, 'provider': settings.vision_provider,
+    deadline_seconds = min(options['deadline_seconds'], 300 if standalone_faces else settings.vision_full_task_timeout_seconds, 300 if standalone_faces else 900)
+    options['deadline_seconds'] = deadline_seconds
+    configuration = {'mode': mode, ('face_options' if standalone_faces else 'full_options'): options, 'provider': settings.vision_provider,
                      'model': {'model_id': settings.vision_model_id, 'revision': settings.vision_model_revision,
                                'device': 'pending', 'dtype': 'pending'}}
+    if face_models:
+        configuration['face_models'] = face_models
     try:
         job = Job(id=job_id, user_id=current_user.id, filename=name, name=name, source_type='image',
             mime_type=mime, file_size_bytes=len(image_bytes), file_checksum=hashlib.sha256(image_bytes).hexdigest(),
@@ -77,10 +95,11 @@ def submit(request, http_request, image_bytes, filename, current_user, db, tags,
         db.add(job)
         db.flush()
         set_job_tags(job, tags)
-        save_configuration(db, job, operation='image', options=configuration, provider=settings.vision_provider, model=settings.vision_model_id)
+        save_configuration(db, job, operation='image', options=configuration, provider='facial' if standalone_faces else settings.vision_provider, model='enet_b0_8_best_afew' if standalone_faces else settings.vision_model_id)
         bind_destination(db, job, destination)
         db.add(Submission(user_id=current_user.id, key_hash=key_hash, request_hash=request_hash, job_id=job_id))
-        db.add(Run(job_id=job_id, options=configuration, source_path=source_path,
+        from shared.face_analysis import profile
+        db.add(Run(job_id=job_id, profile=profile(configuration), options=configuration, source_path=source_path,
                    deadline_at=now+timedelta(seconds=deadline_seconds), dispatch_after=now))
         db.flush()  # Unique idempotency key owns this transaction before object write.
         if not storage.upload_file(bucket_name=storage.bucket_results, object_name=source_path,
@@ -118,7 +137,9 @@ async def run_full(request, http_request, image_bytes, filename, user, db, tags,
             if job and job.status.value in TERMINAL and job.minio_result_path:
                 storage = get_minio_client()
                 payload = json.loads(await run_in_threadpool(storage.download_file, storage.bucket_results, job.minio_result_path))
-                return ImageFullAnalyzeResponse(job_id=job_id, status=job.status.value, **payload)
+                from shared.schemas import FaceAnalyzeResponse
+                response = FaceAnalyzeResponse if hasattr(request, 'face_options') else ImageFullAnalyzeResponse
+                return response(job_id=job_id, status=job.status.value, **payload)
             await asyncio.sleep(.25)
         raise HTTPException(504, {'error_code': 'VISION_TIMEOUT', 'message': 'Full Analysis continua processando',
             'job_id': job_id, 'poll_url': f'/jobs/{job_id}', 'result_url': f'/jobs/{job_id}/result'})

@@ -1303,7 +1303,7 @@ def _job_status_with_db_fallback(redis_client, job_id: str, owned_job: Optional[
 
     A child may be authorized by its parent's row, which is never its status.
     """
-    full = owned_job is not None and owned_job.source_type == 'image' and owned_job.configuration_row and owned_job.configuration_row.options.get('mode') == 'full'
+    full = owned_job is not None and owned_job.source_type == 'image' and owned_job.configuration_row and owned_job.configuration_row.options.get('mode') in ('full', 'faces')
     status = None if full else redis_client.get_job_status(job_id)
     if owned_job is None or owned_job.id != job_id:
         return status
@@ -1347,7 +1347,7 @@ async def get_job_status(
     # Get job status from Redis (real-time data)
     status_data = _job_status_with_db_fallback(redis_client, job_id, owned_job)
 
-    if owned_job and owned_job.configuration_row and owned_job.configuration_row.options.get('mode') == 'full' and status_data and status_data['status'] == 'pending':
+    if owned_job and owned_job.configuration_row and owned_job.configuration_row.options.get('mode') in ('full', 'faces') and status_data and status_data['status'] == 'pending':
         status_data['status'] = 'queued'
 
     if owned_job is not None and owned_job.id == job_id:
@@ -1791,7 +1791,7 @@ async def get_job_result(
                     raise HTTPException(400, detail="Sessão live não concluída")
                 live_generation = live.generation
 
-    if owned_job and owned_job.source_type == 'image' and owned_job.configuration_row and owned_job.configuration_row.options.get('mode') == 'full':
+    if owned_job and owned_job.source_type == 'image' and owned_job.configuration_row and owned_job.configuration_row.options.get('mode') in ('full', 'faces'):
         from shared.image_full import TERMINAL
         if owned_job.status.value not in TERMINAL:
             return JSONResponse(status_code=202, content={'job_id': job_id, 'status': owned_job.status.value,

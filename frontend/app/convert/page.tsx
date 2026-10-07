@@ -27,6 +27,8 @@ import {
 import { FileUpload } from "@/components/upload/file-upload";
 import { DocumentOptionsFields } from "@/components/upload/document-options";
 import { ModelOptions } from "@/components/upload/model-options";
+import { FaceOptionsFields } from "@/components/upload/face-options";
+import type { FaceOptions } from "@/types/faces";
 import { ImageRegionPicker } from "@/components/upload/image-region-picker";
 import { TagInput } from "@/components/tag-input";
 import { Input } from "@/components/ui/input";
@@ -84,10 +86,13 @@ function ConversionWorkspace() {
   const [imageEngine, setImageEngine] = useState<"vision" | "docling">("vision");
   const [externalProcessing, setExternalProcessing] = useState<"document" | "audio">("document");
   const [lakeKey, setLakeKey] = useState("");
-  const [imageOperation, setImageOperation] = useState<"describe" | "ocr" | "analyze" | "full">("describe");
+  const [imageOperation, setImageOperation] = useState<"describe" | "ocr" | "analyze" | "full" | "faces">("describe");
   const [imageTask, setImageTask] = useState<CaptionTask | "">("");
   const [analysisTask, setAnalysisTask] = useState<VisionTask>("<OD>");
   const [imageTextInput, setImageTextInput] = useState("");
+  const [faceOptions, setFaceOptions] = useState<FaceOptions>({});
+  const [fullProfile, setFullProfile] = useState<"image-full-v1" | "image-full-v2">("image-full-v1");
+  const fullProfileChosen = useRef(false);
   const [fullQueries, setFullQueries] = useState("");
   const [imageRegion, setImageRegion] = useState<number[] | null>(null);
   const [imageGeneration, setImageGeneration] = useState<Record<string, unknown>>({});
@@ -122,12 +127,27 @@ function ConversionWorkspace() {
     queryKey: ["image-capabilities", token], queryFn: jobsApi.imageCapabilities,
     enabled: !!token && isImage, staleTime: 30_000,
   });
+  const faceCapabilities = useQuery({ queryKey: ["face-capabilities", token], queryFn: jobsApi.faceCapabilities,
+    enabled: !!token && isImage, staleTime: 30_000 });
+  useEffect(() => {
+    if (!fullProfileChosen.current && imageCapabilities.data?.full_profiles) {
+      if (imageCapabilities.data.full_profiles.some(p => p.profile === "image-full-v2" && p.ready)) setFullProfile("image-full-v2");
+      fullProfileChosen.current = true;
+    }
+  }, [imageCapabilities.data]);
+  const needsFaces = imageOperation === "faces" || (imageOperation === "full" && fullProfile === "image-full-v2");
+  const faceMode = imageOperation === "full" ? "expressions" : faceOptions.mode ?? "expressions";
+  const faceStages = faceCapabilities.data?.stages;
+  const faceUnavailable = needsFaces && (faceCapabilities.isPending || faceCapabilities.isError || !faceCapabilities.data?.enabled || !faceStages?.face_detection?.ready ||
+    (faceMode === "expressions" && (!faceStages?.face_movements?.ready || !faceStages?.face_expression_classification?.ready)));
+  const faceInputError = needsFaces && Object.entries(faceOptions).some(([key,value]) => key !== "mode" &&
+    (typeof value !== "number" || !Number.isFinite(value) || (key === "max_faces" ? !Number.isInteger(value) || value < 1 || value > (imageOperation === "full" ? 5 : 10) : key === "deadline_seconds" ? !Number.isInteger(value) || value < 1 || value > 300 : value < 0 || value > 1)));
   const imageSizeError = isImage && imageCapabilities.data && selectedFile!.size > imageCapabilities.data.max_image_size_mb * 1024 * 1024;
-  const imageUnavailable = isImage && (imageCapabilities.isPending || imageCapabilities.isError || !imageCapabilities.data?.enabled || !imageCapabilities.data?.dependencies_installed || !imageCapabilities.data?.model_downloaded);
+  const imageUnavailable = isImage && (faceUnavailable || (imageOperation !== "faces" && (imageCapabilities.isPending || imageCapabilities.isError || !imageCapabilities.data?.enabled || !imageCapabilities.data?.dependencies_installed || !imageCapabilities.data?.model_downloaded)));
   const analysisTaskInfo = imageCapabilities.data?.tasks?.find((item) => item.task === analysisTask);
   const fullQueryValues = fullQueries.split("\n").map(query => query.trim()).filter(Boolean);
   const fullInputError = isImage && imageOperation === "full" && (fullQueryValues.length > 3 || fullQueryValues.join(". ").length > 2000);
-  const imageInputError = fullInputError || (isImage && imageOperation === "analyze" && (
+  const imageInputError = faceInputError || fullInputError || (isImage && imageOperation === "analyze" && (
     !analysisTaskInfo || (analysisTaskInfo.input === "text" && !imageTextInput.trim()) ||
     (analysisTaskInfo.input === "region" && (!imageRegion || imageRegion[0] >= imageRegion[2] || imageRegion[1] >= imageRegion[3]))));
   const [customName, setCustomName] = useState("");
@@ -146,7 +166,7 @@ function ConversionWorkspace() {
     queryFn: () => datalakeApi.objects(lakeSource!.connection_id, lakeSource!.bucket, lakeSource!.prefix),
     enabled: !!token && !!lakeSource?.bucket });
   const [partitionValid, setPartitionValid] = useState(true);
-  const validDestination = (isImage && imageOperation !== "full") || !destination || (!!destination.bucket.trim() && partitionValid);
+  const validDestination = (isImage && imageOperation !== "full" && imageOperation !== "faces") || !destination || (!!destination.bucket.trim() && partitionValid);
 
   const projectsQuery = useProjects();
   const projects = projectsQuery.data?.projects ?? [];
@@ -256,14 +276,17 @@ function ConversionWorkspace() {
         image_text_input: imageOperation === "analyze" && analysisTaskInfo?.input === "text" ? imageTextInput.trim() : undefined,
         image_region: imageOperation === "analyze" && analysisTaskInfo?.input === "region" ? imageRegion ?? undefined : undefined,
         image_generation: imageGeneration,
-        ...(imageOperation === "full" && destination ? { datalake: destination } : {}),
+        ...((imageOperation === "full" || imageOperation === "faces") && destination ? { datalake: destination } : {}),
+        face_options: imageOperation === "faces" ? faceOptions : undefined,
         image_full_options: imageOperation === "full" ? {
+          profile: fullProfile,
+          ...(fullProfile === "image-full-v2" ? { faces: Object.fromEntries(Object.entries({ ...faceOptions, mode: "expressions" }).filter(([key]) => key !== "deadline_seconds")) } : {}),
           ...(fullQueries.trim() ? { queries: fullQueries.split("\n").map(q => q.trim()).filter(Boolean) } : {}),
           ...(imageRegion ? { regions: [imageRegion] } : {}),
         } : undefined,
       } : destination ? { datalake: destination } : {}),
     };
-    if (isImage && imageOperation === "full") {
+    if (isImage && (imageOperation === "full" || imageOperation === "faces")) {
       const signature = JSON.stringify({ ...request, file: undefined });
       if (!fullSubmission.current || fullSubmission.current.file !== selectedFile || fullSubmission.current.signature !== signature) {
         fullSubmission.current = { file: selectedFile, signature, key: crypto.randomUUID() };
@@ -382,7 +405,7 @@ function ConversionWorkspace() {
               {isDocument && documentCapabilities.data && <DocumentOptionsFields capabilities={documentCapabilities.data} preset={documentPreset} onPreset={setDocumentPreset} value={documentOptions} onChange={setDocumentOptions} disabled={uploadMutation.isPending} onValid={setDocumentOptionsValid} />}
 
               <Tabs value={sourceTab} onValueChange={setSourceTab} className="w-full">
-                {(!isImage || imageOperation === "full") && <DatalakeDestinationFields value={destination} onChange={setDestination} disabled={uploadMutation.isPending} context={{ project_id: project?.id ?? (project ? "novo-projeto" : null), folder_id: folder?.id ?? (folder ? "nova-pasta" : null), source_type: sourceTab === "file" && selectedFile ? uploadSourceType(selectedFile.name) : sourceTab }} onValid={setPartitionValid} />}
+                {(!isImage || imageOperation === "full" || imageOperation === "faces") && <DatalakeDestinationFields value={destination} onChange={setDestination} disabled={uploadMutation.isPending} context={{ project_id: project?.id ?? (project ? "novo-projeto" : null), folder_id: folder?.id ?? (folder ? "nova-pasta" : null), source_type: sourceTab === "file" && selectedFile ? uploadSourceType(selectedFile.name) : sourceTab }} onValid={setPartitionValid} />}
                 <TabsList className="mt-4 flex h-auto w-full flex-wrap gap-1">
                   <TabsTrigger value="file">
                     <UploadIcon className="h-4 w-4 mr-2" />
@@ -443,11 +466,12 @@ function ConversionWorkspace() {
                     <div className="space-y-3 rounded-lg border p-4">
                       <div className="space-y-2">
                         <Label htmlFor="image-operation">Processamento da imagem</Label>
-                        <select id="image-operation" value={imageOperation} onChange={(e) => setImageOperation(e.target.value as "describe" | "ocr" | "analyze" | "full")} disabled={uploadMutation.isPending} className="h-10 w-full rounded-md border bg-background px-3 text-sm">
+                        <select id="image-operation" value={imageOperation} onChange={(e) => setImageOperation(e.target.value as "describe" | "ocr" | "analyze" | "full" | "faces")} disabled={uploadMutation.isPending} className="h-10 w-full rounded-md border bg-background px-3 text-sm">
                           <option value="describe">Descrever imagem</option>
                           <option value="ocr">Extrair texto (OCR com regiões)</option>
                           <option value="analyze">Detecção, segmentação e outras análises</option>
                           <option value="full">Full Analysis · todas as capacidades de visão</option>
+                          <option value="faces">Rostos e expressões</option>
                         </select>
                       </div>
                       {imageOperation === "describe" && imageCapabilities.data && (
@@ -471,9 +495,14 @@ function ConversionWorkspace() {
                         {analysisTaskInfo?.input === "region" && selectedFile && <ImageRegionPicker file={selectedFile} region={imageRegion} onChange={setImageRegion} disabled={uploadMutation.isPending} />}
                         {imageInputError && <p className="text-xs text-muted-foreground">Preencha a entrada exigida pela tarefa escolhida.</p>}
                       </div>}
+                      {imageOperation === "faces" && <FaceOptionsFields value={faceOptions} onChange={setFaceOptions} disabled={uploadMutation.isPending} />}
                       {imageOperation === "full" && <div className="space-y-3 rounded border p-3">
                         <p className="text-sm">Descrições, texto, objetos, regiões e segmentações em uma execução. A imagem basta: consultas e regiões são selecionadas automaticamente.</p>
-                        <p className="text-xs text-muted-foreground">15 tarefas de visão; até 3 consultas, 4 regiões e 32 chamadas. Pode demorar mais. O resultado mostra cobertura e limites.</p>
+                        <label className="block space-y-1 text-sm">Perfil do Full Analysis<select aria-label="Perfil do Full Analysis" value={fullProfile} onChange={e => { fullProfileChosen.current = true; setFullProfile(e.target.value as typeof fullProfile); }} className="block h-10 w-full rounded border bg-background px-3">
+                          <option value="image-full-v1">Florence · 15 famílias</option><option value="image-full-v2">Florence + rostos e expressões · 18 famílias</option>
+                        </select></label>
+                        {fullProfile === "image-full-v2" && <FaceOptionsFields full value={faceOptions} onChange={setFaceOptions} disabled={uploadMutation.isPending} />}
+                        <p className="text-xs text-muted-foreground">{fullProfile === "image-full-v2" ? "18 famílias; até 5 rostos e 54 chamadas incluindo recuperação." : "15 tarefas de visão; até 3 consultas, 4 regiões e 32 chamadas."} Pode demorar mais. O resultado mostra cobertura e limites.</p>
                         <details className="space-y-3"><summary className="cursor-pointer text-sm font-medium">Consultas e região de interesse (opcional)</summary>
                           <label htmlFor="full-queries" className="text-sm">Objetos ou expressões, uma por linha (até 3)</label>
                           <textarea id="full-queries" value={fullQueries} onChange={event => { setFullQueries(event.target.value);  }} className="w-full rounded border bg-background p-2" maxLength={2000} placeholder="a red car" />
@@ -482,14 +511,14 @@ function ConversionWorkspace() {
                           <button type="button" className="text-xs underline" onClick={() => { setFullQueries(""); setImageRegion(null);  }}>Usar seleção automática</button>
                         </details>
                       </div>}
-                      {imageCapabilities.data?.generation_schema && <details className="space-y-3 rounded border p-3">
+                      {imageOperation !== "faces" && imageCapabilities.data?.generation_schema && <details className="space-y-3 rounded border p-3">
                         <summary className="cursor-pointer text-sm font-medium">Opções de geração</summary>
                         <ModelOptions schema={imageCapabilities.data.generation_schema} defaults={imageCapabilities.data.generation_defaults} value={imageGeneration} onChange={value => { setImageGeneration(value);  }} disabled={uploadMutation.isPending} />
                         <button type="button" className="text-xs underline" onClick={() => setImageGeneration({})}>Restaurar padrões do serviço</button>
                       </details>}
                       <p className="text-xs text-muted-foreground">{imageCapabilities.data ? `Limite: ${imageCapabilities.data.max_image_size_mb} MB. ` : "Verificando disponibilidade… "}O nome do arquivo identifica o job. Imagens são salvas no projeto; Full Analysis também permite exportação para datalake quando um destino é selecionado.</p>
                       {imageSizeError && <p role="alert" className="text-sm text-destructive">A imagem excede o limite de tamanho.</p>}
-                      {imageUnavailable && !imageCapabilities.isPending && <p role="alert" className="text-sm text-destructive">Processamento de imagens indisponível. {imageCapabilities.data?.reason || formatApiError(imageCapabilities.error, "Verifique a disponibilidade do serviço.")}</p>}
+                      {imageUnavailable && !imageCapabilities.isPending && <p role="alert" className="text-sm text-destructive">Processamento de imagens indisponível. {(faceUnavailable ? faceCapabilities.data?.reason || "Modelos faciais indisponíveis neste worker." : imageCapabilities.data?.reason) || formatApiError(imageCapabilities.error, "Verifique a disponibilidade do serviço.")}</p>}
                     </div>
                   )}
 

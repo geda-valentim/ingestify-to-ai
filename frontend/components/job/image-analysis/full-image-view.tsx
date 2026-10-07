@@ -13,9 +13,11 @@ import { StepDetails } from "./step-details";
 export function FullImageView({
   image,
   fileName,
+  showSummary = true,
 }: {
   image: ImageFullAnalysisResult;
   fileName: string;
+  showSummary?: boolean;
 }) {
   const [stepId, setStepId] = useState(defaultStep(image)?.step_id);
   const [activeRegion, setActiveRegion] = useState<number | null>(null);
@@ -36,7 +38,7 @@ export function FullImageView({
   };
   return (
     <div className="min-w-0 space-y-5">
-      <AnalysisSummary image={image} fileName={fileName} />
+      {showSummary && <AnalysisSummary image={image} fileName={fileName} />}
       <div className="grid min-w-0 gap-5 lg:grid-cols-[200px_minmax(0,1fr)] xl:grid-cols-[220px_minmax(0,1fr)]">
         <FamilyNavigation
           families={image.coverage.families}

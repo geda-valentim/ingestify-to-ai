@@ -1,4 +1,45 @@
-# Visão: descrição, OCR e análise de imagens (Florence-2)
+# Visão: descrição, OCR, Full Analysis e rostos/expressões
+
+## Rostos e expressões
+
+`POST /images/faces` (JSON) e `POST /images/faces/upload` (multipart) oferecem
+detecção simples (`face_options.mode=detection`) ou detecção, movimentos e
+expressão estimada (`expressions`, padrão). Consulte
+`GET /images/faces/capabilities` para disponibilidade por etapa, modelos e schema.
+Ambas as criações exigem `Idempotency-Key`, localização de projeto e imagem;
+replay devolve o mesmo job. `/jobs/{id}/result` conserva o resultado após F5/Redis expirado.
+
+MediaPipe fornece caixas/confiança/keypoints e landmarks/blendshapes. O modelo
+ONNX EmotiEffLib fixado oferece oito classes de expressão. Scores são estimativas
+não calibradas de expressão visível, sem determinar estado emocional interno.
+IDs de rosto são locais ao job; não existe reconhecimento de identidade.
+Falhas e classificações inconclusivas são distintas de detecção vazia.
+
+Full `image-full-v2` inclui as 15 famílias Florence e três faciais. Envie
+`full_options.profile=image-full-v2`; `full_options.faces` permite thresholds e
+até cinco rostos. O prazo único é de até 900s e o teto é 54 invocações incluindo
+recuperação (32 Florence + 22 faciais). Omissão do perfil conserva v1. Operação
+específica aceita até dez rostos, até 42 invocações e prazo de até 300s.
+Campos exclusivos de expressão são recusados em `detection`; prazo dentro de
+`faces` é recusado no Full. Limites e omissões ficam visíveis nos resultados.
+
+Ativação administrada, após aplicar as migrações de imagem:
+
+1. Instale `backend/requirements-faces.txt` no worker e as bibliotecas nativas
+   `libegl1`/`libgles2` (incluídas no Dockerfile do worker).
+2. Execute `python scripts/download_face_models.py --destination /models/faces`
+   em ambiente com as dependências do backend. Preserve esse diretório num volume
+   persistente acessível ao usuário do worker; o instalador verifica todos os SHA-256.
+3. Configure `FACE_MODEL_CACHE_DIR=/models/faces` e `FACE_ANALYSIS_ENABLED=true`
+   na API e nos workers que atendem a fila de visão; reinicie-os e confira capabilities.
+
+Os pesos não são baixados durante uma requisição. O manifesto
+[`face_models.json`](../../backend/shared/face_models.json) registra origem,
+licenças, versões, labels e pré-processamento. O custo do executor é liquidado
+por lote; contadores e tempos dos adapters ficam separados no resultado/ledger,
+com tentativas sem medição identificadas, sem inventar rate de custo por modelo.
+
+As próximas seções descrevem as operações Florence existentes.
 
 > Contratos dos endpoints revisados em 2026-10-06. Campos, modelos e autorização:
 > [referência completa da API](../api-reference.md). As datas abaixo também registram revisões da implementação/operação.

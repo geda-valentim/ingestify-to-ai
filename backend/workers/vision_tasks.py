@@ -142,6 +142,8 @@ def capabilities_report() -> Dict[str, Any]:
     from workers.vision.download import model_is_cached
 
     report = device_report()
+    from workers.vision.faces import capabilities as facial_capabilities
+    faces = facial_capabilities()
     providers = get_available_providers()
     provider = settings.vision_provider
     probe = providers.get(provider, {"available": False, "reason": f"unknown provider '{provider}'"})
@@ -165,6 +167,7 @@ def capabilities_report() -> Dict[str, Any]:
         reason = f"{type(exc).__name__}: {exc}"
 
     return {
+        "faces": faces,
         "enabled": settings.enable_image_description,
         "provider": provider,
         "model_id": settings.vision_model_id,

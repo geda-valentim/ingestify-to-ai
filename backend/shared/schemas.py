@@ -1,3 +1,4 @@
+from typing import Annotated
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator, model_validator
 from typing import Optional, Literal, List
 from datetime import datetime
@@ -251,7 +252,7 @@ class DocumentMetadata(BaseModel):
 class ConversionResult(BaseModel):
     markdown: str
     metadata: DocumentMetadata
-    image: Optional["ImageJobResult | ImageFullAnalysisResult"] = None
+    image: Optional["ImageJobResult | ImageFullAnalysisResult | ImageFullV2Result | FaceAnalysisResult"] = None
     exports: Optional[dict[str, str]] = None
     assets: Optional[list[dict]] = None
 
@@ -570,6 +571,8 @@ class VisionCapabilitiesResponse(BaseModel):
     generation_schema: dict = Field(default_factory=lambda: VisionGenerationOptions.model_json_schema())
     generation_defaults: dict = Field(default_factory=lambda: _vision_generation_defaults())
     analysis_modes: list[str] = ["single", "full"]
+    full_profiles: List[dict] = Field(default_factory=list)
+    faces: Optional[dict] = None
     full_profile: str = "image-full-v1"
     full_limits: dict = {"max_queries": 3, "max_regions": 4, "max_calls": 32, "deadline_seconds": 900}
 
@@ -682,8 +685,27 @@ def _vision_generation_defaults():
 
 
 
+from shared.face_analysis import FaceRequestOptions, FullFaceOptions, FaceAnalysisResult, FaceStepResult, FaceModelInfo, FacialBlock
+
+
+class FaceAnalyzeRequest(ImageOcrRequest):
+    model_config = ConfigDict(extra='forbid')
+    face_options: FaceRequestOptions = Field(default_factory=FaceRequestOptions)
+    wait: bool = False
+    datalake: Optional['Destination'] = None
+
+
+class FaceAnalyzeResponse(BaseModel):
+    job_id: str
+    status: str
+    markdown: str
+    image: FaceAnalysisResult
+
+
 class ImageFullOptions(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    profile: Literal['image-full-v1', 'image-full-v2'] = 'image-full-v1'
+    faces: Optional[FullFaceOptions] = None
     queries: Optional[List[str]] = Field(None, min_length=1, max_length=3)
     regions: Optional[List[List[float]]] = Field(None, min_length=1, max_length=4)
     generation: VisionGenerationOptions = Field(default_factory=VisionGenerationOptions)
@@ -691,6 +713,10 @@ class ImageFullOptions(BaseModel):
 
     @model_validator(mode="after")
     def validate_inputs(self):
+        if self.profile == 'image-full-v1' and self.faces is not None:
+            raise ValueError('faces exige profile=image-full-v2')
+        if self.profile == 'image-full-v2' and self.faces is None:
+            self.faces = FullFaceOptions()
         if self.queries is not None:
             self.queries = [q.strip() for q in self.queries]
             if any(not q or len(q) > 2000 for q in self.queries) or len('. '.join(self.queries)) > 2000:
@@ -751,6 +777,19 @@ class ImageFullAnalysisResult(BaseModel):
     frame_policy: str = 'first_frame'
 
 
+class FlorenceV2StepResult(ImageFullStepResult):
+    kind: Literal['florence'] = 'florence'
+
+
+class ImageFullV2Result(ImageFullAnalysisResult):
+    schema_version: Literal['image-full-result-v2'] = 'image-full-result-v2'
+    profile: Literal['image-full-v2'] = 'image-full-v2'
+    models: List[FaceModelInfo | dict]
+    faces: FacialBlock
+    results: List[Annotated[FlorenceV2StepResult | FaceStepResult, Field(discriminator='kind')]]
+    calls_by_provider: dict[str, int] = Field(default_factory=dict)
+
+
 class ImageFullQueuedResponse(JobCreatedResponse):
     status: JobStatus
     poll_url: str
@@ -761,11 +800,12 @@ class ImageFullAnalyzeResponse(BaseModel):
     job_id: str
     status: str
     markdown: str
-    image: ImageFullAnalysisResult
+    image: ImageFullAnalysisResult | ImageFullV2Result
 
 
 from shared.datalake.schemas import Destination
 ImageFullAnalyzeRequest.model_rebuild()
+FaceAnalyzeRequest.model_rebuild()
 
 ConversionResult.model_rebuild()
 JobResultResponse.model_rebuild()

@@ -13,6 +13,7 @@ from api.auth_routes import router as auth_router
 from api.apikey_routes import router as apikey_router
 from api.admin_routes import router as admin_router
 from api.image_routes import router as image_router
+from api.face_routes import router as face_router
 from api.tag_routes import router as tag_router
 from api.engine_admin_routes import router as engine_admin_router
 from api.engine_control_routes import router as engine_control_router, host_router as engine_host_router
@@ -357,6 +358,7 @@ app.include_router(auth_router, prefix="/auth", tags=["Authentication"])
 app.include_router(platform_settings_router)
 app.include_router(apikey_router, prefix="/api-keys", tags=["API Keys"])
 app.include_router(admin_router)  # Admin routes (already has /admin prefix)
+app.include_router(face_router)
 app.include_router(image_router)  # Vision routes (already has /images prefix)
 app.include_router(tag_router)  # GET /tags, PUT /jobs/{job_id}/tags
 # Before engine_admin_router: /admin/engines/status must not match /admin/engines/{engine_id}

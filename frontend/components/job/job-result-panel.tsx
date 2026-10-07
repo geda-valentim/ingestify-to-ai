@@ -131,7 +131,9 @@ export function JobResultPanel({
         <div>
           <h2 className="text-xl font-semibold">
             {result.result.image
-              ? result.result.image.operation === "analyze"
+              ? result.result.image.operation === "face_analysis"
+                ? "Rostos e expressões"
+                : result.result.image.operation === "analyze"
                 ? "Análise da imagem"
                 : result.result.image.operation === "ocr"
                   ? "Texto da imagem (OCR)"

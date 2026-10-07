@@ -345,9 +345,13 @@ class Florence2Describer(ImageDescriber):
             "duration_ms": duration_ms,
         }
 
-    def prepare_full(self, image_path, check):
+    def prepare_full(self, image_path, check, bitmap=None):
         self.load()
-        image, width, height = self._open_image(Path(image_path), self._backend)
+        if bitmap is None:
+            image, width, height = self._open_image(Path(image_path), self._backend)
+        else:
+            image = bitmap
+            width, height = image.size
         self._full_context = {'image': image, 'check': check}
         return image, width, height
 

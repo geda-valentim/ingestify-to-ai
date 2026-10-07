@@ -1099,10 +1099,18 @@ async def vision_capabilities(
     # O worker respondeu: o `reason` de degradação não vale mais, e um worker
     # saudável simplesmente não manda `reason`.
     merged["reason"] = heartbeat.get("reason")
+    from api.face_routes import face_capabilities
+    from shared.face_analysis import FullFaceOptions
+    facial = face_capabilities()
+    merged["faces"] = facial
+    merged["full_profiles"] = [
+        {"profile": "image-full-v1", "ready": bool(merged["dependencies_installed"] and merged["model_downloaded"]), "families": 15, "max_calls": 32, "max_faces": 0},
+        {"profile": "image-full-v2", "ready": bool(merged["dependencies_installed"] and merged["model_downloaded"] and facial["ready"]), "families": 18, "max_calls": 54, "max_faces": 5, "face_options_schema": FullFaceOptions.model_json_schema()},
+    ]
     return VisionCapabilitiesResponse(**merged)
 
 
-@router.post('/{job_id}/cancel', summary='Cancelar Full Analysis de imagem')
+@router.post('/{job_id}/cancel', summary='Cancelar análise composta de imagem')
 def cancel_full_image(job_id: str, current_user: User = Depends(get_current_active_user), db: Session = Depends(get_db)):
     from shared.models import ImageAnalysisRun
     job = db.query(Job).filter(Job.id == job_id, Job.user_id == current_user.id).with_for_update().first()

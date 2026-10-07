@@ -14,7 +14,8 @@ from shared.database import SessionLocal
 from shared.models import Job, ImageAnalysisRun as Run, ImageAnalysisStep as Step, EngineUsage
 from shared.config import get_settings
 from shared.minio_client import get_minio_client
-from shared.image_analysis import claim, guard, next_step, save_step, resolve, finish, locked, LostLease, TERMINAL
+from shared.image_analysis import claim, guard, next_step, save_step, resolve, resolve_faces, finish, locked, LostLease, TERMINAL
+from shared import face_analysis as facial
 from workers.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
@@ -79,6 +80,11 @@ def run_full_image_task(self, job_id, usage_id=None):
         return
     fence, options, source, deadline, usage_id = claimed
     model = None
+    face_pipeline = None
+    face_error = None
+    native_error = None
+    native_prepared = False
+    bitmap = None
     control = Control(job_id, holder, fence)
     started = time.monotonic()
     accounting_claimed = False
@@ -94,10 +100,18 @@ def run_full_image_task(self, job_id, usage_id=None):
             raise LostLease(control.reason)
         control.thread.start()
         from workers.vision.factory import get_image_describer
-        model = get_image_describer()
+        if facial.profile(options) != 'image-faces-v1':
+            try:
+                model = get_image_describer()
+            except Exception:
+                if facial.profile(options) == 'image-full-v1':
+                    raise
+                native_error = 'vision_provider_unavailable'
         settings = get_settings()
-        if options['provider'] != settings.vision_provider or options['model']['model_id'] != settings.vision_model_id or options['model']['revision'] != settings.vision_model_revision:
-            raise LostLease('model_configuration_changed')
+        if model and (options['provider'] != settings.vision_provider or options['model']['model_id'] != settings.vision_model_id or options['model']['revision'] != settings.vision_model_revision):
+            if facial.profile(options) == 'image-full-v1':
+                raise LostLease('model_configuration_changed')
+            native_error = 'model_configuration_changed'
         # The durable source, not a vanished handoff, is the authority.
         path = Path(settings.temp_storage_path) / 'images' / job_id / holder / 'full-source'
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -108,12 +122,13 @@ def run_full_image_task(self, job_id, usage_id=None):
         if not expected or hashlib.sha256(raw).hexdigest() != expected:
             raise LostLease('source_checksum_mismatch')
         path.write_bytes(raw)
-        if hasattr(model, 'prepare_full'):
+        if facial.profile(options) == 'image-full-v1' and hasattr(model, 'prepare_full'):
             bitmap, width, height = model.prepare_full(path, control.check)
+            native_prepared = True
         else:
-            from PIL import Image
+            from PIL import Image, ImageOps
             with Image.open(path) as opened:
-                bitmap = opened.convert('RGB')
+                bitmap = ImageOps.exif_transpose(opened).convert('RGB')
             width, height = bitmap.size
             if width * height > settings.vision_max_image_pixels:
                 bitmap.close()
@@ -130,11 +145,18 @@ def run_full_image_task(self, job_id, usage_id=None):
             check(db, job, run, holder, fence)
             run.width, run.height = width, height
             run.preview_path = preview_path
-            run.options = {**run.options, 'model': model.info()}
+            run.options = {**run.options, 'model': model.info() if model else options['model']}
             db.commit()
+        if facial.profile(options) != 'image-full-v1':
+            from workers.vision.faces import FacePipeline
+            try:
+                face_pipeline = FacePipeline(facial.face_options(options), options['face_models'])
+            except Exception as exc:
+                face_error = getattr(exc, 'error_code', 'face_provider_unavailable')
         while True:
             if not control.check(True):
                 raise LostLease(control.reason)
+            resolve_faces(job_id, holder, fence, storage)
             item = next_step(job_id, holder, fence)
             if item == 'limit':
                 continue
@@ -142,10 +164,33 @@ def run_full_image_task(self, job_id, usage_id=None):
                 if resolve(job_id, holder, fence, storage):
                     continue
                 break
-            native = {'task': item['task'], 'generation': options['full_options']['generation']}
+            native = {'task': item['task'], 'generation': options.get('full_options', {}).get('generation', {})}
             native.update({key: item['input'][key] for key in ('text_input', 'region') if key in item['input']})
+            step_started = time.monotonic()
             try:
-                output = model.analyze(path, native)
+                if item['task'] in facial.FACIAL_TASKS:
+                    if face_error:
+                        from workers.vision.faces import FaceFailure
+                        raise FaceFailure(face_error)
+                    output = face_pipeline.analyze(bitmap, item)
+                else:
+                    if native_error:
+                        from workers.vision.faces import FaceFailure
+                        raise FaceFailure(native_error)
+                    if not native_prepared and hasattr(model, 'prepare_full'):
+                        try:
+                            model.prepare_full(path, control.check, bitmap=bitmap)
+                        except Exception:
+                            native_error = 'vision_provider_unavailable'
+                            raise
+                        native_prepared = True
+                        with SessionLocal() as db:
+                            job, run = locked(db, job_id)
+                            from shared.image_analysis import check
+                            check(db, job, run, holder, fence)
+                            run.options = {**run.options, 'model': model.info()}
+                            db.commit()
+                    output = model.analyze(path, native)
                 if not control.check(True):
                     raise LostLease(control.reason)
                 save_step(job_id, holder, fence, item, output, storage)
@@ -154,7 +199,7 @@ def run_full_image_task(self, job_id, usage_id=None):
             except Exception as exc:
                 # Preserve other independent outputs, without exposing exception internals.
                 logger.warning('Full vision step failed: job=%s task=%s type=%s', job_id, item['task'], type(exc).__name__)
-                save_step(job_id, holder, fence, item, {}, storage, reason=getattr(exc, 'error_code', 'inference_failed'))
+                save_step(job_id, holder, fence, item, {'duration_ms': round((time.monotonic()-step_started)*1000)}, storage, reason=getattr(exc, 'error_code', 'inference_failed'))
         payload = finish(job_id, holder, fence, storage)
         return {'job_id': job_id, 'status': payload['image']['analysis_status'] if payload else 'unknown'}
     except BaseException as exc:
@@ -176,6 +221,10 @@ def run_full_image_task(self, job_id, usage_id=None):
         control.stop.set()
         if control.thread.is_alive():
             control.thread.join(timeout=2)
+        if face_pipeline:
+            face_pipeline.close()
+        if bitmap is not None and (not model or not hasattr(model, 'close_full') or not native_prepared):
+            bitmap.close()
         if model and hasattr(model, 'close_full'):
             model.close_full()
         if usage_id and accounting_claimed:
@@ -188,6 +237,15 @@ def run_full_image_task(self, job_id, usage_id=None):
                 persisted = bool(job and job.minio_result_path and run and run.status in TERMINAL)
                 status = run.status if persisted else None
                 ended_at = job.completed_at if persisted else None
+                if ours and run and facial.profile(run.options) != 'image-full-v1':
+                    durations = {}
+                    measured_attempts = 0
+                    for row in db.query(Step).filter_by(job_id=job_id):
+                        durations[row.provider] = durations.get(row.provider, 0) + (row.duration_ms or 0)
+                        measured_attempts += bool(row.result_path)
+                    usage.units = {**(usage.units or {}), 'image_analysis': {'calls_by_provider': run.calls_by_provider,
+                        'duration_by_provider_ms': durations, 'unmeasured_attempts': max(0, run.calls_started-measured_attempts)}}
+                    db.commit()
             if ours:
                 seconds = round(time.monotonic()-started, 3)
                 if persisted and status == 'completed':
@@ -272,8 +330,7 @@ def reconcile():
                 reason = 'cancelled' if run.cancel_requested else 'deadline'
                 if not db.query(Step).filter(Step.job_id == job_id).first():
                     from shared.image_analysis import add_steps
-                    from shared.image_full import initial_steps
-                    add_steps(db, job_id, initial_steps())
+                    add_steps(db, job_id, facial.initial_steps(run.options))
                 db.commit()
             payload = finish(job_id, holder, fence, storage, reason=reason, recovery=True)
             if payload:

@@ -32,7 +32,7 @@ export function FullAnalysisJobSidebar({
             {status.name || "Análise de imagem"}
           </h1>
           <p className="mt-1 text-xs text-muted-foreground">
-            Análise completa da imagem
+            {status.configuration?.options?.mode === "faces" ? "Rostos e expressões" : "Análise completa da imagem"}
           </p>
         </div>
       </div>

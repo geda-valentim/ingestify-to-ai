@@ -8,14 +8,21 @@ import type { ImageJobResult, ImageFullAnalysisResult } from "@/types/api";
 import { CopyButton, Panel } from "./result-primitives";
 import { FullImageView } from "./image-analysis/full-image-view";
 import { ImageCanvas } from "./image-analysis/image-canvas";
+import type { FaceAnalysisResult, ImageFullV2Result } from "@/types/faces";
+import { FaceView } from "./image-analysis/face-view";
+import { FullV2View } from "./image-analysis/full-v2-view";
 
 export function ImageView({
   image,
   fileName,
 }: {
-  image: ImageJobResult | ImageFullAnalysisResult;
+  image: ImageJobResult | ImageFullAnalysisResult | ImageFullV2Result | FaceAnalysisResult;
   fileName: string;
 }) {
+  if (image.operation === "face_analysis")
+    return <FaceView analysis={image} imageBase64={image.image_base64} mime={image.image_mime_type} width={image.width} height={image.height} fileName={fileName} />;
+  if (image.operation === "full_analysis" && "faces" in image)
+    return <FullV2View image={image} fileName={fileName} />;
   if (image.operation === "full_analysis")
     return <FullImageView image={image} fileName={fileName} />;
   return <SingleImageView image={image} fileName={fileName} />;
