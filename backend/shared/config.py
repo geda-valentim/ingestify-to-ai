@@ -1,7 +1,7 @@
 import logging
 import re
 from functools import lru_cache
-from typing import List
+from typing import List, Literal
 from urllib.parse import quote
 
 from pydantic import Field, ValidationError, ValidationInfo, field_validator, model_validator
@@ -290,6 +290,10 @@ class Settings(BaseSettings):
     # Comma-separated user IDs (UUIDs) allowed to use /admin endpoints. Empty = no admins.
     # IDs are used instead of emails because registration does not verify email ownership.
     admin_user_ids: str = ""
+
+    # IAM decision core (spec 0014 §4.11). off: legacy decides, bindings are inert.
+    # shadow: both decide, legacy answers, divergences are logged. enforce: IAM answers.
+    iam_mode: Literal["off", "shadow", "enforce"] = "off"
 
     # Execution engines (spec 0003). Remote engine credentials are sealed to the
     # public key; only worker-remote is given the private keys (a list, for
