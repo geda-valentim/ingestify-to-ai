@@ -163,9 +163,14 @@ def test_a_revocation_reaches_the_mirror_so_the_frozen_legacy_reader_denies(worl
         assert _legacy_row(db, g["id"])["version"] == 1
         assert engine_equivalence.legacy_grants(db, "observer") == []
         assert not policy.allowed(db, "observer", "engines.read", engine=db.get(Engine, "engine-a"))
-        # The 0009 contract: re-revoking is accepted and bumps the version.
+        # The 0009 contract: re-revoking is accepted and bumps the version, but it
+        # never rewrites who revoked the binding, or when.
+        first = b.revoked_at
         assert service.revoke(db, g["id"], 1, "bootstrap")["version"] == 2
         assert _legacy_row(db, g["id"])["version"] == 2
+        db.refresh(b)
+        assert (b.revoked_at, b.revoked_by) == (first, "bootstrap")
+        assert _legacy_row(db, g["id"])["revoked_at"] == first
 
 
 def test_the_unified_revoke_semantics(world):  # noqa: F811
@@ -278,6 +283,22 @@ def test_a_platform_grant_ignores_engines_bindings_and_leaves_the_epoch_alone(wo
         assert db.query(AdminAudit).filter_by(target_type="iam_binding", target_id=b.id).count() == 1
 
 
+def test_the_platform_locking_read_is_pinned_to_the_role_index(world):  # noqa: F811
+    """§4.3: on MySQL the BINDING_EXISTS read never scans the subject's engines rows."""
+    from sqlalchemy.dialects import mysql
+
+    from shared.iam.models import IamBinding as Model
+
+    assert bindings.INDEX_SUBJECT_ROLE == migration.INDEX_0018
+    assert migration.INDEX_0018 in {i.name for i in Model.__table__.indexes}
+    with world() as db:
+        q = bindings._active_platform_binding(db, "user", "observer", "platform_auditor", datetime.utcnow())
+        sql = str(q.statement.compile(dialect=mysql.dialect()))
+        assert f"iam_bindings FORCE INDEX ({migration.INDEX_0018})" in sql
+        assert sql.rstrip().endswith("FOR UPDATE")
+        assert "FORCE INDEX" not in str(q.statement.compile(dialect=db.get_bind().dialect))
+
+
 # -- §4.2.3: reconciliation at boot ---------------------------------------------------
 
 
@@ -293,6 +314,37 @@ def test_reconciliation_runs_at_boot_and_brings_back_a_legacy_revocation(world):
     assert migration.reconcile_on_boot(engine) == {"copied": 0, "restricted": 0}
     with world() as db:
         assert ids["op_plan"] not in {g.id for g in policy.grants(db, "operator")}
+
+
+def test_every_worker_reconciles_at_boot_before_deciding(world, monkeypatch):  # noqa: F811
+    """§4.2.3: a worker booting before any api still sees a rollback revocation."""
+    import shared.database
+    from workers.celery_app import reconcile_engine_grants_on_boot
+
+    with world() as db:
+        ids = legacy_state(db)
+    engine = world.kw["bind"]
+    migration.upgrade_0018(engine)
+    with world() as db:
+        legacy_revoke(db, ids["op_plan"], "bootstrap")
+    disposed = []
+    monkeypatch.setattr(engine, "dispose", lambda: disposed.append(True))  # keep StaticPool's db
+    monkeypatch.setattr(shared.database, "engine", engine)
+    reconcile_engine_grants_on_boot()
+    assert disposed == [True]
+    with world() as db:
+        assert ids["op_plan"] not in {g.id for g in policy.grants(db, "operator")}
+
+    def broken(bind):
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr(migration, "reconcile_on_boot", broken)
+    with pytest.raises(SystemExit, match="db down"):
+        reconcile_engine_grants_on_boot()
+    from shared.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "engine_access_enabled", False)
+    reconcile_engine_grants_on_boot()  # engines are bootstrap-only: nothing to reconcile
 
 
 def test_reconciliation_at_boot_skips_a_fresh_or_pre_0018_database():
@@ -322,6 +374,26 @@ def test_iam_mode_is_the_flag_and_engine_access_enabled_a_deprecated_alias(monke
     assert s.engine_access_enabled is expected
     assert ("ENGINE_ACCESS_ENABLED=" in caplog.text and "deprecated" in caplog.text) is explicit
     assert f"engine_access_enabled={expected}" in caplog.text
+
+
+@pytest.mark.parametrize("alias", [None, "true"])
+def test_every_process_reports_the_effective_flag_before_logging_is_configured(alias):
+    """CA15: Settings is built at import time, before any logging setup."""
+    import os
+    import subprocess
+    import sys
+
+    env = {**os.environ, "IAM_MODE": "enforce"}
+    env.pop("ENGINE_ACCESS_ENABLED", None)
+    if alias is not None:
+        env["ENGINE_ACCESS_ENABLED"] = alias
+    out = subprocess.run(
+        [sys.executable, "-c", "from shared.config import Settings; Settings(_env_file=None)"],
+        cwd=BACKEND, env=env, capture_output=True, text=True, timeout=60,
+    )
+    assert out.returncode == 0, out.stderr
+    source = "ENGINE_ACCESS_ENABLED" if alias else "IAM_MODE=enforce"
+    assert f"engine_access_enabled=True ({source})" in out.stderr
 
 
 # -- CA15: compose ---------------------------------------------------------------------

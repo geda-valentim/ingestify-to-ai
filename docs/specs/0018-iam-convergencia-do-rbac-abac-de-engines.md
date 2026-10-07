@@ -303,9 +303,11 @@ da API (`init_db`, único chamador hoje) enquanto `access_role_grants` existir.
   (`shared/iam/engine_mirror.py`, só escrita por id; CA9).
 - **Ordem global de locks:** epoch (só família `engines`) → linhas `users` → linhas
   `iam_bindings`/`access_role_grants`. A checagem `BINDING_EXISTS` da família
-  `platform` restringe a consulta com lock a `role IN catalog.ROLES` usando
-  `ix_iam_bindings_subject_role`, para não bloquear registros de bindings `engines`
-  do mesmo sujeito.
+  `platform` (`role` já validado como papel `platform`) força no MySQL o índice
+  `ix_iam_bindings_subject_role` (`FORCE INDEX`), para a leitura com lock não varrer
+  `ix_iam_bindings_subject` e travar bindings `engines` do mesmo sujeito; o boot
+  exige o índice. Ordem não verificada em InnoDB até existir o teste de concorrência
+  de CA5.
 - O `_delegator` mantém o envelope restrito a `policy.PERMISSIONS`
   (`DELEGATION_INVALID`) e considera só bindings `engines`.
 
@@ -442,7 +444,8 @@ não vai a produção.
   `shared/iam/bindings.grant_engine`/`revoke_engine`/`list_engine_grants` servem
   `create_grant`/`revoke`/`list_grants` (códigos e auditoria da 0009 até a fatia 3);
   espelho em `shared/iam/engine_mirror.py`; `migration.reconcile_on_boot` em
-  `init_db`. Testes em `tests/test_iam_engine_bindings_writes.py`. O teste de
+  `init_db` e no `worker_init` de todo worker Celery (com engines ligado; falha
+  impede o boot). Testes em `tests/test_iam_engine_bindings_writes.py`. O teste de
   concorrência em MySQL de CA5 fica para quando houver banco InnoDB descartável no CI.
 - [ ] 3. API unificada por família, aliases depreciados, auditoria e docs de API (CA6,
   CA8, CA12, CA16, CA17).

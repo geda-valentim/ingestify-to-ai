@@ -480,6 +480,8 @@ class Settings(BaseSettings):
     def _derive_engine_access_enabled(self) -> "Settings":
         # Every process that imports shared.access.policy builds Settings once at
         # boot, so this is where each of them reports the effective value (CA15).
+        # That happens at import time, before api.main or Celery configure logging,
+        # so the report is a WARNING: Python's last-resort handler drops INFO.
         explicit = self.engine_access_enabled is not None
         if explicit:
             logger.warning(
@@ -490,7 +492,7 @@ class Settings(BaseSettings):
             )
         else:
             self.engine_access_enabled = self.iam_mode == "enforce"
-        logger.info(
+        logger.warning(
             "engine_access_enabled=%s (%s)",
             self.engine_access_enabled,
             "ENGINE_ACCESS_ENABLED" if explicit else f"IAM_MODE={self.iam_mode}",
