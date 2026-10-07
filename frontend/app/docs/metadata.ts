@@ -14,8 +14,8 @@ export function docsMetadata(lang: DocsLang, slug?: string): Metadata {
     topic && group
       ? `${topic.title[lang]}. ${group.description[lang]}`
       : lang === "pt"
-        ? "Guias e exemplos da API do Ingestify: conversão de documentos, OCR, transcrição, jobs e entrega ao Data Lake."
-        : "Ingestify API guides and examples for document conversion, OCR, transcription, jobs and Data Lake delivery.";
+        ? "Guias de uso da plataforma, integração pela API e administração do Ingestify: documentos, imagens, transcrições, jobs e datalakes."
+        : "Ingestify platform usage guides, API integration and administration: documents, images, transcripts, jobs and datalakes.";
   const canonical = `${DOCS_ORIGIN}${docsHref(slug, lang)}`;
   return {
     title,

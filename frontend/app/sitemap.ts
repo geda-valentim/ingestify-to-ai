@@ -5,6 +5,7 @@ export default function sitemap(): MetadataRoute.Sitemap {
   return [
     { url: DOCS_ORIGIN },
     { url: `${DOCS_ORIGIN}/agents` },
+    { url: `${DOCS_ORIGIN}/business` },
     ...[undefined, ...DOCS_TOPICS.map((topic) => topic.slug)].flatMap((slug) =>
       (["en", "pt"] as const).map((lang) => ({
         url: `${DOCS_ORIGIN}${docsHref(slug, lang)}`,
