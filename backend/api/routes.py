@@ -1,7 +1,21 @@
 from starlette.responses import JSONResponse
 import json
 from shared.job_configuration import job_configuration
-from shared.job_source import SourceDeleteError, delete_source, save_purge_option, source_available
+from shared.job_source import (
+    DUPLICATE_ALREADY_GONE,
+    DUPLICATE_KEPT,
+    DUPLICATE_PURGED,
+    DUPLICATE_SCHEDULED,
+    SourceDeleteError,
+    apply_purge_to_duplicate,
+    delete_source,
+    has_pending_work,
+    local_source_dirs,
+    save_purge_option,
+    source_available,
+    source_bucket,
+    source_deleted_at,
+)
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Header, Body, Depends, Request, Query
 from fastapi.responses import Response, StreamingResponse
 from starlette.concurrency import run_in_threadpool
@@ -52,6 +66,8 @@ from api.projects_api import (
     LocationFields,
     existing_job_location,
     find_duplicate_job,
+    conversion_operation_key,
+    save_operation_key,
     prepare_upload_location,
     resolve_upload_location,
     upload_location_form,
@@ -85,11 +101,48 @@ PAGE_PDF_URL_TTL_SECONDS = 15 * 60
 
 
 PURGE_SOURCE_FORM_DESCRIPTION = (
-    "Apagar o arquivo original (MinIO e cópia local) quando o job terminar com sucesso; "
-    "fica só o resultado. Mantido se o job falhar ou tiver páginas com falha (o retry "
-    "de página precisa dele) e apagado quando um retry levar o job a completed. "
-    "Também é possível apagar depois com DELETE /jobs/{job_id}/source"
+    "Se true, apaga os arquivos de origem do job — o arquivo enviado (MinIO e cópia "
+    "local) e, num PDF dividido, os PDFs por página — quando o job termina: "
+    "`completed`, ou `failed`/`partial` depois de esgotadas as tentativas automáticas "
+    "(nunca enquanto houver retry ou página na fila). O resultado (markdown, "
+    "markdown por página) fica. Depois disso o retry manual de página não é mais "
+    "possível. GET /jobs/{job_id} informa `source_available` e `source_deleted_at`. "
+    "Arquivo repetido no mesmo projeto: com true o job existente é devolvido "
+    "(`duplicate: true`) e passa a apagar a origem (na hora, se já terminou); com "
+    "false um job existente cuja origem foi (ou será) apagada não é reaproveitado e "
+    "um job novo é criado. Padrão false (mantém). Para apagar depois: "
+    "DELETE /jobs/{job_id}/source"
 )
+
+
+def _duplicate_response(db: Session, existing_job: Job, upload_location, message: str,
+                        purge_source: bool) -> JobCreatedResponse:
+    """
+    The answer to a request for a file already processed in this project: the
+    existing job. With `purge_source=true` the option is recorded on that job and,
+    when it already completed, its original is deleted now (best effort; never
+    fails the request). `find_duplicate_job` already refused to reuse a job whose
+    original is gone when the request keeps it.
+    """
+    from shared import error_catalog
+
+    if purge_source is True:
+        outcome = apply_purge_to_duplicate(db, existing_job, get_minio_client)
+        message += {
+            DUPLICATE_PURGED: ". O arquivo original foi apagado (purge_source)",
+            DUPLICATE_SCHEDULED: ". O arquivo original será apagado quando o job terminar com sucesso (purge_source)",
+            DUPLICATE_ALREADY_GONE: ". O arquivo original já tinha sido apagado",
+            DUPLICATE_KEPT: ". " + (error_catalog.describe("SOURCE_DELETE_FAILED")[0] or ""),
+        }[outcome]
+    return JobCreatedResponse(
+        job_id=existing_job.id,
+        status="queued",
+        created_at=existing_job.created_at,
+        message=message,
+        duplicate=True,
+        source_available=source_available(existing_job),
+        **existing_job_location(db, existing_job, upload_location),
+    )
 
 
 def _request_path(request) -> str:
@@ -136,11 +189,31 @@ async def upload_and_convert(
         - OCR: Desligado | Images: Ligadas | Tables: Ligadas
       - **quality**: Máxima qualidade, inclui OCR para documentos escaneados (~350s/MB)
         - OCR: Ligado | Images: Ligadas | Tables: Ligadas
-    - `purge_source`: Se `true`, apaga o arquivo original (MinIO e cópia local) quando
-      o job termina `completed`; fica só o resultado. Se o job falhar ou tiver páginas
-      com falha, o original é mantido (o retry de página precisa dele) e só é apagado
-      quando um retry levar o job a `completed`. Os PDFs por página continuam
-      disponíveis. Para apagar depois: `DELETE /jobs/{job_id}/source`
+    - `purge_source`: Se `true`, apaga os arquivos de origem (o arquivo enviado e os
+      PDFs por página) quando o job termina — `completed`, ou `failed`/`partial` depois
+      das tentativas automáticas — e fica só o resultado. Veja "Arquivos de origem".
+
+    ## Arquivos de origem (`purge_source`)
+    - O que é apagado: o arquivo enviado (MinIO `uploads/...` e cópia local) e, num
+      PDF de várias páginas, os PDFs por página (`/jobs/{job_id}/pages/{n}/pdf`
+      passa a responder 410 `SOURCE_PURGED`). O markdown (inteiro e por página) fica.
+    - Quando: ao terminar `completed`, ou `failed`/`partial` depois de esgotados os
+      retries automáticos; nunca enquanto houver retry ou página na fila. Depois
+      disso o retry manual de página responde 409 `SOURCE_NOT_AVAILABLE`.
+    - `GET /jobs/{job_id}` informa `source_available`, `source_deleted_at` e
+      `source_deletable`. Para apagar depois: `DELETE /jobs/{job_id}/source`.
+    - Arquivo repetido no mesmo projeto: com `purge_source=true` a resposta traz o
+      job existente com `duplicate: true` e ele passa a apagar a origem (na hora, se
+      já terminou; `source_available` diz o resultado). Com `false`, um job existente
+      cuja origem foi (ou será) apagada não é reaproveitado: um job novo é criado.
+
+    ```bash
+    curl -X POST http://localhost:8000/upload \\
+      -H "X-API-Key: your-api-key" \\
+      -F "file=@contrato.pdf" \\
+      -F "project=Cliente X" \\
+      -F "purge_source=true"
+    ```
 
     ## Formatos suportados
     PDF, DOCX, DOC, HTML, PPTX, XLSX, RTF, ODT
@@ -189,20 +262,19 @@ async def upload_and_convert(
         upload_location = resolve_upload_location(db, current_user, plan, _request_path(request))
 
         # Check if file already processed by this user in this project
+        operation_key = None if transcription_profile_hash else conversion_operation_key(docling_preset)
         existing_job, reprocess_note = find_duplicate_job(
             db, current_user.id, file_checksum, upload_location,
-            transcription_profile_hash=transcription_profile_hash)
+            transcription_profile_hash=transcription_profile_hash,
+            purge_source=purge_source is True, operation_key=operation_key)
 
         if existing_job:
             logger.info(f"Duplicate file detected! Returning existing job: {existing_job.id}")
             add_tags_to_existing_job(db, existing_job, tag_list)
-            return JobCreatedResponse(
-                job_id=existing_job.id,
-                status="queued",  # Use current status from DB
-                created_at=existing_job.created_at,
-                message=f"Arquivo já foi processado anteriormente (job existente: {existing_job.id})",
-                **existing_job_location(db, existing_job, upload_location),
-            )
+            return _duplicate_response(
+                db, existing_job, upload_location,
+                f"Arquivo já foi processado anteriormente (job existente: {existing_job.id})",
+                purge_source)
 
         # Generate job ID for new file
         job_id = uuid4()
@@ -250,6 +322,8 @@ async def upload_and_convert(
             set_job_tags(db_job, tag_list)
             if purge_source is True:
                 save_purge_option(db, db_job)
+            if operation_key is not None:
+                save_operation_key(db, db_job, operation_key)
             db.commit()
             logger.info(f"Job {job_id} created in MySQL with name: {job_name} and checksum: {file_checksum}")
         except Exception as e:
@@ -488,7 +562,7 @@ async def transcribe_audio(
     ),
     purge_source: bool = Form(
         False,
-        description="Apagar o áudio/vídeo enviado assim que a transcrição terminar (guarda só o texto)",
+        description="Apagar o áudio/vídeo enviado quando a transcrição terminar (com sucesso, ou com falha depois das tentativas automáticas); guarda só o texto",
     ),
     diarize: Optional[bool] = Form(None, description="Identificar falantes; omitido usa o padrão do provider"),
     min_speakers: Optional[int] = Form(None, ge=1, le=20),
@@ -522,7 +596,8 @@ async def transcribe_audio(
     - `include_word_timestamps`: Adicionar timestamps em cada palavra (mais detalhado)
     - `output_format`: Formato padrão do resultado (`markdown`, `vtt`, `srt`, `txt`, `json`)
     - `purge_source`: Se `true`, apaga o arquivo enviado (disco e MinIO) quando o job
-      termina com sucesso; ficam só as transcrições. `DELETE /jobs/{job_id}` também
+      termina (com sucesso, ou com falha depois das tentativas automáticas); ficam só
+      as transcrições. `GET /jobs/{job_id}` informa `source_deleted_at`. `DELETE /jobs/{job_id}` também
       apaga o arquivo de origem e as transcrições
 
     ## Projeto
@@ -648,20 +723,18 @@ async def transcribe_audio(
         # Check if file already processed by this user in this project
         existing_job, reprocess_note = find_duplicate_job(
             db, current_user.id, file_checksum, upload_location,
-            transcription_profile_hash=transcription_profile_hash)
+            transcription_profile_hash=transcription_profile_hash,
+            purge_source=purge_source is True)
 
         if existing_job:
             logger.info(f"Duplicate audio file detected! Returning existing job: {existing_job.id}")
             add_tags_to_existing_job(db, existing_job, tag_list)
             # The latest request decides the default result format of the reused job
             redis_client.set_job_output_format(str(existing_job.id), output_format)
-            return JobCreatedResponse(
-                job_id=existing_job.id,
-                status="queued",
-                created_at=existing_job.created_at,
-                message=f"Arquivo de áudio já foi processado anteriormente (job existente: {existing_job.id})",
-                **existing_job_location(db, existing_job, upload_location),
-            )
+            return _duplicate_response(
+                db, existing_job, upload_location,
+                f"Arquivo de áudio já foi processado anteriormente (job existente: {existing_job.id})",
+                purge_source)
 
         # Generate job ID for new file
         job_id = uuid4()
@@ -705,6 +778,10 @@ async def transcribe_audio(
             )
             db.add(db_job)
             set_job_tags(db_job, tag_list)
+            if purge_source is True:
+                # Durable too (not only in the task options): a page retry, a
+                # backlog re-run and dedup all read it from the job
+                save_purge_option(db, db_job)
             db.commit()
             logger.info(f"Audio transcription job {job_id} created in MySQL with name: {job_name} and checksum: {file_checksum}")
         except Exception as e:
@@ -903,10 +980,11 @@ async def convert_document(
     (só sem JWT). Sem projeto: 422. Um arquivo repetido só é reaproveitado
     dentro do mesmo projeto.
 
-    ## Arquivo original (`purge_source`)
-    Com `purge_source=true` o arquivo original (o enviado, ou o baixado da URL) é
-    apagado quando o job termina `completed`. Falha ou páginas com falha: o original
-    fica para o retry de página, e é apagado quando um retry completar o job.
+    ## Arquivos de origem (`purge_source`)
+    Com `purge_source=true` os arquivos de origem (o enviado, ou o baixado da URL,
+    e os PDFs por página) são apagados quando o job termina: `completed`, ou
+    `failed`/`partial` depois das tentativas automáticas. O resultado fica. Mesmas
+    regras de `/upload` (inclusive para arquivo repetido).
     Para apagar depois: `DELETE /jobs/{job_id}/source`
 
     ## Formatos suportados
@@ -983,18 +1061,17 @@ async def convert_document(
             # (a failed job does not count: sending the file again is the retry)
             existing_job, reprocess_note = find_duplicate_job(
                 db, current_user.id, file_checksum, upload_location,
-                transcription_profile_hash=transcription_profile_hash)
+                transcription_profile_hash=transcription_profile_hash,
+                purge_source=purge_source is True,
+                operation_key=None if transcription_profile_hash else conversion_operation_key(None))
 
             if existing_job:
                 logger.info(f"Duplicate file detected! Returning existing job: {existing_job.id}")
                 add_tags_to_existing_job(db, existing_job, tag_list)
-                return JobCreatedResponse(
-                    job_id=existing_job.id,
-                    status="queued",
-                    created_at=existing_job.created_at,
-                    message=f"Arquivo já foi processado anteriormente (job existente: {existing_job.id})",
-                    **existing_job_location(db, existing_job, upload_location),
-                )
+                return _duplicate_response(
+                    db, existing_job, upload_location,
+                    f"Arquivo já foi processado anteriormente (job existente: {existing_job.id})",
+                    purge_source)
 
         # Generate job ID for new conversion
         job_id = uuid4()
@@ -1051,6 +1128,8 @@ async def convert_document(
             set_job_tags(db_job, tag_list)
             if purge_source is True:
                 save_purge_option(db, db_job)
+            if file_checksum and not transcription_profile_hash:
+                save_operation_key(db, db_job, conversion_operation_key(None))
             db.commit()
             checksum_info = f" and checksum: {file_checksum}" if file_checksum else ""
             logger.info(f"Job {job_id} created in MySQL with name: {job_name} (source_type: {source_type}){checksum_info}")
@@ -1284,8 +1363,13 @@ async def get_job_status(
             owned_job.name if owned_job is not None and str(owned_job.id) == job_id else None
         ),
         "tags": owned_job.tags if owned_job is not None and str(owned_job.id) == job_id else [],
-        # Whether the original file still exists (purge_source / DELETE /jobs/{id}/source)
+        # Source files (original + split page PDFs): do they still exist, when were
+        # they deleted (purge_source / DELETE /jobs/{id}/source), and may
+        # DELETE /jobs/{id}/source run now (all from the DB, never from Redis)
         "source_available": source_available(db_job),
+        "source_deleted_at": source_deleted_at(db_job),
+        "source_deletable": bool(db_job is not None and source_available(db_job)
+                                 and not has_pending_work(db, db_job)),
         # Children have no row of their own: they inherit the MAIN job's location
         **_job_location_refs(db, owned_job),
     }
@@ -1453,7 +1537,8 @@ async def delete_job(
     - Metadados do MySQL (job e pages)
     - Conteúdo do Elasticsearch (markdown)
     - Status temporário do Redis
-    - Para transcrições: o áudio/vídeo enviado e as transcrições guardadas no MinIO
+    - O arquivo original (documento, áudio ou vídeo) no MinIO e as cópias locais
+    - Para transcrições: as transcrições guardadas no MinIO
 
     **Atenção:** Esta operação é irreversível!
 
@@ -1537,17 +1622,22 @@ async def delete_job(
     else:
         logger.info(f"Elasticsearch not available, skipping content deletion for job {job_id}")
 
-    # Transcriptions: the uploaded media and the stored transcript formats
+    # The original (document, audio or video) in the bucket it really lives in
+    # (`uploads/...` or `audio/...`), and its local copies
+    if db_job:
+        try:
+            delete_source(db, db_job, get_minio_client)
+        except Exception as e:
+            db.rollback()
+            logger.warning(f"Failed to delete the original of job {job_id}: {e}")
+
+    # Transcriptions: the stored transcript formats
     if db_job and db_job.source_type == "audio":
         try:
             minio_client = get_minio_client()
-            if db_job.minio_upload_path:
-                minio_client.delete_file(minio_client.bucket_audio, db_job.minio_upload_path)
             minio_client.delete_folder(minio_client.bucket_audio, f"transcripts/{job_id}/")
         except Exception as e:
             logger.warning(f"Failed to delete audio objects of job {job_id} from MinIO: {e}")
-        # Local copy left behind by a failed job (a completed one has none)
-        shutil.rmtree(Path(settings.temp_storage_path) / "audio" / job_id, ignore_errors=True)
 
     if db_job and db_job.source_type == "image":
         try:
@@ -1629,32 +1719,43 @@ async def delete_job_source(
     db: Session = Depends(get_db),
 ):
     """
-    Apaga o arquivo original de um job (o documento, áudio ou vídeo enviado),
-    mantendo o job e o resultado (markdown, páginas, transcrições).
+    Apaga os arquivos de origem de um job — o arquivo enviado (documento, áudio
+    ou vídeo) e os PDFs por página de um PDF dividido — mantendo o job e o
+    resultado (markdown, markdown por página, transcrições).
 
-    Remove o objeto no MinIO (`uploads/...` ou `audio/...`) e a cópia local, e
-    zera a referência do job. Depois disso `GET /jobs/{job_id}` responde
-    `source_available: false` e o retry de página deixa de ser possível
-    (ele restaura o original do MinIO). Os PDFs por página continuam disponíveis.
+    Remove os objetos no MinIO (`uploads/...` ou `audio/...`, e `pages/{job_id}/`)
+    e as cópias locais, e grava quando isso aconteceu. Depois disso
+    `GET /jobs/{job_id}` responde `source_available: false` e `source_deleted_at`,
+    `GET /jobs/{job_id}/pages/{n}/pdf` responde 410 `SOURCE_PURGED` e o retry de
+    página responde 409 `SOURCE_NOT_AVAILABLE`.
 
-    Para apagar automaticamente ao terminar, envie `purge_source=true` em
+    Para apagar automaticamente quando o job terminar, envie `purge_source=true` em
     `/upload`, `/convert` ou `/transcribe`.
 
     ## Retorno
-    - 200: `{"job_id": "...", "source_deleted": true}`
-    - 404: job inexistente, de outro usuário, ou sem arquivo original
-    - 409: `{"code": "JOB_STILL_PROCESSING"}`: o job ainda está na fila ou em processamento
-    - 503: `{"code": "SOURCE_DELETE_FAILED"}`: o armazenamento recusou; o original foi mantido
+    - 200: `{"job_id": "...", "source_deleted": true, "source_deleted_at": "..."}`
+    - 404: job inexistente, de outro usuário, ou sem arquivos de origem
+    - 409: `{"code": "JOB_STILL_PROCESSING"}`: o job ainda está na fila ou em processamento,
+      espera um retry automático, ou tem página na fila/em processamento (retry de página)
+    - 503: `{"code": "SOURCE_DELETE_FAILED"}`: o armazenamento recusou; o que não foi
+      apagado continua referenciado (chamar de novo termina)
     """
     from shared import error_catalog
 
     # Child jobs (split/page/merge) are authorized by their parent's row, but
     # have no original of their own
     db_job = owned_job if (owned_job is not None and owned_job.id == job_id) else None
+    if db_job is not None:
+        # Same row lock as the page retry: a retry cannot start between the check
+        # below and the delete
+        db_job = db.query(Job).filter(Job.id == job_id).with_for_update().populate_existing().first()
     if db_job is None or not source_available(db_job):
         raise HTTPException(status_code=404, detail="Arquivo original não encontrado")
 
-    if db_job.status in (DBJobStatus.PENDING, DBJobStatus.PROCESSING):
+    # Anything queued or running may still read the original: the MAIN job
+    # (also while a Celery retry waits, PENDING), or a page (retry included)
+    if has_pending_work(db, db_job):
+        db.rollback()
         raise HTTPException(status_code=409, detail=error_catalog.detail("JOB_STILL_PROCESSING"))
 
     try:
@@ -1665,7 +1766,8 @@ async def delete_job_source(
         raise HTTPException(status_code=503, detail=error_catalog.detail("SOURCE_DELETE_FAILED"))
 
     logger.info(f"Original file of job {job_id} deleted on request")
-    return SourceDeletedResponse(job_id=job_id, source_deleted=True)
+    return SourceDeletedResponse(job_id=job_id, source_deleted=True,
+                                 source_deleted_at=source_deleted_at(db_job))
 
 
 @router.get("/jobs/{job_id}/result", response_model=JobResultResponse)
@@ -2567,26 +2669,64 @@ async def retry_failed_page(
     if not db_job:
         raise HTTPException(status_code=404, detail="Job principal não encontrado")
 
+    from shared import error_catalog
+
+    # Lock the MAIN job row: DELETE /jobs/{id}/source takes the same lock, so the
+    # original cannot be deleted between finding it here and the retry being queued
+    db_job = db.query(Job).filter(Job.id == job_id).with_for_update().populate_existing().first()
+    if db_job is None:
+        raise HTTPException(status_code=404, detail="Job principal não encontrado")
+    try:
+        db.refresh(db_page)
+    except Exception:  # a page migrated from Redis whose row could not be saved
+        pass
+    if db_page.status != DBJobStatus.FAILED:
+        db.rollback()
+        raise HTTPException(
+            status_code=400,
+            detail=f"Página {page_number} não está em status 'failed' (status atual: {db_page.status.value})"
+        )
+
     logger.info(f"Retrying page {page_number} of job {job_id} for user {current_user.username}")
 
     try:
         from workers.tasks import process_page
-        from pathlib import Path
-        import uuid
+    except ImportError as e:
+        logger.error(f"Celery tasks not available: {e}")
+        db.rollback()
+        raise HTTPException(status_code=503, detail="Sistema de processamento indisponível")
 
-        # Generate new job ID for the retry
-        new_page_job_id = str(uuid.uuid4())
+    # Find (or restore) the original PDF first: nothing is changed when it is gone
+    settings = get_settings()
+    pdf_path = _retry_source_pdf(db_job, settings)
+    if pdf_path is None:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=error_catalog.detail("SOURCE_NOT_AVAILABLE"))
 
-        # Update page status to pending and increment retry count
-        db_page.status = DBJobStatus.PENDING
-        db_page.page_job_id = new_page_job_id
-        db_page.error_message = None
-        db_page.retry_count += 1
+    import uuid
+
+    new_page_job_id = str(uuid.uuid4())
+    previous = (db_job.status, db_job.completed_at, db_job.error_message)
+
+    # The page waits for its retry, and the MAIN job is open again until it
+    # settles (completed after the merge, or partial if the page fails again)
+    db_page.status = DBJobStatus.PENDING
+    db_page.page_job_id = new_page_job_id
+    db_page.error_message = None
+    db_page.retry_count += 1
+    db_job.status = DBJobStatus.PROCESSING
+    db_job.completed_at = None
+    db_job.error_message = None
+    try:
         db.commit()
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Could not queue the retry of page {page_number} of job {job_id}: {e}")
+        raise HTTPException(503, detail={"code": "DATABASE_UNAVAILABLE"}) from None
 
-        logger.info(f"Retry attempt {db_page.retry_count}/3 for page {page_number}")
+    logger.info(f"Retry attempt {db_page.retry_count}/3 for page {page_number}")
 
-        # Create Redis status for new page job
+    try:
         redis_client.set_job_status(
             job_id=new_page_job_id,
             job_type="page",
@@ -2595,38 +2735,9 @@ async def retry_failed_page(
             parent_job_id=job_id,
             page_number=page_number,
         )
-
-        # Set job ownership
         redis_client.set_job_owner(new_page_job_id, current_user.id)
-
-        # Find the PDF file path
-        # For file uploads, files are stored in temp_storage_path/uploads/{job_id}/
-        settings = get_settings()
-        temp_dir = Path(settings.temp_storage_path) / "uploads" / job_id
-
-        # Find PDF file in directory
-        pdf_files = list(temp_dir.glob("*.pdf"))
-
-        # Local copies are deleted once a job completes: restore the original from MinIO
-        if not pdf_files and db_job.minio_upload_path:
-            try:
-                restored = temp_dir / Path(db_job.minio_upload_path).name
-                temp_dir.mkdir(parents=True, exist_ok=True)
-                minio_client = get_minio_client()
-                minio_client.download_file(
-                    minio_client.bucket_uploads, db_job.minio_upload_path, file_path=str(restored)
-                )
-                pdf_files = [restored] if restored.suffix.lower() == ".pdf" else []
-            except Exception as e:
-                logger.warning(f"Could not restore original PDF of job {job_id} from MinIO: {e}")
-
-        if not pdf_files:
-            raise HTTPException(
-                status_code=404,
-                detail="Arquivo PDF original não encontrado. O arquivo pode ter expirado."
-            )
-
-        pdf_path = str(pdf_files[0])
+        redis_client.update_job_progress(job_id, (redis_client.get_job_status(job_id) or {}).get("progress") or 0,
+                                         status="processing", error=None)
 
         # Enqueue retry task: through the document_conversion route when there is one
         # (spec 0003, 4.14); without a route, exactly as before
@@ -2647,27 +2758,77 @@ async def retry_failed_page(
                 source_pdf_path=pdf_path, today_queue=settings.celery_task_default_queue),
             today=enqueue, celery=_engine_celery(), session_factory=SessionLocal,
         )
-
-        logger.info(f"Page {page_number} of job {job_id} enqueued for retry with new job_id {new_page_job_id}")
-
-        return {
-            "message": f"Página {page_number} enfileirada para reprocessamento (tentativa {db_page.retry_count}/3)",
-            "job_id": job_id,
-            "page_number": page_number,
-            "new_page_job_id": new_page_job_id,
-            "status": "queued",
-            "retry_count": db_page.retry_count,
-            "retry_limit": 3,
-        }
-
-    except ImportError as e:
-        logger.error(f"Celery tasks not available: {e}")
-        db.rollback()
-        raise HTTPException(status_code=503, detail="Sistema de processamento indisponível")
     except Exception as e:
         logger.error(f"Error retrying page {page_number} of job {job_id}: {e}", exc_info=True)
         db.rollback()
+        # Nothing was queued: put the page and the MAIN job back as they were
+        try:
+            db_page.status = DBJobStatus.FAILED
+            db_page.retry_count = max((db_page.retry_count or 1) - 1, 0)
+            db_job.status, db_job.completed_at, db_job.error_message = previous
+            db.commit()
+        except Exception:
+            db.rollback()
         raise HTTPException(status_code=500, detail="Erro ao reprocessar página")
+
+    logger.info(f"Page {page_number} of job {job_id} enqueued for retry with new job_id {new_page_job_id}")
+
+    return {
+        "message": f"Página {page_number} enfileirada para reprocessamento (tentativa {db_page.retry_count}/3)",
+        "job_id": job_id,
+        "page_number": page_number,
+        "new_page_job_id": new_page_job_id,
+        "status": "queued",
+        "retry_count": db_page.retry_count,
+        "retry_limit": 3,
+    }
+
+
+def _raise_if_source_purged(job: Optional[Job]) -> None:
+    """410 SOURCE_PURGED: the job's source files (original + page PDFs) were deleted."""
+    deleted_at = source_deleted_at(job)
+    if deleted_at is None:
+        return
+    from shared import error_catalog
+
+    body = error_catalog.detail("SOURCE_PURGED", context={
+        "deleted_at": deleted_at.strftime("%d/%m/%Y %H:%M") + " UTC"})
+    body["source_deleted_at"] = deleted_at.isoformat() + "Z"
+    raise HTTPException(status_code=410, detail=body)
+
+
+def _retry_source_pdf(db_job: Job, settings) -> Optional[str]:
+    """
+    The original PDF a page retry extracts its page from: a local copy (the upload
+    copy, or a URL download in the work dir), else restored from MinIO into
+    {temp}/uploads/{job_id}/. None when the original is gone (purge_source /
+    DELETE /jobs/{id}/source) or is not a PDF.
+    """
+    for directory in local_source_dirs(db_job.id):
+        try:
+            found = sorted(p for p in directory.glob("*.pdf") if p.is_file()) if directory.is_dir() else []
+        except OSError:
+            found = []
+        if found:
+            return str(found[0])
+
+    if not db_job.minio_upload_path:
+        return None
+    restored = Path(settings.temp_storage_path) / "uploads" / db_job.id / Path(db_job.minio_upload_path).name
+    if restored.suffix.lower() != ".pdf":
+        return None
+    try:
+        restored.parent.mkdir(parents=True, exist_ok=True)
+        minio_client = get_minio_client()
+        minio_client.download_file(
+            source_bucket(minio_client, db_job.minio_upload_path), db_job.minio_upload_path,
+            file_path=str(restored),
+        )
+    except Exception as e:
+        logger.warning(f"Could not restore original PDF of job {db_job.id} from MinIO: {e}")
+        restored.unlink(missing_ok=True)  # never leave a partial download behind as "the original"
+        return None
+    return str(restored) if restored.is_file() else None
 
 
 @router.get("/jobs/{job_id}/pages/{page_number}/pdf", summary="URL temporária do PDF de uma página")
@@ -2721,6 +2882,7 @@ async def get_page_pdf(
     # (MySQL como fonte da verdade).
     if not db_page:
         raise HTTPException(status_code=404, detail=f"Página {page_number} não encontrada")
+    _raise_if_source_purged(db_page.job)
 
     minio_client = get_minio_client()
 

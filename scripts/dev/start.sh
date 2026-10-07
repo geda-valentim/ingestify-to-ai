@@ -34,7 +34,7 @@ echo -e "${BLUE}======================================${NC}"
 echo ""
 
 # Read a key's current value from .env, if the file already has one.
-# start.sh regenerates .env on every run; secrets must survive that.
+# scripts/dev/start.sh regenerates .env on every run; secrets must survive that.
 env_value() {
     [ -f .env ] || return 0
     grep -E "^$1=" .env | tail -n1 | cut -d= -f2-
@@ -229,6 +229,6 @@ echo ""
 echo -e "${CYAN}Useful Commands:${NC}"
 echo -e "  📋 View logs:    ${YELLOW}docker compose logs -f${NC}"
 echo -e "  🛑 Stop:         ${YELLOW}docker compose down${NC}"
-echo -e "  🔄 Restart:      ${YELLOW}./start.sh${NC}"
+echo -e "  🔄 Restart:      ${YELLOW}./scripts/dev/start.sh${NC}"
 echo -e "${BLUE}======================================${NC}"
 echo ""

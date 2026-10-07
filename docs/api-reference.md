@@ -3180,11 +3180,31 @@ Use os outros endpoints para converter de URL, Google Drive ou Dropbox.
     - OCR: Desligado | Images: Ligadas | Tables: Ligadas
   - **quality**: Máxima qualidade, inclui OCR para documentos escaneados (~350s/MB)
     - OCR: Ligado | Images: Ligadas | Tables: Ligadas
-- `purge_source`: Se `true`, apaga o arquivo original (MinIO e cópia local) quando
-  o job termina `completed`; fica só o resultado. Se o job falhar ou tiver páginas
-  com falha, o original é mantido (o retry de página precisa dele) e só é apagado
-  quando um retry levar o job a `completed`. Os PDFs por página continuam
-  disponíveis. Para apagar depois: `DELETE /jobs/{job_id}/source`
+- `purge_source`: Se `true`, apaga os arquivos de origem (o arquivo enviado e os
+  PDFs por página) quando o job termina — `completed`, ou `failed`/`partial` depois
+  das tentativas automáticas — e fica só o resultado. Veja "Arquivos de origem".
+
+## Arquivos de origem (`purge_source`)
+- O que é apagado: o arquivo enviado (MinIO `uploads/...` e cópia local) e, num
+  PDF de várias páginas, os PDFs por página (`/jobs/{job_id}/pages/{n}/pdf`
+  passa a responder 410 `SOURCE_PURGED`). O markdown (inteiro e por página) fica.
+- Quando: ao terminar `completed`, ou `failed`/`partial` depois de esgotados os
+  retries automáticos; nunca enquanto houver retry ou página na fila. Depois
+  disso o retry manual de página responde 409 `SOURCE_NOT_AVAILABLE`.
+- `GET /jobs/{job_id}` informa `source_available`, `source_deleted_at` e
+  `source_deletable`. Para apagar depois: `DELETE /jobs/{job_id}/source`.
+- Arquivo repetido no mesmo projeto: com `purge_source=true` a resposta traz o
+  job existente com `duplicate: true` e ele passa a apagar a origem (na hora, se
+  já terminou; `source_available` diz o resultado). Com `false`, um job existente
+  cuja origem foi (ou será) apagada não é reaproveitado: um job novo é criado.
+
+```bash
+curl -X POST http://localhost:8000/upload \
+  -H "X-API-Key: your-api-key" \
+  -F "file=@contrato.pdf" \
+  -F "project=Cliente X" \
+  -F "purge_source=true"
+```
 
 ## Formatos suportados
 PDF, DOCX, DOC, HTML, PPTX, XLSX, RTF, ODT
@@ -3217,7 +3237,7 @@ Content-Type: `multipart/form-data`. Esquema: [Body_upload_and_convert_upload_po
 | `max_speakers` | não | integer / null |  |  |
 | `language` | não | string / null |  | Idioma para áudio/vídeo; omitido detecta automaticamente |
 | `include_word_timestamps` | não | boolean / null |  |  |
-| `purge_source` | não | boolean | default=false | Apagar o arquivo original (MinIO e cópia local) quando o job terminar com sucesso; fica só o resultado. Mantido se o job falhar ou tiver páginas com falha (o retry de página precisa dele) e apagado quando um retry levar o job a completed. Também é possível apagar depois com DELETE /jobs/{job_id}/source |
+| `purge_source` | não | boolean | default=false | Se true, apaga os arquivos de origem do job — o arquivo enviado (MinIO e cópia local) e, num PDF dividido, os PDFs por página — quando o job termina: `completed`, ou `failed`/`partial` depois de esgotadas as tentativas automáticas (nunca enquanto houver retry ou página na fila). O resultado (markdown, markdown por página) fica. Depois disso o retry manual de página não é mais possível. GET /jobs/{job_id} informa `source_available` e `source_deleted_at`. Arquivo repetido no mesmo projeto: com true o job existente é devolvido (`duplicate: true`) e passa a apagar a origem (na hora, se já terminou); com false um job existente cuja origem foi (ou será) apagada não é reaproveitado e um job novo é criado. Padrão false (mantém). Para apagar depois: DELETE /jobs/{job_id}/source |
 | `project` | não | string / null |  | Nome do projeto (obrigatório, a menos que a API key esteja vinculada a um projeto). É criado se não existir; grafias equivalentes ('Reunião', ' reuniao ') são o mesmo projeto. |
 | `project_id` | não | string / null |  | ID de um projeto existente (alternativa a 'project'; nunca cria). |
 | `folder` | não | string / null |  | Nome da pasta dentro do projeto (opcional; criada se não existir; sem '/'). |
@@ -3259,7 +3279,8 @@ JSON com segmentos. Escolha o formato em `GET /jobs/{job_id}/result?format=vtt`
 - `include_word_timestamps`: Adicionar timestamps em cada palavra (mais detalhado)
 - `output_format`: Formato padrão do resultado (`markdown`, `vtt`, `srt`, `txt`, `json`)
 - `purge_source`: Se `true`, apaga o arquivo enviado (disco e MinIO) quando o job
-  termina com sucesso; ficam só as transcrições. `DELETE /jobs/{job_id}` também
+  termina (com sucesso, ou com falha depois das tentativas automáticas); ficam só
+  as transcrições. `GET /jobs/{job_id}` informa `source_deleted_at`. `DELETE /jobs/{job_id}` também
   apaga o arquivo de origem e as transcrições
 
 ## Projeto
@@ -3335,7 +3356,7 @@ Content-Type: `multipart/form-data`. Esquema: [Body_transcribe_audio_transcribe_
 | `include_timestamps` | não | boolean | default=true | Incluir marcadores de tempo na transcrição |
 | `include_word_timestamps` | não | boolean | default=false | Incluir timestamps em nível de palavra (mais detalhado) |
 | `output_format` | não | string | default="markdown" | Formato padrão do resultado em /jobs/{job_id}/result: markdown, vtt, srt, txt ou json |
-| `purge_source` | não | boolean | default=false | Apagar o áudio/vídeo enviado assim que a transcrição terminar (guarda só o texto) |
+| `purge_source` | não | boolean | default=false | Apagar o áudio/vídeo enviado quando a transcrição terminar (com sucesso, ou com falha depois das tentativas automáticas); guarda só o texto |
 | `diarize` | não | boolean / null |  | Identificar falantes; omitido usa o padrão do provider |
 | `min_speakers` | não | integer / null |  |  |
 | `max_speakers` | não | integer / null |  |  |
@@ -3392,10 +3413,11 @@ provedor nem colocado na mensagem do Celery (S-01).
 (só sem JWT). Sem projeto: 422. Um arquivo repetido só é reaproveitado
 dentro do mesmo projeto.
 
-## Arquivo original (`purge_source`)
-Com `purge_source=true` o arquivo original (o enviado, ou o baixado da URL) é
-apagado quando o job termina `completed`. Falha ou páginas com falha: o original
-fica para o retry de página, e é apagado quando um retry completar o job.
+## Arquivos de origem (`purge_source`)
+Com `purge_source=true` os arquivos de origem (o enviado, ou o baixado da URL,
+e os PDFs por página) são apagados quando o job termina: `completed`, ou
+`failed`/`partial` depois das tentativas automáticas. O resultado fica. Mesmas
+regras de `/upload` (inclusive para arquivo repetido).
 Para apagar depois: `DELETE /jobs/{job_id}/source`
 
 ## Formatos suportados
@@ -3427,7 +3449,7 @@ Content-Type: `multipart/form-data`. Esquema: [Body_convert_document_convert_pos
 | `max_speakers` | não | integer / null |  |  |
 | `language` | não | string / null |  | Idioma para áudio/vídeo; omitido detecta automaticamente |
 | `include_word_timestamps` | não | boolean / null |  |  |
-| `purge_source` | não | boolean | default=false | Apagar o arquivo original (MinIO e cópia local) quando o job terminar com sucesso; fica só o resultado. Mantido se o job falhar ou tiver páginas com falha (o retry de página precisa dele) e apagado quando um retry levar o job a completed. Também é possível apagar depois com DELETE /jobs/{job_id}/source |
+| `purge_source` | não | boolean | default=false | Se true, apaga os arquivos de origem do job — o arquivo enviado (MinIO e cópia local) e, num PDF dividido, os PDFs por página — quando o job termina: `completed`, ou `failed`/`partial` depois de esgotadas as tentativas automáticas (nunca enquanto houver retry ou página na fila). O resultado (markdown, markdown por página) fica. Depois disso o retry manual de página não é mais possível. GET /jobs/{job_id} informa `source_available` e `source_deleted_at`. Arquivo repetido no mesmo projeto: com true o job existente é devolvido (`duplicate: true`) e passa a apagar a origem (na hora, se já terminou); com false um job existente cuja origem foi (ou será) apagada não é reaproveitado e um job novo é criado. Padrão false (mantém). Para apagar depois: DELETE /jobs/{job_id}/source |
 | `project` | não | string / null |  | Nome do projeto (obrigatório, a menos que a API key esteja vinculada a um projeto). É criado se não existir; grafias equivalentes ('Reunião', ' reuniao ') são o mesmo projeto. |
 | `project_id` | não | string / null |  | ID de um projeto existente (alternativa a 'project'; nunca cria). |
 | `folder` | não | string / null |  | Nome da pasta dentro do projeto (opcional; criada se não existir; sem '/'). |
@@ -3485,7 +3507,8 @@ Remove completamente um job do sistema, incluindo:
 - Metadados do MySQL (job e pages)
 - Conteúdo do Elasticsearch (markdown)
 - Status temporário do Redis
-- Para transcrições: o áudio/vídeo enviado e as transcrições guardadas no MinIO
+- O arquivo original (documento, áudio ou vídeo) no MinIO e as cópias locais
+- Para transcrições: as transcrições guardadas no MinIO
 
 **Atenção:** Esta operação é irreversível!
 
@@ -3522,22 +3545,26 @@ Apagar o arquivo original do job
 
 Autorização: **JWT ou API key**. Operation ID: `delete_job_source_jobs__job_id__source_delete`.
 
-Apaga o arquivo original de um job (o documento, áudio ou vídeo enviado),
-mantendo o job e o resultado (markdown, páginas, transcrições).
+Apaga os arquivos de origem de um job — o arquivo enviado (documento, áudio
+ou vídeo) e os PDFs por página de um PDF dividido — mantendo o job e o
+resultado (markdown, markdown por página, transcrições).
 
-Remove o objeto no MinIO (`uploads/...` ou `audio/...`) e a cópia local, e
-zera a referência do job. Depois disso `GET /jobs/{job_id}` responde
-`source_available: false` e o retry de página deixa de ser possível
-(ele restaura o original do MinIO). Os PDFs por página continuam disponíveis.
+Remove os objetos no MinIO (`uploads/...` ou `audio/...`, e `pages/{job_id}/`)
+e as cópias locais, e grava quando isso aconteceu. Depois disso
+`GET /jobs/{job_id}` responde `source_available: false` e `source_deleted_at`,
+`GET /jobs/{job_id}/pages/{n}/pdf` responde 410 `SOURCE_PURGED` e o retry de
+página responde 409 `SOURCE_NOT_AVAILABLE`.
 
-Para apagar automaticamente ao terminar, envie `purge_source=true` em
+Para apagar automaticamente quando o job terminar, envie `purge_source=true` em
 `/upload`, `/convert` ou `/transcribe`.
 
 ## Retorno
-- 200: `{"job_id": "...", "source_deleted": true}`
-- 404: job inexistente, de outro usuário, ou sem arquivo original
-- 409: `{"code": "JOB_STILL_PROCESSING"}`: o job ainda está na fila ou em processamento
-- 503: `{"code": "SOURCE_DELETE_FAILED"}`: o armazenamento recusou; o original foi mantido
+- 200: `{"job_id": "...", "source_deleted": true, "source_deleted_at": "..."}`
+- 404: job inexistente, de outro usuário, ou sem arquivos de origem
+- 409: `{"code": "JOB_STILL_PROCESSING"}`: o job ainda está na fila ou em processamento,
+  espera um retry automático, ou tem página na fila/em processamento (retry de página)
+- 503: `{"code": "SOURCE_DELETE_FAILED"}`: o armazenamento recusou; o que não foi
+  apagado continua referenciado (chamar de novo termina)
 
 Parâmetros:
 
@@ -4855,7 +4882,7 @@ Esquema JSON completo:
 | `max_speakers` | não | integer / null |  |  |
 | `language` | não | string / null |  | Idioma para áudio/vídeo; omitido detecta automaticamente |
 | `include_word_timestamps` | não | boolean / null |  |  |
-| `purge_source` | não | boolean | default=false | Apagar o arquivo original (MinIO e cópia local) quando o job terminar com sucesso; fica só o resultado. Mantido se o job falhar ou tiver páginas com falha (o retry de página precisa dele) e apagado quando um retry levar o job a completed. Também é possível apagar depois com DELETE /jobs/{job_id}/source |
+| `purge_source` | não | boolean | default=false | Se true, apaga os arquivos de origem do job — o arquivo enviado (MinIO e cópia local) e, num PDF dividido, os PDFs por página — quando o job termina: `completed`, ou `failed`/`partial` depois de esgotadas as tentativas automáticas (nunca enquanto houver retry ou página na fila). O resultado (markdown, markdown por página) fica. Depois disso o retry manual de página não é mais possível. GET /jobs/{job_id} informa `source_available` e `source_deleted_at`. Arquivo repetido no mesmo projeto: com true o job existente é devolvido (`duplicate: true`) e passa a apagar a origem (na hora, se já terminou); com false um job existente cuja origem foi (ou será) apagada não é reaproveitado e um job novo é criado. Padrão false (mantém). Para apagar depois: DELETE /jobs/{job_id}/source |
 | `project` | não | string / null |  | Nome do projeto (obrigatório, a menos que a API key esteja vinculada a um projeto). É criado se não existir; grafias equivalentes ('Reunião', ' reuniao ') são o mesmo projeto. |
 | `project_id` | não | string / null |  | ID de um projeto existente (alternativa a 'project'; nunca cria). |
 | `folder` | não | string / null |  | Nome da pasta dentro do projeto (opcional; criada se não existir; sem '/'). |
@@ -4984,7 +5011,7 @@ Esquema JSON completo:
     "purge_source": {
       "type": "boolean",
       "title": "Purge Source",
-      "description": "Apagar o arquivo original (MinIO e cópia local) quando o job terminar com sucesso; fica só o resultado. Mantido se o job falhar ou tiver páginas com falha (o retry de página precisa dele) e apagado quando um retry levar o job a completed. Também é possível apagar depois com DELETE /jobs/{job_id}/source",
+      "description": "Se true, apaga os arquivos de origem do job — o arquivo enviado (MinIO e cópia local) e, num PDF dividido, os PDFs por página — quando o job termina: `completed`, ou `failed`/`partial` depois de esgotadas as tentativas automáticas (nunca enquanto houver retry ou página na fila). O resultado (markdown, markdown por página) fica. Depois disso o retry manual de página não é mais possível. GET /jobs/{job_id} informa `source_available` e `source_deleted_at`. Arquivo repetido no mesmo projeto: com true o job existente é devolvido (`duplicate: true`) e passa a apagar a origem (na hora, se já terminou); com false um job existente cuja origem foi (ou será) apagada não é reaproveitado e um job novo é criado. Padrão false (mantém). Para apagar depois: DELETE /jobs/{job_id}/source",
       "default": false
     },
     "project": {
@@ -5282,7 +5309,7 @@ Esquema JSON completo:
 | `include_timestamps` | não | boolean | default=true | Incluir marcadores de tempo na transcrição |
 | `include_word_timestamps` | não | boolean | default=false | Incluir timestamps em nível de palavra (mais detalhado) |
 | `output_format` | não | string | default="markdown" | Formato padrão do resultado em /jobs/{job_id}/result: markdown, vtt, srt, txt ou json |
-| `purge_source` | não | boolean | default=false | Apagar o áudio/vídeo enviado assim que a transcrição terminar (guarda só o texto) |
+| `purge_source` | não | boolean | default=false | Apagar o áudio/vídeo enviado quando a transcrição terminar (com sucesso, ou com falha depois das tentativas automáticas); guarda só o texto |
 | `diarize` | não | boolean / null |  | Identificar falantes; omitido usa o padrão do provider |
 | `min_speakers` | não | integer / null |  |  |
 | `max_speakers` | não | integer / null |  |  |
@@ -5359,7 +5386,7 @@ Esquema JSON completo:
     "purge_source": {
       "type": "boolean",
       "title": "Purge Source",
-      "description": "Apagar o áudio/vídeo enviado assim que a transcrição terminar (guarda só o texto)",
+      "description": "Apagar o áudio/vídeo enviado quando a transcrição terminar (com sucesso, ou com falha depois das tentativas automáticas); guarda só o texto",
       "default": false
     },
     "diarize": {
@@ -5472,7 +5499,7 @@ Esquema JSON completo:
 | `max_speakers` | não | integer / null |  |  |
 | `language` | não | string / null |  | Idioma para áudio/vídeo; omitido detecta automaticamente |
 | `include_word_timestamps` | não | boolean / null |  |  |
-| `purge_source` | não | boolean | default=false | Apagar o arquivo original (MinIO e cópia local) quando o job terminar com sucesso; fica só o resultado. Mantido se o job falhar ou tiver páginas com falha (o retry de página precisa dele) e apagado quando um retry levar o job a completed. Também é possível apagar depois com DELETE /jobs/{job_id}/source |
+| `purge_source` | não | boolean | default=false | Se true, apaga os arquivos de origem do job — o arquivo enviado (MinIO e cópia local) e, num PDF dividido, os PDFs por página — quando o job termina: `completed`, ou `failed`/`partial` depois de esgotadas as tentativas automáticas (nunca enquanto houver retry ou página na fila). O resultado (markdown, markdown por página) fica. Depois disso o retry manual de página não é mais possível. GET /jobs/{job_id} informa `source_available` e `source_deleted_at`. Arquivo repetido no mesmo projeto: com true o job existente é devolvido (`duplicate: true`) e passa a apagar a origem (na hora, se já terminou); com false um job existente cuja origem foi (ou será) apagada não é reaproveitado e um job novo é criado. Padrão false (mantém). Para apagar depois: DELETE /jobs/{job_id}/source |
 | `project` | não | string / null |  | Nome do projeto (obrigatório, a menos que a API key esteja vinculada a um projeto). É criado se não existir; grafias equivalentes ('Reunião', ' reuniao ') são o mesmo projeto. |
 | `project_id` | não | string / null |  | ID de um projeto existente (alternativa a 'project'; nunca cria). |
 | `folder` | não | string / null |  | Nome da pasta dentro do projeto (opcional; criada se não existir; sem '/'). |
@@ -5590,7 +5617,7 @@ Esquema JSON completo:
     "purge_source": {
       "type": "boolean",
       "title": "Purge Source",
-      "description": "Apagar o arquivo original (MinIO e cópia local) quando o job terminar com sucesso; fica só o resultado. Mantido se o job falhar ou tiver páginas com falha (o retry de página precisa dele) e apagado quando um retry levar o job a completed. Também é possível apagar depois com DELETE /jobs/{job_id}/source",
+      "description": "Se true, apaga os arquivos de origem do job — o arquivo enviado (MinIO e cópia local) e, num PDF dividido, os PDFs por página — quando o job termina: `completed`, ou `failed`/`partial` depois de esgotadas as tentativas automáticas (nunca enquanto houver retry ou página na fila). O resultado (markdown, markdown por página) fica. Depois disso o retry manual de página não é mais possível. GET /jobs/{job_id} informa `source_available` e `source_deleted_at`. Arquivo repetido no mesmo projeto: com true o job existente é devolvido (`duplicate: true`) e passa a apagar a origem (na hora, se já terminou); com false um job existente cuja origem foi (ou será) apagada não é reaproveitado e um job novo é criado. Padrão false (mantém). Para apagar depois: DELETE /jobs/{job_id}/source",
       "default": false
     },
     "project": {
@@ -7761,6 +7788,7 @@ Esquema JSON completo:
 | `status` | sim | string |  |  |
 | `markdown` | sim | string |  |  |
 | `image` | sim | [FaceAnalysisResult](#model-faceanalysisresult) |  |  |
+| `attempt` | não | integer / null |  |  |
 
 Esquema JSON completo:
 
@@ -7781,6 +7809,17 @@ Esquema JSON completo:
     },
     "image": {
       "$ref": "#/components/schemas/FaceAnalysisResult"
+    },
+    "attempt": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Attempt"
     }
   },
   "type": "object",
@@ -10007,6 +10046,7 @@ Esquema JSON completo:
 | `status` | sim | string |  |  |
 | `markdown` | sim | string |  |  |
 | `image` | sim | [ImageFullAnalysisResult](#model-imagefullanalysisresult) / [ImageFullV2Result](#model-imagefullv2result) |  |  |
+| `attempt` | não | integer / null |  |  |
 
 Esquema JSON completo:
 
@@ -10035,6 +10075,17 @@ Esquema JSON completo:
         }
       ],
       "title": "Image"
+    },
+    "attempt": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Attempt"
     }
   },
   "type": "object",
@@ -10149,8 +10200,11 @@ Esquema JSON completo:
 | `message` | sim | string |  |  |
 | `project` | não | [UploadProjectInfo](#model-uploadprojectinfo) / null |  |  |
 | `folder` | não | [UploadFolderInfo](#model-uploadfolderinfo) / null |  |  |
+| `duplicate` | não | boolean | default=false |  |
+| `source_available` | não | boolean / null |  |  |
 | `poll_url` | sim | string |  |  |
 | `result_url` | sim | string |  |  |
+| `attempt` | não | integer | default=1 |  |
 
 Esquema JSON completo:
 
@@ -10194,6 +10248,22 @@ Esquema JSON completo:
         }
       ]
     },
+    "duplicate": {
+      "type": "boolean",
+      "title": "Duplicate",
+      "default": false
+    },
+    "source_available": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Source Available"
+    },
     "poll_url": {
       "type": "string",
       "title": "Poll Url"
@@ -10201,6 +10271,11 @@ Esquema JSON completo:
     "result_url": {
       "type": "string",
       "title": "Result Url"
+    },
+    "attempt": {
+      "type": "integer",
+      "title": "Attempt",
+      "default": 1
     }
   },
   "type": "object",
@@ -11092,6 +11167,8 @@ Esquema JSON completo:
 | `message` | sim | string |  |  |
 | `project` | não | [UploadProjectInfo](#model-uploadprojectinfo) / null |  |  |
 | `folder` | não | [UploadFolderInfo](#model-uploadfolderinfo) / null |  |  |
+| `duplicate` | não | boolean | default=false |  |
+| `source_available` | não | boolean / null |  |  |
 
 Esquema JSON completo:
 
@@ -11136,6 +11213,22 @@ Esquema JSON completo:
           "type": "null"
         }
       ]
+    },
+    "duplicate": {
+      "type": "boolean",
+      "title": "Duplicate",
+      "default": false
+    },
+    "source_available": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Source Available"
     }
   },
   "type": "object",
@@ -11355,6 +11448,8 @@ Esquema JSON completo:
 | `name` | não | string / null |  |  |
 | `tags` | não | array de string | default=[] |  |
 | `source_available` | não | boolean | default=false |  |
+| `source_deleted_at` | não | string (date-time) / null |  |  |
+| `source_deletable` | não | boolean | default=false |  |
 | `project` | não | [ProjectRef](#model-projectref) / null |  |  |
 | `folder` | não | [FolderRef](#model-folderref) / null |  |  |
 | `parent_job_id` | não | string (uuid) / null |  |  |
@@ -11458,6 +11553,23 @@ Esquema JSON completo:
     "source_available": {
       "type": "boolean",
       "title": "Source Available",
+      "default": false
+    },
+    "source_deleted_at": {
+      "anyOf": [
+        {
+          "type": "string",
+          "format": "date-time"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Source Deleted At"
+    },
+    "source_deletable": {
+      "type": "boolean",
+      "title": "Source Deletable",
       "default": false
     },
     "project": {
@@ -13522,6 +13634,7 @@ Resposta de DELETE /jobs/{job_id}/source
 | --- | --- | --- | --- | --- |
 | `job_id` | sim | string |  |  |
 | `source_deleted` | sim | boolean |  |  |
+| `source_deleted_at` | não | string (date-time) / null |  |  |
 
 Esquema JSON completo:
 
@@ -13535,6 +13648,18 @@ Esquema JSON completo:
     "source_deleted": {
       "type": "boolean",
       "title": "Source Deleted"
+    },
+    "source_deleted_at": {
+      "anyOf": [
+        {
+          "type": "string",
+          "format": "date-time"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Source Deleted At"
     }
   },
   "type": "object",

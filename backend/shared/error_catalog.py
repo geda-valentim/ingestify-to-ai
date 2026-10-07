@@ -55,8 +55,23 @@ _HOST_AGENT_HINT = (
 CATALOG = {
     # --- jobs ------------------------------------------------------------------
     "JOB_STILL_PROCESSING": (
-        "O job ainda está na fila ou em processamento. Aguarde ele terminar para "
-        "apagar o arquivo original.",
+        "O job (ou uma página dele) ainda está na fila, em processamento ou "
+        "aguardando uma nova tentativa. Aguarde ele terminar para apagar o arquivo original.",
+        ["retry"],
+    ),
+    "SOURCE_PURGED": (
+        "Os arquivos de origem deste job (o arquivo enviado e os PDFs das páginas) "
+        "foram apagados em {deleted_at}, a pedido (purge_source ou exclusão do "
+        "original). O resultado da conversão continua disponível.",
+        [],
+    ),
+    "SOURCE_NOT_AVAILABLE": (
+        "O arquivo original foi apagado; não é possível refazer esta página.",
+        [],
+    ),
+    "PAGES_FAILED": (
+        "{failed} de {total} páginas falharam. As demais foram convertidas; "
+        "refaça as páginas com falha para completar o documento.",
         ["retry"],
     ),
     "SOURCE_DELETE_FAILED": (
@@ -554,6 +569,7 @@ def describe(code, *, feature=None, needs_connection=False, **context):
         for_feature=f" para {feature}" if feature else "",
         host=f" “{context['host']}”" if context.get("host") else "",
         since=_since(context.get("seen_at")) if "seen_at" in context else "",
+        **{k: context[k] for k in ("failed", "total", "deleted_at") if k in context},
     )
     message = template.format_map(values)
     steps = list(steps)

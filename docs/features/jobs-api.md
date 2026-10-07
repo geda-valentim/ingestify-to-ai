@@ -108,9 +108,21 @@ pelo split aparecem como `queued` com `job_id: null`.
 
 Paginação da lista de páginas: `?page_limit=50&page_offset=0` (sem `page_limit`, todas).
 
-`source_available` (bool) diz se o arquivo original ainda existe (`Job.minio_upload_path`
-preenchido ou cópia local em `{TEMP_STORAGE_PATH}/uploads|audio/{job_id}/`). Fica `false`
-depois de `purge_source` ou de `DELETE /jobs/{job_id}/source`, e para jobs filhos.
+Arquivos de origem (o original e, num PDF dividido, os PDFs por página), lidos do MySQL,
+nunca do Redis:
+
+- `source_available` (bool): algum ainda existe (`Job.minio_upload_path`, `Page.minio_page_path`
+  ou cópia local em `{TEMP_STORAGE_PATH}/uploads|audio/{job_id}/` ou no diretório de
+  trabalho `{TEMP_STORAGE_PATH}/{job_id}/`, onde fica o download de URL). `false` depois
+  de `purge_source` ou de `DELETE /jobs/{job_id}/source`, e para jobs filhos.
+- `source_deleted_at` (datetime UTC ou `null`): quando foram apagados.
+- `source_deletable` (bool): `DELETE /jobs/{job_id}/source` pode rodar agora (há arquivo e
+  nada pendente: nem o job, nem retry automático, nem página `pending`/`processing`).
+
+`status` de um PDF dividido cujas páginas terminaram todas, com alguma falha definitiva,
+é **`partial`** (com `error_message` "N de M páginas falharam…"), não mais `processing`
+para sempre. Entre tentativas automáticas de `process_conversion` o job aparece `queued`
+(com o erro da tentativa), e só fica `failed` na última.
 
 ### `GET /jobs/{job_id}/result`
 
@@ -137,39 +149,47 @@ curl -H "X-API-Key: $INGESTIFY_API_KEY" http://localhost:8000/jobs/$JOB_ID/resul
   `{job_id, page_number, url, expires_in: 900, expires_at}`. A `url` é assinada para o
   host que o navegador usa (`MINIO_PUBLIC_ENDPOINT`, ou o host da requisição) e não aceita
   parâmetros extras na query string (invalidaria a assinatura → `403` no MinIO).
+  Depois de `purge_source` / `DELETE /jobs/{id}/source`: `410` com
+  `{"code": "SOURCE_PURGED", "message": "...apagados em DD/MM/AAAA HH:MM UTC...", "source_deleted_at"}`.
 - `POST /jobs/{id}/pages/{n}/retry` — só para página `failed` e com `retry_count < 3`.
-  Gera um novo `page_job_id`; se a cópia local do PDF já foi apagada, restaura o original
-  de `ingestify-uploads` antes de reextrair a página. Resposta inclui `new_page_job_id`,
-  `retry_count` e `retry_limit: 3`.
+  Procura o PDF original primeiro (cópia local, download de URL no diretório de trabalho,
+  ou restaurado de `ingestify-uploads`); sem ele responde `409`
+  `{"code": "SOURCE_NOT_AVAILABLE"}` **sem mudar nada** (a página continua `failed`, o
+  `retry_count` não sobe). Com ele, a página vai a `pending` e o job MAIN volta a
+  `processing` até a página assentar (`completed` depois do merge, ou `partial` de novo).
+  Se o enfileiramento falhar, página e job voltam ao que eram (`500`). Resposta inclui
+  `new_page_job_id`, `retry_count` e `retry_limit: 3`.
 
 ### `DELETE /jobs/{job_id}`
 
-Remove, nesta ordem: o resultado e as páginas no Elasticsearch; para transcrições, os
-objetos de áudio/legendas no MinIO; as linhas do MySQL (`jobs` filhos, `pages`, o MAIN —
+Remove, nesta ordem: o resultado e as páginas no Elasticsearch; os arquivos de origem
+(o original no bucket onde ele está — `ingestify-uploads` ou `ingestify-audio` —, os PDFs
+por página e as cópias locais); para transcrições, as legendas no MinIO; as linhas do MySQL (`jobs` filhos, `pages`, o MAIN —
 `job_tags` cai por cascade); e as chaves do Redis (MAIN, SPLIT, PAGEs, MERGE e o índice
 `user:{id}:jobs`). Responde `{message, job_id, deleted_at}`.
 
-**Lacuna:** para documentos, os objetos no MinIO **não** são apagados — o original
-(`ingestify-uploads/uploads/{job_id}/…`; apague-o antes com `DELETE /jobs/{job_id}/source`
-ou use `purge_source`), os PDFs por página
-(`ingestify-pages/pages/{job_id}/…`) e os Markdown por página
-(`ingestify-results/results/{job_id}/…`) permanecem.
+**Lacuna:** os Markdown por página (`ingestify-results/results/{job_id}/…`) permanecem
+no MinIO.
 
 ### `DELETE /jobs/{job_id}/source`
 
-Apaga só o **arquivo original** (documento, áudio ou vídeo enviado), mantendo o job e o
-resultado: o objeto no MinIO (`ingestify-uploads` para `uploads/…`, `ingestify-audio` para
-`audio/…`) e a cópia local; zera `Job.minio_upload_path`. Autorização `jobs.delete`.
+Apaga os **arquivos de origem** — o enviado (documento, áudio ou vídeo) e, num PDF
+dividido, os PDFs por página — mantendo o job e o resultado (Markdown do documento e das
+páginas, transcrições): os objetos no MinIO (`ingestify-uploads` para `uploads/…`,
+`ingestify-audio` para `audio/…`, `ingestify-pages/pages/{job_id}/`) e as cópias locais;
+zera `Job.minio_upload_path`/`Page.minio_page_path` e grava `source_deleted_at`.
+Autorização `jobs.delete`. O job é travado (`SELECT … FOR UPDATE`) junto com o retry de
+página, então um retry não começa entre a checagem e o apagamento.
 
 | Resposta | Quando |
 |---|---|
-| `200 {"job_id": "...", "source_deleted": true}` | apagado |
-| `404` | job inexistente, de outro usuário, job filho, ou sem original (já apagado) |
-| `409 {"code": "JOB_STILL_PROCESSING", "message": ...}` | job `queued`/`processing` (inclui PDF dividido com páginas em andamento ou falhas ainda não resolvidas) |
-| `503 {"code": "SOURCE_DELETE_FAILED", ...}` | o MinIO recusou; o original continua referenciado |
+| `200 {"job_id", "source_deleted": true, "source_deleted_at"}` | apagado |
+| `404` | job inexistente, de outro usuário, job filho, ou sem arquivos de origem (já apagados) |
+| `409 {"code": "JOB_STILL_PROCESSING", "message": ...}` | o job está `queued`/`processing` (inclui um retry automático agendado, que espera como `queued`), ou alguma página está `pending`/`processing` (retry de página, ou retry automático de página) |
+| `503 {"code": "SOURCE_DELETE_FAILED", ...}` | o MinIO recusou; o que não foi apagado continua referenciado (chamar de novo termina) |
 
-Depois disso o retry de página não tem mais de onde restaurar o PDF (`404`). Os PDFs por
-página continuam disponíveis. Para apagar automaticamente ao terminar, use
+Depois disso o retry de página responde `409 SOURCE_NOT_AVAILABLE` e o PDF de página `410
+SOURCE_PURGED`. Para apagar automaticamente quando o job terminar, use
 `purge_source=true` no `/upload`, `/convert` ou `/transcribe` (ver
 [conversion.md](conversion.md#guardar-ou-apagar-o-arquivo-original-purge_source)).
 

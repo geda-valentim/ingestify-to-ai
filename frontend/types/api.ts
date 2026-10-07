@@ -354,6 +354,10 @@ export interface JobCreatedResponse {
   message: string;
   project?: UploadProjectInfo;
   folder?: UploadFolderInfo | null;
+  /** true: the file was already processed in this project and job_id is that existing job */
+  duplicate?: boolean;
+  /** Duplicates only: whether the existing job's source files still exist after this request */
+  source_available?: boolean | null;
 }
 
 export interface ChildJobs {
@@ -376,8 +380,12 @@ export interface JobStatusResponse {
   error?: string | null;
   name?: string | null;
   tags?: string[];
-  /** Whether the original file still exists (false after purge_source / DELETE /jobs/{id}/source) */
+  /** Whether any source file still exists: the original or the page PDFs (false after purge_source / DELETE /jobs/{id}/source) */
   source_available?: boolean;
+  /** When the source files were deleted (UTC ISO-8601), null if they were not */
+  source_deleted_at?: string | null;
+  /** Whether DELETE /jobs/{id}/source can run now (files exist, nothing queued or retrying) */
+  source_deletable?: boolean;
   parent_job_id?: string | null;
   total_pages?: number | null;
   pages_completed?: number | null;
@@ -468,6 +476,7 @@ export interface HealthCheckResponse {
 export interface SourceDeletedResponse {
   job_id: string;
   source_deleted: boolean;
+  source_deleted_at?: string | null;
 }
 
 export interface ConvertRequest extends UploadLocation {
@@ -477,7 +486,7 @@ export interface ConvertRequest extends UploadLocation {
   name?: string;
   tags?: string[];
   authToken?: string; // OAuth token for gdrive/dropbox
-  /** Delete the original file once the job completes (kept on failure for page retry) */
+  /** Delete the source files (original + page PDFs) once the job settles: completed, or failed/partial after its automatic retries */
   purge_source?: boolean;
 }
 
@@ -496,7 +505,7 @@ export interface UploadRequest extends UploadLocation {
   file: File;
   name?: string;
   tags?: string[];
-  /** Delete the original file once the job completes (kept on failure for page retry) */
+  /** Delete the source files (original + page PDFs) once the job settles: completed, or failed/partial after its automatic retries */
   purge_source?: boolean;
 }
 

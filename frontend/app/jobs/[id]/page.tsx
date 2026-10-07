@@ -137,6 +137,12 @@ export default function JobStatusPage({ params }: PageProps) {
     },
   });
 
+  // Source files (original + page PDFs) deleted by purge_source / DELETE /jobs/{id}/source.
+  // From GET /jobs/{id}, which reads them from the database, never from the Redis cache.
+  const sourcePurged = !!status?.source_deleted_at;
+  // A page retry re-reads the original: impossible once it is gone
+  const canRetryPages = status?.source_available !== false;
+
   // Fetch result when job is completed
   const { data: result, isError: isResultError, refetch: refetchResult } = useQuery({
     queryKey: ["job-result", resolvedParams.id, token],
@@ -185,7 +191,7 @@ export default function JobStatusPage({ params }: PageProps) {
   } = useQuery({
     queryKey: ["page-pdf-url", resolvedParams.id, selectedPage?.page_number, token],
     queryFn: () => jobsApi.getPagePdf(resolvedParams.id, selectedPage!.page_number),
-    enabled: !!selectedPage && !!token && selectedPage.status === "completed",
+    enabled: !!selectedPage && !!token && selectedPage.status === "completed" && !sourcePurged,
     staleTime: 0,
     gcTime: 0,
     retry: 1,
@@ -337,7 +343,7 @@ export default function JobStatusPage({ params }: PageProps) {
       setSelectedPage(page);
       setPdfError(null);
       // Set initial tab based on status
-      setActiveTab(page.status === "completed" ? "pdf" : "markdown");
+      setActiveTab(page.status === "completed" && !sourcePurged ? "pdf" : "markdown");
     }
   };
 
@@ -704,13 +710,22 @@ export default function JobStatusPage({ params }: PageProps) {
                   variant="outline"
                   className="w-full"
                   onClick={() => setSourceDialogOpen(true)}
-                  disabled={["queued", "pending", "processing"].includes(status.status) || deleteSourceMutation.isPending}
-                  title={["queued", "pending", "processing"].includes(status.status) ? "Available when the job finishes" : undefined}
+                  disabled={!status.source_deletable || deleteSourceMutation.isPending}
+                  title={
+                    !status.source_deletable
+                      ? "Available when the job and its retries have finished"
+                      : undefined
+                  }
                   size="sm"
                 >
                   <Trash2 className="h-4 w-4 mr-2" />
                   Delete original file
                 </Button>
+              )}
+              {status.source_deleted_at && (
+                <p className="text-xs text-muted-foreground text-center">
+                  Original files deleted on {new Date(status.source_deleted_at).toLocaleString()}
+                </p>
               )}
             </div>
 
@@ -727,7 +742,14 @@ export default function JobStatusPage({ params }: PageProps) {
                 </CardHeader>
 
                 {/* Bulk Actions */}
-                {pages.filter((p: PageInfo) => p.status === "failed").length > 0 && (
+                {pages.filter((p: PageInfo) => p.status === "failed").length > 0 && !canRetryPages && (
+                  <CardContent className="pt-0 pb-3">
+                    <p className="text-xs text-muted-foreground">
+                      Failed pages can no longer be retried: the original file was deleted.
+                    </p>
+                  </CardContent>
+                )}
+                {pages.filter((p: PageInfo) => p.status === "failed").length > 0 && canRetryPages && (
                   <CardContent className="pt-0 pb-3 space-y-2">
                     <div className="flex gap-2">
                       <Button
@@ -765,7 +787,7 @@ export default function JobStatusPage({ params }: PageProps) {
 
                 <CardContent className="space-y-1 max-h-[400px] overflow-y-auto">
                   {pages.map((page: PageInfo) => {
-                    const isRetryDisabled = page.retry_count >= 3;
+                    const isRetryDisabled = page.retry_count >= 3 || !canRetryPages;
                     const canRetry = page.status === "failed" && !isRetryDisabled;
                     const isSelected = selectedPage?.page_number === page.page_number;
                     const isChecked = selectedPages.has(page.page_number);
@@ -893,7 +915,7 @@ export default function JobStatusPage({ params }: PageProps) {
                     </div>
 
                     <div className="flex gap-2 justify-center">
-                      {selectedPage.retry_count < 3 && (
+                      {selectedPage.retry_count < 3 && canRetryPages && (
                         <Button
                           onClick={(e) => handleRetryPage(selectedPage, e)}
                           disabled={retryPageMutation.isPending}
@@ -928,6 +950,16 @@ export default function JobStatusPage({ params }: PageProps) {
                     {selectedPage.retry_count >= 3 && (
                       <p className="text-xs text-destructive font-medium">
                         Maximum retry attempts reached (3/3)
+                      </p>
+                    )}
+
+                    {!canRetryPages && (
+                      <p className="text-xs text-muted-foreground">
+                        This page can no longer be retried: the original file was deleted
+                        {status?.source_deleted_at
+                          ? ` on ${new Date(status.source_deleted_at).toLocaleString()}`
+                          : ""}
+                        .
                       </p>
                     )}
 
@@ -967,7 +999,17 @@ export default function JobStatusPage({ params }: PageProps) {
 
                     <TabsContent value="pdf" className="flex-1 overflow-hidden mt-4">
                       <div className="h-full overflow-y-auto border rounded-lg bg-muted/30 p-4">
-                        {pdfError || isPdfUrlError ? (
+                        {sourcePurged ? (
+                          <div className="text-center py-12">
+                            <p className="text-sm text-muted-foreground">
+                              The page PDFs were deleted with the original file
+                              {status?.source_deleted_at
+                                ? ` on ${new Date(status.source_deleted_at).toLocaleString()}`
+                                : ""}
+                              . The Markdown is still available.
+                            </p>
+                          </div>
+                        ) : pdfError || isPdfUrlError ? (
                           <div className="text-center py-12">
                             <AlertCircle className="h-12 w-12 text-destructive mx-auto mb-4" />
                             <p className="text-sm text-muted-foreground">
@@ -1060,13 +1102,13 @@ export default function JobStatusPage({ params }: PageProps) {
             <AlertDialogHeader>
               <AlertDialogTitle>Delete the original file?</AlertDialogTitle>
               <AlertDialogDescription>
-                The uploaded file will be permanently deleted. The job, the conversion result
-                and the per-page PDFs stay available, but failed pages can no longer
-                be retried.
+                The uploaded file and the per-page PDFs will be permanently deleted. The job
+                and its conversion result (Markdown) stay available, but failed pages can no
+                longer be retried.
               </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>
-              <AlertDialogCancel>Cancelar</AlertDialogCancel>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
               <AlertDialogAction
                 onClick={(event) => {
                   event.preventDefault();
@@ -1078,7 +1120,7 @@ export default function JobStatusPage({ params }: PageProps) {
                 {deleteSourceMutation.isPending ? (
                   <>
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Apagando...
+                    Deleting...
                   </>
                 ) : (
                   "Delete original file"

@@ -76,7 +76,7 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr(routes, "prepare_upload_location", lambda *args: "plan")
     monkeypatch.setattr(routes, "resolve_upload_location", lambda *args: location)
     monkeypatch.setattr(routes, "find_duplicate_job",
-                        lambda db, user_id, checksum, loc, transcription_profile_hash=None: (db.query(None).filter().first(), None))
+                        lambda db, user_id, checksum, loc, **kw: (db.query(None).filter().first(), None))
     monkeypatch.setattr(routes, "existing_job_location", lambda db, job, loc: {})
     return SimpleNamespace(tmp=tmp_path, minio=minio, enqueued=enqueued)
 
@@ -116,7 +116,8 @@ def test_upload_over_limit_is_rejected_without_leftovers(env):
 
 
 def test_duplicate_upload_discards_staged_file(env):
-    existing = SimpleNamespace(id="3f1c9a2e-0000-4000-8000-00000000000a", created_at=datetime.utcnow())
+    existing = SimpleNamespace(id="3f1c9a2e-0000-4000-8000-00000000000a", created_at=datetime.utcnow(),
+                               minio_upload_path="uploads/3f1c9a2e/report.pdf", pages=[], configuration_row=None)
     response = upload(db=FakeDB(existing=existing))
     assert str(response.job_id) == existing.id
     assert staging_files(env.tmp) == []

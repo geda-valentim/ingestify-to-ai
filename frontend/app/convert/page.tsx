@@ -158,9 +158,15 @@ function ConversionWorkspace() {
       const created = [data.project?.created && "Project created", data.folder?.created && "Folder created"]
         .filter(Boolean)
         .join(" · ");
+      // A file already processed in this project returns the existing job
+      const duplicateNote = data.duplicate
+        ? `Already processed: opening the existing job${
+            data.source_available === false ? " (its original files were deleted)" : ""
+          }`
+        : "";
       toast({
         title: sentTo ? `Sent to ${sentTo}` : "Upload started",
-        description: created || undefined,
+        description: [created, duplicateNote].filter(Boolean).join(" · ") || undefined,
       });
       queryClient.invalidateQueries({ queryKey: ["projects"] });
       queryClient.invalidateQueries({ queryKey: ["jobs"] });
@@ -351,8 +357,9 @@ function ConversionWorkspace() {
                           Don't keep the original file after converting
                         </Label>
                         <p className="text-xs text-muted-foreground">
-                          The file is deleted once the conversion succeeds; only the result is kept.
-                          If a page fails, it is kept until the retry completes.
+                          The file and its page PDFs are deleted when the job finishes (also when it
+                          fails, after its automatic retries); only the Markdown result is kept, and
+                          failed pages can no longer be retried.
                         </p>
                       </div>
                     </div>

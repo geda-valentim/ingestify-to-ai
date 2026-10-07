@@ -11,21 +11,49 @@
   `test_upload_apikey.sh`, `test_conversion_flow.py` (cobertos pela suíte `pytest` e por `scripts/`).
 - Os `docker-compose*.yml` ficam na raiz: o host agent fixa o caminho e o hash de cada um.
 
-## 2026-10: Guardar ou apagar o arquivo original de documentos
+## 2026-10: Guardar ou apagar os arquivos de origem de documentos
 
 - `POST /upload` e `POST /convert` aceitam `purge_source` (form, padrão `false`; mesmo
-  nome e sentido do `/transcribe`). Com `true`, o original (MinIO `uploads/…` e cópia
-  local) é apagado quando o job MAIN termina `completed` — documento único ou PDF dividido
-  depois do merge. Jobs que falham ou têm páginas com falha mantêm o original para o
-  retry de página; ele é apagado quando um retry completa o job. Os PDFs por página ficam.
-  A opção é gravada em `job_configurations` (sem migração). Falha ao apagar não falha o job.
-- Nova rota `DELETE /jobs/{job_id}/source` (`jobs.delete`): apaga o original de um job
-  terminado (documento ou áudio) e responde `{job_id, source_deleted: true}`; `404` sem
-  original ou de outro usuário, `409 JOB_STILL_PROCESSING` enquanto processa.
-- `GET /jobs/{job_id}` ganha `source_available`.
-- Transcrições criadas por `/upload` ou `/convert` também respeitam `purge_source`.
+  nome e sentido do `/transcribe`). Com `true`, os **arquivos de origem** — o original
+  (MinIO `uploads/…` e cópias locais, inclusive o download de URL no diretório de
+  trabalho) e os PDFs por página de um PDF dividido (`pages/{job_id}/…`) — são apagados
+  quando o job MAIN termina de vez: `completed`, ou `failed`/`partial` **depois de
+  esgotadas as tentativas automáticas**; nunca com retry ou página pendente. O Markdown
+  fica. A opção e a data ficam em `job_configurations.options` (sem migração). Falha ao
+  apagar não muda o job.
+- **Mudança de comportamento:** depois do apagamento o retry manual de página responde
+  `409 SOURCE_NOT_AVAILABLE` sem mudar nada (antes: página presa em `pending` e `500`), e
+  `GET /jobs/{id}/pages/{n}/pdf` responde `410 SOURCE_PURGED` com a data.
+- Nova rota `DELETE /jobs/{job_id}/source` (`jobs.delete`): apaga os arquivos de origem
+  de um job terminado (documento ou áudio) e responde `{job_id, source_deleted: true,
+  source_deleted_at}`; `404` sem arquivos ou de outro usuário; `409 JOB_STILL_PROCESSING`
+  enquanto o job, um retry automático ou uma página está pendente.
+- `GET /jobs/{job_id}` ganha `source_available`, `source_deleted_at` e `source_deletable`
+  (todos do MySQL).
+- **Mudança de comportamento (status):** um PDF dividido cujas páginas terminaram todas,
+  com alguma falha definitiva, passa a **`partial`** ("N de M páginas falharam…") em vez
+  de ficar `processing` para sempre; o retry de página o reabre (`processing`). Entre
+  tentativas automáticas, `process_conversion` deixa o job `queued` (antes `failed`), a
+  página espera como `pending` (antes `failed`) e o merge mantém o job `processing`.
+- **Mudança de comportamento (deduplicação):** a chave inclui a operação (preset do
+  Docling numa conversão, perfil numa transcrição); jobs de imagem nunca são devolvidos;
+  jobs `failed` **ou `partial`** nunca são devolvidos (reenviar é a nova tentativa). Com
+  `purge_source=true` a duplicata passa a apagar a origem (na hora se já terminou); com
+  `false`, uma duplicata sem origem (ou que vai apagá-la) não é reaproveitada. A resposta
+  de `/upload`, `/convert` e `/transcribe` ganha `duplicate` e `source_available`.
+- `DELETE /jobs/{job_id}` passa a apagar o original de qualquer job no bucket certo
+  (antes: só transcrições, e sempre no bucket de áudio) e os PDFs por página.
+- `/transcribe` grava `purge_source` também em `job_configurations` e apaga o áudio
+  também quando a transcrição falha de vez.
+- **Idempotency-Key por tentativa** (`/images/analyze` `mode=full` e rostos): uma chave
+  cuja última tentativa terminou `failed` cria a tentativa seguinte (job novo) em vez de
+  devolver o job falho; respostas trazem `attempt`. Migração aditiva Alembic
+  `a7d30021c5e9` (`image_analysis_submissions.attempt`, também em `_ADDED_COLUMNS`).
 - Frontend: caixa "Don't keep the original file after converting" no formulário de
-  conversão e botão "Delete original file" (com diálogo de confirmação) na página do job.
+  arquivo; botão "Delete original file" habilitado por `source_deletable`; "Original files
+  deleted on …"; retry de página escondido (com explicação) sem original; aviso de
+  duplicata no upload. Não há a opção nas abas URL/Drive/Dropbox (não guardam original).
+- `scripts/dev/start.sh` mostra o próprio caminho (`./scripts/dev/start.sh`).
 
 ## 2026-10: Spec 0020 — perfis de execução padrão na instalação
 

@@ -2,6 +2,7 @@
 import asyncio
 import hashlib
 import json
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from uuid import uuid4
 from fastapi import HTTPException
@@ -18,11 +19,34 @@ from shared.schemas import ImageFullAnalyzeResponse
 from shared.datalake.service import prepare_destination, bind_destination
 
 
-def replay(db, user_id, key_hash, request_hash):
+class _AttemptRace(Exception):
+    """Another request started the next attempt of this Idempotency-Key first."""
+
+
+@dataclass
+class Previous:
+    """The latest attempt recorded for one (user, Idempotency-Key)."""
+    row: Submission
+    job_id: str
+    attempt: int
+    failed: bool  # FAILED for good: the same key starts the next attempt
+
+
+def lookup(db, user_id, key_hash, request_hash):
+    """
+    The latest attempt of a key (None when the key is new). 410 when its job was
+    deleted, 409 when the key was used for another request.
+
+    Idempotency-Key covers one *attempt*: while the latest attempt is queued,
+    running or settled other than FAILED, the same key replays it; once it FAILED
+    for good, the same key starts attempt+1 (a new job), so a retry with the same
+    key never returns the failed job.
+    """
     row = db.query(Submission).filter_by(user_id=user_id, key_hash=key_hash).first()
     if row is None:
         return None
-    if row.deleted_at or not db.get(Job, row.job_id):
+    job = db.get(Job, row.job_id) if row.job_id else None
+    if row.deleted_at or job is None:
         if row.deleted_at and row.purged_at and row.deleted_at < datetime.utcnow()-timedelta(hours=24):
             db.delete(row)
             db.commit()
@@ -30,7 +54,13 @@ def replay(db, user_id, key_hash, request_hash):
         raise HTTPException(410, 'Job excluído; use nova Idempotency-Key para outra solicitação')
     if row.request_hash != request_hash:
         raise HTTPException(409, 'Idempotency-Key já utilizada com outra solicitação')
-    return row.job_id
+    return Previous(row=row, job_id=row.job_id, attempt=row.attempt or 1, failed=job.status == JobStatus.FAILED)
+
+
+def replay(db, user_id, key_hash, request_hash):
+    """The job a repeated request returns, or None when it must create one."""
+    previous = lookup(db, user_id, key_hash, request_hash)
+    return previous.job_id if previous is not None and not previous.failed else None
 
 
 def submit(request, http_request, image_bytes, filename, current_user, db, tags, plan):
@@ -50,9 +80,9 @@ def submit(request, http_request, image_bytes, filename, current_user, db, tags,
         'mode': mode, 'options': raw_options, 'location': {'project': request.project, 'project_id': request.project_id,
         'folder': request.folder, 'folder_id': request.folder_id}, 'tags': tags,
         'datalake': request.datalake.model_dump(mode='json') if request.datalake else None})
-    previous = replay(db, current_user.id, key_hash, request_hash)
-    if previous:
-        return previous
+    previous = lookup(db, current_user.id, key_hash, request_hash)
+    if previous is not None and not previous.failed:
+        return previous.job_id, previous.attempt
     face_models = []
     if standalone_faces or raw_options.get('profile') == 'image-full-v2':
         from api.face_routes import require_faces
@@ -97,7 +127,20 @@ def submit(request, http_request, image_bytes, filename, current_user, db, tags,
         set_job_tags(job, tags)
         save_configuration(db, job, operation='image', options=configuration, provider='facial' if standalone_faces else settings.vision_provider, model='enet_b0_8_best_afew' if standalone_faces else settings.vision_model_id)
         bind_destination(db, job, destination)
-        db.add(Submission(user_id=current_user.id, key_hash=key_hash, request_hash=request_hash, job_id=job_id))
+        if previous is None:
+            attempt = 1
+            db.add(Submission(user_id=current_user.id, key_hash=key_hash, request_hash=request_hash,
+                              job_id=job_id, attempt=attempt))
+        else:
+            # Compare-and-set on the key's row: only one request moves it from the
+            # failed attempt to the next one (the loser replays the winner's job)
+            attempt = previous.attempt + 1
+            moved = db.query(Submission).filter(
+                Submission.id == previous.row.id, Submission.attempt == previous.attempt,
+                Submission.job_id == previous.job_id,
+            ).update({'attempt': attempt, 'job_id': job_id}, synchronize_session=False)
+            if moved != 1:
+                raise _AttemptRace()
         from shared.face_analysis import profile
         db.add(Run(job_id=job_id, profile=profile(configuration), options=configuration, source_path=source_path,
                    deadline_at=now+timedelta(seconds=deadline_seconds), dispatch_after=now))
@@ -108,12 +151,13 @@ def submit(request, http_request, image_bytes, filename, current_user, db, tags,
         if hashlib.sha256(storage.download_file(storage.bucket_results, source_path)).hexdigest() != job.file_checksum:
             raise RuntimeError('Source checksum mismatch')
         db.commit()  # Source + key + configuration + outbox/run are ready together.
-    except IntegrityError:
+    except (IntegrityError, _AttemptRace):
         db.rollback()
-        previous = replay(db, current_user.id, key_hash, request_hash)
-        if not previous:
+        db.expire_all()
+        previous = lookup(db, current_user.id, key_hash, request_hash)
+        if previous is None or previous.failed:
             raise HTTPException(503, 'Conflito ao preservar a solicitação; tente novamente')
-        return previous
+        return previous.job_id, previous.attempt
     except Exception as exc:
         db.rollback()
         storage.delete_folder(storage.bucket_results, f'images/{job_id}/')
@@ -124,11 +168,11 @@ def submit(request, http_request, image_bytes, filename, current_user, db, tags,
     except Exception:
         # Durable outbox is recovered by beat. Never lose the owned request.
         pass
-    return job_id
+    return job_id, attempt
 
 
 async def run_full(request, http_request, image_bytes, filename, user, db, tags, plan):
-    job_id = await run_in_threadpool(submit, request, http_request, image_bytes, filename, user, db, tags, plan)
+    job_id, attempt = await run_in_threadpool(submit, request, http_request, image_bytes, filename, user, db, tags, plan)
     if request.wait:
         deadline = asyncio.get_running_loop().time()+get_settings().vision_request_timeout_seconds
         while asyncio.get_running_loop().time() < deadline:
@@ -139,11 +183,11 @@ async def run_full(request, http_request, image_bytes, filename, user, db, tags,
                 payload = json.loads(await run_in_threadpool(storage.download_file, storage.bucket_results, job.minio_result_path))
                 from shared.schemas import FaceAnalyzeResponse
                 response = FaceAnalyzeResponse if hasattr(request, 'face_options') else ImageFullAnalyzeResponse
-                return response(job_id=job_id, status=job.status.value, **payload)
+                return response(job_id=job_id, status=job.status.value, attempt=attempt, **payload)
             await asyncio.sleep(.25)
         raise HTTPException(504, {'error_code': 'VISION_TIMEOUT', 'message': 'Análise da imagem continua processando',
             'job_id': job_id, 'poll_url': f'/jobs/{job_id}', 'result_url': f'/jobs/{job_id}/result'})
     job = db.get(Job, job_id)
     return JSONResponse(status_code=202, content={'job_id': job_id, 'status': 'queued' if job.status == JobStatus.PENDING else job.status.value,
-        'created_at': job.created_at.isoformat()+'Z', 'message': 'Análise da imagem enfileirada',
+        'created_at': job.created_at.isoformat()+'Z', 'message': 'Análise da imagem enfileirada', 'attempt': attempt,
         'poll_url': f'/jobs/{job_id}', 'result_url': f'/jobs/{job_id}/result'})

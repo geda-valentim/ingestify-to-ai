@@ -754,7 +754,10 @@ class ImageAnalysisSubmission(Base):
     user_id = Column(String(36), ForeignKey('users.id', ondelete='CASCADE'), nullable=False)
     key_hash = Column(String(64), nullable=False)
     request_hash = Column(String(64), nullable=False)
-    job_id = Column(String(36), nullable=True, index=True)
+    job_id = Column(String(36), nullable=True, index=True)  # the latest attempt's job
+    # Attempts of this key: a FAILED job lets the same key start attempt+1 (a new
+    # job; job_id moves to it by compare-and-set on (id, attempt, job_id))
+    attempt = Column(Integer, nullable=False, default=1, server_default='1')
     deleted_at = Column(DateTime, index=True)
     purge_after = Column(DateTime)
     purged_at = Column(DateTime)

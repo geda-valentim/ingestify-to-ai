@@ -117,6 +117,9 @@ _ADDED_COLUMNS = {
     "users": {
         "root_slot": "SMALLINT NULL",  # alembic f1c90019d3e4 (spec 0019); unique index below
     },
+    "image_analysis_submissions": {
+        "attempt": "INTEGER NOT NULL DEFAULT 1",  # alembic a7d30021c5e9 (attempt per Idempotency-Key)
+    },
 }
 
 # Unique indexes on _ADDED_COLUMNS, created separately: SQLite cannot ADD COLUMN ... UNIQUE.

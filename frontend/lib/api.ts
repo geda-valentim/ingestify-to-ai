@@ -473,7 +473,7 @@ export const jobsApi = {
     });
 
     if (!response.ok) {
-      await throwApiError(response, "Não foi possível apagar o arquivo original");
+      await throwApiError(response, "Could not delete the original file");
     }
 
     return response.json();

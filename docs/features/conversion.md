@@ -34,7 +34,7 @@ Os dois endpoints exigem autenticação (`Authorization: Bearer <jwt>` **ou**
 | `name` | não | nome do arquivo | Nome amigável do job. |
 | `tags` | não | — | Tags separadas por vírgula (ver [tags.md](tags.md)). |
 | `docling_preset` | não | `fast` | `fast`, `balanced` ou `quality` (tabela abaixo). Qualquer outro valor cai nos defaults do `config.py`. |
-| `purge_source` | não | `false` | `true` apaga o arquivo original quando o job termina `completed` (ver [Guardar ou apagar o original](#guardar-ou-apagar-o-arquivo-original-purge_source)). |
+| `purge_source` | não | `false` | `true` apaga os arquivos de origem (o enviado e os PDFs por página) quando o job termina — `completed`, ou `failed`/`partial` depois das tentativas automáticas (ver [Guardar ou apagar o original](#guardar-ou-apagar-o-arquivo-original-purge_source)). |
 
 ```bash
 curl -X POST http://localhost:8000/upload \
@@ -69,15 +69,30 @@ Diferenças em relação ao `/upload` (comportamento atual, não necessariamente
 - Os dois endpoints excluem jobs `FAILED` da deduplicação; reenviar o arquivo de um job
   falho cria outro job (a regra compartilhada está em `api/projects_api.py`).
 
-### Deduplicação por checksum
+### Deduplicação por checksum (por operação e por tentativa)
 
 Nos dois endpoints, quando há arquivo, a API calcula o SHA-256 enquanto grava o upload em
-disco. Se o mesmo usuário já tem um job `MAIN` não falho com o mesmo checksum **no mesmo
-projeto**, a resposta devolve o
-`job_id` existente (com `message` "Arquivo já foi processado anteriormente…") e as tags
-enviadas são **adicionadas** ao job existente. A pasta original é preservada e trocar
-`docling_preset` no reenvio não reprocessa. Enviar para outro projeto cria uma conversão
-independente. Não há opção para forçar reprocessamento de um job não falho no mesmo projeto.
+disco. Se o mesmo usuário já tem um job `MAIN` com o mesmo checksum, **a mesma operação**
+e **no mesmo projeto**, a resposta devolve o `job_id` existente (`duplicate: true`,
+`message` "Arquivo já foi processado anteriormente…") e as tags enviadas são
+**adicionadas** ao job existente. A pasta original é preservada. Enviar para outro projeto
+cria uma conversão independente.
+
+- **Operação.** A chave inclui o que muda o resultado: numa conversão, o `docling_preset`
+  (`/convert` não tem preset: usa os defaults); numa transcrição, o perfil de
+  processamento. O mesmo arquivo com outro preset é outro job. Jobs de imagem
+  (`/images/describe`, `/images/ocr`, `/images/analyze`, rostos) nunca são devolvidos
+  pela deduplicação de documentos, mesmo com os mesmos bytes. A chave fica em
+  `job_configurations.options.operation_key`; um job criado antes dela responde a
+  qualquer conversão do mesmo arquivo, como antes.
+- **Tentativa.** Um job que terminou com falha (`failed`, ou `partial` — páginas que
+  falharam depois das tentativas automáticas) nunca é devolvido: reenviar o arquivo é a
+  nova tentativa e cria outro job.
+- **`purge_source`.** Com `purge_source=true` a duplicata devolvida passa a apagar a
+  origem: se ela já terminou, na hora (`source_available` na resposta diz o resultado;
+  uma falha ao apagar não falha o pedido), senão quando terminar. Com `false` (manter), um
+  job cuja origem já foi apagada, ou foi pedida para ser apagada, não é reaproveitado: um
+  job novo é criado, e `message` cita o job anterior.
 
 O projeto vem do request ou, quando não há campo de projeto, da API key vinculada.
 Com JWT e API key juntos, vale o JWT e a vinculação da key não é usada. IDs de projetos
@@ -86,42 +101,64 @@ ou pastas de outro usuário retornam `404`. Nomes usam a normalização comparti
 
 ### Guardar ou apagar o arquivo original (`purge_source`)
 
-Por padrão o original fica guardado em `ingestify-uploads/uploads/{job_id}/…` (é dele que
-o retry de página restaura o PDF). Com `purge_source=true` em `/upload` ou `/convert`
-(mesmo nome e sentido do parâmetro do `/transcribe`), o original é apagado — objeto no
-MinIO e cópia local em `{TEMP_STORAGE_PATH}/uploads/{job_id}/` — quando o job MAIN
-termina **`completed`**:
+Por padrão os arquivos de origem ficam guardados: o original em
+`ingestify-uploads/uploads/{job_id}/…` (é dele que o retry de página restaura o PDF) e,
+num PDF dividido, os PDFs por página em `ingestify-pages/pages/{job_id}/…` (servidos por
+`/jobs/{id}/pages/{n}/pdf`). Com `purge_source=true` em `/upload` ou `/convert` (mesmo
+nome e sentido do parâmetro do `/transcribe`):
 
-- documento único: ao fim da conversão;
-- PDF dividido: depois do merge. Os PDFs por página (`ingestify-pages`, servidos por
-  `/jobs/{id}/pages/{n}/pdf`) e os Markdown por página **ficam**;
-- job que falhou, ou com páginas que falharam: o original **fica**, porque o retry de
-  página precisa dele. Se um retry completar o job (merge), aí ele é apagado;
-- `source_type=url`: o arquivo baixado só existe no disco do worker e já é removido ao
-  fim do job; com `purge_source` o comportamento é o mesmo.
+- **O que é apagado:** o original (objeto no MinIO e cópias locais em
+  `{TEMP_STORAGE_PATH}/uploads/{job_id}/` e no diretório de trabalho
+  `{TEMP_STORAGE_PATH}/{job_id}/`, onde fica o download de URL/Drive/Dropbox) e os PDFs
+  por página (MinIO e locais). A conversão de documentos não guarda imagens/assets
+  extraídos (o Markdown mantém marcadores de imagem), então não há mais nada a apagar.
+  **Ficam** o Markdown do documento e de cada página, e o índice de busca.
+- **Quando:** quando o job MAIN termina de vez — `completed` (documento único ao fim da
+  conversão; PDF dividido depois do merge), ou `failed` / `partial` **depois de
+  esgotadas as tentativas automáticas** (retries do Celery de `process_conversion`,
+  `convert_page_task`/`process_page` e `merge_pages_task`, e do backlog de engines).
+  Nunca enquanto houver retry agendado, página na fila ou em processamento.
+- **Depois:** `GET /jobs/{id}` responde `source_available: false` e `source_deleted_at`
+  (UTC); `GET /jobs/{id}/pages/{n}/pdf` responde `410` `SOURCE_PURGED` com a data; o
+  retry manual de página responde `409` `SOURCE_NOT_AVAILABLE` (a interface esconde o
+  botão e explica).
 
 A escolha é gravada com o job no MySQL (tabela `job_configurations`, `operation:
-"conversion"`, `options: {"purge_source": true}`), não só na mensagem do Celery: o merge
-depois de um retry, em qualquer worker, a respeita. Depois do apagamento,
-`Job.minio_upload_path` fica nulo e `GET /jobs/{id}` responde `source_available: false`.
-Se o MinIO recusar o apagamento, o erro é registrado no log, o original continua
-referenciado e o job **continua `completed`**.
+"conversion"`, `options.purge_source`), não só na mensagem do Celery: o merge depois de
+um retry, em qualquer worker, a respeita. A data do apagamento também fica ali
+(`options.source_deleted_at`), sem migração. Se o MinIO recusar o apagamento, o erro é
+registrado no log, o que não foi apagado continua referenciado e o status do job **não
+muda**.
 
-Um reenvio do mesmo arquivo que devolve um job existente (deduplicação) não muda a
-escolha daquele job.
+Um reenvio do mesmo arquivo segue as regras da
+[deduplicação](#deduplicação-por-checksum-por-operação-e-por-tentativa).
 
-Para apagar o original de um job já terminado, sem ter enviado `purge_source`:
+```bash
+curl -X POST http://localhost:8000/upload \
+  -H "X-API-Key: $INGESTIFY_API_KEY" \
+  -F "file=@contrato.pdf" \
+  -F "project=Cliente X" \
+  -F "purge_source=true"
+```
+
+Para apagar os arquivos de origem de um job já terminado, sem ter enviado `purge_source`:
 
 ```bash
 curl -X DELETE "http://localhost:8000/jobs/$JOB_ID/source" -H "X-API-Key: $INGESTIFY_API_KEY"
-# {"job_id":"<uuid>","source_deleted":true}
+# {"job_id":"<uuid>","source_deleted":true,"source_deleted_at":"2026-10-07T21:30:00"}
 ```
 
-`404` se o job não existe, não é seu ou já não tem original; `409`
-(`code: JOB_STILL_PROCESSING`) enquanto está na fila ou processando. Ver
-[jobs-api.md](jobs-api.md#delete-jobsjob_idsource). Na interface: caixa "Não guardar o
-arquivo original após converter" no formulário de conversão e botão "Apagar arquivo
-original" na página do job.
+`404` se o job não existe, não é seu ou já não tem arquivos de origem; `409`
+(`code: JOB_STILL_PROCESSING`) enquanto o job, uma página ou um retry automático está
+pendente (o campo `source_deletable` de `GET /jobs/{id}` diz se pode agora). Ver
+[jobs-api.md](jobs-api.md#delete-jobsjob_idsource). Na interface: caixa "Don't keep the
+original file after converting" no formulário de arquivo, botão "Delete original file" e
+a data "Original files deleted on …" na página do job.
+
+Não há a opção nas abas URL / Google Drive / Dropbox: essas fontes não guardam original
+no MinIO; o arquivo baixado só existe no diretório de trabalho e já é apagado quando o job
+completa. A API aceita `purge_source` nelas (apaga o download e os PDFs por página quando
+o job falha de vez), mas a interface não oferece.
 
 ### Presets do Docling
 
@@ -200,12 +237,19 @@ process_conversion (worker)
   (soft). O default do código é 300 s; o `docker-compose.yml` usa 600 s.
 - `process_conversion` faz até 3 retries com backoff exponencial (60 s, 120 s, 240 s)
   em qualquer falha (inclusive soft time limit); entre uma tentativa e outra o job aparece
-  como `failed` com a mensagem de erro. `convert_page_task` tem `max_retries=3`;
-  `split_pdf_task` e `merge_pages_task`, 2.
+  como `queued` (MySQL `pending`) com a mensagem de erro, e só fica `failed` na última.
+  `convert_page_task` tem `max_retries=3` (a página espera o retry como `pending`);
+  `split_pdf_task` e `merge_pages_task`, 2 (durante o retry do merge o job continua
+  `processing`).
+- Quando todas as páginas de um PDF dividido terminaram e alguma falhou de vez, o job
+  MAIN passa a **`partial`** (antes ficava `processing` para sempre), com
+  `error_message` "N de M páginas falharam…" e `completed_at`. As páginas convertidas
+  ficam disponíveis; o retry de página reabre o job (`processing`) e, se todas
+  completarem, o merge o leva a `completed`.
 - Um conversor Docling é reaproveitado por processo e por combinação de opções (o
   carregamento dos modelos de layout/tabela é caro).
 - Ao concluir, os arquivos locais do job são apagados (`_remove_job_files`); o original
-  continua no MinIO. Sobras de jobs que falharam são varridas pela task diária
+  continua no MinIO (salvo `purge_source`). Sobras de jobs que falharam são varridas pela task diária
   `cleanup_stale_files` (ver [storage-and-retention.md](storage-and-retention.md)).
 - Se o pacote `docling` não puder ser importado, o conversor devolve um Markdown
   **MOCK** ("This is a **MOCK conversion**…") em vez de falhar. Útil em testes, perigoso
