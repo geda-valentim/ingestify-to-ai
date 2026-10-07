@@ -101,11 +101,14 @@ def db():
                            credentials_encrypted=b"x")
         for owner in (ALICE, BOB, DAVE)
     ])
-    session.add_all([job("alice-image", ALICE), job("bob-image", BOB), job("orphan-image", None)])
+    session.add_all([job("alice-image", ALICE), job("bob-image", BOB), job("orphan-image", None),
+                     # NULL owner, parent owned by alice: a job the shared rule gives alice,
+                     # but main's inline cancel rule (`Job.user_id == me`) did not.
+                     job("alice-parented-image", None, parent="alice-main")])
     session.flush()
     session.add_all([
         ImageAnalysisRun(job_id=j, options={}, source_path=f"images/{j}/source", deadline_at=datetime(2026, 1, 2))
-        for j in ("alice-image", "bob-image", "orphan-image")
+        for j in ("alice-image", "bob-image", "orphan-image", "alice-parented-image")
     ])
     session.commit()
     try:
@@ -127,12 +130,12 @@ def _run(db):
 def test_fixture_is_clean_and_covers_every_kind(db):
     report = _run(db)
     assert report.clean, "\n".join(map(str, report.divergences))
-    # 4 users × (11 job rows + 3 page children + 5 extras + 3 projects + 2 folders + 3 keys
-    #            + 3 datalake connections + 3 image runs)
-    assert report.pairs == 4 * (11 + 3 + 5 + 3 + 2 + 3 + 3 + 3)
+    # 4 users × (12 job rows + 3 page children + 5 extras + 3 projects + 2 folders + 3 keys
+    #            + 3 datalake connections + 4 image runs)
+    assert report.pairs == 4 * (12 + 3 + 5 + 3 + 2 + 3 + 3 + 4)
     # read/update/delete everywhere, + datalakes.use; a run is one jobs.cancel.
-    per_user = (11 + 3 + 5 + 3 + 2 + 3) * len(equivalence.ACTIONS) \
-        + 3 * len(equivalence.DATALAKE_PERMISSIONS) + 3 * 1
+    per_user = (12 + 3 + 5 + 3 + 2 + 3) * len(equivalence.ACTIONS) \
+        + 3 * len(equivalence.DATALAKE_PERMISSIONS) + 4 * 1
     assert report.decisions == 4 * per_user
 
 
@@ -158,6 +161,9 @@ def test_legacy_copy_decides_the_tricky_shapes(db):
     assert equivalence.legacy_image_cancel_allowed(db, "alice-image", alice)
     assert not equivalence.legacy_image_cancel_allowed(db, "alice-image", bob)
     assert not equivalence.legacy_image_cancel_allowed(db, "orphan-image", alice)
+    # The shared job rule gives alice the parented row; the cancel rule did not.
+    assert legacy("alice-parented-image", alice)
+    assert not equivalence.legacy_image_cancel_allowed(db, "alice-parented-image", alice)
 
 
 def test_a_regression_in_ownership_is_reported(db, monkeypatch):
