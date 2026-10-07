@@ -253,6 +253,56 @@ def test_ca9_revoked_without_a_local_path_follows_on_no_engine(world, monkeypatc
     assert world.remote.published == [("fake_1", first, world.item(first).usage_id)]
 
 
+def test_ca9_a_revoked_reservation_does_not_hold_the_remote_engine(world, monkeypatch):
+    """A reservation earned while BOB held the permission is dropped once he loses it"""
+    mode(monkeypatch, "enforce")
+    fake = add_remote(world)
+    binding = bind(world)
+    world.set_route([fake], on_no_engine="hold")
+    reserving = world.add_item(user=BOB, remote_allowed=True, media=10, wait=20,
+                               blocked_engine_id=fake, skip_count=5)
+    revoke(world, binding)
+    other = world.add_item(user=ROOT, remote_allowed=True, media=10, wait=10)
+
+    assert [(p[0], p[1]) for p in world.tick().placed] == [(other, "fake_1")]
+    row = world.item(reserving)
+    assert (row.state, row.blocked_engine_id, row.skip_count) == ("waiting", None, 0)
+
+
+def test_ca9_a_busy_remote_engine_does_not_keep_a_revoked_item_waiting(world, monkeypatch):
+    """'blocked' / 'full' on an engine the item may never use are not a capacity wait"""
+    mode(monkeypatch, "enforce")
+    fake = add_remote(world)
+    binding = bind(world)
+    world.set_route([fake], on_no_engine="fail", fail_after_seconds=60)
+    occupy(world, fake, "transcription", 1)  # full
+    world.add_item(user=ROOT, remote_allowed=True, media=10, wait=20, blocked_engine_id=fake)  # reserves it
+    revoked = world.add_item(user=BOB, remote_allowed=True, media=10, wait=10)
+    revoke(world, binding)
+
+    assert world.tick().placed == []
+    assert world.item(revoked).unplaceable_since is not None
+    world.tick(world.now + timedelta(seconds=120))
+    assert world.item(revoked).state == "failed"
+
+
+def test_shadow_divergence_from_the_dispatcher_is_reported_once_per_period(world, monkeypatch, caplog):
+    from shared.iam import decide
+
+    mode(monkeypatch, "shadow")
+    monkeypatch.setattr(decide, "_last_reported", {})
+    fake = add_remote(world)
+    bind(world)  # IAM allows, legacy (not an admin) denies
+    world.set_route([fake], on_no_engine="hold")
+    world.add_item(user=BOB, remote_allowed=True, media=10)
+
+    with caplog.at_level("WARNING", logger=decide.logger.name):
+        for s in (0, 5, 10):
+            assert world.tick(world.now + timedelta(seconds=s)).placed == []  # shadow: legacy decides
+    lines = [r.getMessage() for r in caplog.records if "iam_shadow_divergence" in r.getMessage()]
+    assert len(lines) == 1 and "route=dispatcher" in lines[0] and f"subject={BOB}" in lines[0]
+
+
 def test_ca9_an_all_route_never_asks(world, monkeypatch):
     mode(monkeypatch, "enforce")
     fake = add_remote(world)
