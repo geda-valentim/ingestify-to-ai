@@ -4,6 +4,7 @@ from datetime import datetime
 from sqlalchemy.orm import Session
 
 from shared.database import SessionLocal
+from shared.iam import ownership
 from shared.datalake.adapters import adapter_for
 from shared.datalake.schemas import Destination
 from shared.minio_client import get_minio_client
@@ -13,8 +14,8 @@ from shared.transcripts import TRANSCRIPT_CONTENT_TYPES, transcript_result_objec
 
 
 def owned_connection(db: Session, connection_id: str, user_id: str):
-    return db.query(DatalakeConnection).filter(DatalakeConnection.id == connection_id,
-                                              DatalakeConnection.user_id == user_id).first()
+    """The connection when `user_id` owns it, decided by `shared.iam.ownership` (spec 0014)."""
+    return ownership.owned_row(db, DatalakeConnection, connection_id, user_id)
 
 
 def prepare_destination(db, user_id, choice):

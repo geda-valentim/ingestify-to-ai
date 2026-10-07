@@ -14,10 +14,9 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from api.deps import get_owned_job
-from shared.auth import get_current_active_user
+from api.iam_deps import Scope, authorized, visible
 from shared.database import get_db
-from shared.models import Job, JobTag, User
+from shared.models import Job, JobTag
 from shared.tags import MAX_TAG_LENGTH, MAX_TAGS_PER_JOB, InvalidTagsError, add_job_tags, parse_tags, set_job_tags
 
 logger = logging.getLogger(__name__)
@@ -73,7 +72,7 @@ class JobTagsResponse(BaseModel):
 
 @router.get("/tags", response_model=TagListResponse, summary="Listar as tags do usuário")
 async def list_tags(
-    current_user: User = Depends(get_current_active_user),
+    scope: Scope = Depends(visible(Job, "jobs.read")),
     db: Session = Depends(get_db),
 ):
     """
@@ -85,7 +84,7 @@ async def list_tags(
     rows = (
         db.query(JobTag.tag, func.count(JobTag.job_id))
         .join(Job, Job.id == JobTag.job_id)
-        .filter(Job.user_id == current_user.id)
+        .filter(scope.predicate)
         .group_by(JobTag.tag)
         .order_by(func.count(JobTag.job_id).desc(), JobTag.tag)
         .all()
@@ -97,7 +96,7 @@ async def list_tags(
 async def replace_job_tags(
     job_id: str,
     body: JobTagsUpdate,
-    owned_job: Optional[Job] = Depends(get_owned_job),
+    owned_job: Optional[Job] = Depends(authorized(Job, "jobs.update")),
     db: Session = Depends(get_db),
 ):
     """

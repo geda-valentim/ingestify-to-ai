@@ -317,6 +317,18 @@ class UserCreate(BaseModel):
     email: str = Field(..., example="user@example.com")
     username: str = Field(..., min_length=3, max_length=50, example="testuser")
     password: str = Field(..., min_length=8, max_length=20, example="SecurePass123")
+    # Spec 0019: only read while the installation has no root user yet, and only
+    # required when ROOT_SETUP_TOKEN is configured (always, in production)
+    setup_token: Optional[str] = Field(None, max_length=256, description="Installation setup token; only read when creating the root user")
+
+
+class SetupStatus(BaseModel):
+    """Whether the installation still needs its root user (spec 0019)"""
+    root_exists: bool
+    # Brand-new installation (no users): the next registration becomes root
+    root_pending: bool
+    # Whether that root registration needs ROOT_SETUP_TOKEN
+    setup_token_required: bool
 
 
 class UserLogin(BaseModel):
@@ -335,8 +347,15 @@ class UserResponse(BaseModel):
     # Effective admin rule (users.is_admin OR ADMIN_USER_IDS); the API fills it in,
     # so the frontend can show admin-only screens
     is_admin: bool = False
+    # The installation's single root user (spec 0019)
+    is_root: bool = False
+    # Flat list: the 0009 engine permissions plus the platform/IAM ones (spec 0014 CA12)
     permissions: list[str] = []
     engine_access_enabled: bool = False
+    # Emergency access (users.is_admin / ADMIN_USER_IDS), never a binding (spec 0014 CA8)
+    bootstrap: bool = False
+    # Managed platform roles held through active bindings (empty unless IAM_MODE=enforce)
+    platform_roles: list[str] = []
 
     class Config:
         from_attributes = True

@@ -1,7 +1,7 @@
 import logging
 import re
 from functools import lru_cache
-from typing import List
+from typing import List, Literal, Optional
 from urllib.parse import quote
 
 from pydantic import Field, ValidationError, ValidationInfo, field_validator, model_validator
@@ -295,6 +295,15 @@ class Settings(BaseSettings):
     # Comma-separated user IDs (UUIDs) allowed to use /admin endpoints. Empty = no admins.
     # IDs are used instead of emails because registration does not verify email ownership.
     admin_user_ids: str = ""
+    # Spec 0019: one-time token required to create the root user (the first account of an
+    # installation without root). Mandatory when ENVIRONMENT=production; optional
+    # elsewhere (if set, it is required everywhere). Generate with `openssl rand -hex 32`
+    # and remove it once root exists.
+    root_setup_token: str = Field(default="", repr=False)
+
+    # IAM decision core (spec 0014 §4.11). off: legacy decides, bindings are inert.
+    # shadow: both decide, legacy answers, divergences are logged. enforce: IAM answers.
+    iam_mode: Literal["off", "shadow", "enforce"] = "off"
 
     # Execution engines (spec 0003). Remote engine credentials are sealed to the
     # public key; only worker-remote is given the private keys (a list, for
@@ -307,7 +316,12 @@ class Settings(BaseSettings):
 
     # Spec 0007 is opt-in after scripts/migrate_0007_engine_control.py.
     engine_control_enabled: bool = False
-    engine_access_enabled: bool = False
+    # Engine RBAC/ABAC (spec 0009) is governed by IAM_MODE since spec 0018 §4.4:
+    # unset (or empty) -> on only when IAM_MODE=enforce (shadow does not turn it on).
+    # ENGINE_ACCESS_ENABLED is a deprecated alias that still wins when set, true or
+    # false; `false` stays the emergency lever (engines back to bootstrap only).
+    # Always a bool once Settings is built (see _derive_engine_access_enabled).
+    engine_access_enabled: Optional[bool] = None
     engine_installation_principal_id: str = ""
     engine_control_queue: str = "ingestify-engine-control"
     engine_control_beat: bool = False
@@ -459,6 +473,36 @@ class Settings(BaseSettings):
                 f"Accepted values: {', '.join(sorted(allowed))}."
             )
         return dtype
+
+    @field_validator("engine_access_enabled", mode="before")
+    @classmethod
+    def _empty_engine_access_is_unset(cls, value):
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
+    @model_validator(mode="after")
+    def _derive_engine_access_enabled(self) -> "Settings":
+        # Every process that imports shared.access.policy builds Settings once at
+        # boot, so this is where each of them reports the effective value (CA15).
+        # That happens at import time, before api.main or Celery configure logging,
+        # so the report is a WARNING: Python's last-resort handler drops INFO.
+        explicit = self.engine_access_enabled is not None
+        if explicit:
+            logger.warning(
+                "ENGINE_ACCESS_ENABLED=%s is deprecated (spec 0018): IAM_MODE governs "
+                "engine access; unset it to follow IAM_MODE=%s",
+                str(self.engine_access_enabled).lower(),
+                self.iam_mode,
+            )
+        else:
+            self.engine_access_enabled = self.iam_mode == "enforce"
+        logger.warning(
+            "engine_access_enabled=%s (%s)",
+            self.engine_access_enabled,
+            "ENGINE_ACCESS_ENABLED" if explicit else f"IAM_MODE={self.iam_mode}",
+        )
+        return self
 
     @model_validator(mode="after")
     def _reject_partial_vision_model_override(self) -> "Settings":

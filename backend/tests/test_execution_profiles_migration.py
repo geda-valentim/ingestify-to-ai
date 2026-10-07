@@ -11,9 +11,9 @@ from sqlalchemy.orm import sessionmaker
 
 from shared.database import Base
 from shared.access import migration, service, policy
-from shared.access.models import AuthorizationEpoch, RoleGrant, EffectAdmission
+from shared.access.models import AuthorizationEpoch, EffectAdmission
 from shared.engine_control import service as control
-from tests.test_execution_profiles import world, prepared
+from tests.test_execution_profiles import world, prepared, grant_row
 
 
 def mysql_url():
@@ -177,7 +177,7 @@ def test_innodb_revocation_committed_before_admission_denies_cached_actor(mysql_
         def effect():
             with mysql_world() as db:
                 # Hold an old identity snapshot before waiting on the SQL epoch.
-                assert db.get(RoleGrant, g["id"]).revoked_at is None
+                assert grant_row(db, g["id"]).revoked_at is None
                 started.set()
                 try:
                     control.admit_effect(

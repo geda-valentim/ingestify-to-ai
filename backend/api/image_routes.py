@@ -30,9 +30,10 @@ operações já usam. A task **não** é revogada no timeout.
 
 ## Autorização
 
-Nada aqui é anônimo. `get_current_active_user` já aceita tanto um Bearer JWT
-quanto `X-API-Key`, e é a mesma dependência usada por `/upload` e
-`/transcribe`. As rotas não são endereçadas por `job_id`, então nada de
+Nada aqui é anônimo. Toda rota de criação declara `require("images.analyze")` (spec 0014;
+`POST /images/{job_id}/cancel` declara `authorized(Job, "jobs.cancel")`, só o dono),
+que autentica por `get_current_active_user` — Bearer JWT ou `X-API-Key`, como
+`/upload` e `/transcribe` — e libera todo usuário ativo (criar no próprio espaço). As rotas não são endereçadas por `job_id`, então nada de
 `api/deps.py` se aplica — a posse é *escrita* aqui, antes do despacho, o que é
 o que faz `/jobs/{job_id}` e `/jobs/{job_id}/result` funcionarem depois sem
 nenhum caso especial.
@@ -51,8 +52,8 @@ from uuid import uuid4
 from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Request, UploadFile
 from sqlalchemy.orm import Session
 
-from shared.admin import is_effective_admin
-from shared.auth import get_current_active_user
+from shared.iam.remote import can_use_remote
+from api.iam_deps import authorized, require
 from shared.config import get_settings
 from shared.database import SessionLocal, get_db
 from shared.engines import dispatch as engine_dispatch
@@ -274,7 +275,8 @@ def _place_vision(job_id: str, current_user: User) -> "engine_dispatch.Placement
     try:
         return engine_dispatch.place_now(
             feature="vision", subject_id=job_id, job_id=job_id, user_id=current_user.id,
-            is_admin=is_effective_admin(current_user), session_factory=SessionLocal,
+            remote_use=lambda: can_use_remote(current_user, session_factory=SessionLocal),
+            session_factory=SessionLocal,
         )
     except Exception as e:
         logger.warning(f"Vision placement for job {job_id} failed, using the vision queue: {type(e).__name__}: {e}")
@@ -744,7 +746,7 @@ def _ocr_response(common: Dict[str, Any]) -> ImageOcrResponse:
 async def describe_image(
     request: ImageDescribeRequest,
     http_request: Request,
-    current_user: User = Depends(get_current_active_user),
+    current_user: User = Depends(require("images.analyze")),
     db: Session = Depends(get_db),
 ):
     """
@@ -798,7 +800,7 @@ def _analyze_response(common: Dict[str, Any], wait: bool):
              responses={202: {"model": ImageFullQueuedResponse | JobCreatedResponse}}, summary="Executar tarefa de visão (JSON base64)")
 async def analyze_image(request: ImageFullAnalyzeRequest | ImageAnalyzeRequest, http_request: Request,
                         idempotency_key: Optional[str] = Header(None, max_length=128, description="Obrigatória somente em mode=full; repetir mesma solicitação devolve o mesmo job."),
-                        current_user: User = Depends(get_current_active_user), db: Session = Depends(get_db)):
+                        current_user: User = Depends(require("images.analyze")), db: Session = Depends(get_db)):
     """Todas as tarefas do Florence integrado, descobríveis em GET /images/capabilities.
 
     Captions/OCR/detecção/propostas não recebem entradas adicionais. Grounding,
@@ -849,7 +851,7 @@ async def analyze_image_upload(
     tags: Optional[str] = Form(None, description=TAGS_FORM_DESCRIPTION),
     http_request: Request = None,
     location: LocationFields = Depends(upload_location_form),
-    current_user: User = Depends(get_current_active_user), db: Session = Depends(get_db),
+    current_user: User = Depends(require("images.analyze")), db: Session = Depends(get_db),
 ):
     """Mesmas tarefas/validações do JSON /images/analyze. region e generation são JSON nos campos multipart.
 
@@ -912,7 +914,7 @@ async def describe_image_upload(
     tags: Optional[str] = Form(None, description=TAGS_FORM_DESCRIPTION),
     http_request: Request = None,
     location: LocationFields = Depends(upload_location_form),
-    current_user: User = Depends(get_current_active_user),
+    current_user: User = Depends(require("images.analyze")),
     db: Session = Depends(get_db),
 ):
     """
@@ -956,7 +958,7 @@ async def describe_image_upload(
 async def ocr_image(
     request: ImageOcrRequest,
     http_request: Request,
-    current_user: User = Depends(get_current_active_user),
+    current_user: User = Depends(require("images.analyze")),
     db: Session = Depends(get_db),
 ):
     """
@@ -994,7 +996,7 @@ async def ocr_image_upload(
     tags: Optional[str] = Form(None, description=TAGS_FORM_DESCRIPTION),
     http_request: Request = None,
     location: LocationFields = Depends(upload_location_form),
-    current_user: User = Depends(get_current_active_user),
+    current_user: User = Depends(require("images.analyze")),
     db: Session = Depends(get_db),
 ):
     """Igual a `POST /images/ocr`, com a imagem em `multipart/form-data`."""
@@ -1023,7 +1025,7 @@ async def ocr_image_upload(
     summary="Estado do subsistema de visão",
 )
 async def vision_capabilities(
-    current_user: User = Depends(get_current_active_user),
+    current_user: User = Depends(require("images.analyze")),
 ):
     """
     O que o worker de visão consegue fazer *neste* deploy.
@@ -1110,13 +1112,29 @@ async def vision_capabilities(
     return VisionCapabilitiesResponse(**merged)
 
 
+FULL_ANALYSIS_NOT_FOUND = 'Full Analysis não encontrada'
+
+
 @router.post('/{job_id}/cancel', summary='Cancelar análise composta de imagem')
-def cancel_full_image(job_id: str, current_user: User = Depends(get_current_active_user), db: Session = Depends(get_db)):
+def cancel_full_image(
+    job_id: str,
+    # Owner only (spec 0014); missing and someone else's keep this route's own 404.
+    owned_job: Optional[Job] = Depends(authorized(
+        Job, "jobs.cancel", not_found=lambda: HTTPException(404, FULL_ANALYSIS_NOT_FOUND))),
+    db: Session = Depends(get_db),
+):
     from shared.models import ImageAnalysisRun
-    job = db.query(Job).filter(Job.id == job_id, Job.user_id == current_user.id).with_for_update().first()
+    # Only the job's own row counts: a child job (authorized through its MAIN job) or
+    # a Redis-only job has no Full Analysis run, the same 404 as before. The row must
+    # also carry its own owner: main matched the caller against this very row only,
+    # while the shared job rule also authorizes a NULL user_id through its parent.
+    # With user_id set, the allow above already means it is the caller.
+    job = None
+    if owned_job is not None and owned_job.id == job_id and owned_job.user_id is not None:
+        job = db.query(Job).filter(Job.id == job_id).with_for_update().first()
     run = db.get(ImageAnalysisRun, job_id) if job else None
     if run is None:
-        raise HTTPException(404, 'Full Analysis não encontrada')
+        raise HTTPException(404, FULL_ANALYSIS_NOT_FOUND)
     from shared.image_full import TERMINAL
     terminal = run.status in TERMINAL
     if not terminal:

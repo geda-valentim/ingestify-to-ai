@@ -15,8 +15,8 @@ from shared.datalake.schemas import ConnectionCreate, ConnectionUpdate, Connecti
 from shared.datalake.secrets import seal, unseal
 from shared.datalake import service
 from shared.datalake.partitioning import PartitionStrategy, PartitionError, resolve_layout, validate_values
-from shared.models import DatalakeConnection, JobDatalakeExport, User, JobStatus
-from api.deps import get_owned_job
+from shared.models import DatalakeConnection, Job, JobDatalakeExport, User, JobStatus
+from api.iam_deps import Scope, authorized, require, visible
 
 router = APIRouter(prefix="/datalakes", tags=["Datalakes"])
 
@@ -52,7 +52,7 @@ def draft_connection(body: DiscoverConnection, user: User, db: Session):
 
 
 @router.post("/discover")
-def discover_connection(body: DiscoverConnection, user: User = Depends(get_current_active_user), db: Session = Depends(get_db)):
+def discover_connection(body: DiscoverConnection, user: User = Depends(require("datalakes.create")), db: Session = Depends(get_db)):
     """Read buckets with draft settings, without creating or updating a connection."""
     draft = draft_connection(body, user, db)
     try:
@@ -95,7 +95,7 @@ def validate_new_bucket(provider, bucket):
 
 
 @router.post("/buckets", status_code=201)
-def create_bucket(body: CreateBucket, user: User = Depends(get_current_active_user), db: Session = Depends(get_db)):
+def create_bucket(body: CreateBucket, user: User = Depends(require("datalakes.create")), db: Session = Depends(get_db)):
     """Create storage now; saving the connection remains a separate operation."""
     draft = draft_connection(body, user, db)
     validate_new_bucket(body.provider, body.bucket)
@@ -171,7 +171,7 @@ class PartitionPreview(BaseModel):
 
 
 @router.post("/partition-preview")
-def partition_preview(body: PartitionPreview, user: User = Depends(get_current_active_user), db: Session = Depends(get_db)):
+def partition_preview(body: PartitionPreview, user: User = Depends(require("datalakes.create")), db: Session = Depends(get_db)):
     connection = connection_or_404(db, user, body.connection_id) if body.connection_id else None
     config = connection.config if connection else {}
     strategy = body.partitioning or PartitionStrategy.model_validate(config.get("partitioning") or {})
@@ -185,13 +185,14 @@ def partition_preview(body: PartitionPreview, user: User = Depends(get_current_a
 
 
 @router.get("")
-def list_connections(user: User = Depends(get_current_active_user), db: Session = Depends(get_db)):
+def list_connections(scope: Scope = Depends(visible(DatalakeConnection, "datalakes.read")),
+                     db: Session = Depends(get_db)):
     return {"connections": [public_connection(row) for row in db.query(DatalakeConnection)
-                            .filter(DatalakeConnection.user_id == user.id).order_by(DatalakeConnection.name).all()]}
+                            .filter(scope.predicate).order_by(DatalakeConnection.name).all()]}
 
 
 @router.post("", status_code=201)
-def create_connection(body: ConnectionCreate, user: User = Depends(get_current_active_user), db: Session = Depends(get_db)):
+def create_connection(body: ConnectionCreate, user: User = Depends(require("datalakes.create")), db: Session = Depends(get_db)):
     credentials = {key: value.get_secret_value() for key, value in body.credentials.items()}
     config = body.config.model_dump()
     ensure_credentials(body.provider, config, credentials)
@@ -205,8 +206,8 @@ def create_connection(body: ConnectionCreate, user: User = Depends(get_current_a
 
 @router.patch("/{connection_id}")
 def update_connection(connection_id: str, body: ConnectionUpdate,
-                      user: User = Depends(get_current_active_user), db: Session = Depends(get_db)):
-    row = connection_or_404(db, user, connection_id)
+                      row: DatalakeConnection = Depends(authorized(DatalakeConnection, "datalakes.update")),
+                      db: Session = Depends(get_db)):
     credentials = {key: value.get_secret_value() for key, value in body.credentials.items()} if body.credentials is not None else unseal(row)
     config = body.config.model_dump() if body.config is not None else row.config
     ensure_credentials(row.provider, config, credentials)
@@ -217,14 +218,16 @@ def update_connection(connection_id: str, body: ConnectionUpdate,
     row.config = config
     if body.enabled is not None:
         row.enabled = body.enabled
-    row.credentials_encrypted = seal(user.id, row.id, credentials)
+    # Sealed to the owner, as before (the authorized row is the caller's own).
+    row.credentials_encrypted = seal(row.user_id, row.id, credentials)
     db.commit()
     return public_connection(row)
 
 
 @router.delete("/{connection_id}", status_code=204)
-def delete_connection(connection_id: str, user: User = Depends(get_current_active_user), db: Session = Depends(get_db)):
-    row = connection_or_404(db, user, connection_id)
+def delete_connection(connection_id: str,
+                      row: DatalakeConnection = Depends(authorized(DatalakeConnection, "datalakes.delete")),
+                      db: Session = Depends(get_db)):
     if db.query(JobDatalakeExport).filter(JobDatalakeExport.connection_id == row.id).first():
         raise HTTPException(409, "Esta conexão está vinculada a jobs. Desative-a para impedir novas solicitações.")
     db.delete(row)
@@ -233,8 +236,9 @@ def delete_connection(connection_id: str, user: User = Depends(get_current_activ
 
 
 @router.get("/{connection_id}/buckets")
-def list_buckets(connection_id: str, user: User = Depends(get_current_active_user), db: Session = Depends(get_db)):
-    row = connection_or_404(db, user, connection_id)
+def list_buckets(connection_id: str,
+                 row: DatalakeConnection = Depends(authorized(DatalakeConnection, "datalakes.read")),
+                 db: Session = Depends(get_db)):
     if not row.enabled:
         raise HTTPException(409, "Conexão desativada")
     configured = row.config.get("buckets") or []
@@ -251,12 +255,12 @@ class TestConnection(BaseModel):
 
 @router.post("/{connection_id}/test")
 def test_connection(connection_id: str, body: TestConnection,
-                    user: User = Depends(get_current_active_user), db: Session = Depends(get_db)):
-    row = connection_or_404(db, user, connection_id)
+                    row: DatalakeConnection = Depends(authorized(DatalakeConnection, "datalakes.use")),
+                    db: Session = Depends(get_db)):
     bucket = body.bucket or row.config.get("default_bucket")
     try:
         if bucket:
-            service.prepare_destination(db, user.id, Destination(connection_id=row.id, bucket=bucket))
+            service.prepare_destination(db, row.user_id, Destination(connection_id=row.id, bucket=bucket))
         else:
             adapter_for(row).buckets()
     except Exception:
@@ -266,16 +270,20 @@ def test_connection(connection_id: str, body: TestConnection,
 
 @router.get("/{connection_id}/objects")
 def list_objects(connection_id: str, bucket: str, prefix: str = "", limit: int = Query(100, ge=1, le=1000),
-                 user: User = Depends(get_current_active_user), db: Session = Depends(get_db)):
-    row = connection_or_404(db, user, connection_id)
+                 row: DatalakeConnection = Depends(authorized(DatalakeConnection, "datalakes.read")),
+                 db: Session = Depends(get_db)):
     try:
         choice = Destination(connection_id=row.id, bucket=bucket)
-        service.prepare_destination(db, user.id, choice)
+        service.prepare_destination(db, row.user_id, choice)
         return {"objects": adapter_for(row).objects(choice.bucket, prefix, limit), "limit": limit}
     except Exception:
         raise HTTPException(502, "Não foi possível listar os arquivos deste bucket") from None
 
 
+# A form sub-dependency, not a route guard: it only names the caller, so the route
+# that uses it still declares its own IAM permission (CA1). The connection it names
+# is resolved owner-only through `service.prepare_destination` (shared.iam.ownership).
+# No route uses it yet.
 def destination_form(
     datalake_connection_id: Optional[str] = Form(None), datalake_bucket: Optional[str] = Form(None),
     datalake_prefix: str = Form(""), datalake_partitioning: Optional[str] = Form(None,
@@ -338,12 +346,13 @@ job_router = APIRouter(tags=["Datalakes"])
 
 
 @job_router.get("/jobs/{job_id}/datalake")
-def get_delivery(job_id: str, owned_job=Depends(get_owned_job), db: Session = Depends(get_db)):
+def get_delivery(job_id: str, owned_job=Depends(authorized(Job, "jobs.read")), db: Session = Depends(get_db)):
     return {"destination": service.export_ref(db, job_id)}
 
 
 @job_router.post("/jobs/{job_id}/datalake/retry", status_code=202)
-def retry_delivery(job_id: str, owned_job=Depends(get_owned_job), db: Session = Depends(get_db)):
+def retry_delivery(job_id: str, owned_job=Depends(authorized(Job, "datalake_exports.retry")),
+                   db: Session = Depends(get_db)):
     if owned_job is None or owned_job.id != job_id or owned_job.status != JobStatus.COMPLETED:
         raise HTTPException(409, "Aguarde a conclusão do job")
     dest = db.get(JobDatalakeExport, job_id)

@@ -21,9 +21,11 @@ from shared.models import Engine
 from api.engine_admin_routes import require_admin_session, _engine_or_404
 from api.admin_routes import require_admin
 from api.access_deps import access_session, scoped_engine, scoped_features
+from api.iam_deps import engine_access
 from shared.access import policy
 
-router = APIRouter(prefix="/admin", tags=["Admin - Engine control"])
+# 0009 routes: engine_access only declares them in the IAM inventory (0014 CA1).
+router = APIRouter(prefix="/admin", tags=["Admin - Engine control"], dependencies=[Depends(engine_access())])
 host_router = APIRouter(prefix="/internal/engine-hosts", tags=["Engine hosts"])
 
 

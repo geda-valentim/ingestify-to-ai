@@ -15,6 +15,16 @@ export interface UserCreate {
   email: string;
   username: string;
   password: string;
+  /** Only read when this account becomes the installation's root (spec 0019). */
+  setup_token?: string;
+}
+
+/** GET /auth/setup: whether the installation still needs its root user (spec 0019). */
+export interface SetupStatus {
+  root_exists: boolean;
+  /** Brand-new installation (no users): the next registration becomes root. */
+  root_pending: boolean;
+  setup_token_required: boolean;
 }
 
 export interface UserLogin {
@@ -30,8 +40,15 @@ export interface UserResponse {
   created_at: string;
   /** Effective admin (users.is_admin or ADMIN_USER_IDS). Absent in sessions saved by older builds. */
   is_admin?: boolean;
+  /** The installation's single root user (spec 0019). */
+  is_root?: boolean;
+  /** Flat list: 0009 engine permissions plus platform/IAM ones (spec 0014). */
   permissions?: string[];
   engine_access_enabled?: boolean;
+  /** Emergency access (is_admin column or ADMIN_USER_IDS), never a binding. */
+  bootstrap?: boolean;
+  /** Managed platform roles held through active bindings (IAM_MODE=enforce only). */
+  platform_roles?: string[];
 }
 
 export interface Token {

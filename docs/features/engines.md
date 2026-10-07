@@ -79,22 +79,24 @@ ativação separados. Ela permanece desabilitada por padrão; os critérios de p
 
 A UI Compute permite configurar e operar engines pelo controlador, além de mostrar os
 comandos Docker/CLI existentes. As leituras de engines e o controle usam sessão JWT. Com
-`ENGINE_ACCESS_ENABLED=true`, usuários delegados veem apenas engines, perfis e ações
-permitidos por seus grants; o servidor revalida a autorização em cada etapa. Diagnósticos
+acesso de engines ligado (`IAM_MODE=enforce`, ou o alias depreciado
+`ENGINE_ACCESS_ENABLED=true`), usuários delegados veem apenas engines, perfis e ações
+permitidos por seus bindings de engines; o servidor revalida a autorização em cada etapa. Diagnósticos
 globais de GPU, routing e status continuam restritos ao administrador de bootstrap.
 
 Configure as opções de runtime em **Compute → Perfis de execução**
 (`/admin/execution-profiles`), publique uma revisão e selecione-a em
 **Engine → Configuração → Perfil de execução**. Vincular altera apenas o desejado;
 aplicar exige uma prévia e execução separadas. Administre papéis e escopos em
-**Compute → Acesso** (`/admin/access`). Veja o [guia de perfis e acesso](execution-profiles.md)
+**Admin → Acesso** (`/admin/access`), a mesma tela dos papéis de plataforma desde a
+[spec 0018](../specs/0018-iam-convergencia-do-rbac-abac-de-engines.md). Veja o [guia de perfis e acesso](execution-profiles.md)
 e o [runbook de migração/ativação](../runbooks/execution-profiles-access.md).
 
 | Tela | O que interpretar |
 |---|---|
 | `/admin/engines` e `/admin/engines/{id}` | Status/saúde, bindings, em voo, orçamento, teste e deploy; `paused` barra novas colocações |
 | `/admin/execution-profiles` | Criar, revisar, publicar e vincular modelos de configuração de runtime |
-| `/admin/access` | Políticas, grants, delegação, ambientes e consumidores de recursos |
+| `/admin/access` | Concessões (bindings de plataforma e de engines, delegação), políticas, ambientes, consumidores de recursos e principais de instalação |
 | `/admin/gpus` | VRAM orçada × usada e GPUs detectadas sem declaração; valor desconhecido não é zero |
 | `/admin/routing` | Ordem dos motores e backlog de cada feature; sem rota vale a fila local habitual |
 | `/admin/status` | Lease do despachante, disponibilidade do worker remoto e workers configurados × vivos |
@@ -265,6 +267,25 @@ Por rota: `max_attempts` (3), `on_no_engine` (`hold`/`fail` + `fail_after_second
 `remote_allowed_for` (`admins`/`all`; `all` exige `current_password`, `user_period_limit_usd` e
 `remote_data_notice`), `dispatcher_fallback` (`local_direct`/`hold`), `dispatcher_down_seconds`
 (120).
+
+**Desde a spec 0014** `remote_allowed_for=admins` significa "exige `engines.remote.use`"
+(`shared/iam/remote.py`; em `IAM_MODE=off` continua sendo `is_effective_admin`, em `enforce`
+somam-se os bindings `platform_admin`/`remote_engine_user`). `JobDispatch.remote_allowed`,
+gravado no submit, é só um filtro: o dispatcher decide de novo, uma vez por usuário por tick,
+antes de cada placement remoto. Uma revogação alcança o que já está na fila (páginas ainda não
+colocadas vão para o caminho local ou seguem `on_no_engine`, e a reserva de skip-starvation
+num motor remoto é descartada). **Mudança intencional (CA10):** `user_period_limit_usd` vale
+também em rotas `admins`, bootstrap incluído. O dispatcher (`worker-dispatch`) e o `worker`
+decidem essa permissão: precisam de `ADMIN_USER_IDS` e `IAM_MODE` iguais aos da `api` (o
+`docker-compose.yml` repassa ambos). Divergências de shadow vindas do dispatcher saem com
+`route=dispatcher`, no máximo uma a cada 10 min por usuário. O custo por tick (CA11) é medido
+nos testes (`tests/test_iam_remote_engine.py`) em statements SQL (até 2 por usuário, nunca por
+item) e em tempo: com 1 000 itens em backlog, o p95 do tempo gasto em `_may_use_remote` por tick
+(o único trabalho que uma rota `admins` acrescenta a uma `all`) fica ≤ 5 ms (medido ~1 ms em
+SQLite). A revalidação no dispatcher e o teto CA10 **não dependem de `IAM_MODE`**: em `off` a
+decisão é o legado (`is_effective_admin` do dono), mas tomada a cada placement e não congelada no
+submit. Logo, "`off` = legado" vale para as decisões de rota da API; no dispatcher, `off` só
+desliga os bindings.
 
 Validação: motor sem binding para a feature, motor repetido, ou passo remoto com
 `remote_allowed_for=admins` sem passo local ⇒ 422; motor remoto não pronto (pausado, saúde ruim, sem
@@ -491,7 +512,7 @@ docker compose exec api python scripts/engines.py speed [--engine modal_1]
 ## API admin
 
 Listagem/detalhe de engines e descritores exigem JWT; com acesso habilitado, aplicam escopos
-de grants. Diagnósticos globais e alterações legadas exigem bootstrap; credenciais podem ser
+dos bindings de engines. Diagnósticos globais e alterações legadas exigem bootstrap; credenciais podem ser
 delegadas ao papel `connection_manager`. Mudanças exigem sessão JWT (API key ⇒ 403),
 gravam `admin_audit` e nunca
 ecoam valores de credenciais.

@@ -235,7 +235,7 @@ def _divert_audio_to_backlog(job_id: str, file_path: Path, options: dict, redis_
     hand it to dispatch.submit (spec 0003, 4.3). Returns (diverted, file path).
     Without an active route it returns at once and touches nothing.
     """
-    from shared.admin import is_effective_admin
+    from shared.iam.remote import remote_use_of
     from shared.engines import dispatch as engine_dispatch
     from shared.engines import routing
 
@@ -265,7 +265,7 @@ def _divert_audio_to_backlog(job_id: str, file_path: Path, options: dict, redis_
     try:
         job = db.query(Job).filter(Job.id == job_id).first()
         user_id = job.user_id if job else None
-        is_admin = is_effective_admin(job.user) if job is not None and job.user is not None else False
+        remote_use = remote_use_of(user_id, session_factory=SessionLocal)  # decided only on 'admins' routes
         name = job.name if job else None
         if job:
             job.status = JobStatus.PENDING
@@ -280,7 +280,7 @@ def _divert_audio_to_backlog(job_id: str, file_path: Path, options: dict, redis_
     payload = engine_dispatch.transcription_payload(job_id, file_path, routed_options,
                                                     today_queue=settings.celery_task_default_queue)
     outcome = engine_dispatch.submit(
-        feature="transcription", job_id=job_id, user_id=user_id, is_admin=is_admin, payload=payload,
+        feature="transcription", job_id=job_id, user_id=user_id, remote_use=remote_use, payload=payload,
         today=None, celery=celery_app, media_bytes=file_path.stat().st_size, session_factory=SessionLocal,
     )
     if outcome == "today":  # the route went away in between: transcribe here after all
@@ -871,14 +871,14 @@ def _page_route():
 def _submit_page(page_job_id: str, parent_job_id: str, page_number: int, options: dict, *,
                  page_file_path: str = None, source_pdf_path: str = None, today=None) -> str:
     """Hand one PDF page to the document_conversion route (subject_type=page)"""
-    from shared.admin import is_effective_admin
+    from shared.iam.remote import remote_use_of
     from shared.engines import dispatch as engine_dispatch
 
     db = SessionLocal()
     try:
         job = db.query(Job).filter(Job.id == parent_job_id).first()
         user_id = job.user_id if job else None
-        is_admin = is_effective_admin(job.user) if job is not None and job.user is not None else False
+        remote_use = remote_use_of(user_id, session_factory=SessionLocal)  # decided only on 'admins' routes
     finally:
         db.close()
     payload = engine_dispatch.page_payload(
@@ -892,7 +892,7 @@ def _submit_page(page_job_id: str, parent_job_id: str, page_number: int, options
     path = Path(page_file_path or source_pdf_path)
     return engine_dispatch.submit(
         feature="document_conversion", job_id=parent_job_id, subject_type="page", subject_id=page_job_id,
-        user_id=user_id, is_admin=is_admin, payload=payload, today=today, celery=celery_app,
+        user_id=user_id, remote_use=remote_use, payload=payload, today=today, celery=celery_app,
         media_bytes=path.stat().st_size if path.exists() else None, session_factory=SessionLocal,
     )
 

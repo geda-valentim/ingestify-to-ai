@@ -5,10 +5,13 @@ from shared.access import service, policy, contracts as C
 from shared.access.models import EngineAttributes, ResourceScope, ExecutionRevision
 from shared.engine_control.models import ControlResource
 from shared.models import Engine, User
+from shared import root
 from api.access_deps import access_session, scoped_engine
 from api.engine_control_routes import invoke
+from api.iam_deps import engine_access
 
-router = APIRouter(prefix="/admin", tags=["Admin - Execution profiles and access"])
+# 0009 routes: decided by access_session + policy; engine_access only declares them (0014 CA1).
+router = APIRouter(prefix="/admin", tags=["Admin - Execution profiles and access"], dependencies=[Depends(engine_access())])
 
 
 def ready():
@@ -165,20 +168,22 @@ def subjects(user=Depends(access_session), db: Session = Depends(get_db)):
     ]
 
 
-@router.get("/access/grants")
+# Deprecated aliases (spec 0018 §4.5, CA8): the engines family of
+# /admin/iam/bindings, with the 0009 contract unchanged (tests/test_iam_access_grant_aliases.py).
+@router.get("/access/grants", deprecated=True)
 def grants(user=Depends(access_session), db: Session = Depends(get_db)):
     ready()
     return invoke(service.list_grants, db, user.id)
 
 
-@router.post("/access/grants", status_code=201)
+@router.post("/access/grants", status_code=201, deprecated=True)
 def grant(
     body: C.GrantCreate, user=Depends(access_session), db: Session = Depends(get_db)
 ):
     return invoke(service.create_grant, db, body, user.id)
 
 
-@router.post("/access/grants/{id}/revoke")
+@router.post("/access/grants/{id}/revoke", deprecated=True)
 def revoke(
     id: str,
     body: C.Version,
@@ -335,6 +340,10 @@ def subject_state(
         body.expected_is_admin,
     ):
         raise HTTPException(409, detail={"code": "VERSION_CONFLICT"})
+    try:
+        root.refuse_root_change(target, body)
+    except root.RootError as exc:
+        raise HTTPException(exc.status, detail={"code": exc.code})
     target.is_active = body.is_active
     target.is_admin = body.is_admin
     authority.version += 1

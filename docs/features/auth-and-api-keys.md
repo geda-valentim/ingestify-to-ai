@@ -1,6 +1,6 @@
 # Autenticação, API keys e autorização
 
-> Verificado contra o código em 2026-10-04. Fonte da verdade:
+> Verificado contra o código em 2026-10-07. Fonte da verdade:
 > [backend/api/auth_routes.py](../../backend/api/auth_routes.py),
 > [backend/api/apikey_routes.py](../../backend/api/apikey_routes.py),
 > [backend/shared/auth.py](../../backend/shared/auth.py),
@@ -94,18 +94,43 @@ e e-mail da mesma conta compartilham o contador de falhas. Se o Redis cair, o li
   está em `ADMIN_USER_IDS` (UUIDs separados por vírgula). A regra é uma só
   (`shared/admin.py:is_effective_admin`) para as rotas admin e para o campo `is_admin` de
   `GET /auth/me` e `POST /auth/register`. Nas rotas administrativas gerais, quem não é
-  admin recebe `403`. Compute pode conceder acesso por grants quando
-  `ENGINE_ACCESS_ENABLED=true`: biblioteca, controle e IAM humano exigem JWT e
-  RBAC/ABAC atual, inclusive para leitura; uma API key não transmite esses papéis.
-  `/auth/me` expõe as permissões para navegação. Veja [perfis e acesso](execution-profiles.md).
-  Endpoints gerais em
-  [monitoring-and-admin.md](monitoring-and-admin.md).
-- **Primeiro admin:** pelo shell do servidor ou do container, por e-mail ou id, nunca por
-  username (que qualquer um escolhe no cadastro):
+  admin recebe `403`. Com `IAM_MODE=enforce`
+  ([spec 0014](../specs/0014-iam-nucleo-de-decisao-e-papeis-de-plataforma.md)), bindings de
+  plataforma (`platform_admin`, `platform_operator`, `platform_auditor`,
+  `remote_engine_user`) concedem as permissões de plataforma sem tornar ninguém admin.
+  Endpoints gerais em [monitoring-and-admin.md](monitoring-and-admin.md).
+- **Bindings IAM (spec 0018):** toda concessão é um `iam_binding` de uma de duas famílias
+  que nunca se enxergam — `platform` (0014) e `engines` (papéis da 0009, com uma revisão de
+  política como condição). Ambas se administram em **Admin → Acesso** (`/admin/access`) e por
+  `/admin/iam/bindings`, cada uma com sua autoridade: bootstrap ou `iam.bindings.manage` para plataforma;
+  bootstrap ou `access.grants.manage` dentro do envelope de delegação para engines. Ninguém
+  concede papel a si mesmo. Escritas exigem sessão JWT; a família `engines` exige JWT também
+  na leitura, então uma API key só lista bindings de plataforma. Engines ficam ligadas com
+  `IAM_MODE=enforce` ou com o alias depreciado `ENGINE_ACCESS_ENABLED=true`; biblioteca,
+  controle e IAM humano de engines exigem JWT e RBAC/ABAC atual, inclusive para leitura.
+  `/auth/me` expõe as permissões para navegação: as de engines vêm só dos bindings
+  `engines` vigentes. Veja [perfis e acesso](execution-profiles.md).
+- **Usuário root ([spec 0019](../specs/0019-usuario-root-na-primeira-inicializacao.md)):** a
+  primeira conta cadastrada numa instalação **sem nenhum usuário** nasce **root**: admin de emergência
+  (bootstrap) do IAM, único (índice único em `users.root_slot`) e irrevogável pela aplicação
+  — não pode ser desativado nem perder o admin (`409 ROOT_IMMUTABLE`), e continua admin mesmo
+  com `is_admin` zerado por SQL. `GET /auth/setup` (público) diz se o root já existe, se o
+  próximo cadastro vira root (`root_pending`) e se o token é exigido; a tela de cadastro usa
+  isso. Instalações que já tinham usuários continuam com cadastros comuns até um operador
+  designar o root com `make_admin.py --root`. Com `ENVIRONMENT=production`, o root só nasce
+  com `ROOT_SETUP_TOKEN` (`403 ROOT_SETUP_TOKEN_REQUIRED` enquanto não estiver configurado;
+  `403 ROOT_SETUP_TOKEN_INVALID` com token ausente ou errado). Fora de produção o token é
+  opcional e, se configurado, obrigatório. Depois que o root existe, o token é ignorado;
+  remova-o do ambiente. Um deploy exposto feito só com o `docker-compose.yml` base roda com
+  `ENVIRONMENT=development`: configure o token nesse caso também.
+- **Outros admins:** pelo shell do servidor ou do container, por e-mail ou id, nunca por
+  username (que qualquer um escolhe no cadastro). Em instalações que já tinham usuários antes
+  da 0019, `--root` designa o root quando ainda não há nenhum (nunca o substitui):
 
   ```bash
   docker compose exec api python scripts/make_admin.py --email alice@example.com
   docker compose exec api python scripts/make_admin.py --id <uuid> --yes   # sem pergunta
+  docker compose exec api python scripts/make_admin.py --email alice@example.com --root
   ```
 
   O script mostra id, username e e-mail e pede confirmação. Ele recusa quando o e-mail
@@ -120,7 +145,8 @@ e e-mail da mesma conta compartilham o contador de falhas. Se o Redis cair, o li
 | `JWT_SECRET_KEY` | **obrigatória** | ≥ 32 caracteres; placeholders conhecidos são recusados. Gere com `openssl rand -hex 32` (ou `make ensure-jwt-secret`). A API não sobe sem ela. |
 | `JWT_ALGORITHM` | `HS256` | |
 | `JWT_EXPIRATION_MINUTES` | `60` | |
-| `ADMIN_USER_IDS` | vazio | Ninguém é admin por padrão. |
+| `ADMIN_USER_IDS` | vazio | Ninguém é admin por padrão (além do root). |
+| `ROOT_SETUP_TOKEN` | vazio | Spec 0019. Obrigatório em `production` para criar o root; opcional fora dela. Use uma vez e remova. |
 | `CORS_ALLOWED_ORIGINS` | `localhost`/`127.0.0.1` nas portas 3000, 8000, 8080 | Produção deve definir a origem real do frontend. |
 | `ENVIRONMENT` | `production` (o `docker-compose.yml` base define `development`; o `.prod.yml` volta a `production`) | Em `production`, erros 500 não expõem a mensagem da exceção e falhas de MySQL/Redis no startup derrubam a API. |
 | `AUTH_ENABLED` | `true` | **Sem efeito**: declarada, não lida por nenhum código. Não existe modo sem autenticação. |
@@ -130,6 +156,6 @@ e e-mail da mesma conta compartilham o contador de falhas. Se o Redis cair, o li
 - Um usuário desativado (`is_active=false`) recebe `400 Inactive user`, não `401/403`.
 - Revogar uma API key a apaga (não há "desativar"); o campo `is_active` não tem endpoint.
 - Não há escopos configuráveis por chave nas APIs de jobs. Controle, biblioteca e IAM
-  humano exigem sessão JWT; grants Compute não autorizam essas rotas por API key.
+  humano exigem sessão JWT; bindings de engines não autorizam essas rotas por API key.
 - O header `Authorization` colide com o token de provedor exigido por Google Drive/Dropbox
   (ver [sources.md](sources.md#limites-e-lacunas-conhecidas)).

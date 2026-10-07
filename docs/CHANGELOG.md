@@ -1,6 +1,94 @@
 # Changelog - Hierarquia de Jobs Implementada
 
-> **Registro histórico (2025-10).** Não é mantido; para mudanças posteriores use `git log`. Observação: `workers/tasks_old.py`, citado abaixo, não existe (há um `workers/tasks.py.backup`).
+> **Registro histórico (2025-10).** Não é mantido; para mudanças posteriores use `git log`. Observação: `workers/tasks_old.py`, citado abaixo, não existe (há um `workers/tasks.py.backup`). Exceção: mudanças de comportamento intencionais que uma spec manda registrar aqui entram na seção abaixo.
+
+## 2026-10: Spec 0019 — usuário root na primeira inicialização
+
+Ver [specs/0019](specs/0019-usuario-root-na-primeira-inicializacao.md).
+
+- **A primeira conta cadastrada numa instalação sem nenhum usuário vira root** (`users.root_slot = 1`,
+  `is_admin = true`), único por índice único e irrevogável pela aplicação. Migration
+  `f1c90019d3e4` (depois de `d4e80018a2b6`); a coluna também é criada no boot.
+- **Mudança de comportamento:** numa instalação **nova** (sem usuários) com
+  `ENVIRONMENT=production` e sem `ROOT_SETUP_TOKEN`, o cadastro fica fechado
+  (`403 ROOT_SETUP_TOKEN_REQUIRED`) até o token ser configurado. Instalações com usuários não
+  mudam; designe o root com `make_admin.py --root`. O compose repassa `ROOT_SETUP_TOKEN` à API.
+- `GET /auth/setup` (público, com `root_pending`), `is_root` em `/auth/me`, `make_admin.py --root`.
+- `PUT /admin/access/subjects/{id}/state` recusa desativar ou rebaixar o root (`409 ROOT_IMMUTABLE`).
+
+## 2026-10: Spec 0018 — IAM: convergência do RBAC/ABAC de engines (0009)
+
+Ver [specs/0018](specs/0018-iam-convergencia-do-rbac-abac-de-engines.md) e a
+[seção 6 do runbook](runbooks/execution-profiles-access.md#6-convergência-no-iam-spec-0018).
+
+- **Grants de engines viram `iam_bindings`** da família `engines`, com o **mesmo id** do grant
+  (decisões e auditoria que citam `grant_id` continuam válidas). A decisão da 0009 não muda:
+  `policy.authorize`, "um grant satisfaz integralmente", vários grants do mesmo papel,
+  delegação por envelope, epoch e admissão de efeito. Papéis de plataforma e de engines nunca
+  se enxergam (`/iam/check`, `platform_roles` e `ROLE_ABOVE_GRANTOR` ignoram engines).
+- **Migration `d4e80018a2b6`** (depois de `03e70014b8c5`): colunas `permissions`,
+  `condition_ref`, `delegation`, `parent_id`, FKs e índice `ix_iam_bindings_subject_role` em
+  `iam_bindings`; cópia + reconciliação + validação sob o lock do epoch; marcador
+  `0018_engine_bindings`. A reconciliação roda também a cada boot da API e dos workers e só
+  restringe. Gate antes do deploy: `python -m shared.iam.engine_equivalence` (ou
+  `scripts/iam_engine_equivalence.py`) com 0 divergências.
+- **`access_role_grants` vira espelho só-escrita** para rollback: toda concessão/revogação de
+  engines grava a linha de mesmo id na mesma transação. O downgrade aplica nela o mais
+  restritivo antes de apagar os bindings `engines`.
+- **Flag:** `IAM_MODE=enforce` liga o acesso de engines; `ENGINE_ACCESS_ENABLED` vira alias
+  depreciado que, quando definido (`true`/`false`), vence com aviso no boot; vazio = não
+  definido. `ENGINE_ACCESS_ENABLED=false` continua sendo a alavanca de emergência. Os compose
+  files passam `IAM_MODE` e `ENGINE_ACCESS_ENABLED` (default vazio) a todos os processos que
+  decidem engines, e cada um registra `engine_access_enabled=` no boot. **Atenção:** antes
+  desta release `ENGINE_ACCESS_ENABLED` ausente valia `false`; agora segue `IAM_MODE`. Uma
+  instalação com `IAM_MODE=enforce` e a variável ausente (nunca ligou engines, ou desligou
+  apagando a linha) passa a ligar o enforcement de engines e a exigir o esquema da 0009, e
+  os grants ativos de `access_role_grants` voltam a valer: fixe `ENGINE_ACCESS_ENABLED=false`
+  ou revise/revogue esses grants antes do deploy (runbook §6.1).
+- **InnoDB:** as leituras com lock da família `engines` travam bindings só pela chave
+  primária (sem gap): uma admissão de efeito de um filho delegado não entra mais em deadlock
+  com uma concessão de plataforma ao dono do pai. Conceder e revogar papéis `engines` leem
+  autoridade e delegação com lock, vendo uma revogação do pai mesmo com snapshot antigo.
+  Testes opt-in em MySQL (`ENGINE_CONTROL_TEST_DATABASE_URL`) para concorrência e para o
+  round trip da migração.
+- **Boot:** com `IAM_MODE` diferente de `off` (inclusive `shadow` com engines desligado) ou
+  engines ligado, a API não sobe sem a migração da 0018 (colunas, FKs, índice), e esta exige a
+  migração da 0009 mesmo em instalações só com IAM de plataforma.
+- **API:** `/admin/iam/bindings*` administra as duas famílias, com regras por família
+  (corpo ganha `permissions`, `condition_ref`, `delegation`; resposta ganha `family` e
+  `parent_id`). `/admin/access/grants*` ficam como aliases **depreciados** com o contrato da
+  0009, só para papéis de engines.
+- **Mudança intencional:** autoconcessão de papel de engines passa a ser recusada
+  (`422 SELF_GRANT`) nas duas rotas.
+- **Auditoria:** concessões e revogações das duas famílias gravam `iam.binding.grant` /
+  `iam.binding.revoke` em `target_type="iam_binding"`; linhas antigas (`access`) intactas.
+- **Frontend:** uma tela **Admin → Acesso** (`/admin/access`) com abas Concessões, Políticas,
+  Atributos de engine, Recursos e Principais de instalação; `/admin/platform-access` redireciona
+  para ela e o menu tem um item "Acesso".
+
+## 2026-10: Spec 0014 — IAM: núcleo de decisão e papéis de plataforma
+
+Ver [specs/0014](specs/0014-iam-nucleo-de-decisao-e-papeis-de-plataforma.md).
+
+- **`IAM_MODE`** (`off` | `shadow` | `enforce`, padrão `off`). Em `off` as rotas da API decidem
+  pela regra legada (`is_effective_admin`, dono do recurso) e os bindings ficam inertes; `shadow`
+  decide pelo legado e registra `iam_shadow_divergence` no log; `enforce` decide por
+  `shared/iam/decide.py`. Antes de `enforce`, rodar `scripts/iam_equivalence.py` contra o
+  snapshot (CA3): precisa sair com 0 divergências.
+- **Migration `a1c40014e7b2` (`iam_bindings`)**: aditiva, só `CREATE TABLE iam_bindings`
+  (marcador `0014_iam_bindings` em `app_migrations`). Nenhuma tabela da 0009 muda.
+- **Mudança intencional (CA10):** `user_period_limit_usd` vale também em rotas com
+  `remote_allowed_for=admins`, **bootstrap incluído**. Jobs de admins em rotas restritas passam a
+  receber recusa `user_cap` quando o teto da rota é atingido; antes gastavam sem teto.
+- **Mudança intencional (CA9):** o dispatcher decide `engines.remote.use` do dono a cada placement
+  remoto em rota `admins`, em vez de confiar só no `remote_allowed` gravado no submit. Rebaixar um
+  admin (ou revogar o binding) alcança páginas já enfileiradas: vão para o caminho local ou seguem
+  `on_no_engine`. Isso e o CA10 **não dependem de `IAM_MODE`**: em `off` o dispatcher usa a regra
+  legada, mas a cada placement.
+- `/auth/me` ganha `bootstrap` e `platform_roles`; `permissions` passa a incluir as permissões de
+  plataforma. Novas rotas `/iam/permissions`, `/iam/check` e `/admin/iam/bindings*`.
+- Na UI de roteamento, `remote_allowed_for=admins` aparece como "restricted (needs the remote engine
+  permission)".
 
 ## 2025-10-01: Job Hierarchy Architecture + CLI Tests
 

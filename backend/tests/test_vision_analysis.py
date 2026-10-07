@@ -77,6 +77,10 @@ def test_child_init_returns_while_expensive_probe_or_preload_runs(monkeypatch, h
         release.wait(timeout=3)
     monkeypatch.setattr(vision_tasks, "consumes_vision_queue", lambda: True)
     monkeypatch.setattr(vision_tasks.settings, "vision_preload_model", True)
+    # _preload_vision_model reads get_settings(), which differs from the module's
+    # `settings` once another test cleared the settings cache (order-dependent).
+    from shared.config import get_settings
+    monkeypatch.setattr(get_settings(), "vision_preload_model", True)
     monkeypatch.setattr(vision_tasks, "start_vision_heartbeat", slow)
     monkeypatch.setattr(vision_tasks, "get_image_describer", lambda: SimpleNamespace(load=slow))
     try:

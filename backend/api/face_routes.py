@@ -7,7 +7,7 @@ from shared.database import get_db
 from shared.models import User
 from shared.schemas import FaceAnalyzeRequest, FaceAnalyzeResponse, ImageFullQueuedResponse
 from shared.face_analysis import FaceOptions, FaceRequestOptions, FullFaceOptions
-from api.deps import get_current_active_user
+from api.iam_deps import require
 
 router = APIRouter(prefix='/images/faces', tags=['Vision'])
 
@@ -40,14 +40,14 @@ def require_faces(mode):
 
 
 @router.get('/capabilities', summary='Modelos, parâmetros e prontidão da análise facial')
-def capabilities(user: User = Depends(get_current_active_user)):
+def capabilities(user: User = Depends(require("images.analyze"))):
     return face_capabilities()
 
 
 @router.post('', response_model=FaceAnalyzeResponse | ImageFullQueuedResponse, status_code=202,
              summary='Detectar rostos e analisar expressões em uma imagem base64')
 async def analyze(request: FaceAnalyzeRequest, http_request: Request,
-                  user: User = Depends(get_current_active_user), db: Session = Depends(get_db),
+                  user: User = Depends(require("images.analyze")), db: Session = Depends(get_db),
                   idempotency_key: str = Header(..., min_length=1, max_length=128)):
     from api.image_routes import _decode_base64_image, _plan_location, _json_location, parse_tags_or_422
     from api.image_full_routes import run_full
@@ -62,7 +62,7 @@ async def upload(http_request: Request, file: UploadFile = File(...), face_optio
                  wait: bool = Form(False), project: str | None = Form(None), project_id: str | None = Form(None),
                  folder: str | None = Form(None), folder_id: str | None = Form(None), tags: str | None = Form(None),
                  datalake: str | None = Form(None), idempotency_key: str = Header(..., min_length=1, max_length=128),
-                 user: User = Depends(get_current_active_user), db: Session = Depends(get_db)):
+                 user: User = Depends(require("images.analyze")), db: Session = Depends(get_db)):
     from api.image_routes import _plan_location, _json_location
     from api.image_full_routes import run_full
     from shared.tags import parse_tags

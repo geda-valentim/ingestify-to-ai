@@ -212,6 +212,38 @@ def test_json_and_multipart_are_idempotent_and_single_is_preserved(memory, monke
     assert cancelled.status_code == 202
 
 
+@pytest.mark.parametrize('mode', ['off', 'enforce'])
+def test_cancel_requires_the_run_row_to_carry_the_callers_own_user_id(memory, monkeypatch, mode):
+    """Main's rule was `Job.user_id == me` on the run's own row; a NULL-owner row that
+    the shared job rule gives the caller through its parent stays a 404 (spec 0014 CA3)."""
+    factory, storage, user = memory
+    from shared.auth import get_current_active_user
+    from shared.config import get_settings
+    from api import image_routes
+    monkeypatch.setattr(get_settings(), 'iam_mode', mode)
+    with factory() as db:
+        for job_id, owner, parent in (('own-image', user.id, None), ('parent-main', user.id, None),
+                                      ('parented-image', None, 'parent-main')):
+            db.add(Job(id=job_id, user_id=owner, parent_job_id=parent, name=job_id, filename='image.png',
+                       status=JobStatus.PROCESSING, job_type='MAIN', created_at=datetime(2026, 1, 1)))
+        db.flush()
+        for job_id in ('own-image', 'parented-image'):
+            db.add(Run(job_id=job_id, options={}, source_path=f'images/{job_id}/source',
+                       deadline_at=datetime(2030, 1, 1)))
+        db.commit()
+    def db_dependency():
+        with factory() as db: yield db
+    app = FastAPI(); app.include_router(image_routes.router)
+    app.dependency_overrides[get_db] = db_dependency
+    app.dependency_overrides[get_current_active_user] = lambda: user
+    client = TestClient(app)
+    refused = client.post('/images/parented-image/cancel')
+    assert refused.status_code == 404 and refused.json()['detail'] == image_routes.FULL_ANALYSIS_NOT_FOUND
+    with factory() as db:
+        assert not db.get(Run, 'parented-image').cancel_requested
+    assert client.post('/images/own-image/cancel').status_code == 202
+
+
 def test_ocr_failure_is_not_a_caption_or_detection_dependency():
     results = [{**s, 'status': 'succeeded', 'text': '', 'regions': []} for s in initial_steps()]
     next(r for r in results if r['task'] == '<OCR>')['status'] = 'failed'

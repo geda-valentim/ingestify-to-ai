@@ -13,7 +13,6 @@ from shared.access.models import (
     ExecutionRevision,
     AccessPolicy,
     PolicyRevision,
-    RoleGrant,
     EngineAttributes,
     ResourceScope,
 )
@@ -354,11 +353,17 @@ def bind(db, engine, body, actor):
     )
 
 
-def _delegator(db, actor, permission_set, constraints, expires_at, delegation=None):
+def _delegator(db, actor, permission_set, constraints, expires_at, delegation=None, lock=False):
+    """
+    The actor's grant whose envelope covers the request. `lock=True` reads the
+    grants with locking reads, as the effect admission does: under the epoch lock a
+    concurrent revocation of the parent is then seen even by a transaction that
+    already holds an older snapshot (0018 §7).
+    """
     user = db.get(User, actor)
     if is_effective_admin(user):
         return None
-    for g in policy.grants(db, actor):
+    for g in policy.grants(db, actor, lock):
         envelope = g.delegation
         if "access.grants.manage" not in g.permissions or not envelope:
             continue
@@ -471,96 +476,34 @@ def grant_view(g):
 
 
 def create_grant(db, body, actor):
-    require_enabled()
-    authority = policy.epoch(db, True)
-    policy.authorize(db, actor, "access.grants.manage")
-    if body.role not in policy.ROLES:
-        raise control.ControlError("ROLE_UNKNOWN", 422)
-    ps = (
-        body.permissions
-        if body.permissions is not None
-        else sorted(policy.ROLES[body.role])
-    )
-    if not ps or not set(ps).issubset(policy.ROLES[body.role]):
-        raise control.ControlError("PERMISSIONS_OUTSIDE_ROLE", 422)
-    p = db.get(PolicyRevision, body.policy_revision_id)
-    target = db.get(User, body.user_id)
-    if not p or not target or not target.is_active:
-        raise control.ControlError("GRANT_TARGET_NOT_FOUND", 404)
-    expiry = body.expires_at.astimezone(timezone.utc).replace(tzinfo=None)
-    if expiry <= datetime.utcnow() or expiry > datetime.utcnow() + timedelta(days=365):
-        raise control.ControlError("GRANT_EXPIRY_INVALID", 422)
-    delegation = body.delegation.model_dump(mode="json") if body.delegation else None
-    if delegation and (
-        body.role != "access_admin"
-        or not set(delegation["permissions"]).issubset(policy.PERMISSIONS)
-    ):
-        raise control.ControlError("DELEGATION_INVALID", 422)
-    parent = _delegator(db, actor, ps, p.constraints, expiry, delegation)
-    g = RoleGrant(
-        user_id=target.id,
-        role=body.role,
-        permissions=ps,
-        policy_revision_id=p.id,
-        delegation=delegation,
-        expires_at=expiry,
-        granted_by=actor,
-        parent_id=parent,
-    )
-    db.add(g)
-    db.flush()
-    authority.version += 1
-    policy.audit(
+    """`POST /admin/access/grants`: an engines binding (spec 0018 §4.3)."""
+    from shared.iam import bindings
+    from shared.iam.engine_bindings import as_grant
+
+    b = bindings.grant_engine(
         db,
         actor,
-        "access.granted",
-        g.id,
-        {"subject_id": target.id, "role": g.role, "policy_revision_id": p.id},
+        subject_id=body.user_id,
+        role=body.role,
+        permissions=body.permissions,
+        condition_ref=body.policy_revision_id,
+        expires_at=body.expires_at,
+        delegation=body.delegation,
     )
-    db.commit()
-    return grant_view(g)
+    return grant_view(as_grant(b))
 
 
 def list_grants(db, actor):
-    policy.authorize(db, actor, "access.grants.manage")
-    rows = []
-    for g in db.query(RoleGrant).order_by(RoleGrant.created_at.desc()):
-        try:
-            _delegator(
-                db,
-                actor,
-                g.permissions,
-                db.get(PolicyRevision, g.policy_revision_id).constraints,
-                min(g.expires_at, datetime.utcnow() + timedelta(seconds=60)),
-                g.delegation,
-            )
-            rows.append(grant_view(g))
-        except control.ControlError:
-            pass
-    return rows
+    from shared.iam import bindings
+
+    return [grant_view(g) for g in bindings.list_engine_grants(db, actor)]
 
 
 def revoke(db, id, version, actor):
-    authority = policy.epoch(db, True)
-    policy.authorize(db, actor, "access.grants.manage")
-    g = db.query(RoleGrant).filter_by(id=id).with_for_update().first()
-    if not g:
-        raise control.ControlError("GRANT_NOT_FOUND", 404)
-    _delegator(
-        db,
-        actor,
-        g.permissions,
-        db.get(PolicyRevision, g.policy_revision_id).constraints,
-        min(g.expires_at, datetime.utcnow() + timedelta(seconds=60)),
-        g.delegation,
-    )
-    _version(g, version)
-    g.revoked_at = datetime.utcnow()
-    g.version += 1
-    authority.version += 1
-    policy.audit(db, actor, "access.revoked", id)
-    db.commit()
-    return grant_view(g)
+    from shared.iam import bindings
+    from shared.iam.engine_bindings import as_grant
+
+    return grant_view(as_grant(bindings.revoke_engine(db, actor, id, version)))
 
 
 def set_attributes(db, engine, body, actor):

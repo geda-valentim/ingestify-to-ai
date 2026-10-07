@@ -12,7 +12,7 @@
           "Authentication"
         ],
         "summary": "Register",
-        "description": "Register a new user\n\n## Request Body:\n```json\n{\n  \"email\": \"user@example.com\",\n  \"username\": \"testuser\",\n  \"password\": \"Test123\"\n}\n```\n\n## Returns:\nUser object with id, email, username, is_active, created_at, is_admin\n\n## Errors:\n- 400: Email or username already exists\n- 429: Too many registrations from this IP",
+        "description": "Register a new user\n\n## Request Body:\n```json\n{\n  \"email\": \"user@example.com\",\n  \"username\": \"testuser\",\n  \"password\": \"Test123\"\n}\n```\n\n## Returns:\nUser object with id, email, username, is_active, created_at, is_admin\n\nThe first account of an installation without root becomes its root user\n(spec 0019); see GET /auth/setup. `setup_token` is only read for that account.\n\n## Errors:\n- 400: Email or username already exists\n- 403: ROOT_SETUP_TOKEN_REQUIRED / ROOT_SETUP_TOKEN_INVALID (root account only)\n- 429: Too many registrations from this IP",
         "operationId": "register_auth_register_post",
         "requestBody": {
           "content": {
@@ -41,6 +41,29 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "x-access": "public"
+      }
+    },
+    "/auth/setup": {
+      "get": {
+        "tags": [
+          "Authentication"
+        ],
+        "summary": "Installation setup state (public)",
+        "description": "Whether this installation still needs its root user (spec 0019).\n\n`root_pending` is true only for a brand-new installation (no users): the next\nregistration becomes root. An installation with users but no root keeps plain\nregistrations; an operator designates root with `make_admin.py --root`.\nPublic on purpose: the registration screen uses it to explain that the account\nbecomes root and whether a setup token is needed. Reveals nothing else.",
+        "operationId": "setup_status_auth_setup_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SetupStatus"
                 }
               }
             }
@@ -126,7 +149,7 @@
           "Authentication"
         ],
         "summary": "Get Current User Info",
-        "description": "Get information about the currently authenticated user\n\n## Headers Required:\n```\nAuthorization: Bearer <token>\n```\nor\n```\nX-API-Key: <api_key>\n```\n\n## Returns:\nUser object with id, email, username, is_active, created_at\n\n## Errors:\n- 401: Not authenticated or invalid token/API key",
+        "description": "Get information about the currently authenticated user\n\n## Headers Required:\n```\nAuthorization: Bearer <token>\n```\nor\n```\nX-API-Key: <api_key>\n```\n\n## Returns:\nUser object with id, email, username, is_active, created_at, is_admin, and:\n- `permissions`: flat list, the 0009 engine permissions plus the platform/IAM\n  permissions the caller holds under the current IAM_MODE (spec 0014 CA12)\n- `bootstrap`: emergency access (the is_admin column or ADMIN_USER_IDS)\n- `platform_roles`: managed roles held through active bindings\n\n## Errors:\n- 401: Not authenticated or invalid token/API key",
         "operationId": "get_current_user_info_auth_me_get",
         "responses": {
           "200": {
@@ -3924,6 +3947,7 @@
             }
           }
         },
+        "deprecated": true,
         "security": [
           {
             "bearerAuth": []
@@ -3967,6 +3991,7 @@
             }
           }
         },
+        "deprecated": true,
         "security": [
           {
             "bearerAuth": []
@@ -3982,6 +4007,7 @@
         ],
         "summary": "Revoke",
         "operationId": "revoke_admin_access_grants__id__revoke_post",
+        "deprecated": true,
         "security": [
           {
             "bearerAuth": []
@@ -4383,6 +4409,243 @@
           }
         },
         "x-access": "jwt"
+      }
+    },
+    "/iam/permissions": {
+      "get": {
+        "tags": [
+          "IAM"
+        ],
+        "summary": "The permission catalog and the managed roles",
+        "operationId": "list_permissions_iam_permissions_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "x-access": "user"
+      }
+    },
+    "/iam/check": {
+      "post": {
+        "tags": [
+          "IAM"
+        ],
+        "summary": "Which platform permissions the caller holds",
+        "description": "Answers for the caller only, as IAM_MODE decides it, and never audits (asking\nis not exercising). Only platform/IAM permissions in this slice: a data or 0009\nengine permission, or a name outside the catalog, is a 422.",
+        "operationId": "check_permissions_iam_check_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "items": {
+                  "$ref": "#/components/schemas/PermissionCheck"
+                },
+                "type": "array",
+                "title": "Body"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/PermissionCheckResult"
+                  },
+                  "type": "array",
+                  "title": "Response Check Permissions Iam Check Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "x-access": "user"
+      }
+    },
+    "/admin/iam/bindings": {
+      "get": {
+        "tags": [
+          "IAM"
+        ],
+        "summary": "Platform and engines bindings",
+        "description": "Filtered per row: platform bindings for `iam.bindings.read` (as IAM_MODE\ndecides it); engines bindings the caller's 0009 delegation covers (bootstrap\nsees them all), with `engine_access_enabled`. Newest first.",
+        "operationId": "list_bindings_admin_iam_bindings_get",
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "include_inactive",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Include Inactive"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "x-access": "admin"
+      },
+      "post": {
+        "tags": [
+          "IAM"
+        ],
+        "summary": "Grant a platform or engines role",
+        "operationId": "grant_binding_admin_iam_bindings_post",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BindingCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "x-access": "admin-session"
+      }
+    },
+    "/admin/iam/bindings/{binding_id}/revoke": {
+      "post": {
+        "tags": [
+          "IAM"
+        ],
+        "summary": "Revoke a platform or engines binding",
+        "operationId": "revoke_binding_admin_iam_bindings__binding_id__revoke_post",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "binding_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Binding Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BindingRevoke"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "x-access": "admin-session"
       }
     },
     "/admin/engine-control-adapters": {
@@ -7078,6 +7341,103 @@
           "revision_id"
         ],
         "title": "Bind"
+      },
+      "BindingCreate": {
+        "properties": {
+          "subject_type": {
+            "type": "string",
+            "title": "Subject Type",
+            "default": "user"
+          },
+          "subject_id": {
+            "type": "string",
+            "title": "Subject Id"
+          },
+          "role": {
+            "type": "string",
+            "title": "Role"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At",
+            "examples": [
+              "2027-01-31T00:00:00Z"
+            ]
+          },
+          "permissions": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array",
+                "maxItems": 100
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Permissions"
+          },
+          "condition_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Condition Ref"
+          },
+          "delegation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Delegation"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "parent_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "subject_id",
+          "role"
+        ],
+        "title": "BindingCreate"
+      },
+      "BindingRevoke": {
+        "properties": {
+          "version": {
+            "type": "integer",
+            "title": "Version"
+          }
+        },
+        "type": "object",
+        "required": [
+          "version"
+        ],
+        "title": "BindingRevoke"
       },
       "BindingUpdate": {
         "properties": {
@@ -13243,6 +13603,37 @@
         "type": "object",
         "title": "PartitionStrategy"
       },
+      "PermissionCheck": {
+        "properties": {
+          "permission": {
+            "type": "string",
+            "title": "Permission"
+          }
+        },
+        "type": "object",
+        "required": [
+          "permission"
+        ],
+        "title": "PermissionCheck"
+      },
+      "PermissionCheckResult": {
+        "properties": {
+          "permission": {
+            "type": "string",
+            "title": "Permission"
+          },
+          "allowed": {
+            "type": "boolean",
+            "title": "Allowed"
+          }
+        },
+        "type": "object",
+        "required": [
+          "permission",
+          "allowed"
+        ],
+        "title": "PermissionCheckResult"
+      },
       "PlanRequest": {
         "properties": {
           "type": {
@@ -14013,6 +14404,30 @@
         ],
         "title": "ScopeUpdate"
       },
+      "SetupStatus": {
+        "properties": {
+          "root_exists": {
+            "type": "boolean",
+            "title": "Root Exists"
+          },
+          "root_pending": {
+            "type": "boolean",
+            "title": "Root Pending"
+          },
+          "setup_token_required": {
+            "type": "boolean",
+            "title": "Setup Token Required"
+          }
+        },
+        "type": "object",
+        "required": [
+          "root_exists",
+          "root_pending",
+          "setup_token_required"
+        ],
+        "title": "SetupStatus",
+        "description": "Whether the installation still needs its root user (spec 0019)"
+      },
       "SpendCap": {
         "properties": {
           "usd": {
@@ -14265,6 +14680,19 @@
             "minLength": 8,
             "title": "Password",
             "example": "SecurePass123"
+          },
+          "setup_token": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 256
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Setup Token",
+            "description": "Installation setup token; only read when creating the root user"
           }
         },
         "type": "object",
@@ -14305,6 +14733,11 @@
             "title": "Is Admin",
             "default": false
           },
+          "is_root": {
+            "type": "boolean",
+            "title": "Is Root",
+            "default": false
+          },
           "permissions": {
             "items": {
               "type": "string"
@@ -14317,6 +14750,19 @@
             "type": "boolean",
             "title": "Engine Access Enabled",
             "default": false
+          },
+          "bootstrap": {
+            "type": "boolean",
+            "title": "Bootstrap",
+            "default": false
+          },
+          "platform_roles": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Platform Roles",
+            "default": []
           }
         },
         "type": "object",
