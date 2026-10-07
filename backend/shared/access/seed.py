@@ -45,45 +45,12 @@ MODAL_DEFAULT_GPU = "L4"  # the GPU the engine console and benchmarks default to
 HOST_READY_SECONDS = 30  # local driver: a host agent seen longer ago is not ready
 
 
-# Portuguese reason for each stable code a seeding run can record. Codes stay the
-# contract (tests, logs, scripts); the text is for the operator reading the report.
-REASONS = {
-    "ACCESS_NOT_ENABLED": "Acesso a engines desligado (IAM_MODE diferente de enforce): "
-    "a biblioteca de perfis está fechada; a semeadura roda no próximo boot com o acesso ligado.",
-    "BOOTSTRAP_ACTOR_REQUIRED": "Somente o root (ou outro admin de bootstrap ativo) pode semear perfis.",
-    "ACCESS_SCHEMA_NOT_READY": "Migração da 0009 não aplicada: falta o epoch de autorização.",
-    "MODEL_NOT_APPROVED": "Modelo não aprovado no catálogo com a configuração atual.",
-    "MODEL_PROFILE_UNAVAILABLE": "Modelo indisponível ou não aprovado para este adapter/feature.",
-    "ADAPTER_NOT_REGISTERED": "Adapter do modelo não está registrado nesta instalação.",
-    "FEATURE_NOT_SUPPORTED": "O adapter da engine não executa esta feature.",
-    "NO_REGISTERED_HOST": "Nenhum host agent registrado: perfis locais precisam de um host_id; "
-    "serão criados quando o host se registrar.",
-    "PROVIDER_SETTINGS_REQUIRED": "O adapter exige parâmetros de provider que não podem ser deduzidos.",
-    "WHISPERX_CONTROL_PROFILE_NOT_QUALIFIED": "Engine Modal com WhisperX ainda não qualificada para perfis de controle.",
-    "BOUND_TO_LIBRARY_PROFILE": "A engine já usa um perfil da biblioteca nesta feature.",
-    "PROFILE_ARCHIVED": "O perfil semeado foi arquivado por um admin; não é recriado.",
-    "RUNTIME_PROFILE_EXISTS": "A engine já tem perfil desejado nesta feature; o vínculo existente é mantido.",
-    "ENGINE_ENVIRONMENT_REQUIRED": "O ambiente da engine difere do ambiente do perfil.",
-    "HOST_AGENT_NOT_READY": "Host agent sem heartbeat recente (30 s); o vínculo é tentado de novo "
-    "no próximo boot, heartbeat de host ou execução do script.",
-    "SERVICE_NOT_REGISTERED": "O serviço da feature não está no inventário do host agent.",
-    "GPU_UUID_NOT_REGISTERED": "A GPU do binding não tem UUID registrado no host agent.",
-    "LIVE_REQUIRES_CUDA": "Transcrição ao vivo exige uma GPU no binding.",
-    "LIVE_SINGLE_RESIDENT_REQUIRED": "Transcrição ao vivo exige 1 worker com 1 execução.",
-    "MODEL_FOOTPRINT_NOT_QUALIFIED": "Modelo sem consumo de VRAM qualificado não pode usar GPU.",
-    "TEST_CONNECTION_FIRST": "Engine Modal sem identidade verificada: execute \"Testar conexão\" e rode a semeadura de novo.",
-    "OPERATION_CONFLICT": "Há uma operação em andamento na engine; o vínculo é tentado de novo depois.",
-    "RESOURCE_LOCKED": "Um recurso da engine está bloqueado por operação; o vínculo é tentado de novo depois.",
-    "RESOURCE_OWNED_BY_ANOTHER_ENGINE": "O recurso físico pertence a outra engine.",
-    "VERSION_CONFLICT": "A engine ou o perfil mudou durante a semeadura; tentado de novo na próxima execução.",
-    "WARM_DURATION_REQUIRED": "Perfil Modal com réplicas aquecidas exige duração de aquecimento.",
-    "MODEL_METADATA_CHANGED": "Os metadados do modelo mudaram desde a publicação; publique uma nova revisão.",
-    "INVALID_SETTINGS": "Configuração atual inválida para o contrato de RuntimeSettings.",
-}
-
-
 def reason_text(code):
-    return REASONS.get(code, f"Falha: {code}")
+    """Portuguese text for a skip/failure code, from the single error catalog."""
+    from shared.error_catalog import describe
+
+    message, _ = describe(code)
+    return message or f"Falha: {code}"
 
 
 @dataclass
