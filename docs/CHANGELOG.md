@@ -29,6 +29,11 @@
 - Full Analysis/rostos: `purge_source` fica fora do fingerprint da `Idempotency-Key`;
   repetir a chave com outro valor devolve a tentativa existente sem alterá-la.
 - Front: a opção "Don't keep the original file after processing" aparece também para imagens.
+- Purge de imagem que falhou (armazenamento fora) é refeito pela task periódica
+  `workers.image_full_tasks.reconcile` (até 20 jobs por minuto, idempotente).
+- Worker de Full Analysis que perdeu o lease não deixa mais a prévia em tamanho real para
+  trás; `source_available`/`DELETE /jobs/{id}/source` listam `images/{id}/source`,
+  `images/{id}/preview/` e relatórios não selecionados, e consideram o resultado no Redis.
 
 ## 2026-10: Guardar ou apagar os arquivos de origem de documentos
 

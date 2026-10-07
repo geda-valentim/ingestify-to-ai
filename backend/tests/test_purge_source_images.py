@@ -65,9 +65,13 @@ class Storage:
 
     def __init__(self):
         self.objects = {}
+        self.refuse_delete = None  # None | callable(object_name) -> True to refuse
+        self.on_upload = None  # callable(object_name), called after the write
 
     def upload_file(self, bucket_name, object_name, file_data=None, content_type=None, **kwargs):
         self.objects[object_name] = file_data
+        if self.on_upload:
+            self.on_upload(object_name)
         return object_name
 
     def download_file(self, bucket_name, object_name, file_path=None):
@@ -75,11 +79,18 @@ class Storage:
             raise KeyError(object_name)
         return self.objects[object_name]
 
+    def list_objects(self, bucket_name, prefix=""):
+        return [k for k in self.objects if k.startswith(prefix)]
+
     def delete_file(self, bucket_name, object_name):
+        if self.refuse_delete and self.refuse_delete(object_name):
+            return False  # what MinIOClient answers on an S3Error
         self.objects.pop(object_name, None)
         return True
 
     def delete_folder(self, bucket_name, folder_prefix):
+        if self.refuse_delete and self.refuse_delete(folder_prefix):
+            return False
         for key in [k for k in self.objects if k.startswith(folder_prefix)]:
             del self.objects[key]
         return True
@@ -509,3 +520,206 @@ def test_a_replayed_key_with_another_purge_source_returns_the_attempt_unchanged(
     assert two.json()["job_id"] == one.json()["job_id"]
     assert two.json()["attempt"] == one.json()["attempt"] == 1
     assert bool(job(env, one.json()["job_id"]).purge_source) is bool(first)
+
+
+# ---------------------------------------------------------------------------
+# Review fixes: lost leases, report rewrite, cache write-back, Redis, retry
+# ---------------------------------------------------------------------------
+
+def _previews(env, job_id):
+    return [k for k in env.storage.objects if k.startswith(f"images/{job_id}/preview/")]
+
+
+def test_a_worker_that_lost_its_lease_never_leaves_its_preview_behind(env):
+    """The reconciler fenced the run and the job was purged while the old worker
+    was about to publish its preview: the preview it wrote must go too."""
+    from datetime import datetime
+
+    job_id = _post(env, "/images/analyze/full", True).json()["job_id"]
+
+    def fence_and_purge(name):
+        if "/preview/" not in name:
+            return
+        env.storage.on_upload = None
+        with env.Session() as db:
+            run = db.get(ImageAnalysisRun, job_id)
+            run.fence += 1
+            run.status = "cancelled"
+            env.storage.objects.pop(f"images/{job_id}/source", None)  # what the purge deleted
+            run.source_path, run.preview_path = "", None
+            job_row = db.get(Job, job_id)
+            job_row.status = JobStatus.CANCELLED
+            job_row.source_deleted_at = datetime.utcnow()
+            db.commit()
+
+    env.storage.on_upload = fence_and_purge
+    run_full_worker(job_id)
+
+    assert _previews(env, job_id) == []
+    assert status(env, job_id)["source_available"] is False
+
+
+def test_a_fenced_worker_discards_its_preview_even_without_purge(env):
+    job_id = _post(env, "/images/analyze/full", None).json()["job_id"]
+
+    def fence(name):
+        if "/preview/" in name:
+            env.storage.on_upload = None
+            with env.Session() as db:
+                db.get(ImageAnalysisRun, job_id).fence += 1
+                db.commit()
+
+    env.storage.on_upload = fence
+    run_full_worker(job_id)
+
+    assert _previews(env, job_id) == []
+
+
+def test_an_unreferenced_preview_counts_as_an_original_and_delete_removes_it(env):
+    job_id = _post(env, "/images/analyze/full", None).json()["job_id"]
+    run_full_worker(job_id)
+    assert env.client.delete(f"/jobs/{job_id}/source", headers=jwt()).status_code == 200
+    with env.Session() as db:  # reopen the case: a copy the row knows nothing about
+        db.get(Job, job_id).source_deleted_at = None
+        db.commit()
+    env.storage.objects[f"images/{job_id}/preview/9-late.png"] = PNG
+
+    assert status(env, job_id)["source_available"] is True
+    assert env.client.delete(f"/jobs/{job_id}/source", headers=jwt()).status_code == 200
+    assert _previews(env, job_id) == []
+    assert status(env, job_id)["source_available"] is False
+
+
+def test_the_rewritten_report_is_committed_before_the_old_one_is_deleted(env):
+    job_id = _post(env, "/images/analyze/full", None).json()["job_id"]
+    run_full_worker(job_id)
+    old_report = job(env, job_id).minio_result_path
+    env.storage.refuse_delete = lambda name: name == old_report
+
+    failed = env.client.delete(f"/jobs/{job_id}/source", headers=jwt())
+
+    assert failed.status_code == 503
+    assert failed.json()["detail"]["code"] == "SOURCE_DELETE_FAILED"
+    after = job(env, job_id)
+    assert after.minio_result_path != old_report  # the new path was committed first
+    assert after.minio_result_path in env.storage.objects
+    assert after.source_deleted_at is None
+    assert status(env, job_id)["source_available"] is True  # the old report is still listed
+
+    env.storage.refuse_delete = None
+    assert env.client.delete(f"/jobs/{job_id}/source", headers=jwt()).status_code == 200
+    assert old_report not in env.storage.objects
+    assert status(env, job_id)["source_available"] is False
+
+
+def test_a_full_wait_true_read_survives_a_report_that_moved(env, monkeypatch):
+    from workers import image_full_tasks
+
+    armed = []
+
+    def dispatch_and_run(job_id):
+        run_full_worker(job_id)
+        armed.append(True)  # from now on only the waiting route reads the report
+
+    monkeypatch.setattr(image_full_tasks, "dispatch", dispatch_and_run)
+    original = env.storage.download_file
+    missed = []
+
+    def flaky(bucket, name, file_path=None):
+        if armed and "/reports/" in name and not missed:
+            missed.append(name)
+            raise KeyError(name)  # deleted between reading the path and the download
+        return original(bucket, name, file_path)
+
+    monkeypatch.setattr(env.storage, "download_file", flaky)
+    body = {"mode": "full", "wait": True, "image_base64": PNG_B64, "filename": "foto.png",
+            "project_id": env.project.id}
+    r = env.client.post("/images/analyze", headers={**jwt(), "Idempotency-Key": "moved"}, json=body)
+
+    assert r.status_code == 200, r.text
+    assert missed and r.json()["status"] == "completed", r.json()["image"].get("reason_code")
+
+
+def test_a_delete_between_the_terminal_commit_and_the_cache_write_is_not_undone(env, monkeypatch):
+    job_id = _post(env, "/images/analyze/full", None).json()["job_id"]
+    write = env.redis.set_job_result
+    deleted = []
+
+    def delete_first(target, payload):
+        if target == job_id and not deleted:
+            deleted.append(env.client.delete(f"/jobs/{job_id}/source", headers=jwt()).status_code)
+        return write(target, payload)
+
+    monkeypatch.setattr(env.redis, "set_job_result", delete_first)
+    run_full_worker(job_id)
+
+    assert deleted == [200]
+    assert env.redis.get_job_result(job_id)["image"]["image_base64"] is None
+    assert status(env, job_id)["source_available"] is False
+
+
+def test_a_native_result_only_in_redis_is_reported_and_deleted(env):
+    job_id = _post(env, "/images/ocr", None).json()["job_id"]
+    with env.Session() as db:  # the MinIO write failed: only the cache has the result
+        db.get(Job, job_id).minio_result_path = None
+        db.commit()
+    assert env.redis.get_job_result(job_id)["image"]["image_base64"]
+
+    assert status(env, job_id)["source_available"] is True
+    assert env.client.delete(f"/jobs/{job_id}/source", headers=jwt()).status_code == 200
+    assert env.redis.get_job_result(job_id)["image"]["image_base64"] is None
+    assert status(env, job_id)["source_available"] is False
+
+
+def test_a_failed_purge_is_retried_by_the_periodic_sweep(env):
+    from workers.image_full_tasks import retry_image_purges
+
+    job_id = _post(env, "/images/analyze/full", True).json()["job_id"]
+    env.storage.refuse_delete = lambda name: True  # storage down when the job settles
+    run_full_worker(job_id)
+
+    settled = job(env, job_id)
+    assert settled.status == JobStatus.COMPLETED  # a failed purge never fails the job
+    assert settled.source_deleted_at is None
+    assert f"images/{job_id}/source" in env.storage.objects
+    assert status(env, job_id)["source_available"] is True
+
+    assert retry_image_purges(force=True) == 0  # still down: kept, retried later
+    env.storage.refuse_delete = None
+    assert retry_image_purges(force=True) == 1
+
+    assert job(env, job_id).source_deleted_at is not None
+    assert f"images/{job_id}/source" not in env.storage.objects
+    assert _previews(env, job_id) == []
+    assert retry_image_purges(force=True) == 0  # idempotent: nothing left to do
+
+
+def test_the_purge_retry_is_bounded(env):
+    from shared.job_source import retry_pending_image_purges
+
+    env.storage.refuse_delete = lambda name: True
+    ids = [_post(env, "/images/analyze/full", True).json()["job_id"] for _ in range(3)]
+    for job_id in ids:
+        run_full_worker(job_id)
+    env.storage.refuse_delete = None
+
+    assert retry_pending_image_purges(env.Session, lambda: env.storage, limit=2) == 2
+    assert sum(job(env, i).source_deleted_at is None for i in ids) == 1
+
+
+def test_purge_source_descriptions_match_each_route_family():
+    from api.main import app
+
+    schema = app.openapi()
+
+    def description(path):
+        body = schema["paths"][path]["post"]["requestBody"]["content"]["multipart/form-data"]["schema"]
+        name = body["$ref"].rsplit("/", 1)[-1]
+        return schema["components"]["schemas"][name]["properties"]["purge_source"]["description"]
+
+    assert "ecoa `image_base64`" in description("/images/describe/upload")
+    assert "ecoa `image_base64`" in description("/images/ocr/upload")
+    analyze = description("/images/analyze/upload")
+    assert "mode=single com wait=true" in analyze and "Idempotency-Key" in analyze
+    faces = description("/images/faces/upload")
+    assert "ecoa" not in faces and "`image.image_base64` null" in faces

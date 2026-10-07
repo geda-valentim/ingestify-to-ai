@@ -495,21 +495,38 @@ class VisionModelInfo(BaseModel):
 
 
 # `purge_source` of every /images/* route (JSON field and multipart Form field):
-# one text, so the eight operations of the contract cannot drift apart.
-IMAGE_PURGE_SOURCE_DESCRIPTION = (
+# one base text plus what differs per route family, so the eight operations of
+# the contract cannot drift apart.
+_IMAGE_PURGE_SOURCE_BASE = (
     "Se true, apaga todas as cópias guardadas da imagem original enviada quando o "
     "job termina: `completed`, ou `failed`/`partial`/`cancelled` (as rotas de imagem "
     "não têm retry automático). Apaga a cópia local de processamento, o original e a "
     "cópia normalizada (prévia em tamanho real) da análise completa/facial no "
     "armazenamento, e a imagem embutida no resultado guardado (`image.image_base64` "
-    "de GET /jobs/{job_id}/result fica null). O resultado da inferência (descrição, "
-    "OCR, regiões, rostos, markdown) fica. Com wait=true a resposta síncrona ainda "
-    "ecoa `image_base64`: vem dos bytes desta requisição, não de uma cópia guardada. "
-    "GET /jobs/{job_id} informa `source_available` e `source_deleted_at`. Padrão "
-    "false (mantém). Para apagar depois: DELETE /jobs/{job_id}/source. Análise "
-    "completa e facial: purge_source não faz parte da Idempotency-Key; repetir a "
-    "chave com outro purge_source devolve a tentativa existente, sem mudar nada."
+    "do resultado fica null). O resultado da inferência (descrição, OCR, regiões, "
+    "rostos, markdown) fica. GET /jobs/{job_id} informa `source_available` e "
+    "`source_deleted_at`. Padrão false (mantém). Para apagar depois: "
+    "DELETE /jobs/{job_id}/source."
 )
+_IMAGE_PURGE_SOURCE_IDEMPOTENCY = (
+    " `purge_source` não faz parte da Idempotency-Key: repetir a chave com outro "
+    "purge_source devolve a tentativa existente, sem mudar nada."
+)
+# /images/describe, /images/ocr (+ /upload): always synchronous
+IMAGE_PURGE_SOURCE_DESCRIPTION = _IMAGE_PURGE_SOURCE_BASE + (
+    " A resposta síncrona ainda ecoa `image_base64` no topo: vem dos bytes desta "
+    "requisição, não de uma cópia guardada."
+)
+# /images/analyze (+ /upload): mode=single or mode=full
+IMAGE_ANALYZE_PURGE_SOURCE_DESCRIPTION = _IMAGE_PURGE_SOURCE_BASE + (
+    " mode=single com wait=true: a resposta ainda ecoa `image_base64` no topo (vem "
+    "dos bytes desta requisição, não de uma cópia guardada). mode=full: a resposta "
+    "(wait=true) e o relatório trazem `image.image_base64` null, e"
+) + _IMAGE_PURGE_SOURCE_IDEMPOTENCY
+# /images/faces (+ /upload)
+FACE_PURGE_SOURCE_DESCRIPTION = _IMAGE_PURGE_SOURCE_BASE + (
+    " A resposta (wait=true) e o relatório trazem `image.image_base64` null."
+) + _IMAGE_PURGE_SOURCE_IDEMPOTENCY
 
 
 class ImageDescribeRequest(BaseModel):
@@ -748,6 +765,7 @@ class ImageAnalyzeOptions(BaseModel):
 
 class ImageAnalyzeRequest(ImageOcrRequest, ImageAnalyzeOptions):
     mode: Literal["single"] = "single"
+    purge_source: bool = Field(False, description=IMAGE_ANALYZE_PURGE_SOURCE_DESCRIPTION)
     wait: bool = Field(False, description="false cria um job e retorna 202; true espera pelo resultado (sujeito ao timeout de visão).")
 
 
@@ -780,6 +798,7 @@ from shared.face_analysis import FaceRequestOptions, FullFaceOptions, FaceAnalys
 
 class FaceAnalyzeRequest(ImageOcrRequest):
     model_config = ConfigDict(extra='forbid')
+    purge_source: bool = Field(False, description=FACE_PURGE_SOURCE_DESCRIPTION)
     face_options: FaceRequestOptions = Field(default_factory=FaceRequestOptions)
     wait: bool = False
     datalake: Optional['Destination'] = None
@@ -821,6 +840,7 @@ class ImageFullOptions(BaseModel):
 class ImageFullAnalyzeRequest(ImageOcrRequest):
     model_config = ConfigDict(extra="forbid")
     mode: Literal['full']
+    purge_source: bool = Field(False, description=IMAGE_ANALYZE_PURGE_SOURCE_DESCRIPTION)
     full_options: ImageFullOptions = Field(default_factory=ImageFullOptions)
     wait: bool = False
     datalake: Optional['Destination'] = None

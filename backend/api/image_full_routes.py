@@ -188,7 +188,13 @@ async def run_full(request, http_request, image_bytes, filename, user, db, tags,
             job = db.get(Job, job_id)
             if job and job.status.value in TERMINAL and job.minio_result_path:
                 storage = get_minio_client()
-                payload = json.loads(await run_in_threadpool(storage.download_file, storage.bucket_results, job.minio_result_path))
+                try:
+                    payload = json.loads(await run_in_threadpool(storage.download_file, storage.bucket_results, job.minio_result_path))
+                except Exception:
+                    # The report can move (DELETE /jobs/{id}/source rewrites it under a
+                    # new hash, then deletes the old one): re-read the path and retry
+                    await asyncio.sleep(.25)
+                    continue
                 from shared.schemas import FaceAnalyzeResponse
                 response = FaceAnalyzeResponse if hasattr(request, 'face_options') else ImageFullAnalyzeResponse
                 return response(job_id=job_id, status=job.status.value, attempt=attempt, **payload)

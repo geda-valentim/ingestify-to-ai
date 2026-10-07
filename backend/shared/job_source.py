@@ -401,8 +401,9 @@ def apply_purge_to_duplicate(db, job: Job, minio_factory: Callable) -> str:
 #   the echoed `image_base64` of a synchronous answer comes from the request's
 #   own bytes, never from a stored copy;
 # - native tasks: the stored result embeds it, `image.image_base64` of
-#   `job:{id}:result` (Redis) and `images/{job_id}/result.json` (results bucket,
-#   `Job.minio_result_path`), which GET /jobs/{id}/result serves;
+#   `job:{id}:result` (Redis, a TTL cache: GET /jobs/{id}/result reads
+#   Elasticsearch, then this) and `images/{job_id}/result.json` (results bucket,
+#   `Job.minio_result_path`, the durable copy the datalake delivery reads);
 # - Full / face analysis: the durable source `images/{job_id}/source`
 #   (`ImageAnalysisRun.source_path`), the normalized full-size PNG of it
 #   `images/{job_id}/preview/...` (`ImageAnalysisRun.preview_path`), and that
@@ -453,14 +454,51 @@ def _image_result_embeds_original(job: Job) -> bool:
     return bool(job.minio_result_path) and job.source_deleted_at is None and not purge_requested(job)
 
 
+def _cached_result_embeds_original(job_id: str) -> bool:
+    """The Redis result (a TTL cache) still carries the image."""
+    try:
+        from shared.redis_client import get_redis_client
+
+        payload = get_redis_client().get_job_result(job_id)
+        image = payload.get("image") if isinstance(payload, dict) else None
+        return bool(isinstance(image, dict) and image.get("image_base64"))
+    except Exception:  # noqa: BLE001 - unknown is not "available"
+        return False
+
+
+def stored_original_objects(job: Job, minio) -> list:
+    """
+    Objects of the results bucket that are a copy of the original, listed (not
+    only what the run row points at, so a preview written by a worker that lost
+    its lease is found too): `images/{id}/source`, every `images/{id}/preview/...`,
+    and every report other than the selected one (an older fence's, or the one a
+    rewrite left behind: reports may embed the preview).
+    """
+    prefix = f"images/{job.id}/"
+    names = minio.list_objects(minio.bucket_results, prefix) or []
+    selected = job.minio_result_path
+    return [name for name in names
+            if name == prefix + "source" or name.startswith(prefix + "preview/")
+            or (name.startswith(prefix + "reports/") and name != selected)]
+
+
+def _listed_originals(job: Job) -> bool:
+    try:
+        from shared.minio_client import get_minio_client
+
+        return bool(stored_original_objects(job, get_minio_client()))
+    except Exception:  # noqa: BLE001 - storage unreachable: the row fields decide
+        return False
+
+
 def image_source_available(job: Job) -> bool:
     """True while any copy of an image job's original remains (see above)."""
     if job.minio_upload_path or _has_files(image_handoff_path(job.id)):
         return True
     run = _image_run(job)
-    if run is not None and (run.source_path or run.preview_path):
+    if run is not None and (run.source_path or run.preview_path or _listed_originals(job)):
         return True
-    return _image_result_embeds_original(job)
+    return _image_result_embeds_original(job) or _cached_result_embeds_original(job.id)
 
 
 def strip_embedded_image(payload) -> bool:
@@ -478,9 +516,11 @@ def _missing_object(exc: Exception) -> bool:
 
 def _strip_stored_result(job: Job, minio) -> bool:
     """
-    Rewrite the job's stored result without the embedded image. A Full / face
-    report is named after its content hash, so it is written under its new hash
-    and the old object deleted; a native `result.json` is rewritten in place.
+    Write the job's stored result without the embedded image. A Full / face report
+    is named after its content hash, so it is written under its new hash and
+    `minio_result_path` moves to it; the old object is NOT deleted here: the caller
+    commits the new path first, and then deletes it as a leftover report
+    (`stored_original_objects`). A native `result.json` is rewritten in place.
     Raises when the storage refuses.
     """
     import json
@@ -499,15 +539,10 @@ def _strip_stored_result(job: Job, minio) -> bool:
     if directory.endswith("/reports") and "-" in name:
         from shared.image_full import fingerprint
 
-        new_path = f"{directory}/{name.split('-', 1)[0]}-{fingerprint(payload)}.json"
-        minio.upload_file(bucket_name=minio.bucket_results, object_name=new_path,
-                          file_data=data, content_type="application/json")
-        job.minio_result_path = new_path
-        if new_path != path and not minio.delete_file(minio.bucket_results, path):
-            raise SourceDeleteError(f"MinIO did not delete {path}")
-    else:
-        minio.upload_file(bucket_name=minio.bucket_results, object_name=path,
-                          file_data=data, content_type="application/json")
+        path = f"{directory}/{name.split('-', 1)[0]}-{fingerprint(payload)}.json"
+    minio.upload_file(bucket_name=minio.bucket_results, object_name=path,
+                      file_data=data, content_type="application/json")
+    job.minio_result_path = path
     return True
 
 
@@ -535,11 +570,17 @@ def delete_image_source(db, job: Job, minio_factory: Callable) -> bool:
 
     Same contract as `delete_source`: the caller holds the row lock and checked
     `has_pending_work`; a storage failure commits what is already gone and raises
-    SourceDeleteError, and calling again finishes the job.
+    SourceDeleteError (`source_deleted_at` stays unset, so the copies left are
+    still reported and found again), and calling again finishes the job.
+
+    Order: the result without the image is written and its path committed first,
+    then the objects it replaces are deleted (a reader never gets a path whose
+    object is already gone for good), all under the job's row lock (re-taken after
+    that commit).
     """
     found = False
     minio = None
-    run = _image_run(job, db)
+    job_id = job.id
 
     def storage():
         nonlocal minio
@@ -547,6 +588,14 @@ def delete_image_source(db, job: Job, minio_factory: Callable) -> bool:
         return minio
 
     try:
+        if job.minio_result_path and _strip_stored_result(job, storage()):
+            found = True
+            db.commit()
+            job = lock_job(db, job_id)
+            if job is None:  # deleted meanwhile: DELETE /jobs/{id} removed everything
+                db.rollback()
+                return found
+        run = _image_run(job, db)
         if job.minio_upload_path:  # an original kept like a document's (uploads bucket)
             object_name = job.minio_upload_path
             if not storage().delete_file(source_bucket(minio, object_name), object_name):
@@ -554,19 +603,19 @@ def delete_image_source(db, job: Job, minio_factory: Callable) -> bool:
             job.minio_upload_path = None
             found = True
         if run is not None:
-            if run.source_path:
-                if not storage().delete_file(minio.bucket_results, run.source_path):
-                    raise SourceDeleteError(f"MinIO did not delete {run.source_path}")
-                run.source_path = ""  # NOT NULL column: empty means "deleted"
+            if run.source_path or run.preview_path:
                 found = True
-            if run.preview_path:
+            for name in stored_original_objects(job, storage()):
+                if not minio.delete_file(minio.bucket_results, name):
+                    raise SourceDeleteError(f"MinIO did not delete {name}")
                 found = True
-            # Every fence writes its own preview: delete them all
-            if not storage().delete_folder(minio.bucket_results, f"images/{job.id}/preview/"):
-                raise SourceDeleteError(f"MinIO did not delete images/{job.id}/preview/")
+            # Also when listing came back empty (it hides S3 errors): the known paths
+            if run.source_path and not minio.delete_file(minio.bucket_results, run.source_path):
+                raise SourceDeleteError(f"MinIO did not delete {run.source_path}")
+            if not minio.delete_folder(minio.bucket_results, f"images/{job_id}/preview/"):
+                raise SourceDeleteError(f"MinIO did not delete images/{job_id}/preview/")
+            run.source_path = ""  # NOT NULL column: empty means "deleted"
             run.preview_path = None
-        if job.minio_result_path and job.source_deleted_at is None:
-            found = _strip_stored_result(job, storage()) or found
     except Exception as e:  # noqa: BLE001 - reported to the caller as one error
         try:
             db.commit()  # record what is already gone (releases the lock)
@@ -576,8 +625,8 @@ def delete_image_source(db, job: Job, minio_factory: Callable) -> bool:
             raise
         raise SourceDeleteError(str(e)) from e
 
-    found = _strip_cached_result(job.id) or found
-    handoff = image_handoff_path(job.id)
+    found = _strip_cached_result(job_id) or found
+    handoff = image_handoff_path(job_id)
     if handoff.exists():
         found = _has_files(handoff) or found
         shutil.rmtree(handoff, ignore_errors=True)
@@ -586,3 +635,59 @@ def delete_image_source(db, job: Job, minio_factory: Callable) -> bool:
         job.source_deleted_at = job.source_deleted_at or datetime.utcnow()
     db.commit()
     return found
+
+
+def recheck_cached_result(job_id: str, session_factory) -> None:
+    """
+    A writer just cached a result that may embed the image, after the job's
+    terminal commit: if the original was deleted meanwhile (DELETE /jobs/{id}/source
+    or the purge), strip that cache again. Decided under the job's row lock, which
+    the delete holds until it has stripped the cache itself, so either the delete
+    sees this write or this check sees the delete. Never raises.
+    """
+    try:
+        with session_factory() as db:
+            job = lock_job(db, job_id)
+            if job is not None and job.source_deleted_at is not None:
+                _strip_cached_result(job_id)
+            db.commit()
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"[IMAGE JOB {job_id}] Could not re-check the cached result: {e}")
+
+
+# Image jobs whose purge failed (storage down when they settled) are retried by a
+# periodic sweep; at most this many per run, oldest first
+IMAGE_PURGE_RETRY_BATCH = 20
+
+
+def retry_pending_image_purges(session_factory, minio_factory: Callable,
+                               limit: int = IMAGE_PURGE_RETRY_BATCH) -> int:
+    """
+    Retry the purge of settled image jobs that asked for purge_source and still
+    have no `source_deleted_at` (the purge raised and kept the copies). Bounded
+    (`limit` jobs per call) and idempotent: each goes through
+    `purge_source_if_requested`, which re-checks everything under the job's row
+    lock, and a successful purge sets `source_deleted_at`, which takes the job out
+    of this query. Returns how many purges completed. Never raises.
+    """
+    try:
+        with session_factory() as db:
+            job_ids = [row[0] for row in db.query(Job.id).filter(
+                Job.source_type == IMAGE_SOURCE_TYPE,
+                Job.purge_source.is_(True),
+                Job.source_deleted_at.is_(None),
+                Job.status.in_([JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.PARTIAL, JobStatus.CANCELLED]),
+            ).order_by(Job.completed_at, Job.created_at).limit(limit)]
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"[IMAGE PURGE] Could not list pending image purges: {e}")
+        return 0
+    done = 0
+    for job_id in job_ids:
+        purge_source_if_requested(job_id, session_factory=session_factory, minio_factory=minio_factory)
+        try:
+            with session_factory() as db:
+                job = db.get(Job, job_id)
+                done += bool(job is not None and job.source_deleted_at is not None)
+        except Exception:  # noqa: BLE001
+            pass
+    return done

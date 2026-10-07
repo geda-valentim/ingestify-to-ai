@@ -406,6 +406,11 @@ def finish(job_id, holder, fence, storage, *, reason=None, recovery=False, sessi
         cache.set_job_status(job_id=job_id, job_type='main', status=status, progress=100)
     except Exception:
         pass
+    # The cache was written after the terminal commit: a DELETE /jobs/{id}/source
+    # that ran in between must not find the image back in Redis
+    if payload['image'].get('image_base64'):
+        from shared.job_source import recheck_cached_result
+        recheck_cached_result(job_id, factory)
     from shared.datalake.service import enqueue_export
     enqueue_export(job_id, session_factory=session_factory)
     # Settled for good: purge_source deletes the source, the preview and the local

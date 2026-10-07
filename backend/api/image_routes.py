@@ -60,6 +60,7 @@ from shared.engines import dispatch as engine_dispatch
 from shared.models import Job, JobStatus as DBJobStatus, User
 from shared.redis_client import VISION_HEARTBEAT_TTL_SECONDS, get_redis_client
 from shared.schemas import (
+    IMAGE_ANALYZE_PURGE_SOURCE_DESCRIPTION,
     IMAGE_PURGE_SOURCE_DESCRIPTION,
     ImageAnalyzeRequest,
     ImageFullAnalyzeRequest,
@@ -865,7 +866,7 @@ async def analyze_image_upload(
     generation: Optional[str] = Form(None, description="Objeto JSON conforme VisionGenerationOptions; omitido usa os padrões do worker."),
     wait: bool = Form(False, description="false retorna 202 com job_id; true espera pelo resultado."),
     tags: Optional[str] = Form(None, description=TAGS_FORM_DESCRIPTION),
-    purge_source: bool = Form(False, description=IMAGE_PURGE_SOURCE_DESCRIPTION),
+    purge_source: bool = Form(False, description=IMAGE_ANALYZE_PURGE_SOURCE_DESCRIPTION),
     http_request: Request = None,
     location: LocationFields = Depends(upload_location_form),
     current_user: User = Depends(require("images.analyze")), db: Session = Depends(get_db),
