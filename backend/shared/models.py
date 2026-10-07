@@ -626,3 +626,5 @@ from shared.access.models import (
     LegacyRequest,
     ServicePrincipal,
 )  # noqa: E402,F401
+# Spec 0014: explicit additive migration (shared/iam/migration.py).
+from shared.iam.models import IamBinding  # noqa: E402,F401

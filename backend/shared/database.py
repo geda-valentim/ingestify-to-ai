@@ -59,6 +59,7 @@ def init_db():
                 or table.name == "engine_runtime_profiles"
                 or table.name.startswith("access_")
                 or table.name.startswith("execution_profile")
+                or table.name.startswith("iam_")
             )
         )
     ]
@@ -85,6 +86,10 @@ def init_db():
         from shared.access.migration import validate_schema
 
         validate_schema(engine)
+    if settings.iam_mode != "off":
+        from shared.iam.migration import validate_schema as validate_iam_schema
+
+        validate_iam_schema(engine)
 
     # The built-in local engine (spec 0003): this server's workers, no bindings until declared
     from shared.engines.store import ensure_local_engine, ensure_lease_row
