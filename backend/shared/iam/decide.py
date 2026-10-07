@@ -264,6 +264,9 @@ class Decider:
         self.db.add(
             AdminAudit(
                 actor_user_id=principal.subject_id,
+                # `audit_auth_method` is jwt|cli and is not widened here: an API key
+                # (a user credential) is recorded as "jwt", and the exact credential
+                # ("session" | "api_key" | "cli") is in `after.credential`.
                 auth_method="cli" if principal.credential == "cli" else "jwt",
                 ip=self._ip,
                 action="iam.bootstrap.use",
@@ -348,13 +351,16 @@ def report_divergence(permission: str, principal, *, legacy: bool, iam: bool, ro
     project has no metrics facility yet, so the log is the signal.
     """
     p = as_principal(principal)
+    fields = {
+        "route": route,
+        "permission": permission,
+        "subject": p.subject_id if p else None,
+        "legacy": legacy,
+        "iam": iam,
+    }
+    # The fields go in the message itself: the API's log format (api/main.py)
+    # prints only %(message)s, never `extra`. `extra` stays for structured handlers.
     logger.warning(
-        "iam_shadow_divergence",
-        extra={
-            "permission": permission,
-            "route": route,
-            "subject": p.subject_id if p else None,
-            "legacy": legacy,
-            "iam": iam,
-        },
+        "iam_shadow_divergence " + " ".join(f"{k}={v}" for k, v in fields.items()),
+        extra=fields,
     )

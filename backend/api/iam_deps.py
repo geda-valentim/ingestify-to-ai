@@ -129,9 +129,20 @@ def _mode() -> str:
     return get_settings().iam_mode
 
 
-def _shadow(request: Request, principal: Principal, permission: str, legacy: bool, new: Decision) -> None:
+def _shadow(request: Request, principal: Principal, permission: str, legacy: bool, evaluate: Callable[[], Decision]) -> None:
+    """
+    Shadow: evaluate the new decision *after* the legacy one and compare. The legacy
+    answer never depends on the new path: if it raises (e.g. `iam_bindings` missing
+    on a host where the migration has not run), it is logged and ignored.
+    """
+    route = _route_label(request)
+    try:
+        new = evaluate()
+    except Exception:
+        logger.exception(f"iam_shadow_error route={route} permission={permission}")
+        return
     if legacy != new.allow:
-        report_divergence(permission, principal, legacy=legacy, iam=new.allow, route=_route_label(request))
+        report_divergence(permission, principal, legacy=legacy, iam=new.allow, route=route)
 
 
 def _flush_audit(db: Session) -> None:
@@ -167,7 +178,9 @@ def require(permission: str, *, session: bool = False, session_detail: str = SES
     """
     perm = _check_require_permission(permission)
 
-    async def dependency(
+    # Plain `def`, like `require_admin`: the bindings query and the audit commit
+    # are blocking DB I/O, so FastAPI runs it in the threadpool.
+    def dependency(
         request: Request,
         user: User = Depends(get_current_active_user),
         decider: Decider = Depends(request_decider),
@@ -183,9 +196,10 @@ def require(permission: str, *, session: bool = False, session_detail: str = SES
             allowed = legacy_allows(db, principal, permission, PLATFORM, decider=decider)
             status = 200 if allowed else 403
             if mode == "shadow":
-                _shadow(request, principal, permission, allowed, decider.decide(principal, permission, PLATFORM))
-            elif allowed and principal.bootstrap and perm.mutation and perm.level != catalog.OWNER:
-                # CA8 does not depend on the mode (same as `decide.can`).
+                _shadow(request, principal, permission, allowed, lambda: decider.decide(principal, permission, PLATFORM))
+            if allowed and principal.bootstrap and perm.mutation and perm.level != catalog.OWNER:
+                # CA8 does not depend on the mode (same as `decide.can`), nor on the
+                # shadow evaluation succeeding. Deduplicated per request.
                 decider._audit_bootstrap(principal, permission)
 
         if not allowed:
@@ -272,7 +286,8 @@ def authorized(model: type, permission: str, *, param: Optional[str] = None):
     _check_data_permission(model, permission, loader.family)
     name = param or loader.param
 
-    async def dependency(
+    # Plain `def` (threadpool): the ownership lookup is blocking DB/Redis I/O.
+    def dependency(
         request: Request,
         resource_id: str,
         user: User = Depends(get_current_active_user),
@@ -293,15 +308,20 @@ def authorized(model: type, permission: str, *, param: Optional[str] = None):
         if mode == "off":
             return loader.legacy(db, resource_id, user)
 
-        # shadow: both run, legacy answers.
+        # shadow (§4.11 step 2): legacy runs first and answers; the new decision is
+        # evaluated after it and can neither change nor break that answer. This
+        # resolves ownership twice per request, a cost of the rollout window only.
         principal = request_principal(request, user)
-        new = decider.decide(principal, permission, loader.resource(db, resource_id))
+
+        def evaluate() -> Decision:
+            return decider.decide(principal, permission, loader.resource(db, resource_id))
+
         try:
             value = loader.legacy(db, resource_id, user)
         except HTTPException:
-            _shadow(request, principal, permission, False, new)
+            _shadow(request, principal, permission, False, evaluate)
             raise
-        _shadow(request, principal, permission, True, new)
+        _shadow(request, principal, permission, True, evaluate)
         return value
 
     # The path parameter keeps its name in the route (`/jobs/{job_id}`), so the
@@ -313,9 +333,9 @@ def authorized(model: type, permission: str, *, param: Optional[str] = None):
     ]
     inner = dependency
 
-    async def bound(**kwargs):
+    def bound(**kwargs):
         kwargs["resource_id"] = kwargs.pop(name)
-        return await inner(**kwargs)
+        return inner(**kwargs)
 
     bound.__signature__ = sig.replace(parameters=params)
     return _declare(bound, Declaration("authorized", permission, model), f"authorized[{model.__name__}:{permission}]")

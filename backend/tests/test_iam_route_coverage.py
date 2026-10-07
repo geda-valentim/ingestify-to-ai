@@ -12,6 +12,7 @@ CA2: platform power and ownership are not decided inline in `api/` or
 shrink (exact counts: a stale entry fails too).
 """
 
+import inspect
 import re
 from collections import Counter
 from pathlib import Path
@@ -35,17 +36,29 @@ PUBLIC_ROUTES = {
     "POST /auth/login",
     "POST /auth/register",
     "POST /auth/refresh",
-    "GET /auth/registration-settings",
     # Authenticated by a single-use ticket bound to the session, not by a user.
     "WS /transcribe/live/sessions/{job_id}/stream",
 }
-# Machine identities (engine hosts), never a user session.
-PUBLIC_PREFIXES = ("/internal/",)
+# Named public by the spec (CA1) but not in the app yet. Kept apart so that every
+# PUBLIC_ROUTES entry is checked to exist; move it there when the route lands.
+RESERVED_PUBLIC_ROUTES = {
+    "GET /auth/registration-settings": "0014 CA1 lists it; no such route exists yet",
+}
+# Machine identities (engine hosts), never a user session. Listed one by one: each
+# handler must authenticate the host with `host_identity(...)` (checked below).
+MACHINE_ROUTES = {
+    "POST /internal/engine-hosts/{host_id}/heartbeat",
+    "GET /internal/engine-hosts/{host_id}/next",
+    "GET /internal/engine-hosts/{host_id}/operations/{op_id}/check",
+    "POST /internal/engine-hosts/{host_id}/operations/{op_id}/events",
+    "POST /internal/engine-hosts/{host_id}/operations/{op_id}/result",
+}
+MACHINE_GUARD = "host_identity("
 # FastAPI's own documentation routes.
 DOCS_PATHS = {"/openapi.json", "/docs", "/docs/oauth2-redirect", "/redoc"}
 
 # Routes still on their legacy guard. Converted in spec 0014 §8 items 3 and 4;
-# this set may only shrink.
+# this set may only shrink (and may not grow: see PENDING_MAX).
 PENDING_ROUTES = {
     # Session-only routes (§4.9): a declaration for "any authenticated user" comes with /iam/*.
     "GET /auth/me",
@@ -96,6 +109,12 @@ PENDING_ROUTES = {
     "GET /jobs/{job_id}/pages/{page_number}/pdf",
 }
 
+# Exact sizes, so the allowlists cannot grow unnoticed (a removal that is later
+# re-added would otherwise pass). Lower these in each slice that converts.
+PENDING_MAX = 44
+ADMIN_ALLOWLIST_MAX = 21
+OWNER_ALLOWLIST_MAX = 16
+
 # What a route marked engine_access() must still be guarded by (0009, unchanged).
 ENGINE_GUARDS = {"access_session", "require_admin", "require_admin_session"}
 
@@ -114,7 +133,7 @@ def _calls(dependant):
 
 def _inventory():
     """{"METHOD path": [Declaration, ...]} plus the guards each route depends on."""
-    routes, guards = {}, {}
+    routes, guards, endpoints = {}, {}, {}
     for route in app.routes:
         if isinstance(route, (APIRoute, APIWebSocketRoute)):
             calls = _calls(route.dependant)
@@ -124,21 +143,20 @@ def _inventory():
             for method in methods:
                 key = f"{method} {route.path}"
                 assert key not in routes, f"duplicate route {key}"
-                routes[key], guards[key] = decls, names
+                routes[key], guards[key], endpoints[key] = decls, names, route.endpoint
         elif isinstance(route, Route) and route.path in DOCS_PATHS:
             continue
         else:
             raise AssertionError(f"unexpected route type {type(route).__name__} at {getattr(route, 'path', '?')}")
-    return routes, guards
+    return routes, guards, endpoints
 
 
 def _public(key: str) -> bool:
-    path = key.split(" ", 1)[1]
-    return key in PUBLIC_ROUTES or path.startswith(PUBLIC_PREFIXES)
+    return key in PUBLIC_ROUTES or key in MACHINE_ROUTES
 
 
 def test_every_route_declares_exactly_one_authorization():
-    routes, _ = _inventory()
+    routes, _, _ = _inventory()
     wrong = {}
     for key, decls in routes.items():
         if _public(key) or key in PENDING_ROUTES:
@@ -149,13 +167,13 @@ def test_every_route_declares_exactly_one_authorization():
 
 
 def test_public_routes_declare_nothing():
-    routes, _ = _inventory()
+    routes, _, _ = _inventory()
     declared = {k: d for k, d in routes.items() if _public(k) and d}
     assert not declared, f"a public route cannot also declare a permission: {declared}"
 
 
 def test_pending_allowlist_only_shrinks():
-    routes, _ = _inventory()
+    routes, _, _ = _inventory()
     gone = sorted(k for k in PENDING_ROUTES if k not in routes)
     assert not gone, f"remove from PENDING_ROUTES, the route no longer exists: {gone}"
     converted = sorted(k for k in PENDING_ROUTES if routes[k])
@@ -164,8 +182,35 @@ def test_pending_allowlist_only_shrinks():
     assert not public, f"a route cannot be both public and pending: {public}"
 
 
+def test_public_and_machine_allowlists_name_real_routes():
+    routes, _, _ = _inventory()
+    gone = sorted(k for k in PUBLIC_ROUTES | MACHINE_ROUTES if k not in routes)
+    assert not gone, f"public/machine allowlist entries with no route: {gone}"
+    landed = sorted(k for k in RESERVED_PUBLIC_ROUTES if k in routes)
+    assert not landed, f"move from RESERVED_PUBLIC_ROUTES to PUBLIC_ROUTES: {landed}"
+    unlisted = sorted(k for k in routes if k.split(" ", 1)[1].startswith("/internal/") and k not in MACHINE_ROUTES)
+    assert not unlisted, f"/internal/ routes must be listed in MACHINE_ROUTES: {unlisted}"
+
+
+def test_machine_routes_authenticate_the_host():
+    _, _, endpoints = _inventory()
+    missing = sorted(k for k in MACHINE_ROUTES if MACHINE_GUARD not in inspect.getsource(endpoints[k]))
+    assert not missing, f"/internal/ routes must call {MACHINE_GUARD}...): {missing}"
+
+
+def test_allowlists_do_not_grow():
+    sizes = (
+        len(PENDING_ROUTES),
+        sum(n for n, _ in ADMIN_ALLOWLIST.values()),
+        sum(n for n, _ in OWNER_ALLOWLIST.values()),
+    )
+    assert sizes == (PENDING_MAX, ADMIN_ALLOWLIST_MAX, OWNER_ALLOWLIST_MAX), (
+        "allowlist sizes changed: never add entries; after removing some, lower the *_MAX ceiling"
+    )
+
+
 def test_engine_access_marks_only_routes_still_under_a_0009_guard():
-    routes, guards = _inventory()
+    routes, guards, _ = _inventory()
     unguarded = sorted(
         k for k, decls in routes.items()
         if any(d.kind == "engine_access" for d in decls) and not guards[k] & ENGINE_GUARDS
@@ -174,7 +219,7 @@ def test_engine_access_marks_only_routes_still_under_a_0009_guard():
 
 
 def test_the_0009_routes_are_in_the_inventory():
-    routes, _ = _inventory()
+    routes, _, _ = _inventory()
     for key in (
         "GET /admin/engines",
         "GET /admin/gpus",
