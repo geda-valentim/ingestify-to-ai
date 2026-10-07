@@ -1,8 +1,14 @@
 import Link from "next/link";
 import { ArrowLeft, ArrowRight } from "lucide-react";
-import { AppHeader } from "@/components/app-header";
+import { PublicHeader } from "@/components/public-header";
 import { DOCS_API_URL as API_URL } from "./config";
-import { DOCS_GROUPS, DOCS_TOPICS, docsHref, type DocsLang } from "./topics";
+import {
+  DOCS_GROUPS,
+  DOCS_TOPICS,
+  docsHref,
+  relatedDocs,
+  type DocsLang,
+} from "./topics";
 import { TopicContent } from "./topic-content";
 import { DocsEnhancements } from "./docs-enhancements";
 
@@ -78,7 +84,7 @@ export function DocsBrowser({
   return (
     <div className="min-h-screen bg-background" lang={pt ? "pt-BR" : "en"}>
       <DocsEnhancements topic={topic} lang={lang} />
-      <AppHeader className="sticky top-0 z-20" />
+      <PublicHeader />
       <div className="container mx-auto px-4 py-6 lg:py-8">
         <div className="mb-6 flex flex-wrap items-center justify-between gap-3 border-b pb-4">
           <Link
@@ -142,6 +148,35 @@ export function DocsBrowser({
                   <span aria-current="page">{current.title[lang]}</span>
                 </nav>
                 <TopicContent topic={current.slug} lang={lang} />
+                {relatedDocs(current.slug).length > 0 && (
+                  <section
+                    aria-label={pt ? "Guias relacionados" : "Related guides"}
+                    className="mt-8 rounded-lg border bg-muted/30 p-5"
+                  >
+                    <h2 className="font-semibold">
+                      {pt
+                        ? "Continue nas telas ou pela API"
+                        : "Continue in the platform or through the API"}
+                    </h2>
+                    <ul className="mt-3 space-y-2">
+                      {relatedDocs(current.slug).map((item) => (
+                        <li key={item.slug}>
+                          <Link
+                            href={docsHref(item.slug, lang)}
+                            className="text-sm text-primary underline underline-offset-4"
+                          >
+                            {
+                              DOCS_GROUPS.find(
+                                (section) => section.id === item.group,
+                              )?.title[lang]
+                            }{" "}
+                            · {item.title[lang]}
+                          </Link>
+                        </li>
+                      ))}
+                    </ul>
+                  </section>
+                )}
                 <nav
                   aria-label={pt ? "Outros tópicos" : "Other topics"}
                   className="mt-10 grid grid-cols-1 gap-3 border-t pt-6 sm:grid-cols-2"
@@ -192,10 +227,10 @@ export function DocsBrowser({
                 </h1>
                 <p className="mt-3 text-muted-foreground">
                   {pt
-                    ? "Guias e exemplos de API organizados por assunto. Escolha um tópico para começar."
-                    : "Guides and API examples organized by topic. Choose a topic to get started."}
+                    ? "Escolha seu caminho: usar as telas, integrar sua aplicação pela API ou administrar a instalação. Os guias de uso explicam os passos; os contratos da API ficam na área de integração."
+                    : "Choose your path: use the screens, integrate your application through the API or administer the installation. Usage guides explain the steps; API contracts live in the integration section."}
                 </p>
-                <div className="mt-8 grid gap-5 md:grid-cols-2">
+                <div className="mt-8 grid gap-5 xl:grid-cols-3">
                   {DOCS_GROUPS.map((section) => (
                     <section key={section.id} className="rounded-xl border p-5">
                       <h2 className="text-lg font-semibold">
