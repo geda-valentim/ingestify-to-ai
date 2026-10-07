@@ -131,3 +131,22 @@ Valem para todas as fatias; uma spec de fatia pode detalhar, nunca contrariar.
   `org_data_reader` explícito e auditado (decidir na 0017).
 - [ ] Destino dos recursos de membro removido? Proposta: transferir ao `org_owner` em
   orgs `team` (decidir na 0017).
+
+## 7. Pendências
+
+Registradas em 2026-10-07, após 0014 e 0018 implementadas. Prioridade abaixo do
+usuário root ([0019](0019-usuario-root-na-primeira-inicializacao.md)).
+
+- [ ] **0015 — API keys escopadas.** Risco aberto: uma key age como o dono, inclusive
+  com papéis de plataforma e bootstrap.
+- [ ] **0016 — Organizações pessoais** e **0017 — compartilhamento, grupos e orgs de time**.
+- [ ] **Remover `access_role_grants`** (hoje espelho somente-escrita da 0018 para rollback
+  seguro). Pré-requisito: período estável em `enforce`. Como o dev não tem usuários,
+  pode ser antecipado enquanto não houver ambiente com dados.
+- [ ] **Remover o alias `ENGINE_ACCESS_ENABLED`** depois que os ambientes usarem só `IAM_MODE`.
+- [ ] **Rollout:** `scripts/iam_equivalence.py` no snapshot → `IAM_MODE=shadow` → `enforce`
+  (runbook da 0018).
+- [ ] **Teste intermitente herdado da `main`:**
+  `test_engine_capacity::test_the_engine_view_shows_capacity_and_liveness_but_no_secret`
+  procura `"f00"` em uma view que contém um UUID aleatório.
+- [ ] **Lint do frontend:** não há configuração de ESLint; `npm run lint` não verifica nada.
