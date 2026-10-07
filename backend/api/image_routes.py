@@ -1125,9 +1125,12 @@ def cancel_full_image(
 ):
     from shared.models import ImageAnalysisRun
     # Only the job's own row counts: a child job (authorized through its MAIN job) or
-    # a Redis-only job has no Full Analysis run, the same 404 as before.
+    # a Redis-only job has no Full Analysis run, the same 404 as before. The row must
+    # also carry its own owner: main matched the caller against this very row only,
+    # while the shared job rule also authorizes a NULL user_id through its parent.
+    # With user_id set, the allow above already means it is the caller.
     job = None
-    if owned_job is not None and owned_job.id == job_id:
+    if owned_job is not None and owned_job.id == job_id and owned_job.user_id is not None:
         job = db.query(Job).filter(Job.id == job_id).with_for_update().first()
     run = db.get(ImageAnalysisRun, job_id) if job else None
     if run is None:

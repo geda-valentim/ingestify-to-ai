@@ -265,10 +265,12 @@ def run(
                     db.get(DatalakeConnection, connection_id), None, permissions=DATALAKE_PERMISSIONS)
         for job_id in run_job_ids:
             # As the route answers: authorized(Job, "jobs.cancel"), then only the job's
-            # own row has a run (a child authorized through its MAIN job is a 404).
+            # own row, with its own user_id, has a run (a child authorized through its
+            # MAIN job, or a NULL-owner row authorized through its parent, is a 404).
             compare("image_cancel", job_id, legacy_image_cancel_allowed(db, job_id, user),
                     JobRef(job_id), None, permissions=("jobs.cancel",),
-                    allowed=lambda d, job_id=job_id: d.allow and d.target is not None and d.target.id == job_id)
+                    allowed=lambda d, job_id=job_id: (d.allow and d.target is not None and d.target.id == job_id
+                                                       and d.target.user_id is not None))
 
     return Report(pairs=pairs, decisions=decisions, divergences=divergences)
 

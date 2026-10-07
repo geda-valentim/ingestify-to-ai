@@ -29,7 +29,10 @@ def test_facial_migrations_have_one_head_on_current_main_chain():
     config = Config(str(ROOT/'alembic.ini'))
     config.set_main_option('script_location', str(ROOT/'alembic'))
     scripts = ScriptDirectory.from_config(config)
-    # The IAM bindings migration (spec 0014) follows the facial one on the same chain.
-    assert scripts.get_heads() == ['a1c40014e7b2']
-    assert scripts.get_revision('a1c40014e7b2').down_revision == '02c6000ce6e5'
+    # The IAM bindings branch (spec 0014) keeps its original parent and is joined to
+    # the facial chain by a merge revision, so DBs stamped a1c40014e7b2 still upgrade.
+    assert scripts.get_heads() == ['03e70014b8c5']
+    assert set(scripts.get_revision('03e70014b8c5').down_revision) == {'02c6000ce6e5', 'a1c40014e7b2'}
+    assert scripts.get_revision('a1c40014e7b2').down_revision == 'f0b40009c4d3'
+    assert scripts.get_revision('02c6000ce6e5').down_revision == '01b5000bd5d4'
     assert scripts.get_revision('01b5000bd5d4').down_revision == 'f0b40009c4d3'
