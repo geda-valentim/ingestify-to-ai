@@ -11,6 +11,23 @@ import subprocess
 from engine_host_agent import SERVICES
 
 
+def write_identities(path, identities):
+    """Rewrite the identities file in place, keeping its inode, mode and group.
+
+    The file holds only token hashes. The API container (uid/gid 10001) reads it
+    through a single-file bind mount, so it must stay the same inode (a rename
+    would leave the container on the old file) and keep an existing
+    0640 root:10001 mode. A new file starts 0600; the runbook makes it readable.
+    """
+    existed = path.exists()
+    with open(path, "r+" if existed else "w") as handle:
+        handle.seek(0)
+        handle.write(json.dumps(identities))
+        handle.truncate()
+    if not existed:
+        os.chmod(path, 0o600)
+
+
 def register(args):
     manifests = {
         str(Path(p).resolve()): hashlib.sha256(Path(p).read_bytes()).hexdigest()
@@ -76,8 +93,7 @@ def register(args):
     identities[args.host_id] = hashlib.sha256(token.encode()).hexdigest()
     Path(args.output).write_text(json.dumps(config, indent=2))
     os.chmod(args.output, 0o600)
-    Path(args.identities).write_text(json.dumps(identities))
-    os.chmod(args.identities, 0o600)
+    write_identities(Path(args.identities), identities)
     print(
         "Registration written. Install the systemd unit and mount the identities file in API."
     )

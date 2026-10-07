@@ -171,7 +171,10 @@ def test_engines_grant_validation(world, api, change, expected):  # noqa: F811
         expected = (422, "DELEGATION_INVALID")
     r = api("bootstrap", "POST", BASE, body)
     assert _code(r) == expected, r.text
-    assert set(r.json()["detail"]) == {"code", "message"}
+    # code + human guidance (0009 CA1); `technical` keeps the original English detail.
+    assert {"code", "message", "next_steps"} <= set(r.json()["detail"]) <= {
+        "code", "message", "next_steps", "cause", "technical"
+    }
     with world() as db:
         assert db.query(IamBinding).filter(IamBinding.role.in_(["observer", "wizard"])).count() == 0
 

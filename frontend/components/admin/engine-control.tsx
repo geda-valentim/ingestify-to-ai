@@ -14,6 +14,8 @@ import {
 import { computeApi } from "@/lib/api";
 import { RuntimeSettingsFields } from "./runtime-settings-fields";
 import { ExecutionProfileBinding } from "./execution-profile-binding";
+import { AdminError } from "./admin-error";
+import { guidedOperationError } from "@/lib/admin-errors";
 import { useAuthStore } from "@/lib/store/auth";
 import type { Engine, Feature } from "@/types/compute";
 import type {
@@ -58,15 +60,19 @@ export function EngineControl({
   onChanged: () => void;
 }) {
   const client = useQueryClient();
+  const router = useRouter();
   const user = useAuthStore((s) => s.user);
   const libraryEnabled = user?.engine_access_enabled;
+  const canCreateProfile =
+    !!user?.is_admin ||
+    !!user?.permissions?.includes("execution_profiles.create");
   const [tab, setTab] = useState("overview");
   const [feature, setFeature] = useState("transcription");
   const [form, setForm] = useState<RuntimeProfile | null>(null);
   const [plan, setPlan] = useState<ControlPlan | null>(null);
   const [operation, setOperation] = useState<string | null>(null);
   const [maxUsd, setMaxUsd] = useState("0.10");
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
   const key = useRef<string | null>(null);
   const discovered = useQuery({
@@ -110,7 +116,21 @@ export function EngineControl({
   });
   const d = caps.data;
   const selectableFeatures = discovered.data?.features || d?.features || [];
-  const dependency = d?.actions.find((a) => a.reason)?.reason;
+  const setup = d?.setup;
+  // Disabled actions explained once per reason, except the setup reason shown above.
+  const blocked = Object.values(
+    (d?.actions || [])
+      .filter((a) => !a.enabled && a.reason && a.reason !== setup?.code)
+      .reduce<Record<string, { reason: string; message: string; types: string[] }>>(
+        (acc, a) => {
+          const r = a.reason as string;
+          acc[r] = acc[r] || { reason: r, message: a.message || r, types: [] };
+          acc[r].types.push(labels[a.type] || a.type);
+          return acc;
+        },
+        {},
+      ),
+  );
   const availableModels = models.data?.filter(
     (p) => p.feature === feature && p.adapters.includes(engine.adapter_type),
   );
@@ -163,7 +183,7 @@ export function EngineControl({
     try {
       await fn();
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(e);
     } finally {
       setBusy(false);
     }
@@ -186,18 +206,40 @@ export function EngineControl({
     key.current = createIdempotencyKey();
     setPlan(p);
   }
+  const testEnabled = !!d?.actions.find((a) => a.type === "test")?.enabled;
+  const createProfileUrl = `/admin/execution-profiles?engine_id=${encodeURIComponent(engine.id)}&feature=${encodeURIComponent(feature)}`;
+  // Next steps the page can perform directly (the others are shown as plain items).
+  const stepActions: Partial<Record<string, () => void>> = {
+    ...(testEnabled && { test_connection: () => perform(() => preview("test")) }),
+    bind_profile: () => setTab("configuration"),
+    ...(canCreateProfile && {
+      create_profile: () =>
+        libraryEnabled ? router.push(createProfileUrl) : setTab("configuration"),
+    }),
+    configure_credentials: () => setTab("configuration"),
+    set_warm_until: () => setTab("configuration"),
+    set_budget: () => setTab("operations"),
+    reload: () => {
+      setError(null);
+      refresh();
+    },
+  };
+  const visibleSteps = (steps: string[]) =>
+    steps.filter((s) => s !== "create_profile" || canCreateProfile);
   return (
     <Card>
       <CardHeader>
         <CardTitle>Operar engine</CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
-        {caps.error && <p role="alert">{(caps.error as Error).message}</p>}
-        {error && (
-          <p role="alert" className="rounded border border-red-500 p-3 text-sm">
-            {error}
-          </p>
+        {caps.error != null && (
+          <AdminError
+            error={caps.error}
+            title="Não foi possível carregar as operações desta engine"
+            actions={stepActions}
+          />
         )}
+        {error != null && <AdminError error={error} actions={stepActions} />}
         <Tabs value={tab} onValueChange={setTab}>
           <TabsList className="flex flex-wrap h-auto justify-start">
             <TabsTrigger value="overview">Visão geral</TabsTrigger>
@@ -236,37 +278,41 @@ export function EngineControl({
                 </p>
               </div>
             ))}
+            {setup?.message && (
+              <AdminError
+                tone="info"
+                title={`Configuração necessária${setup.feature ? ` para ${setup.feature}` : ""}`}
+                guided={{
+                  message: setup.message,
+                  nextSteps: visibleSteps(setup.next_steps),
+                  code: setup.code ?? undefined,
+                }}
+                actions={stepActions}
+              />
+            )}
             <div className="flex flex-wrap gap-2">
               {d?.actions.map((a) => (
                 <Button
                   key={a.type}
                   variant="outline"
                   disabled={busy || !a.enabled}
-                  title={a.reason || labels[a.type]}
+                  title={a.enabled ? labels[a.type] : a.message || a.reason || ""}
                   onClick={() => perform(() => preview(a.type))}
                 >
                   {labels[a.type] || a.type}
                 </Button>
               ))}
             </div>
-            {dependency && (
-              <div className="space-y-2 text-sm text-muted-foreground">
-                <p>
-                  {dependency === "RUNTIME_PROFILE_REQUIRED"
-                    ? "Escolha uma revisão publicada de um perfil de execução e vincule ao desejado antes de operar."
-                    : dependency === "HOST_AGENT_NOT_READY"
-                      ? "O agente do host selecionado está indisponível. Verifique o host na configuração desejada."
-                      : `Dependência: ${dependency}`}
-                </p>
-                {dependency === "RUNTIME_PROFILE_REQUIRED" && (
-                  <Button
-                    variant="outline"
-                    onClick={() => setTab("configuration")}
-                  >
-                    {libraryEnabled ? "Escolher perfil" : "Configurar perfil"}
-                  </Button>
-                )}
-              </div>
+            {blocked.length > 0 && (
+              <ul className="space-y-1 text-sm text-muted-foreground">
+                {blocked.map((b) => (
+                  <li key={b.reason}>
+                    <span className="font-medium">{b.types.join(", ")}:</span>{" "}
+                    {b.message}{" "}
+                    <span className="font-mono text-[11px]">({b.reason})</span>
+                  </li>
+                ))}
+              </ul>
             )}
             {(!libraryEnabled || user?.is_admin) &&
               !!d?.credential_fields.length && (
@@ -295,6 +341,15 @@ export function EngineControl({
               <ExecutionProfileBinding
                 engine={engine}
                 feature={feature}
+                onTestConnection={
+                  testEnabled
+                    ? () => {
+                        setTab("overview");
+                        perform(() => preview("test"));
+                      }
+                    : undefined
+                }
+                connectionVerified={setup?.connection_verified}
                 onChanged={() => {
                   onChanged();
                   client.invalidateQueries({ queryKey: ["control"] });
@@ -421,8 +476,11 @@ export function EngineControl({
               />
             </div>
             <div className="space-y-2">
-              {history.error && (
-                <p role="alert">{(history.error as Error).message}</p>
+              {history.error != null && (
+                <AdminError
+                  error={history.error}
+                  title="Não foi possível carregar o histórico"
+                />
               )}
               {history.data?.operations.map((op) => (
                 <button
@@ -497,7 +555,7 @@ function OperationConsole({
   const [attempt, setAttempt] = useState(0);
   const [events, setEvents] = useState<OperationEvent[]>([]);
   const [autoScroll, setAutoScroll] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<unknown>(null);
   const bottom = useRef<HTMLDivElement>(null);
   const seen = useRef<string | null>(null);
   const snapshot = useQuery({
@@ -523,7 +581,7 @@ function OperationConsole({
           timer = setTimeout(poll, page.has_more ? 0 : 1000);
       } catch (e) {
         if (!stopped) {
-          setError((e as Error).message);
+          setError(e);
           timer = setTimeout(poll, 3000);
         }
       }
@@ -562,7 +620,7 @@ function OperationConsole({
                 await api.cancel(id);
                 snapshot.refetch();
               } catch (e) {
-                setError((e as Error).message);
+                setError(e);
               }
             }}
           >
@@ -581,18 +639,19 @@ function OperationConsole({
               await snapshot.refetch();
               setAttempt((n) => n + 1);
             } catch (e) {
-              setError((e as Error).message);
+              setError(e);
             }
           }}
         >
           Reconciliar estado sem repetir operação
         </Button>
       )}
-      {error && <p role="alert">{error}</p>}
+      {error != null && <AdminError error={error} />}
       {op?.error && (
-        <p role="alert" className="text-red-600">
-          {op.error.message || op.error.code}
-        </p>
+        <AdminError
+          title="A operação falhou"
+          guided={guidedOperationError(op.error)}
+        />
       )}
       <label className="flex items-center gap-2 text-sm">
         <input
@@ -641,7 +700,7 @@ function QuickConfiguration({
   const [credentials, setCredentials] = useState<Record<string, string>>({});
   const [password, setPassword] = useState("");
   const [budget, setBudget] = useState(String(engine.budget.limit_usd ?? "30"));
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
   async function submit(action: string, body: Record<string, unknown>) {
     setBusy(true);
@@ -652,7 +711,7 @@ function QuickConfiguration({
       setPassword("");
       await onChanged();
     } catch (e) {
-      setError((e as Error).message);
+      setError(e);
     } finally {
       setBusy(false);
     }
@@ -660,7 +719,7 @@ function QuickConfiguration({
   return (
     <div className="space-y-3 border-t pt-4">
       <h3 className="font-medium">Orçamento e credenciais</h3>
-      {error && <p role="alert">{error}</p>}
+      {error != null && <AdminError error={error} />}
       {canBudget && (
         <>
           <Label htmlFor="engine-budget">Limite por período (US$)</Label>
@@ -733,7 +792,7 @@ export function CreateEngine() {
   const [adapter, setAdapter] = useState("");
   const [name, setName] = useState("");
   const [slug, setSlug] = useState("");
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
   const descriptors = useQuery({
     queryKey: ["control", "adapters"],
@@ -746,7 +805,7 @@ export function CreateEngine() {
       </Button>
       {open && (
         <div className="mt-3 space-y-3 rounded border p-4">
-          {error && <p role="alert">{error}</p>}
+          {error != null && <AdminError error={error} />}
           <Label htmlFor="new-adapter">Adapter</Label>
           <select
             id="new-adapter"
@@ -787,7 +846,7 @@ export function CreateEngine() {
                 });
                 router.push(`/admin/engines/${e.id}`);
               } catch (e) {
-                setError((e as Error).message);
+                setError(e);
               } finally {
                 setBusy(false);
               }

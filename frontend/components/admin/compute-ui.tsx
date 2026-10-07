@@ -37,6 +37,7 @@ import type {
 } from "@/types/compute";
 import { FEATURE_TITLES } from "@/types/compute";
 import { formatDistanceToNow } from "date-fns";
+import { NEXT_STEP_LABELS, guidedError } from "@/lib/admin-errors";
 
 /** Where the engines CLI runs (backend/scripts/engines.py is baked into the api image). */
 export const ENGINES_CLI = "docker compose exec api python scripts/engines.py";
@@ -369,7 +370,9 @@ export function QueryError({
 }) {
   if (error instanceof ApiError && error.status === 403)
     return <ForbiddenCard />;
-  const message = error instanceof Error ? error.message : "Unknown error";
+  // Coded API errors carry a human message and next steps (error_catalog.py).
+  const g = guidedError(error, "Unknown error");
+  const reference = [g.code, g.cause].filter(Boolean).join(" → ");
   return (
     <div
       role="alert"
@@ -381,7 +384,18 @@ export function QueryError({
       />
       <div className="flex-1 min-w-0">
         <p className="font-medium">Couldn&apos;t load {what}</p>
-        <p className="text-sm text-muted-foreground break-words">{message}</p>
+        <p className="text-sm text-muted-foreground break-words">{g.message}</p>
+        {g.nextSteps.length > 0 && (
+          <p className="text-sm text-muted-foreground">
+            Próximos passos:{" "}
+            {g.nextSteps.map((s) => NEXT_STEP_LABELS[s] || s).join(" · ")}
+          </p>
+        )}
+        {reference && (
+          <p className="text-[11px] text-muted-foreground font-mono">
+            {reference}
+          </p>
+        )}
       </div>
       {onRetry && (
         <Button variant="outline" size="sm" onClick={onRetry}>

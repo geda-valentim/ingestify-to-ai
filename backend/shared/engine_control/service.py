@@ -23,12 +23,41 @@ from shared.engine_control.contracts import RuntimeSettings, TERMINAL
 from shared.engine_control import registry, catalog
 from shared.engines import budget
 from shared.engines.redact import redact
+from shared import error_catalog
 
 
 class ControlError(Exception):
-    def __init__(self, code, status=409, message=None):
-        self.code, self.status = code, status
+    """A refusal with a stable machine `code` (0009). `str()` keeps the code (or the
+    explicit technical message) for logs and callers that match on it; `detail()`
+    adds the Portuguese message and next steps from `shared.error_catalog`.
+    """
+
+    def __init__(
+        self,
+        code,
+        status=409,
+        message=None,
+        *,
+        cause=None,
+        context=None,
+        feature=None,
+        needs_connection=False,
+    ):
+        self.code, self.status, self.cause = code, status, cause
+        self.context, self.feature = dict(context or {}), feature
+        self.needs_connection = needs_connection
         super().__init__(message or code)
+
+    def detail(self):
+        text = str(self)
+        return error_catalog.detail(
+            self.code,
+            text=None if text == self.code else text,
+            cause=self.cause,
+            context=self.context,
+            feature=self.feature,
+            needs_connection=self.needs_connection,
+        )
 
 
 def now():
@@ -132,6 +161,7 @@ def capabilities(db, engine, feature=None):
         .first()
     )
     dependency = None
+    host_context = {}
     if d["execution_mode"] == "queue":
         if latest is None:
             dependency = "RUNTIME_PROFILE_REQUIRED"
@@ -140,21 +170,32 @@ def capabilities(db, engine, feature=None):
             h = db.get(ControlHost, host_id) if host_id else None
             if not h or h.seen_at < now() - timedelta(seconds=30):
                 dependency = "HOST_AGENT_NOT_READY"
+                host_context = error_catalog.host_context(host_id, h)
     if (
         not __import__("shared.config", fromlist=["get_settings"])
         .get_settings()
         .engine_control_enabled
     ):
         dependency = "CONTROL_NOT_ENABLED"
+    connect_first = error_catalog.needs_connection(engine, d)
+    # Remote runners (Modal) also cannot plan anything but test/reconcile without a
+    # desired profile for this feature: say so up front instead of failing on submit.
+    remote_unbound = (
+        dependency is None and d["execution_mode"] != "queue" and latest is None
+    )
     for a in d["actions"]:
         reason = dependency
+        if remote_unbound and a not in error_catalog.PROFILE_ACTIONS_EXEMPT:
+            reason = (
+                "NOTHING_TO_COOL_DOWN" if a == "cooldown" else "RUNTIME_PROFILE_REQUIRED"
+            )
         if (
             d.get("credential_fields")
             and a not in ("test", "reconcile")
             and not engine.credentials_sealed
         ):
             reason = "CREDENTIALS_REQUIRED"
-        if d.get("requires_cleanup_watchdog") and a in (
+        if reason is None and d.get("requires_cleanup_watchdog") and a in (
             "start",
             "warmup",
             "deploy",
@@ -170,12 +211,52 @@ def capabilities(db, engine, feature=None):
             except Exception:
                 reason = "CLEANUP_WATCHDOG_NOT_READY"
 
-        actions.append(
-            dict(type=a, supported=True, enabled=reason is None, reason=reason)
+        message, steps = error_catalog.describe(
+            reason,
+            feature=feature,
+            needs_connection=connect_first,
+            **(host_context if reason == "HOST_AGENT_NOT_READY" else {}),
         )
+        actions.append(
+            dict(
+                type=a,
+                supported=True,
+                enabled=reason is None,
+                reason=reason,
+                message=message,
+                next_steps=steps,
+            )
+        )
+    # The first thing to fix, in the order the admin has to do it.
+    if d.get("credential_fields") and not engine.credentials_sealed:
+        setup_code, setup_context = "CREDENTIALS_REQUIRED", {}
+    elif dependency == "CONTROL_NOT_ENABLED":
+        setup_code, setup_context = dependency, {}
+    elif latest is None:
+        setup_code, setup_context = "RUNTIME_PROFILE_REQUIRED", {}
+    elif connect_first:
+        setup_code, setup_context = "TEST_CONNECTION_FIRST", {}
+    elif dependency == "HOST_AGENT_NOT_READY":
+        setup_code, setup_context = dependency, host_context
+    else:
+        setup_code, setup_context = None, {}
+    setup_message, setup_steps = error_catalog.describe(
+        setup_code, feature=feature, needs_connection=connect_first, **setup_context
+    )
     return dict(
         d,
         actions=actions,
+        # 0009 CA1: what is missing before operating this feature, and what to do next.
+        setup=dict(
+            feature=feature,
+            profile_bound=latest is not None,
+            connection_verified=None
+            if not d.get("requires_control_identity")
+            else not connect_first,
+            code=setup_code,
+            message=setup_message,
+            next_steps=setup_steps,
+        ),
         managed=bool(latest),
         hosts=[
             dict(id=h.id, seen_at=h.seen_at, services=h.inventory.get("services", []))
@@ -320,6 +401,14 @@ def save_profile(
     return profile_view(row)
 
 
+def _host_context(db, engine_id, feature):
+    latest = latest_profile(db, engine_id, feature)
+    host_id = ((latest.profile if latest else {}).get("provider_settings") or {}).get(
+        "host_id"
+    )
+    return error_catalog.host_context(host_id, db.get(ControlHost, host_id) if host_id else None)
+
+
 def create_plan(db, engine, req, actor):
     from shared.access import policy
 
@@ -336,13 +425,39 @@ def create_plan(db, engine, req, actor):
         ),
         None,
     )
+    connect_first = error_catalog.needs_connection(
+        engine, registry.descriptor(engine.adapter_type)
+    )
     if cap is None or not cap["enabled"]:
+        reason = cap["reason"] if cap else "ACTION_UNSUPPORTED"
+        status = {
+            "ACTION_UNSUPPORTED": 422,
+            "RUNTIME_PROFILE_REQUIRED": 422,
+            "NOTHING_TO_COOL_DOWN": 409,
+            "ACCESS_DENIED": 403,
+        }.get(reason, 503)
         raise ControlError(
-            cap["reason"] if cap else "ACTION_UNSUPPORTED", 503 if cap else 422
+            reason,
+            status,
+            feature=req.feature,
+            needs_connection=connect_first,
+            context=_host_context(db, engine.id, req.feature)
+            if reason == "HOST_AGENT_NOT_READY"
+            else None,
         )
     p = latest_profile(db, engine.id, req.feature, req.profile_revision)
-    if not p and req.type not in ("test", "reconcile"):
-        raise ControlError("RUNTIME_PROFILE_REQUIRED", 422)
+    if not p and req.type not in error_catalog.PROFILE_ACTIONS_EXEMPT:
+        if req.type == "cooldown" and req.profile_revision is None:
+            # Without a desired profile no control operation ever warmed this
+            # feature (every effectful plan needs one), so there is nothing to release.
+            raise ControlError(
+                "NOTHING_TO_COOL_DOWN", 409, feature=req.feature,
+                needs_connection=connect_first,
+            )
+        raise ControlError(
+            "RUNTIME_PROFILE_REQUIRED", 422, feature=req.feature,
+            needs_connection=connect_first,
+        )
     driver = registry.create(engine.adapter_type)
     if p:
         validate_source_model(db, p.source_profile_revision_id)
@@ -350,7 +465,12 @@ def create_plan(db, engine, req, actor):
     try:
         body = driver.plan(engine, req, profile, db)
     except ValueError as exc:
-        raise ControlError("INVALID_OPERATION", 422, str(exc)) from None
+        raise ControlError(
+            "INVALID_OPERATION", 422, str(exc),
+            cause=error_catalog.split(str(exc))[0],
+            context=getattr(exc, "context", None),
+            feature=req.feature, needs_connection=connect_first,
+        ) from None
     body.update(
         adapter_type=engine.adapter_type,
         adapter_version=1,
@@ -546,7 +666,7 @@ def operation_view(op):
         generation=op.generation,
         last_seq=op.seq,
         result=op.result,
-        error=op.error,
+        error=error_catalog.operation_error(op.error),
         reserved_usd=str(op.reserved_usd),
         actual_usd=str(op.actual_usd) if op.actual_usd is not None else None,
         cost_confirmed=op.cost_confirmed,

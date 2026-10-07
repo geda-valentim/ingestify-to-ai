@@ -15,6 +15,11 @@ proves their contract did not move, against the behaviour **before 0018**:
 
 The one intentional deviation (0018 §4.5, CA8) is listed in `DEVIATIONS`: a
 self-grant, accepted by 0009 (201 in the capture), is now 422 SELF_GRANT.
+
+Refusals also gained additive, human guidance (0009 CA1, `shared.error_catalog`):
+`message` became Portuguese text instead of the bare code, plus `next_steps`
+(and `cause`/`technical` when present). Those keys are compared apart: every other
+byte of the body — `code` included — must still match the capture.
 """
 
 import json
@@ -180,13 +185,32 @@ def _pre_0018():
     return json.loads(PRE_0018_TRANSCRIPT.read_text())
 
 
+_GUIDANCE = ("message", "next_steps", "cause", "technical")
+
+
+def _without_guidance(body):
+    """The body with the additive 0009 CA1 guidance keys of a coded refusal removed."""
+    data = json.loads(body)
+    detail = data.get("detail") if isinstance(data, dict) else None
+    if isinstance(detail, dict) and "code" in detail:
+        data["detail"] = {k: v for k, v in detail.items() if k not in _GUIDANCE}
+    return json.dumps(data, separators=(",", ":"))
+
+
 def test_the_aliases_answer_byte_for_byte_as_before_0018(world, client):  # noqa: F811
     http, actor = client
     expected = _pre_0018()
     got = alias_scenarios(world, http, actor)
     assert [row[0] for row in got] == [row[0] for row in expected]
     for (label, status, body), (_, old_status, old_body) in zip(got, expected):
-        assert (status, body) == DEVIATIONS.get(label, (old_status, old_body)), label
+        old_status, old_body = DEVIATIONS.get(label, (old_status, old_body))
+        if old_body == body:
+            continue
+        assert (status, _without_guidance(body)) == (old_status, _without_guidance(old_body)), label
+        detail = json.loads(body)["detail"]
+        # The guidance is real text, never the bare code again.
+        assert detail["message"] and detail["message"] != detail["code"], label
+        assert isinstance(detail["next_steps"], list), label
 
 
 def test_a_self_grant_is_the_one_listed_deviation():
