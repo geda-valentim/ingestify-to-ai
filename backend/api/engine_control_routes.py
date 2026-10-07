@@ -6,6 +6,7 @@ import hmac
 import json
 from datetime import datetime
 from pathlib import Path
+from api.error_guidance import GuidedRoute
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Header
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import StreamingResponse
@@ -25,7 +26,7 @@ from api.iam_deps import engine_access
 from shared.access import policy
 
 # 0009 routes: engine_access only declares them in the IAM inventory (0014 CA1).
-router = APIRouter(prefix="/admin", tags=["Admin - Engine control"], dependencies=[Depends(engine_access())])
+router = APIRouter(prefix="/admin", tags=["Admin - Engine control"], dependencies=[Depends(engine_access())], route_class=GuidedRoute)
 host_router = APIRouter(prefix="/internal/engine-hosts", tags=["Engine hosts"])
 
 
@@ -38,12 +39,19 @@ def invoke(fn, *args, **kw):
     try:
         return fn(*args, **kw)
     except service.ControlError as exc:
-        raise HTTPException(
-            exc.status, detail={"code": exc.code, "message": str(exc)}
-        ) from None
+        raise HTTPException(exc.status, detail=exc.detail()) from None
     except ValueError as exc:
+        # Adapter gates (e.g. HOST_AGENT_NOT_READY) keep INVALID_CONFIGURATION as the
+        # code and surface the gate as `cause` with its own message (0009 CA1).
+        from shared import error_catalog
+
         raise HTTPException(
-            422, detail={"code": "INVALID_CONFIGURATION", "message": str(exc)}
+            422,
+            detail=error_catalog.detail(
+                "INVALID_CONFIGURATION",
+                text=str(exc),
+                context=getattr(exc, "context", None),
+            ),
         ) from None
 
 
@@ -150,7 +158,12 @@ def caps(
             engine=e,
             feature=selected,
         ):
-            action.update(enabled=False, reason="ACCESS_DENIED")
+            from shared import error_catalog
+
+            message, steps = error_catalog.describe("ACCESS_DENIED")
+            action.update(
+                enabled=False, reason="ACCESS_DENIED", message=message, next_steps=steps
+            )
     return out
 
 

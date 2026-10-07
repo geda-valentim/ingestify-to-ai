@@ -60,3 +60,57 @@ O bootstrap habilita a infraestrutura de controle. A disponibilidade de ações
 continua dependente do perfil, credenciais e capacidades do adapter. Os gates
 de qualificação da [spec 0007](../specs/0007-operacao-de-engines-pelo-admin.md)
 continuam aplicáveis, inclusive aos perfis WhisperX.
+
+## Diagnosticar `HOST_AGENT_NOT_READY`
+
+A página da engine e a API dizem há quanto tempo o host não envia heartbeat.
+O motivo fica no journal do agente, que registra o tipo, o código e uma dica
+(nunca o token):
+
+```bash
+journalctl -u ingestify-engine-host-agent -n 50 --no-pager
+```
+
+- `REGISTERED_MANIFEST_CHANGED`: algum arquivo compose registrado mudou desde o
+  registro (deploy, overlay novo, edição do `.env` que altera o compose). O
+  agente recusa operar até o host ser registrado de novo (abaixo).
+- `HTTP 403 HOST_IDENTITY_REQUIRED`: a API não reconhece o
+  token. Confira se `secrets/engine_host_identities.json` está montado e
+  legível pela API (passo 4) e se o host não foi rotacionado só de um lado.
+- `API unreachable`: a API não responde no `--api-url` registrado.
+
+O agente volta a registrar `Agent recovered` quando o heartbeat é aceito.
+
+## Re-registrar o host
+
+Use após mudar manifests compose, serviços permitidos, imagens ou GPUs. É uma
+rotação deliberada: o registro antigo é substituído por um token novo.
+
+```bash
+systemctl stop ingestify-engine-host-agent
+stamp=$(date +%Y%m%d%H%M%S)
+cp -p /etc/ingestify/engine-host.json /etc/ingestify/engine-host.json.$stamp
+cp -p secrets/engine_host_identities.json secrets/engine_host_identities.json.$stamp
+rm /etc/ingestify/engine-host.json
+# remova só a entrada deste host, mantendo modo e grupo do arquivo
+python3 - <<'PY'
+import json
+path, host = "secrets/engine_host_identities.json", "SEU_HOST_ID"
+with open(path, "r+") as f:  # reescreve no lugar: mesmo inode, modo e grupo
+    data = json.load(f)
+    data.pop(host, None)
+    f.seek(0); f.write(json.dumps(data)); f.truncate()
+PY
+python3 scripts/register_engine_host.py <os mesmos argumentos do registro original>
+systemctl start ingestify-engine-host-agent
+```
+
+Use exatamente os mesmos `--host-id`, `--api-url`, `--manifest`, `--service`
+e `--gpu-uuid` do registro original (os perfis vinculados apontam para o
+`host_id`; os valores anteriores estão no backup `/etc/ingestify/engine-host.json.$stamp`). O script reescreve o arquivo de identidades no lugar: mantém o
+inode (a API o monta como arquivo único; um `mv`/rename deixaria o container
+lendo a versão antiga), o modo e o grupo (por exemplo `0640 root:10001`). Se o
+arquivo for novo, aplique o passo 4. Não edite esse arquivo com ferramentas que
+substituem o arquivo (por exemplo `sed -i`). A API relê as identidades a cada requisição do host; não é preciso
+reiniciá-la. Se o inventário do host mudou (GPU ou manifests), vincule de novo
+o perfil de execução das engines locais (`PROFILE_INVENTORY_CHANGED`).
