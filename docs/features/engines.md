@@ -79,22 +79,24 @@ ativação separados. Ela permanece desabilitada por padrão; os critérios de p
 
 A UI Compute permite configurar e operar engines pelo controlador, além de mostrar os
 comandos Docker/CLI existentes. As leituras de engines e o controle usam sessão JWT. Com
-`ENGINE_ACCESS_ENABLED=true`, usuários delegados veem apenas engines, perfis e ações
-permitidos por seus grants; o servidor revalida a autorização em cada etapa. Diagnósticos
+acesso de engines ligado (`IAM_MODE=enforce`, ou o alias depreciado
+`ENGINE_ACCESS_ENABLED=true`), usuários delegados veem apenas engines, perfis e ações
+permitidos por seus bindings de engines; o servidor revalida a autorização em cada etapa. Diagnósticos
 globais de GPU, routing e status continuam restritos ao administrador de bootstrap.
 
 Configure as opções de runtime em **Compute → Perfis de execução**
 (`/admin/execution-profiles`), publique uma revisão e selecione-a em
 **Engine → Configuração → Perfil de execução**. Vincular altera apenas o desejado;
 aplicar exige uma prévia e execução separadas. Administre papéis e escopos em
-**Compute → Acesso** (`/admin/access`). Veja o [guia de perfis e acesso](execution-profiles.md)
+**Admin → Acesso** (`/admin/access`), a mesma tela dos papéis de plataforma desde a
+[spec 0018](../specs/0018-iam-convergencia-do-rbac-abac-de-engines.md). Veja o [guia de perfis e acesso](execution-profiles.md)
 e o [runbook de migração/ativação](../runbooks/execution-profiles-access.md).
 
 | Tela | O que interpretar |
 |---|---|
 | `/admin/engines` e `/admin/engines/{id}` | Status/saúde, bindings, em voo, orçamento, teste e deploy; `paused` barra novas colocações |
 | `/admin/execution-profiles` | Criar, revisar, publicar e vincular modelos de configuração de runtime |
-| `/admin/access` | Políticas, grants, delegação, ambientes e consumidores de recursos |
+| `/admin/access` | Concessões (bindings de plataforma e de engines, delegação), políticas, ambientes, consumidores de recursos e principais de instalação |
 | `/admin/gpus` | VRAM orçada × usada e GPUs detectadas sem declaração; valor desconhecido não é zero |
 | `/admin/routing` | Ordem dos motores e backlog de cada feature; sem rota vale a fila local habitual |
 | `/admin/status` | Lease do despachante, disponibilidade do worker remoto e workers configurados × vivos |
@@ -510,7 +512,7 @@ docker compose exec api python scripts/engines.py speed [--engine modal_1]
 ## API admin
 
 Listagem/detalhe de engines e descritores exigem JWT; com acesso habilitado, aplicam escopos
-de grants. Diagnósticos globais e alterações legadas exigem bootstrap; credenciais podem ser
+dos bindings de engines. Diagnósticos globais e alterações legadas exigem bootstrap; credenciais podem ser
 delegadas ao papel `connection_manager`. Mudanças exigem sessão JWT (API key ⇒ 403),
 gravam `admin_audit` e nunca
 ecoam valores de credenciais.

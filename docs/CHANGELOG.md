@@ -2,6 +2,44 @@
 
 > **Registro histórico (2025-10).** Não é mantido; para mudanças posteriores use `git log`. Observação: `workers/tasks_old.py`, citado abaixo, não existe (há um `workers/tasks.py.backup`). Exceção: mudanças de comportamento intencionais que uma spec manda registrar aqui entram na seção abaixo.
 
+## 2026-10: Spec 0018 — IAM: convergência do RBAC/ABAC de engines (0009)
+
+Ver [specs/0018](specs/0018-iam-convergencia-do-rbac-abac-de-engines.md) e a
+[seção 6 do runbook](runbooks/execution-profiles-access.md#6-convergência-no-iam-spec-0018).
+
+- **Grants de engines viram `iam_bindings`** da família `engines`, com o **mesmo id** do grant
+  (decisões e auditoria que citam `grant_id` continuam válidas). A decisão da 0009 não muda:
+  `policy.authorize`, "um grant satisfaz integralmente", vários grants do mesmo papel,
+  delegação por envelope, epoch e admissão de efeito. Papéis de plataforma e de engines nunca
+  se enxergam (`/iam/check`, `platform_roles` e `ROLE_ABOVE_GRANTOR` ignoram engines).
+- **Migration `d4e80018a2b6`** (depois de `03e70014b8c5`): colunas `permissions`,
+  `condition_ref`, `delegation`, `parent_id`, FKs e índice `ix_iam_bindings_subject_role` em
+  `iam_bindings`; cópia + reconciliação + validação sob o lock do epoch; marcador
+  `0018_engine_bindings`. A reconciliação roda também a cada boot da API e dos workers e só
+  restringe. Gate antes do deploy: `python -m shared.iam.engine_equivalence` (ou
+  `scripts/iam_engine_equivalence.py`) com 0 divergências.
+- **`access_role_grants` vira espelho só-escrita** para rollback: toda concessão/revogação de
+  engines grava a linha de mesmo id na mesma transação. O downgrade aplica nela o mais
+  restritivo antes de apagar os bindings `engines`.
+- **Flag:** `IAM_MODE=enforce` liga o acesso de engines; `ENGINE_ACCESS_ENABLED` vira alias
+  depreciado que, quando definido (`true`/`false`), vence com aviso no boot; vazio = não
+  definido. `ENGINE_ACCESS_ENABLED=false` continua sendo a alavanca de emergência. Os compose
+  files passam `IAM_MODE` e `ENGINE_ACCESS_ENABLED` (default vazio) a todos os processos que
+  decidem engines, e cada um registra `engine_access_enabled=` no boot. **Atenção:** ligar
+  `IAM_MODE=enforce` numa instalação que nunca ligou engines passa a ligar o enforcement de
+  engines e a exigir o esquema da 0009.
+- **API:** `/admin/iam/bindings*` administra as duas famílias, com regras por família
+  (corpo ganha `permissions`, `condition_ref`, `delegation`; resposta ganha `family` e
+  `parent_id`). `/admin/access/grants*` ficam como aliases **depreciados** com o contrato da
+  0009, só para papéis de engines.
+- **Mudança intencional:** autoconcessão de papel de engines passa a ser recusada
+  (`422 SELF_GRANT`) nas duas rotas.
+- **Auditoria:** concessões e revogações das duas famílias gravam `iam.binding.grant` /
+  `iam.binding.revoke` em `target_type="iam_binding"`; linhas antigas (`access`) intactas.
+- **Frontend:** uma tela **Admin → Acesso** (`/admin/access`) com abas Concessões, Políticas,
+  Atributos de engine, Recursos e Principais de instalação; `/admin/platform-access` redireciona
+  para ela e o menu tem um item "Acesso".
+
 ## 2026-10: Spec 0014 — IAM: núcleo de decisão e papéis de plataforma
 
 Ver [specs/0014](specs/0014-iam-nucleo-de-decisao-e-papeis-de-plataforma.md).
