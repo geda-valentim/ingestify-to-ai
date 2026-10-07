@@ -21,18 +21,18 @@ async def main():
         assert response.status == 200
         assert await page.locator('main h1').count() == 1
         assert await page.locator('main h1').is_visible()
-        assert await page.locator('[lang="pt-BR"]').count() > 0
+        assert await page.locator('[lang="en"]').count() > 0
         assert 'Ingestify for Business' in await page.title()
         canonical = await page.locator('link[rel="canonical"]').get_attribute('href')
         assert urlsplit(canonical).path == '/business'
         assert await page.locator('meta[name="description"]').get_attribute('content')
         assert await page.locator('figure').count() >= 2
         body = await page.locator('main').inner_text()
-        for term in ('Agências e integradores','Produtos e agentes de IA','Equipes de dados','Amazon S3','MinIO','Google Cloud Storage','Azure Blob Storage','customer_id','JSONL','Full Analysis'):
+        for term in ('Agencies and integrators','AI products and agents','Data and automation teams','Amazon S3','MinIO','Google Cloud Storage','Azure Blob Storage','customer_id','JSONL','Full Analysis'):
             assert term in body, term
         links = await page.locator('a[href]').evaluate_all('(links)=>links.map(link=>link.getAttribute("href"))')
         paths = {urlsplit(link).path for link in links if link.startswith('/')}
-        assert {'/convert','/agents','/pt/docs/platform-start'} <= paths
+        assert {'/convert','/agents','/docs/platform-start'} <= paths
         for path in paths:
             result = await static.request.get(URL+path)
             assert result.status == 200, (path,result.status)
@@ -54,11 +54,11 @@ async def main():
             assert response.status == 200
             assert await page.evaluate('document.documentElement.scrollWidth<=innerWidth'), width
             await page.keyboard.press('Tab')
-            await expect(page.get_by_role('link',name='Ir para o conteúdo',exact=True)).to_be_focused()
+            await expect(page.get_by_role('link',name='Skip to content',exact=True)).to_be_focused()
             await page.keyboard.press('Enter')
             await page.wait_for_url(URL+'/business#business-content')
             assert urlsplit(page.url).fragment == 'business-content'
-            for details in await page.locator('details').all():
+            for details in await page.locator('main details').all():
                 await details.locator('summary').click()
                 assert await details.get_attribute('open') is not None
                 assert await details.locator('p').is_visible()
@@ -72,7 +72,7 @@ async def main():
             for path in ('/','/agents','/docs'):
                 await page.goto(URL+path,wait_until='networkidle')
                 assert await page.evaluate('document.documentElement.scrollWidth<=innerWidth'), (path,width)
-                if path == '/docs' and width == 320:
+                if width == 320:
                     await page.get_by_role('button',name='Menu',exact=True).click()
                     menu = page.get_by_role('navigation',name='Mobile navigation',exact=True)
                     await expect(menu.get_by_role('link',name='Business',exact=True)).to_be_visible()
