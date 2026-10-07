@@ -1734,8 +1734,8 @@ curl --fail "${API_URL}/admin/gpus" \\
       />
       <P>
         {lang === "pt"
-          ? "Em Compute → Acesso, o admin classifica o ambiente das engines e qualifica todos os consumidores de cada recurso compartilhado. A política delimita engines/perfis, provider, feature, ambiente, modelo, host/GPU e tetos de réplicas, concorrência, CPU, memória, aquecimento e custo. Um grant completo precisa cobrir a decisão; não se somam partes de grants diferentes. O escopo cobre recursos do desejado e do último aplicado. Consumidor desconhecido ou fora do escopo bloqueia operação delegada."
-          : "Under Compute → Access, the administrator classifies engine environments and qualifies every consumer of shared resources. Policies constrain engines/profiles, provider, feature, environment, model, host/GPU and limits for replicas, concurrency, CPU, memory, warmup and cost. One complete grant must cover the decision; parts of different grants cannot be combined. Scope covers desired and last applied resources. Unknown or out-of-scope consumers block delegated operation."}
+          ? "Em Admin → Acesso, o admin classifica o ambiente das engines e qualifica todos os consumidores de cada recurso compartilhado. A política delimita engines/perfis, provider, feature, ambiente, modelo, host/GPU e tetos de réplicas, concorrência, CPU, memória, aquecimento e custo. Um grant completo precisa cobrir a decisão; não se somam partes de grants diferentes. O escopo cobre recursos do desejado e do último aplicado. Consumidor desconhecido ou fora do escopo bloqueia operação delegada."
+          : "Under Admin → Access, the administrator classifies engine environments and qualifies every consumer of shared resources. Policies constrain engines/profiles, provider, feature, environment, model, host/GPU and limits for replicas, concurrency, CPU, memory, warmup and cost. One complete grant must cover the decision; parts of different grants cannot be combined. Scope covers desired and last applied resources. Unknown or out-of-scope consumers block delegated operation."}
       </P>
       <P>
         {lang === "pt"
@@ -1748,8 +1748,8 @@ curl --fail "${API_URL}/admin/gpus" \\
           : "Warmup uses a duration of up to 24 hours, resolved once on binding. Retry does not renew it. For VERSION_CONFLICT, read current state and review intent before retrying. PUBLISHED_REVISION_REQUIRED needs a published revision; ENGINE_ENVIRONMENT_REQUIRED needs engine classification; MODEL_METADATA_CHANGED needs a compatible new revision; 404 can mean an out-of-scope resource. RUNTIME_PROFILE_REQUIRED needs a binding, while HOST_AGENT_NOT_READY needs a valid host heartbeat."}
       </P>
       <Endpoint method="POST" path="/admin/execution-profiles/{id}/publish" />
-      <Endpoint method="POST" path="/admin/access/grants" />
-      <Endpoint method="POST" path="/admin/access/grants/{id}/revoke" />
+      <Endpoint method="POST" path="/admin/iam/bindings" />
+      <Endpoint method="POST" path="/admin/iam/bindings/{id}/revoke" />
 
       <Endpoint method="GET" path="/admin/execution-profiles" />
       <Endpoint

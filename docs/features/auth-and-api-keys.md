@@ -1,6 +1,6 @@
 # Autenticação, API keys e autorização
 
-> Verificado contra o código em 2026-10-04. Fonte da verdade:
+> Verificado contra o código em 2026-10-07. Fonte da verdade:
 > [backend/api/auth_routes.py](../../backend/api/auth_routes.py),
 > [backend/api/apikey_routes.py](../../backend/api/apikey_routes.py),
 > [backend/shared/auth.py](../../backend/shared/auth.py),
@@ -94,12 +94,22 @@ e e-mail da mesma conta compartilham o contador de falhas. Se o Redis cair, o li
   está em `ADMIN_USER_IDS` (UUIDs separados por vírgula). A regra é uma só
   (`shared/admin.py:is_effective_admin`) para as rotas admin e para o campo `is_admin` de
   `GET /auth/me` e `POST /auth/register`. Nas rotas administrativas gerais, quem não é
-  admin recebe `403`. Compute pode conceder acesso por grants quando
-  `ENGINE_ACCESS_ENABLED=true`: biblioteca, controle e IAM humano exigem JWT e
-  RBAC/ABAC atual, inclusive para leitura; uma API key não transmite esses papéis.
-  `/auth/me` expõe as permissões para navegação. Veja [perfis e acesso](execution-profiles.md).
-  Endpoints gerais em
-  [monitoring-and-admin.md](monitoring-and-admin.md).
+  admin recebe `403`. Com `IAM_MODE=enforce`
+  ([spec 0014](../specs/0014-iam-nucleo-de-decisao-e-papeis-de-plataforma.md)), bindings de
+  plataforma (`platform_admin`, `platform_operator`, `platform_auditor`,
+  `remote_engine_user`) concedem as permissões de plataforma sem tornar ninguém admin.
+  Endpoints gerais em [monitoring-and-admin.md](monitoring-and-admin.md).
+- **Bindings IAM (spec 0018):** toda concessão é um `iam_binding` de uma de duas famílias
+  que nunca se enxergam — `platform` (0014) e `engines` (papéis da 0009, com uma revisão de
+  política como condição). Ambas se administram em **Admin → Acesso** (`/admin/access`) e por
+  `/admin/iam/bindings`, cada uma com sua autoridade: bootstrap ou `iam.bindings.manage` para plataforma;
+  bootstrap ou `access.grants.manage` dentro do envelope de delegação para engines. Ninguém
+  concede papel a si mesmo. Escritas exigem sessão JWT; a família `engines` exige JWT também
+  na leitura, então uma API key só lista bindings de plataforma. Engines ficam ligadas com
+  `IAM_MODE=enforce` ou com o alias depreciado `ENGINE_ACCESS_ENABLED=true`; biblioteca,
+  controle e IAM humano de engines exigem JWT e RBAC/ABAC atual, inclusive para leitura.
+  `/auth/me` expõe as permissões para navegação: as de engines vêm só dos bindings
+  `engines` vigentes. Veja [perfis e acesso](execution-profiles.md).
 - **Primeiro admin:** pelo shell do servidor ou do container, por e-mail ou id, nunca por
   username (que qualquer um escolhe no cadastro):
 
@@ -130,6 +140,6 @@ e e-mail da mesma conta compartilham o contador de falhas. Se o Redis cair, o li
 - Um usuário desativado (`is_active=false`) recebe `400 Inactive user`, não `401/403`.
 - Revogar uma API key a apaga (não há "desativar"); o campo `is_active` não tem endpoint.
 - Não há escopos configuráveis por chave nas APIs de jobs. Controle, biblioteca e IAM
-  humano exigem sessão JWT; grants Compute não autorizam essas rotas por API key.
+  humano exigem sessão JWT; bindings de engines não autorizam essas rotas por API key.
 - O header `Authorization` colide com o token de provedor exigido por Google Drive/Dropbox
   (ver [sources.md](sources.md#limites-e-lacunas-conhecidas)).

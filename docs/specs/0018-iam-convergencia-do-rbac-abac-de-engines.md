@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Em implementação |
+| **Status** | Em implementação; fatias 1–5 no branch, pendentes CA5 e CA18 em MySQL |
 | **Autor** | Geda Valentim / Claude |
 | **Criada em** | 2026-10-07 |
 | **Atualizada em** | 2026-10-07 |
@@ -62,7 +62,7 @@ sua semântica de decisão. As famílias nunca se enxergam (§4.3).
 
 ## 3. Critérios de aceitação
 
-- [ ] CA1. Após a migração, cada linha de `access_role_grants` tem um `iam_binding`
+- [x] CA1. Após a migração, cada linha de `access_role_grants` tem um `iam_binding`
   com o **mesmo id**, `subject_type='user'`, `subject_id=user_id`, papel, permissões
   (materializadas, nunca NULL), `condition_ref=policy_revision_id`, delegação, pai,
   validade, revogação, concedente e versão; `revoked_by` vem da auditoria (§4.2.2).
@@ -70,19 +70,19 @@ sua semântica de decisão. As famílias nunca se enxergam (§4.3).
   admissões, auditoria) continuam válidas. Todo binding de papel `engines` tem
   `permissions` não vazia ⊆ papel e `condition_ref` resolvível; todo binding de papel
   `platform` tem `permissions`, `condition_ref`, `delegation` e `parent_id` NULL.
-- [ ] CA2. `policy.authorize`, `policy.grants`, `active_grant`, `navigation`,
+- [x] CA2. `policy.authorize`, `policy.grants`, `active_grant`, `navigation`,
   `visible_catalog`, `scoped_query`, `_delegator` e `access_session` leem **somente**
   `iam_bindings`. Um teste falha se algum módulo consultar `RoleGrant`, exceto a
   migração da 0018 (`shared/iam/migration.py`), o espelho de rollback
   (`shared/iam/engine_mirror.py`, só escrita por id) e a cópia congelada de CA4
   (`shared/iam/engine_equivalence.py`).
-- [ ] CA3. Toda a suíte da 0009 passa com **asserções inalteradas**. Podem mudar
+- [x] CA3. Toda a suíte da 0009 passa com **asserções inalteradas**. Podem mudar
   apenas: o helper de criação de grants dos fixtures e os acessos diretos a linhas de
   grant (`db.get(RoleGrant, id)`, `query(RoleGrant).filter_by(user_id=...)`, hoje em
   `tests/test_execution_profiles.py` e `tests/test_execution_profiles_migration.py`),
   que passam a usar `IamBinding` por um helper único (`grant_row(db, id)` /
   `grant_rows(db, user_id)`). O diff dos testes contém só essas trocas.
-- [ ] CA4. Equivalência: para um conjunto de grants legados — ativos, revogados,
+- [x] CA4. Equivalência: para um conjunto de grants legados — ativos, revogados,
   expirados, delegados, pai revogado, pai expirado, dono do grant inativo, dono do pai
   inativo, ciclo de `parent_id`, vários grants do mesmo papel com subconjuntos de
   permissões distintos — e uma matriz de pedidos
@@ -96,12 +96,17 @@ sua semântica de decisão. As famílias nunca se enxergam (§4.3).
   no lado legado, `authorize` lança `AttributeError` enquanto `navigation` ainda conta
   o grant, de modo que não há decisão legada a igualar. Só o lado novo é testado, como
   defesa em profundidade: o binding malformado não contribui nada (→ nega).
+  *Gate antes do deploy: seção 6.4 do runbook de acesso.*
 - [ ] CA5. Escrever binding de papel `engines` trava o epoch da 0009 (`FOR UPDATE`)
   antes de ler ou alterar qualquer binding ou usuário e o incrementa na mesma
   transação; bindings de papel `platform` não tocam o epoch (0013 §4 regra 2).
   Ordem global de locks (§4.3) respeitada; teste de concorrência em MySQL: admissão de
   efeito de um filho × concessão 0014 ao dono do pai, sem deadlock.
-- [ ] CA6. `POST /admin/iam/bindings` concede papéis das duas famílias, com regras
+  *Parcial (2026-10-07):* lock e incremento do epoch por família provados em SQLite
+  (`tests/test_iam_bindings_api.py`, `tests/test_iam_engine_bindings_writes.py`) e o
+  índice da leitura com lock fixado no SQL do MySQL; falta o teste de concorrência em
+  InnoDB (§8 fatia 2).
+- [x] CA6. `POST /admin/iam/bindings` concede papéis das duas famílias, com regras
   **por família** que nunca se cruzam:
   - `platform`: as da 0014, inalteradas — `iam.bindings.manage`, autoconcessão
     proibida (`SELF_GRANT`), papel acima do concedente calculado só sobre bindings
@@ -129,19 +134,19 @@ sua semântica de decisão. As famílias nunca se enxergam (§4.3).
   `ACCESS_DENIED` ao conceder ou revogar papel `engines`; um `access_admin` delegado
   recebe 403 `ACCESS_DENIED` ao conceder ou revogar papel `platform`; dois
   `engine_operator` com subconjuntos distintos para o mesmo usuário → 201 e 201.
-- [ ] CA7. Delegação: um binding `access_admin` com envelope permite conceder dentro do
+- [x] CA7. Delegação: um binding `access_admin` com envelope permite conceder dentro do
   envelope (permissões, condições ⊆, prazo máximo); revogar ou expirar o pai, ou
   desativar o dono do pai, invalida os derivados na próxima decisão; sem envelope não
   concede nada; bootstrap não precisa de envelope. Só para a família `engines`; a
   família `platform` não tem delegação nesta spec.
-- [ ] CA8. `GET|POST /admin/access/grants` e `POST /admin/access/grants/{id}/revoke`
+- [x] CA8. `GET|POST /admin/access/grants` e `POST /admin/access/grants/{id}/revoke`
   continuam respondendo com o mesmo contrato da 0009 (status, corpo `{code}`, erros,
   re-revogação aceita, listagem incluindo revogados/expirados filtrada por
   `_delegator`), implementados sobre `iam_bindings`, só para papéis `engines` (papel
   `platform` → 422 `ROLE_UNKNOWN`; a listagem não mostra bindings `platform`), e
   marcados `deprecated` no OpenAPI. Única exceção, listada no teste: autoconcessão →
   422 `SELF_GRANT`.
-- [ ] CA9. Rollback não amplia acesso:
+- [x] CA9. Rollback não amplia acesso:
   - o espelho grava em `access_role_grants`, na mesma transação, toda concessão e
     revogação de papel `engines`, copiando id, user_id, role, permissions
     materializadas, policy_revision_id, delegation, parent_id, granted_by,
@@ -153,42 +158,42 @@ sua semântica de decisão. As famílias nunca se enxergam (§4.3).
     (código antigo) → reconciliar de novo → a decisão nega; (c) o downgrade da 0018
     aplica o mais restritivo em `access_role_grants` antes de apagar os bindings
     `engines`.
-- [ ] CA10. `IAM_MODE` é o flag; `engine_access_enabled` é derivado (§4.4). Teste
+- [x] CA10. `IAM_MODE` é o flag; `engine_access_enabled` é derivado (§4.4). Teste
   parametrizado cobre `IAM_MODE ∈ {off, shadow, enforce}` × `ENGINE_ACCESS_ENABLED ∈
   {não definido, true, false}`: explícito vence (com aviso de depreciação no boot);
   não definido → `IAM_MODE == "enforce"`; `shadow` não liga engines; valor vazio conta
   como não definido. Ambientes que usam `ENGINE_ACCESS_ENABLED=true` hoje (dev) não
   perdem o enforcement de engines; `ENGINE_ACCESS_ENABLED=false` explícito continua
   sendo a alavanca de emergência (só bootstrap em engines).
-- [ ] CA11. Uma tela **Admin → Acesso** lista e administra todos os bindings
+- [x] CA11. Uma tela **Admin → Acesso** lista e administra todos os bindings
   (plataforma e engines), políticas/condições, atributos de engine, recursos canônicos
   e principais de instalação; `admin/platform-access/` redireciona para ela. O menu tem
   um único item "Acesso", visível por `iam.bindings.read` ou `access.grants.manage`;
   cada aba e cada ação aparecem só para quem tem a autoridade da família.
-- [ ] CA12. Auditoria nova usa `target_type="iam_binding"` para toda concessão e
+- [x] CA12. Auditoria nova usa `target_type="iam_binding"` para toda concessão e
   revogação, com a mesma informação que a 0009 registrava (sujeito, papel, revisão de
   política, pai); linhas antigas intactas.
-- [ ] CA13. Permissões de engine em `/auth/me.permissions` e `/admin/access/me` vêm
+- [x] CA13. Permissões de engine em `/auth/me.permissions` e `/admin/access/me` vêm
   exclusivamente de `policy.navigation` (cadeia de pais, dono ativo, condição
   resolvível, flag); `platform_roles`, `/iam/check` e `ROLE_ABOVE_GRANTOR` nunca
   enxergam bindings `engines`. `access_session` continua abrindo **apenas** para quem
   tem permissão da família de engines (um binding só `platform_operator` não abre —
   teste da 0014 mantido). Teste: binding filho com pai revogado não contribui nada para
   `/auth/me.permissions` nem para `platform_roles`.
-- [ ] CA14. Suítes 0014 e completa verdes (exceto as falhas de ambiente conhecidas);
+- [x] CA14. Suítes 0014 e completa verdes (exceto as falhas de ambiente conhecidas);
   `tsc` verde; documentação de API regenerada.
-- [ ] CA15. Todo processo que importa `shared.access.policy` (api, worker,
+- [x] CA15. Todo processo que importa `shared.access.policy` (api, worker,
   worker-audio, worker-vision, worker-remote, worker-dispatch, worker-control,
   worker-control-watchdog, beat) recebe `IAM_MODE` e `ENGINE_ACCESS_ENABLED` com o
   mesmo valor em todos os compose files; o boot de cada um registra o valor efetivo de
   `engine_access_enabled`. Um teste de compose verifica que todo serviço com
   `ENGINE_ACCESS_ENABLED` também tem `IAM_MODE`, e que nenhum compose fixa
   `ENGINE_ACCESS_ENABLED` com default `false` (o default é vazio = não definido).
-- [ ] CA16. Com `IAM_MODE=off` e `ENGINE_ACCESS_ENABLED=true`, um delegado
+- [x] CA16. Com `IAM_MODE=off` e `ENGINE_ACCESS_ENABLED=true`, um delegado
   `access_admin` lista, concede e revoga papéis `engines` por `/admin/iam/bindings` e
   não vê bindings `platform`; com `IAM_MODE=enforce`, um titular só de bindings
   `platform` (sem bootstrap) não vê bindings `engines`.
-- [ ] CA17. Revogar binding `engines` por `/admin/iam/bindings/{id}/revoke` trava o
+- [x] CA17. Revogar binding `engines` por `/admin/iam/bindings/{id}/revoke` trava o
   epoch antes de ler o binding, exige bootstrap ou `access.grants.manage` (403
   `ACCESS_DENIED`) + `_delegator` cobrindo o binding (403 `DELEGATION_EXCEEDED`), e
   incrementa `version` e o epoch; já revogado → 409 `ALREADY_REVOKED`; versão
@@ -197,6 +202,9 @@ sua semântica de decisão. As famílias nunca se enxergam (§4.3).
 - [ ] CA18. `alembic heads` retorna um único head; `upgrade → downgrade → upgrade` é
   idempotente em MySQL e SQLite, partindo tanto de um banco novo (onde a revisão da
   0014 já cria as colunas novas) quanto de um banco existente na 0014.
+  *Parcial (2026-10-07):* head único e o round trip a partir dos dois pontos de partida
+  provados em SQLite (`tests/test_iam_engine_bindings_migration.py`); falta o round trip
+  em MySQL.
 
 ## 4. Solução proposta
 
@@ -470,8 +478,16 @@ não vai a produção.
   item único "Acesso" em `lib/admin-nav.ts` (`iam.bindings.read` ou
   `access.grants.manage`). O cliente deixa de chamar os aliases
   `/admin/access/grants*`.
-- [ ] 5. Documentação de features/runbook (deploy em uma etapa, flag, rollback),
-  CHANGELOG, status das specs.
+- [x] 5. Documentação de features/runbook (deploy em uma etapa, flag, rollback),
+  CHANGELOG, status das specs. Seção 6 de `docs/runbooks/execution-profiles-access.md`
+  (deploy em uma etapa, migração, flag, consultas de verificação, gate
+  `python -m shared.iam.engine_equivalence`, rollback com o espelho, aliases
+  depreciados); `docs/features/execution-profiles.md`, `engines.md`,
+  `auth-and-api-keys.md` e `monitoring-and-admin.md`; guias web de Compute
+  (`frontend/app/docs/`) e o aviso da biblioteca citam `IAM_MODE` e
+  `/admin/iam/bindings`; `docs/CHANGELOG.md`. `CLAUDE.md` não muda: a 0018 não cria
+  chave Redis e não altera JWT/API key. Pendentes para fechar a spec: CA5 e CA18 em
+  MySQL.
 
 ## 9. Questões em aberto
 

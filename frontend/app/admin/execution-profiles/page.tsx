@@ -144,8 +144,8 @@ export default function ExecutionProfilesPage() {
       </div>
       {!access.data?.enabled && (
         <p role="status">
-          A biblioteca requer ENGINE_ACCESS_ENABLED e a migração 0009. Consulte
-          o runbook.
+          A biblioteca requer IAM_MODE=enforce (ou ENGINE_ACCESS_ENABLED=true) e
+          as migrações 0009 e 0018. Consulte o runbook.
         </p>
       )}
       {(error || list.error) && (
