@@ -26,7 +26,7 @@ from shared.models import Job, Page, JobStatus
 from shared.database import SessionLocal
 from shared.redis_client import get_redis_client
 from shared.auth import get_current_active_user
-from shared.admin import is_effective_admin
+from shared.iam.decide import is_bootstrap_admin
 from api.iam_deps import require
 from workers.monitoring import detect_stuck_jobs, auto_retry_failed_pages, cleanup_old_jobs
 from uuid import uuid4
@@ -45,14 +45,14 @@ def require_admin(current_user=Depends(get_current_active_user)):
     module declares its platform permission with `require(...)` (§4.7), decided
     by `shared.iam` under IAM_MODE. Removed in 0014 §8 item 7.
 
-    A user is an admin if EITHER the `users.is_admin` column is true (set with
-    scripts/make_admin.py) OR their ID is listed in ADMIN_USER_IDS
+    The rule is bootstrap (`shared.iam.decide.is_bootstrap_admin`): the admin
+    column set with scripts/make_admin.py, or an ID listed in ADMIN_USER_IDS
     (comma-separated). Both default to nobody.
 
     Raises:
         HTTPException 403: If the authenticated user is not an admin
     """
-    if not is_effective_admin(current_user, settings):
+    if not is_bootstrap_admin(current_user, settings):
         logger.warning(f"[ADMIN] Access denied for user {current_user.id}")
         raise HTTPException(
             status_code=403,

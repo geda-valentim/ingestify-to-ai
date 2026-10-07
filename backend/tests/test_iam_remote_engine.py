@@ -3,7 +3,8 @@
 CA9 (the permission is decided per remote placement, so a revocation reaches
 pages already queued), CA10 (`user_period_limit_usd` on `admins` routes too,
 bootstrap included) and CA11 (one decision per user per tick, never per item or
-chunk, measured as SQL statements so it cannot flake).
+chunk, counted as SQL statements; and the p95 of the time that decision adds to a
+tick with 1 000 items in backlog, within 5 ms).
 
 IAM_MODE is set explicitly in every test that depends on it.
 """
@@ -427,6 +428,73 @@ def test_ca11_one_decision_per_user_per_tick_with_1000_items_in_backlog(world, m
     per_user = {BOB: 2, ROOT: 1}
     assert 0 < restricted_n - open_n <= sum(per_user[u] for u in users)
 
+
+
+
+def _p95(samples):
+    ordered = sorted(samples)
+    return ordered[max(0, int(round(0.95 * len(ordered))) - 1)]
+
+
+CA11_P95_BUDGET_S = 0.005
+CA11_TICKS = 50
+
+
+@pytest.mark.parametrize("users", [[BOB], [BOB, ROOT]])
+def test_ca11_p95_added_by_the_remote_decision_is_within_5ms_with_1000_items(world, monkeypatch, users):
+    """
+    The latency half of CA11. The only work a restricted (`admins`) route adds to a
+    tick over an open (`all`) one is `_may_use_remote`: the routes share every
+    other code path, CA10 included. So the increment is measured where it is
+    spent, as wall-clock inside `_may_use_remote` summed per tick, over 50 ticks
+    with 1 000 items in backlog, and its p95 must stay within 5 ms.
+
+    Comparing two whole-tick p95s instead (~50 ms each on SQLite) measures host
+    noise of the same order as the budget and flakes; this does not. The timer
+    wraps every call, so its own overhead counts against the budget.
+    """
+    import time
+
+    from workers.engines import dispatcher
+
+    mode(monkeypatch, "enforce")
+    fake = add_remote(world)
+    bind(world)
+    _backlog(world, users, 1000)
+
+    spent = []
+    real = dispatcher._may_use_remote
+
+    def timed(*args, **kwargs):
+        started = time.perf_counter()
+        try:
+            return real(*args, **kwargs)
+        finally:
+            spent[-1] += time.perf_counter() - started
+
+    monkeypatch.setattr(dispatcher, "_may_use_remote", timed)
+
+    per_route = {}
+    at = world.now
+    for restriction in ("all", "admins"):
+        world.set_route([fake], remote_allowed_for=restriction, user_period_limit_usd=Decimal("100"))
+        samples = []
+        for _ in range(CA11_TICKS):
+            spent.append(0.0)
+            at += timedelta(seconds=5)
+            started = time.perf_counter()
+            assert len(world.tick(at).placed) == 1
+            samples.append((time.perf_counter() - started, spent[-1]))
+            release(world, [u.id for u in _usages(world)])
+        per_route[restriction] = samples
+
+    iam_p95 = _p95([iam for _tick, iam in per_route["admins"]])
+    print(f"CA11 users={len(users)} p95 tick all={_p95([t for t, _ in per_route['all']]) * 1000:.1f} ms "
+          f"admins={_p95([t for t, _ in per_route['admins']]) * 1000:.1f} ms; "
+          f"p95 remote decision on admins={iam_p95 * 1000:.3f} ms")
+    assert iam_p95 <= CA11_P95_BUDGET_S, f"p95 of the remote decision per tick: {iam_p95 * 1000:.2f} ms"
+    # The open route never decides: its share is only the early return.
+    assert _p95([iam for _tick, iam in per_route["all"]]) < iam_p95
 
 def _usages(world):
     with world.Session() as db:

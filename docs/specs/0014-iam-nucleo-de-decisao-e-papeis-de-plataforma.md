@@ -5,7 +5,7 @@
 | **Status** | Em implementação |
 | **Autor** | Geda Valentim / Claude |
 | **Criada em** | 2026-10-06 |
-| **Atualizada em** | 2026-10-06 |
+| **Atualizada em** | 2026-10-07 |
 | **Relacionadas** | [0013](0013-iam-da-plataforma.md) (guarda-chuva), [0009](0009-perfis-de-execucao-e-controle-de-acesso.md), [0003](0003-motores-de-execucao-roteamento-e-orcamento.md) |
 | **Substituída por** | — |
 
@@ -65,12 +65,23 @@ permissão `engines.remote.use`, verificada no momento do dispatch.
   (serialização de `/auth/me`). Comparações `user_id ==` para autorizar são rastreadas por
   allowlist explícita de usos não-autorizativos (budget por usuário, idempotência de
   `ImageAnalysisSubmission`), e a allowlist só pode diminuir.
+  *Nota de implementação (2026-10-07):* `api/admin_routes.py` não lê mais o flag de admin; a
+  regra de bootstrap vem de `shared.iam.decide.is_bootstrap_admin`. `require_admin` e
+  `require_admin_session` continuam existindo como guardas das rotas de engine da 0009 (fora de
+  escopo, §2) e só deixam de ser dependências próprias no §8 item 7, depois de `enforce`; as
+  entradas restantes da allowlist de admin são código da 0009 (CA13). As duas comparações
+  `user_id !=` do vínculo key→projeto (`apikey_routes.py`, `projects_api.py`) ficam na allowlist
+  como trabalho da **0015**, que muda o que uma key pode fazer.
 
 **Equivalência**
 - [ ] CA3. `scripts/iam_equivalence.py`, rodado sobre um dump do MySQL, compara para cada
   par (usuário, job MAIN/projeto/pasta/datalake/key) a decisão legada e a nova para
   `read/update/delete`; qualquer divergência falha. Executado no CI contra a fixture de
   integração e uma vez contra snapshot do dev antes de `enforce`.
+  *Implementação:* a lógica (com cópia congelada da regra legada do merge-base) está em
+  `backend/shared/iam/equivalence.py`; o CI a roda em `tests/test_iam_equivalence.py`. Não há
+  tabela de datalakes neste código ainda, então datalakes não são percorridos. Offline não há
+  Redis: os dois lados recebem o mesmo "desconhecido" para o vínculo pai/filho e o dono em cache.
 - [ ] CA4. Para cada listagem convertida (`GET /jobs`, `/search`, `/projects`, `/tags`,
   `/datalakes`, `/api-keys`, contagens de `projects_api`), um teste compara o conjunto de
   IDs retornado antes e depois da conversão para usuários com e sem dados.
@@ -83,6 +94,11 @@ permissão `engines.remote.use`, verificada no momento do dispatch.
   `POST /admin/cleanup` e `/admin/iam/*`.
 - [ ] CA6. `platform_auditor` recebe `200` em todas as leituras acima e em
   `GET /admin/iam/bindings`, e `403` em toda mutação.
+  *Dependência:* `GET`/`PATCH /admin/settings` (e `/auth/registration-settings`) chegam com
+  `feat/face-analysis` (`api/platform_settings_routes.py`) e não existem neste branch. Estão
+  fixados em `tests/test_iam_route_coverage.py` (`RESERVED_PLATFORM_ROUTES`:
+  `platform.settings.read` e `platform.settings.update` + sessão) e são verificados assim que
+  existirem; o caso `PATCH /admin/settings → 403` do CA5 é fechado no merge daquele branch.
 - [ ] CA7. Ninguém concede a si próprio; ninguém concede papel cujas permissões não possui;
   binding de plataforma exige `expires_at` ≤ 365 dias; revogar tem efeito na próxima
   requisição (sem cache entre requisições).
@@ -99,6 +115,10 @@ permissão `engines.remote.use`, verificada no momento do dispatch.
   `all`); bootstrap não está isento.
 - [ ] CA11. A decisão remota no dispatcher é por placement, não por chunk; o p95 do ciclo
   do dispatcher não piora mais que 5 ms com 1 000 itens em backlog.
+  *Como é medido:* a única diferença de trabalho entre um tick em rota `admins` e em rota `all` é
+  `_may_use_remote`; o teste mede o tempo gasto nele por tick (50 ticks, 1 000 itens) e exige p95
+  ≤ 5 ms (medido ~1 ms em SQLite), além de contar statements SQL (até 2 por usuário por tick).
+  Comparar p95 de ticks inteiros (~50 ms cada) mede ruído da máquina da mesma ordem do orçamento.
 
 **Compatibilidade**
 - [ ] CA12. Nenhum contrato de rota muda. `/auth/me` só ganha campos; `permissions`
@@ -299,6 +319,11 @@ da 0009: um binding `platform_operator` não abre as rotas de engine/perfil. Iss
 5. Remover `require_admin`, `require_admin_session` (como dependências próprias) e o
    import de `is_effective_admin` fora de `shared/iam/` (CA2).
 
+**Escopo de `off`:** "`off` = legado" vale para as decisões de rota da API. No dispatcher, a
+revalidação de `engines.remote.use` a cada placement (§4.6, CA9) e o teto CA10 **não dependem de
+`IAM_MODE`**: em `off` a decisão é a regra legada (`is_effective_admin` do dono), porém tomada no
+placement e não congelada no submit. Ambos só reduzem acesso; são o defeito que esta spec corrige.
+
 Rollback: `IAM_MODE=off` volta a `require_admin`. Bindings ficam inertes; quem só tinha
 papel de plataforma perde o acesso, o que **reduz** acesso (nunca amplia).
 
@@ -323,7 +348,12 @@ papel de plataforma perde o acesso, o que **reduz** acesso (nunca amplia).
 - **Segurança:** menor privilégio para operação; autoconcessão bloqueada; revogação
   imediata. Risco residual conhecido: key de usuário com papel de plataforma age com esse
   papel até a 0015.
-- **Operação:** env `IAM_MODE`; métrica `iam_shadow_divergence_total{route,permission}`;
+- **Operação:** env `IAM_MODE`; sinal de shadow = linha de log estruturada
+  `iam_shadow_divergence route=… permission=… subject=… legacy=… iam=…` (o projeto não tem
+  facilidade de métricas; os campos são os rótulos de um futuro
+  `iam_shadow_divergence_total{route,permission}`). Em rotas de dados por ID o legado e o IAM
+  resolvem o dono pelo mesmo `shared.iam.ownership`, então shadow não diverge ali por
+  construção: a evidência de equivalência de dados é o CA3 (cópia congelada da regra legada).
   `AdminAudit` para bindings e mutações por bootstrap.
 - **Custo:** nenhum.
 

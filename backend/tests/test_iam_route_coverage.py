@@ -73,7 +73,7 @@ PENDING_ROUTES: set = set()
 # Exact sizes, so the allowlists cannot grow unnoticed (a removal that is later
 # re-added would otherwise pass). Lower these in each slice that converts.
 PENDING_MAX = 0
-ADMIN_ALLOWLIST_MAX = 11
+ADMIN_ALLOWLIST_MAX = 8
 OWNER_ALLOWLIST_MAX = 4
 
 # The only routes that may declare authenticated(): they describe the caller to
@@ -99,6 +99,14 @@ PLATFORM_ROUTES = {
     "GET /admin/iam/bindings": ("iam.bindings.read", False),
     "POST /admin/iam/bindings": ("iam.bindings.manage", True),
     "POST /admin/iam/bindings/{binding_id}/revoke": ("iam.bindings.manage", True),
+}
+# §4.7 routes that do not exist on this branch yet: they arrive with
+# feat/face-analysis (`api/platform_settings_routes.py`). Pinned now so that, when
+# they land, they cannot be declared with a weaker permission or without the
+# session; checked whenever the route exists.
+RESERVED_PLATFORM_ROUTES = {
+    "GET /admin/settings": ("platform.settings.read", False),
+    "PATCH /admin/settings": ("platform.settings.update", True),
 }
 
 # What a route marked engine_access() must still be guarded by (0009, unchanged).
@@ -220,8 +228,13 @@ def test_authenticated_is_only_for_self_describing_routes():
 
 def test_admin_routes_declare_their_platform_permission():
     routes, _, _ = _inventory()
+    from shared.iam import catalog
+
+    for permission, _session in RESERVED_PLATFORM_ROUTES.values():
+        assert catalog.permission(permission).level == catalog.PLATFORM
+    pinned = {**PLATFORM_ROUTES, **{k: v for k, v in RESERVED_PLATFORM_ROUTES.items() if k in routes}}
     wrong = {}
-    for key, (permission, session) in PLATFORM_ROUTES.items():
+    for key, (permission, session) in pinned.items():
         got = [(d.kind, d.permission, d.session) for d in routes[key]]
         if got != [("require", permission, session)]:
             wrong[key] = got
@@ -229,7 +242,7 @@ def test_admin_routes_declare_their_platform_permission():
     # No other /admin route is left on require(): the rest are 0009 engine routes.
     others = sorted(
         k for k, decls in routes.items()
-        if k.split(" ", 1)[1].startswith("/admin/") and k not in PLATFORM_ROUTES
+        if k.split(" ", 1)[1].startswith("/admin/") and k not in pinned
         and [d.kind for d in decls] != ["engine_access"]
     )
     assert not others, f"/admin routes neither in PLATFORM_ROUTES nor engine_access: {others}"
@@ -260,7 +273,7 @@ EXEMPT = {"api/iam_deps.py"}
 ADMIN_PATTERN = re.compile(r"\bis_effective_admin\b|\.is_admin\b")
 OWNER_PATTERN = re.compile(r"\buser_id\b\s*[!=]=|[!=]=\s*\S*\buser_id\b")
 
-PENDING = "pending: converted in a later 0014 slice"
+KEY_BINDING_0015 = "0015: API key project binding (keys change in 0015)"
 
 # (file, stripped line) -> (count, reason). May only shrink.
 ADMIN_ALLOWLIST = {
@@ -270,9 +283,6 @@ ADMIN_ALLOWLIST = {
     ("api/access_routes.py", "target.is_admin = body.is_admin"): (1, "0009 subject state: edits the bootstrap column, decides nothing"),
     ("api/access_routes.py", '{"is_active": target.is_active, "is_admin": target.is_admin},'): (1, "0009 subject state: audit payload"),
     ("api/access_routes.py", "return dict(id=target.id, is_active=target.is_active, is_admin=target.is_admin)"): (1, "0009 subject state: response"),
-    ("api/admin_routes.py", "from shared.admin import is_effective_admin"): (1, PENDING + " (§8.7: require_admin now guards only the 0009 engine routes)"),
-    ("api/admin_routes.py", "A user is an admin if EITHER the `users.is_admin` column is true (set with"): (1, PENDING + " (§8.7: require_admin docstring)"),
-    ("api/admin_routes.py", "if not is_effective_admin(current_user, settings):"): (1, PENDING + " (§8.7: require_admin now guards only the 0009 engine routes)"),
     ("api/engine_admin_routes.py", "from shared.admin import is_effective_admin"): (1, "0009 credential re-auth (CA13: unchanged)"),
     ("api/engine_admin_routes.py", "if is_effective_admin(db.get(User, actor)):"): (1, "0009 credential re-auth (CA13: unchanged)"),
 }
@@ -281,9 +291,11 @@ OWNER_ALLOWLIST = {
     # Non-authorizing uses (permanent while the code stays as it is).
     ("api/auth_routes.py", "user = db.query(User).filter(User.id == user_id).first()"): (1, "token subject lookup, not an ownership check"),
     ("api/projects_api.py", "Job.user_id == user_id,"): (1, "upload idempotency: duplicate detection within the user's own jobs"),
-    # Authorizing comparisons still inline: a key's project binding (0015 changes keys).
-    ("api/apikey_routes.py", "if project is None or project.user_id != key.user_id:"): (1, PENDING + " (key binding, 0015)"),
-    ("api/projects_api.py", "if project is None or project.user_id != user.id or api_key.user_id != user.id:"): (1, PENDING + " (key binding, 0015)"),
+    # Authorizing comparisons still inline: a key's project binding. Tracked as 0015
+    # work (0014 §3 CA2 note): 0015 changes what a key may act on, so the binding
+    # check moves with it; until then it is the unchanged legacy rule.
+    ("api/apikey_routes.py", "if project is None or project.user_id != key.user_id:"): (1, KEY_BINDING_0015),
+    ("api/projects_api.py", "if project is None or project.user_id != user.id or api_key.user_id != user.id:"): (1, KEY_BINDING_0015),
 }
 
 
