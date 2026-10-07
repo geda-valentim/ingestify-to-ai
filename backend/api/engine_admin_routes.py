@@ -30,6 +30,7 @@ from sqlalchemy.orm import Session
 
 from api.admin_routes import require_admin
 from api.access_deps import access_session, scoped_engine, scoped_features
+from api.iam_deps import engine_access
 from shared.access import policy
 from shared.config import get_settings
 from shared.database import get_db
@@ -50,7 +51,9 @@ from workers.engines.remote import expected_fingerprint as fingerprint_of
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
-router = APIRouter(prefix="/admin", tags=["Admin - Engines"])
+# 0009 routes: decided by require_admin(_session)/access_session + policy; engine_access only
+# declares them in the IAM inventory (0014 CA1).
+router = APIRouter(prefix="/admin", tags=["Admin - Engines"], dependencies=[Depends(engine_access())])
 
 
 def require_admin_session(request: Request, admin_user=Depends(require_admin)):

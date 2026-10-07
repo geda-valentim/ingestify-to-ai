@@ -7,8 +7,10 @@ from shared.engine_control.models import ControlResource
 from shared.models import Engine, User
 from api.access_deps import access_session, scoped_engine
 from api.engine_control_routes import invoke
+from api.iam_deps import engine_access
 
-router = APIRouter(prefix="/admin", tags=["Admin - Execution profiles and access"])
+# 0009 routes: decided by access_session + policy; engine_access only declares them (0014 CA1).
+router = APIRouter(prefix="/admin", tags=["Admin - Execution profiles and access"], dependencies=[Depends(engine_access())])
 
 
 def ready():
