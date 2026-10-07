@@ -231,7 +231,11 @@ class Decider:
         if principal.subject_type != "user":
             return not_found
 
-        if resource is None or resource is PLATFORM:
+        if resource is None:
+            # A lookup that found nothing (or a resource scoped away from this
+            # principal). Never confused with "no resource needed": 404 always.
+            return not_found
+        if resource is PLATFORM:
             # Creating in one's own space needs no resource; anything else does.
             if perm.self_service:
                 return Decision(True, 200, "self_service", perm.name)
@@ -284,15 +288,20 @@ def decide(db: Session, principal, permission: str, resource=PLATFORM, *, decide
 
 def legacy_allows(db: Session, principal, permission: str, resource=PLATFORM, *, decider: Optional[Decider] = None) -> bool:
     """
-    The rule before 0014: platform power is `is_effective_admin` of an active
-    user; data is owner-only (unchanged, so it is the same code path).
+    The rule before 0014: platform power is `is_effective_admin` of the user,
+    exactly as the worker paths check it (`workers/tasks.py` reads it off the job
+    owner without looking at `is_active`); service principals hold none. Data is
+    owner-only for an active user (unchanged, so it is the same code path).
     """
     perm = _permission(permission)
     principal = as_principal(principal)
-    if principal is None or not principal.active:
+    if principal is None:
         return False
     if perm.level in (catalog.PLATFORM, catalog.IAM):
-        return principal.bootstrap
+        user = principal.user
+        return principal.subject_type == "user" and user is not None and is_effective_admin(user)
+    if not principal.active:
+        return False
     return (decider or Decider(db))._data(principal, perm, resource).allow
 
 
@@ -311,9 +320,18 @@ def can(
     """
     mode = mode or get_settings().iam_mode
     if mode == "off":
-        return legacy_allows(db, principal, permission, resource, decider=decider)
+        allowed = legacy_allows(db, principal, permission, resource, decider=decider)
+        p = as_principal(principal)
+        perm = catalog.permission(permission)
+        # CA8 does not depend on the mode: a bootstrap mutation is audited in off too.
+        if allowed and p is not None and p.bootstrap and perm.mutation and perm.level in (catalog.PLATFORM, catalog.IAM):
+            (decider or Decider(db))._audit_bootstrap(p, permission)
+        return allowed
     new = decide(db, principal, permission, resource, decider=decider).allow
     if mode == "enforce":
+        return new
+    if catalog.permission(permission).level not in (catalog.PLATFORM, catalog.IAM):
+        # Data permissions: legacy and IAM are the same code path; resolve once.
         return new
     legacy = legacy_allows(db, principal, permission, resource, decider=decider)
     if legacy != new:

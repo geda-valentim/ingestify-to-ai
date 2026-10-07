@@ -301,6 +301,15 @@ def test_self_service_needs_no_resource_other_data_permissions_do(db, people):
     assert decide(db, alice, "projects.delete", None).status == 404
 
 
+@pytest.mark.parametrize("permission", sorted(catalog.DATA_PERMISSIONS))
+def test_missing_resource_is_404_for_every_data_permission(db, people, permission):
+    # A scoped lookup that found nothing must never fall through to self_service.
+    root, alice, _ = people
+    for user in (alice, root):
+        d = decide(db, user, permission, None)
+        assert (d.allow, d.status) == (False, 404)
+
+
 def test_redis_fallback_still_needs_a_positive_owner_match(db, people):
     _, alice, bob = people
     decider = _decider(db, job_access=lambda d, j, u: ownership.job_access(
@@ -337,6 +346,34 @@ def test_mode_shadow_answers_legacy_and_logs_divergence(db, people, settings, mo
     with caplog.at_level(logging.WARNING, logger="shared.iam.decide"):
         assert not can(db, alice, "platform.stats.read", decider=_decider(db))
     assert any(r.getMessage() == "iam_shadow_divergence" for r in caplog.records)
+
+
+def test_mode_off_is_exactly_legacy_for_an_inactive_admin(db, people, settings):
+    # Workers read is_effective_admin off the job owner with no is_active check.
+    ghost = _user(db, "ghost", is_admin=True, active=False)
+    assert can(db, ghost, "engines.remote.use", mode="off")
+    assert not can(db, ghost, "engines.remote.use", mode="enforce", decider=_decider(db))
+    assert not can(db, ghost, "jobs.create", mode="off")
+
+
+def test_mode_off_still_audits_bootstrap_mutations(db, people, settings):
+    root, _, _ = people
+    assert can(db, root, "platform.settings.update", mode="off", decider=_decider(db))
+    assert can(db, root, "platform.stats.read", mode="off", decider=_decider(db))
+    db.commit()
+    rows = db.query(AdminAudit).filter_by(action="iam.bootstrap.use").all()
+    assert [r.target_id for r in rows] == ["platform.settings.update"]
+
+
+def test_mode_shadow_resolves_data_ownership_once(db, people, settings, monkeypatch):
+    _, alice, _ = people
+    db.add(Job(id="j1", user_id=alice.id, job_type="MAIN"))
+    db.commit()
+    calls = []
+    real = ownership.job_access
+    decider = _decider(db, job_access=lambda d, j, u: calls.append(j) or real(d, j, u))
+    assert can(db, alice, "jobs.read", JobRef("j1"), mode="shadow", decider=decider)
+    assert calls == ["j1"]
 
 
 # -- binding service -----------------------------------------------------------------
@@ -485,3 +522,18 @@ def test_migration_refuses_without_base_schema():
     with pytest.raises(RuntimeError):
         migration.upgrade(engine)
     engine.dispose()
+
+
+def test_a_service_principal_never_writes_bindings(db, people):
+    root, alice, bob = people
+    db.add(ServicePrincipal(id="sp-1", purpose="ops", active=True))
+    db.commit()
+    b = _grant(db, root, "sp-1", role="platform_admin", subject_type="service_principal")
+    sp = principal_for_service(db, "sp-1")
+    # It may read bindings, but granted_by/revoked_by are users.id FKs.
+    assert bindings.list_bindings(db, sp, decider=_decider(db))
+    _refused("ACCESS_DENIED", 403, _grant, db, sp, alice)
+    other = _grant(db, root, bob)
+    _refused("ACCESS_DENIED", 403, bindings.revoke, db, sp, other.id, version=0, decider=_decider(db))
+    assert db.get(IamBinding, other.id).revoked_at is None
+    assert b.granted_by == root.id
