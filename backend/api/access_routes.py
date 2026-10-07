@@ -167,20 +167,22 @@ def subjects(user=Depends(access_session), db: Session = Depends(get_db)):
     ]
 
 
-@router.get("/access/grants")
+# Deprecated aliases (spec 0018 §4.5, CA8): the engines family of
+# /admin/iam/bindings, with the 0009 contract unchanged (tests/test_iam_access_grant_aliases.py).
+@router.get("/access/grants", deprecated=True)
 def grants(user=Depends(access_session), db: Session = Depends(get_db)):
     ready()
     return invoke(service.list_grants, db, user.id)
 
 
-@router.post("/access/grants", status_code=201)
+@router.post("/access/grants", status_code=201, deprecated=True)
 def grant(
     body: C.GrantCreate, user=Depends(access_session), db: Session = Depends(get_db)
 ):
     return invoke(service.create_grant, db, body, user.id)
 
 
-@router.post("/access/grants/{id}/revoke")
+@router.post("/access/grants/{id}/revoke", deprecated=True)
 def revoke(
     id: str,
     body: C.Version,

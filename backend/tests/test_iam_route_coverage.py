@@ -2,7 +2,8 @@
 IAM inventory (spec 0014 CA1, CA2).
 
 CA1: every route of the app declares exactly one authorization (`require`,
-`authorized`, `visible`, `engine_access`) or is in the public allowlist. Routes
+`authorized`, `visible`, `engine_access`, `iam_or_engine_access`) or is in the
+public allowlist. Routes
 not converted yet are listed in PENDING_ROUTES, which may only shrink: an entry
 that was converted, or that no longer exists, fails until it is removed.
 
@@ -96,6 +97,11 @@ PLATFORM_ROUTES = {
     "GET /admin/engines/status": ("platform.routing.read", False),
     "PUT /admin/routing/{feature}": ("platform.routing.update", True),
     "DELETE /admin/routing/{feature}": ("platform.routing.update", True),
+}
+# The unified bindings API (spec 0018 §4.5): `binding_admin`, kind
+# `iam_or_engine_access` — the platform permission or the 0009
+# `access.grants.manage`; the handler decides per family.
+BINDING_ROUTES = {
     "GET /admin/iam/bindings": ("iam.bindings.read", False),
     "POST /admin/iam/bindings": ("iam.bindings.manage", True),
     "POST /admin/iam/bindings/{binding_id}/revoke": ("iam.bindings.manage", True),
@@ -239,10 +245,15 @@ def test_admin_routes_declare_their_platform_permission():
         if got != [("require", permission, session)]:
             wrong[key] = got
     assert not wrong, f"administrative routes off their §4.7 permission: {wrong}"
+    for key, (permission, session) in BINDING_ROUTES.items():
+        got = [(d.kind, d.permission, d.session) for d in routes[key]]
+        assert got == [("iam_or_engine_access", permission, session)], (key, got)
+    declared = {k for k, decls in routes.items() if any(d.kind == "iam_or_engine_access" for d in decls)}
+    assert declared == set(BINDING_ROUTES), "iam_or_engine_access is for /admin/iam/bindings* only"
     # No other /admin route is left on require(): the rest are 0009 engine routes.
     others = sorted(
         k for k, decls in routes.items()
-        if k.split(" ", 1)[1].startswith("/admin/") and k not in pinned
+        if k.split(" ", 1)[1].startswith("/admin/") and k not in pinned and k not in BINDING_ROUTES
         and [d.kind for d in decls] != ["engine_access"]
     )
     assert not others, f"/admin routes neither in PLATFORM_ROUTES nor engine_access: {others}"
