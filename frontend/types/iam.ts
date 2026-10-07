@@ -12,6 +12,8 @@ export interface IamCatalog {
     mutation: boolean;
   }[];
   roles: IamRole[];
+  /** IAM_MODE: bindings only take effect under `enforce` (spec 0014 §4.11). */
+  mode?: "off" | "shadow" | "enforce";
 }
 export interface IamBinding {
   id: string;
