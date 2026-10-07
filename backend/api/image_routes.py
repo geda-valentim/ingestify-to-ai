@@ -50,7 +50,7 @@ from uuid import uuid4
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from sqlalchemy.orm import Session
 
-from shared.admin import is_effective_admin
+from shared.iam.remote import can_use_remote
 from api.iam_deps import require
 from shared.config import get_settings
 from shared.database import SessionLocal, get_db
@@ -263,7 +263,8 @@ def _place_vision(job_id: str, current_user: User) -> "engine_dispatch.Placement
     try:
         return engine_dispatch.place_now(
             feature="vision", subject_id=job_id, job_id=job_id, user_id=current_user.id,
-            is_admin=is_effective_admin(current_user), session_factory=SessionLocal,
+            remote_use=lambda: can_use_remote(current_user, session_factory=SessionLocal),
+            session_factory=SessionLocal,
         )
     except Exception as e:
         logger.warning(f"Vision placement for job {job_id} failed, using the vision queue: {type(e).__name__}: {e}")

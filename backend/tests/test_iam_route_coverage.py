@@ -73,7 +73,7 @@ PENDING_ROUTES: set = set()
 # Exact sizes, so the allowlists cannot grow unnoticed (a removal that is later
 # re-added would otherwise pass). Lower these in each slice that converts.
 PENDING_MAX = 0
-ADMIN_ALLOWLIST_MAX = 21
+ADMIN_ALLOWLIST_MAX = 11
 OWNER_ALLOWLIST_MAX = 4
 
 # The only routes that may declare authenticated(): they describe the caller to
@@ -275,14 +275,6 @@ ADMIN_ALLOWLIST = {
     ("api/admin_routes.py", "if not is_effective_admin(current_user, settings):"): (1, PENDING + " (§8.7: require_admin now guards only the 0009 engine routes)"),
     ("api/engine_admin_routes.py", "from shared.admin import is_effective_admin"): (1, "0009 credential re-auth (CA13: unchanged)"),
     ("api/engine_admin_routes.py", "if is_effective_admin(db.get(User, actor)):"): (1, "0009 credential re-auth (CA13: unchanged)"),
-    ("api/image_routes.py", "from shared.admin import is_effective_admin"): (1, PENDING + " (§8.5 engines.remote.use)"),
-    ("api/image_routes.py", "is_admin=is_effective_admin(current_user), session_factory=SessionLocal,"): (1, PENDING + " (§8.5 engines.remote.use)"),
-    ("api/routes.py", "from shared.admin import is_effective_admin"): (1, PENDING + " (§8.5 engines.remote.use)"),
-    ("api/routes.py", 'feature="transcription", job_id=str(job_id), user_id=user.id, is_admin=is_effective_admin(user),'): (1, PENDING + " (§8.5 engines.remote.use)"),
-    ("api/routes.py", "is_admin=is_effective_admin(current_user),"): (1, PENDING + " (§8.5 engines.remote.use)"),
-    ("api/routes.py", "user_id=current_user.id, is_admin=is_effective_admin(current_user),"): (1, PENDING + " (§8.5 engines.remote.use)"),
-    ("workers/tasks.py", "from shared.admin import is_effective_admin"): (2, PENDING + " (§8.5 engines.remote.use)"),
-    ("workers/tasks.py", "is_admin = is_effective_admin(job.user) if job is not None and job.user is not None else False"): (2, PENDING + " (§8.5 engines.remote.use)"),
 }
 
 OWNER_ALLOWLIST = {
