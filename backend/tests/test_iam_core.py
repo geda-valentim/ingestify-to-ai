@@ -137,7 +137,8 @@ def test_catalog_is_closed_and_disjoint_from_0009():
     assert catalog.DATA_PERMISSIONS.isdisjoint(catalog.PLATFORM_PERMISSIONS)
     described = catalog.describe()
     assert {p["name"] for p in described["permissions"]} == set(catalog.PERMISSIONS)
-    assert {r["key"] for r in described["roles"]} == set(EXPECTED_ROLES)
+    # Spec 0018: the engines family is described too, apart (`family`).
+    assert {r["key"] for r in described["roles"] if r["family"] == "platform"} == set(EXPECTED_ROLES)
 
 
 def test_auditor_holds_no_mutation():

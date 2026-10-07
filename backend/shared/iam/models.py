@@ -1,15 +1,20 @@
 """
-IAM bindings (spec 0014 §4.8).
+IAM bindings (spec 0014 §4.8; engine columns since spec 0018 §4.1).
 
-A table of its own, never `access_role_grants`: the 0009 grants drive
-`active_grant`, `navigation` and `access_session`, and a platform binding must not
-open the engine routes (0013 §4.2).
+Two role families share this table and never see each other (0018 §4.3):
+
+- `platform` (keys of `catalog.ROLES`): decided by `shared.iam.decide`; the four
+  engine columns below are always NULL.
+- `engines` (keys of `catalog.ENGINE_ROLES`, the six 0009 roles): migrated from
+  `access_role_grants` with the same ids (0018 §4.2.2). `permissions` is always
+  materialized, `condition_ref` names the ABAC policy revision, and `delegation` /
+  `parent_id` carry the 0009 delegation envelope and parent grant.
 """
 
 from datetime import datetime
 from uuid import uuid4
 
-from sqlalchemy import Column, DateTime, ForeignKey, Index, Integer, String
+from sqlalchemy import JSON, Column, DateTime, ForeignKey, Index, Integer, String
 
 from shared.database import Base
 
@@ -39,8 +44,23 @@ class IamBinding(Base):
     revoked_by = Column(String(36), ForeignKey("users.id"))
     version = Column(Integer, nullable=False, default=0)
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    # -- engines family only (spec 0018 §4.1); NULL for platform roles -----------
+    # Materialized snapshot, never NULL for an engines role: a role gaining an
+    # action does not widen existing bindings.
+    permissions = Column(JSON)
+    # The 0009 ABAC condition: an `access_policy_revisions` id.
+    condition_ref = Column(
+        String(36),
+        ForeignKey("access_policy_revisions.id", name="fk_iam_bindings_condition_ref"),
+    )
+    # The 0009 delegation envelope (`access_admin` only).
+    delegation = Column(JSON)
+    # The `access_admin` binding that authorized this one by delegation.
+    parent_id = Column(String(36), ForeignKey("iam_bindings.id", name="fk_iam_bindings_parent"))
 
     __table_args__ = (
         Index("ix_iam_bindings_subject", "subject_type", "subject_id", "revoked_at"),
         Index("ix_iam_bindings_scope", "scope_type", "scope_id"),
+        # Lock order of 0018 §4.3: BINDING_EXISTS locks only platform-role rows.
+        Index("ix_iam_bindings_subject_role", "subject_type", "subject_id", "role"),
     )

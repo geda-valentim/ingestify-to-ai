@@ -13,12 +13,19 @@ Levels in this slice:
 
 Engine permissions of spec 0009 are only *referenced* here: they stay in
 `shared.access.policy` and are never decided by `shared.iam.decide`.
+
+Role families (spec 0018 §4.1): `ROLES` holds the `platform` family only. The six
+0009 roles are the `engines` family, in the separate map `ENGINE_ROLES`, whose
+permissions are read from `shared.access.policy.ROLES` (one source). They never
+enter `ROLES`: the `Decider`, `platform_roles`, `/iam/check` and
+`ROLE_ABOVE_GRANTOR` must never see an engine binding (0018 CA13).
 """
 
 from dataclasses import dataclass
-from typing import Dict, FrozenSet, Tuple
+from typing import Dict, FrozenSet, Optional, Tuple
 
 from shared.access.policy import PERMISSIONS as ENGINE_PERMISSIONS
+from shared.access.policy import ROLES as _POLICY_ROLES
 
 OWNER = "owner"
 PLATFORM = "platform"
@@ -115,11 +122,16 @@ def _reads(*prefixes: str) -> FrozenSet[str]:
     )
 
 
+PLATFORM_FAMILY = "platform"
+ENGINES_FAMILY = "engines"
+
+
 @dataclass(frozen=True)
 class Role:
     key: str
     permissions: FrozenSet[str]
     description: str
+    family: str = PLATFORM_FAMILY
 
 
 ROLES: Dict[str, Role] = {
@@ -163,13 +175,43 @@ for _role in ROLES.values():
     assert _role.permissions <= PLATFORM_PERMISSIONS, _role.key
 
 
+_ENGINE_ROLE_DESCRIPTIONS = {
+    "observer": "Reads engines, execution profiles and operations within its condition",
+    "profile_editor": "Creates, revises, publishes and archives execution profiles",
+    "runtime_configurator": "Binds published profiles to engine runtimes",
+    "engine_operator": "Plans, executes, cancels and recovers engine operations",
+    "access_admin": "Grants engine roles within its delegation envelope",
+    "connection_manager": "Manages engine connection credentials",
+}
+
+# The 0009 roles (family `engines`). Permissions come from `policy.ROLES`, never a
+# copy: an engine binding still carries its own materialized `permissions`.
+ENGINE_ROLES: Dict[str, Role] = {
+    key: Role(key, frozenset(perms), _ENGINE_ROLE_DESCRIPTIONS.get(key, ""), ENGINES_FAMILY)
+    for key, perms in _POLICY_ROLES.items()
+}
+
+assert not set(ENGINE_ROLES) & set(ROLES), "platform and engines role keys overlap"
+for _role in ENGINE_ROLES.values():
+    assert _role.permissions <= ENGINE_PERMISSIONS, _role.key
+
+
+def family(role_key: str) -> Optional[str]:
+    """`platform`, `engines`, or None for a key in neither family."""
+    if role_key in ROLES:
+        return PLATFORM_FAMILY
+    if role_key in ENGINE_ROLES:
+        return ENGINES_FAMILY
+    return None
+
+
 def permission(name: str) -> Permission:
     """The catalog entry, or KeyError for a name outside the closed catalog."""
     return PERMISSIONS[name]
 
 
 def role(key: str) -> Role:
-    """The managed role, or KeyError for an unknown key."""
+    """The managed platform role, or KeyError for an unknown key (engines included)."""
     return ROLES[key]
 
 
@@ -197,9 +239,10 @@ def describe() -> dict:
         "roles": [
             {
                 "key": r.key,
+                "family": r.family,
                 "permissions": sorted(r.permissions),
                 "description": r.description,
             }
-            for r in ROLES.values()
+            for r in list(ROLES.values()) + list(ENGINE_ROLES.values())
         ],
     }

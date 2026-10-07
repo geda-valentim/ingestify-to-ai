@@ -55,8 +55,11 @@ export default function PlatformAccessPage() {
     enabled: bootstrap,
   });
   // Nobody grants a role whose permissions they lack (CA7): offer only those.
+  // Only the platform family is granted here; engines roles need a condition.
   const roles = (catalog.data?.roles ?? []).filter(
-    (r) => bootstrap || r.permissions.every((p) => held.has(p)),
+    (r) =>
+      r.family === "platform" &&
+      (bootstrap || r.permissions.every((p) => held.has(p))),
   );
   const [subject, setSubject] = useState("");
   const [role, setRole] = useState("");

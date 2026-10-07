@@ -146,6 +146,11 @@ def _permission(name: str) -> catalog.Permission:
         raise UnknownPermission(name) from None
 
 
+def _plain(b: IamBinding) -> bool:
+    """A platform binding: none of the engines-family columns of spec 0018 is set."""
+    return b.permissions is None and b.condition_ref is None and b.delegation is None and b.parent_id is None
+
+
 class Decider:
     """
     Decisions for one request. Memoizes the principal's active bindings for its own
@@ -189,8 +194,11 @@ class Decider:
                 .order_by(IamBinding.created_at, IamBinding.id)
                 .all()
             )
-            # A role key removed from the catalog in a later deploy grants nothing.
-            self._bindings[key] = [b for b in rows if b.role in catalog.ROLES]
+            # A role key removed from the catalog in a later deploy grants nothing,
+            # an engines binding is never seen here (0018 CA13), and a platform
+            # binding carrying engine-only columns is corrupt and grants nothing
+            # (0018 §4.1, defense in depth).
+            self._bindings[key] = [b for b in rows if b.role in catalog.ROLES and _plain(b)]
         return self._bindings[key]
 
     def platform_roles(self, principal) -> List[str]:
