@@ -7,7 +7,9 @@ opt-in; este runbook não inicia engines/modelos nem cria grants automaticamente
 > de engines são `iam_bindings` da família `engines`, administrados em **Admin → Acesso**
 > (`/admin/access`) e por `/admin/iam/bindings`; o flag é `IAM_MODE`. Instalações que já
 > rodam a 0009 seguem a [seção 6](#6-convergência-no-iam-spec-0018) antes de atualizar.
-> Uma instalação nova aplica as seções 1–5 e depois a migração da seção 6.
+> Uma instalação que liga engines pela primeira vez aplica, **na seção 1 e antes de ligar
+> qualquer flag**, a migração da 0009 e depois a da 0014+0018; só então segue as seções 2–5.
+> Com `IAM_MODE` diferente de `off` ou engines ligado, a API não sobe sem as duas.
 
 ## 1. Preparação e migração
 
@@ -33,6 +35,19 @@ Se a instalação já usa Alembic com a árvore corretamente estampada, a revis�
 `f0b40009c4d3`, depois de `c7e10007a1f0`. A função direta é idempotente e evita
 inferir/stampar migrações históricas da instalação.
 
+Em seguida, ainda antes de definir `IAM_MODE`/`ENGINE_ACCESS_ENABLED` na seção 2, aplique a
+migração do IAM (0014) e a convergência da 0018 (detalhes na [seção 6.2](#62-migração)).
+O boot valida esse esquema sempre que `IAM_MODE` não é `off` ou engines está ligado; num
+banco existente o `create_all` não cria as tabelas `iam_*`, então pular este passo deixa a
+API sem subir na seção 2:
+
+```bash
+docker compose run --rm --no-deps api python -c \
+  'from shared.database import engine; from shared.iam import migration; migration.upgrade(engine); migration.upgrade_0018(engine)'
+```
+
+Com Alembic estampado, a revisão é `d4e80018a2b6` (head único).
+
 A migração cria biblioteca, revisões, políticas, grants, epoch, consumidores,
 admissões e contexto legado. Preserva registros antigos e não infere consumidores,
 ambiente confiável, publicação ou estado aplicado. Downgrade destrutivo é recusado
@@ -53,7 +68,8 @@ ENGINE_INSTALLATION_PRINCIPAL_ID=installation:dev
 
 `IAM_MODE=enforce` também liga as decisões de plataforma da
 [0014](../specs/0014-iam-nucleo-de-decisao-e-papeis-de-plataforma.md); rode antes o gate
-`scripts/iam_equivalence.py` dela. Para ligar só engines, mantendo a plataforma no legado,
+dela, `docker compose run --rm --no-deps api python -m shared.iam.equivalence` (fora do
+container, `python scripts/iam_equivalence.py`). Para ligar só engines, mantendo a plataforma no legado,
 use `IAM_MODE=off` com `ENGINE_ACCESS_ENABLED=true` (alias depreciado, ver seção 6.3).
 
 `docker-compose.engine-control.yml` repassa as opções à API e aos workers de
@@ -153,6 +169,19 @@ continuam os mesmos. `access_role_grants` vira **espelho só-escrita** para roll
 
 ### 6.1 Deploy em uma etapa
 
+**Pré-checagem antes do deploy.** Antes da 0018, `ENGINE_ACCESS_ENABLED` ausente valia
+`false`; agora, ausente ou vazio segue `IAM_MODE` (seção 6.3). Uma instalação que já roda
+`IAM_MODE=enforce` (plataforma da 0014) **sem** a variável definida passa a ter o
+enforcement de engines ligado só por este deploy, e todo grant não revogado e não
+expirado em `access_role_grants`, copiado para `iam_bindings`, volta a valer. Nesse caso,
+antes do deploy, ou fixe `ENGINE_ACCESS_ENABLED=false` no `.env`, ou revise os grants
+ativos e revogue os que devem continuar desligados:
+
+```sql
+SELECT id, user_id, role, expires_at FROM access_role_grants
+WHERE revoked_at IS NULL AND expires_at > UTC_TIMESTAMP();
+```
+
 As fatias 1 e 2 da 0018 vão juntas num único deploy. Não deixe pods antigos servindo
 `/admin/access/grants` em paralelo com os novos: o código antigo grava só em
 `access_role_grants`, e a revogação dele só volta aos bindings na próxima reconciliação.
@@ -162,7 +191,9 @@ seção 1, e recrie API, workers e beat juntos.
 ### 6.2 Migração
 
 Faça backup do SQL. Com o código da release disponível, aplique a migração explícita
-(ela exige as migrações 0009 e 0014 já aplicadas; a primeira linha é idempotente):
+(ela exige as migrações 0009 e 0014 já aplicadas, **inclusive numa instalação só com IAM
+de plataforma e engines desligado**: `upgrade_0018` recusa com "Apply the 0009 access
+migration before 0018"; a primeira chamada abaixo é idempotente):
 
 ```bash
 docker compose run --rm --no-deps api python -c \
@@ -190,7 +221,8 @@ A **reconciliação** roda de novo a cada `upgrade_0018`, a cada boot da API (`i
 `worker_init` de todo worker Celery com engines ligado, independentemente do marcador, e
 **só restringe**: copia grants ausentes, aplica `revoked_at` e o menor `expires_at` de
 qualquer das duas tabelas e o maior `version`. Se falhar, a API e o worker não sobem.
-Com engines ligado, a API recusa o boot enquanto as colunas da 0018 não existirem.
+Com `IAM_MODE` diferente de `off` (inclusive `shadow`, com engines desligado) ou com engines
+ligado, a API recusa o boot enquanto as colunas, FKs e índice da 0018 não existirem.
 
 ### 6.3 Flag
 
@@ -203,17 +235,22 @@ Com engines ligado, a API recusa o boot enquanto as colunas da 0018 não existir
 
 `ENGINE_ACCESS_ENABLED=true` (como no dev) continua ligando engines com `IAM_MODE=off`.
 `ENGINE_ACCESS_ENABLED=false` explícito continua sendo a alavanca de emergência.
-Atenção: ligar `IAM_MODE=enforce` numa instalação que nunca ligou engines passa a exigir o
-esquema da 0009 no boot e liga o enforcement de engines; conceda antes os papéis de
-engines necessários ou fixe `ENGINE_ACCESS_ENABLED=false`.
+Atenção: com `IAM_MODE=enforce`, uma instalação com engines desligado por **ausência** da
+variável (inclusive uma que nunca ligou engines ou que o desligou apagando a linha do
+`.env`) passa a exigir o esquema da 0009 no boot e liga o enforcement de engines, com os
+grants ativos que restarem; revise-os (seção 6.1), conceda antes os papéis de engines
+necessários ou fixe `ENGINE_ACCESS_ENABLED=false`.
 
 Todo processo que importa `shared.access.policy` (api, worker, worker-audio,
 worker-vision, worker-remote, worker-dispatch, worker-control, worker-control-watchdog,
 beat) recebe os dois valores pelos compose files e registra no boot
-`engine_access_enabled=<valor> (<origem>)`. Confira essa linha em todos depois do deploy:
+`engine_access_enabled=<valor> (<origem>)`. Confira essa linha em todos depois do deploy,
+passando os mesmos `-f` da instalação (o `worker-control` só existe com o overlay de
+controle; sem ele, tire-o da lista):
 
 ```bash
-docker compose logs api worker worker-control beat 2>&1 | grep 'engine_access_enabled='
+docker compose -f docker-compose.yml -f docker-compose.engine-control.yml \
+  logs api worker worker-control beat 2>&1 | grep 'engine_access_enabled='
 ```
 
 ### 6.4 Verificação
@@ -224,15 +261,19 @@ Depois da migração, antes de reabrir as escritas:
 -- 1. marcador gravado
 SELECT name, applied_at FROM app_migrations WHERE name = '0018_engine_bindings';
 
--- 2. todo grant tem binding de mesmo id, nunca menos restritivo (esperado: 0 linhas)
+-- 2. todo grant tem binding de mesmo id com sujeito, papel, condição, revogação,
+--    pai, validade e versão iguais ou mais restritivos (esperado: 0 linhas). Não compara
+--    permissões nem delegação (JSON): essas a migração/reconciliação já confere campo a
+--    campo (`verify_engine_bindings`) e o gate de equivalência abaixo prova nas decisões.
 SELECT g.id
 FROM access_role_grants g
 LEFT JOIN iam_bindings b ON b.id = g.id
 WHERE b.id IS NULL
    OR b.subject_type <> 'user' OR b.subject_id <> g.user_id OR b.role <> g.role
-   OR b.condition_ref <> g.policy_revision_id
+   OR b.condition_ref IS NULL OR b.condition_ref <> g.policy_revision_id
+   OR COALESCE(b.parent_id, '') <> COALESCE(g.parent_id, '')
    OR (g.revoked_at IS NOT NULL AND b.revoked_at IS NULL)
-   OR b.expires_at > g.expires_at
+   OR b.expires_at IS NULL OR b.expires_at > g.expires_at
    OR b.version < g.version;
 
 -- 3. bindings de plataforma sem colunas de engines (esperado: 0 linhas)
