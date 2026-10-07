@@ -101,3 +101,5 @@ av<19  # faster-whisper 1.2.x opens media with av.open(metadata_errors=...), whi
 openai>=1.0.0  # Optional: For openai-api provider (cloud-based)
 pydub>=0.25.1  # Audio file handling and metadata extraction
 ffmpeg-python>=0.2.0  # Audio format conversion support
+
+-r requirements-datalake.txt

@@ -1,3 +1,4 @@
+import { ImagesGuide } from "./images/images-guide";
 import { ComputeGuide, ComputeGuideLinks } from "./compute-guides";
 import Link from "next/link";
 import { DOCS_API_URL as API_URL } from "./config";
@@ -2056,7 +2057,7 @@ export function TopicContent({ topic, lang }: { topic: string; lang: Lang }) {
     case "pdf-pages":
       return <MediaSections lang={lang} section="paginas-pdf" />;
     case "images":
-      return <MediaSections lang={lang} section="imagens" />;
+      return <ImagesGuide lang={lang} />;
     case "live":
       return <LiveCaptureDocs lang={lang} copyLabel={t.copy} />;
     case "platform-settings":

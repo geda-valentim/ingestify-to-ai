@@ -32,6 +32,8 @@ probe - see ``publish_vision_heartbeat`` for why.
 """
 
 import logging
+import json
+from pathlib import Path
 import threading
 import time
 from datetime import datetime
@@ -40,6 +42,7 @@ from typing import Any, Dict, Optional
 from celery.signals import worker_process_init
 
 from shared.config import get_settings
+from shared.database import SessionLocal
 # Only the two module-level constants; `get_redis_client` stays a function-local
 # import in the call sites below, so a Redis that is not there cannot take the
 # module down at import time.
@@ -96,6 +99,12 @@ def ocr_image_task(self, job_id: str, image_path: str, usage_id: Optional[int] =
     return _run("ocr", job_id, image_path, None, usage_id=usage_id)
 
 
+@celery_app.task(bind=True, max_retries=0, name="workers.vision_tasks.analyze_image_task",
+                 time_limit=_TASK_TIME_LIMIT, soft_time_limit=_TASK_SOFT_TIME_LIMIT)
+def analyze_image_task(self, job_id: str, image_path: str, options: dict, usage_id: Optional[int] = None) -> dict:
+    return _run("analyze", job_id, image_path, options, usage_id=usage_id)
+
+
 @celery_app.task(
     name="workers.vision_tasks.vision_capabilities_task",
     expires=HEARTBEAT_TTL_SECONDS,
@@ -133,11 +142,14 @@ def capabilities_report() -> Dict[str, Any]:
     from workers.vision.download import model_is_cached
 
     report = device_report()
+    from workers.vision.faces import capabilities as facial_capabilities
+    faces = facial_capabilities()
     providers = get_available_providers()
     provider = settings.vision_provider
     probe = providers.get(provider, {"available": False, "reason": f"unknown provider '{provider}'"})
 
     model_loaded = False
+    instance = None
     reason: Optional[str] = probe.get("reason") or report.get("reason")
     try:
         instance = peek_image_describer()
@@ -155,6 +167,7 @@ def capabilities_report() -> Dict[str, Any]:
         reason = f"{type(exc).__name__}: {exc}"
 
     return {
+        "faces": faces,
         "enabled": settings.enable_image_description,
         "provider": provider,
         "model_id": settings.vision_model_id,
@@ -173,6 +186,8 @@ def capabilities_report() -> Dict[str, Any]:
         "model_loaded": model_loaded,
         "trust_remote_code": settings.vision_trust_remote_code,
         "reason": reason,
+        "generation_defaults": {"max_new_tokens": getattr(instance, "max_new_tokens", settings.vision_max_new_tokens),
+                                "num_beams": getattr(instance, "num_beams", settings.vision_num_beams)},
     }
 
 
@@ -189,6 +204,9 @@ def _run(
         if usage_id is not None:
             return _run_accounted(operation, job_id, image_path, options, usage_id)
         return _run_inner(operation, job_id, image_path, options)
+    except Exception as exc:
+        _set_status(job_id, "failed", error=str(exc), completed_at=datetime.utcnow())
+        raise
     finally:
         # EVERY exit: success, typed failure, crash, SoftTimeLimitExceeded.
         # This is the only cleanup that runs in the normal case - the sweeper in
@@ -262,6 +280,8 @@ def _run_inner(
         describer = get_image_describer()
         if operation == "describe":
             result = describer.describe(image_path, options)
+        elif operation == "analyze":
+            result = describer.analyze(image_path, options)
         else:
             result = describer.ocr(image_path, options)
 
@@ -302,6 +322,11 @@ def _run_inner(
         },
     }
 
+    from shared.vision_results import vision_result
+    from workers.vision.image_input import sniff_image_mime
+    image_bytes = Path(image_path).read_bytes()
+    payload = vision_result(payload, operation=operation, image_bytes=image_bytes,
+                            mime=sniff_image_mime(image_bytes), filename=Path(image_path).name)
     _store_result(job_id, payload)
     _set_status(job_id, "completed", progress=100, completed_at=datetime.utcnow())
     return payload
@@ -321,6 +346,20 @@ def _set_status(job_id: str, status: str, **kwargs) -> None:
         )
     except Exception as exc:
         logger.warning("vision: could not set status for job %s: %s", job_id, exc)
+    from shared.models import Job, JobStatus
+    try:
+        with SessionLocal() as db:
+            job = db.get(Job, job_id)
+            if job is not None and job.status != JobStatus.CANCELLED:
+                job.status = JobStatus(status)
+                for key in ("progress", "started_at", "completed_at"):
+                    if key in kwargs:
+                        setattr(job, key, kwargs[key])
+                if "error" in kwargs:
+                    job.error_message = kwargs["error"]
+                db.commit()
+    except Exception as exc:
+        logger.warning("vision: could not persist status for job %s: %s", job_id, type(exc).__name__)
 
 
 def _store_result(job_id: str, payload: dict) -> None:
@@ -331,6 +370,24 @@ def _store_result(job_id: str, payload: dict) -> None:
         get_redis_client().set_job_result(job_id, payload)
     except Exception as exc:
         logger.warning("vision: could not store result for job %s: %s", job_id, exc)
+    # Preserve the original and configuration after cache expiry. The temporary
+    # handoff is still removed by the task; the object follows job retention.
+    from shared.models import Job
+    from shared.minio_client import get_minio_client
+    try:
+        storage = get_minio_client()
+        object_name = f"images/{job_id}/result.json"
+        storage.upload_file(bucket_name=storage.bucket_results, object_name=object_name,
+                            file_data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+                            content_type="application/json")
+        with SessionLocal() as db:
+            job = db.get(Job, job_id)
+            if job is not None:
+                job.minio_result_path = object_name
+                job.char_count = len(payload["markdown"])
+                db.commit()
+    except Exception as exc:
+        logger.warning("vision: could not persist result for job %s: %s", job_id, type(exc).__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -444,10 +501,17 @@ def _start_vision_heartbeat(**kwargs):
     Must never abort startup: a worker whose Redis is briefly unreachable still
     has to boot, and it will simply be reported as absent until it can publish.
     """
-    try:
-        start_vision_heartbeat()
-    except Exception as exc:  # pragma: no cover - defensive
-        logger.warning("vision: could not start the capabilities heartbeat: %s", exc)
+    if not consumes_vision_queue():
+        return
+    def start():
+        try:
+            start_vision_heartbeat()
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("vision: could not start the capabilities heartbeat: %s", exc)
+    # A first capability probe imports the device libraries. Celery kills a
+    # prefork child whose init handlers block past four seconds, so the initial
+    # probe must run after the signal returns, just like subsequent heartbeats.
+    threading.Thread(target=start, name="vision-heartbeat-init", daemon=True).start()
 
 
 @worker_process_init.connect
@@ -460,12 +524,14 @@ def _preload_vision_model(**kwargs):
     This must never abort worker startup: a GPU-less box that turned the flag on
     by accident still has to boot.
     """
-    try:
-        if not get_settings().vision_preload_model:
-            return
-        get_image_describer().load()
-        logger.info("vision: model preloaded at worker start")
-    except VisionError as exc:
-        logger.warning("vision preload failed: %s", exc)
-    except Exception as exc:
-        logger.warning("vision preload failed unexpectedly: %s", exc)
+    if not consumes_vision_queue() or not get_settings().vision_preload_model:
+        return
+    def preload():
+        try:
+            get_image_describer().load()
+            logger.info("vision: model preloaded at worker start")
+        except VisionError as exc:
+            logger.warning("vision preload failed: %s", exc)
+        except Exception as exc:
+            logger.warning("vision preload failed unexpectedly: %s", exc)
+    threading.Thread(target=preload, name="vision-preload", daemon=True).start()

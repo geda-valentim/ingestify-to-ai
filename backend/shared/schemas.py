@@ -1,3 +1,6 @@
+from pydantic import model_validator
+from typing import Annotated
+from shared.vision_capabilities import VisionTask, VISION_TASKS, task_catalog
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator
 from typing import Optional, Literal, List, Any, Dict
 from datetime import datetime
@@ -19,7 +22,8 @@ class JobStatus(str, Enum):
     """Estados possíveis de um job"""
     PENDING = "pending"       # Pendente (usado internamente)
     QUEUED = "queued"         # Na fila
-    PROCESSING = "processing" # Sendo processado
+    PROCESSING = "processing"
+    PARTIAL = "partial" # Resultado preservado com lacunas
     COMPLETED = "completed"   # Concluído com sucesso
     FAILED = "failed"         # Falhou
     CANCELLED = "cancelled"   # Cancelado
@@ -192,6 +196,10 @@ class JobStatusResponse(BaseModel):
 
     # Só com roteamento (spec 0003): onde o job roda e por que ainda espera.
     # Nada de orçamento ou de outros usuários; null sem rota.
+    kind: Optional[str] = None
+    configuration: Optional[dict] = None
+    image_analysis: Optional[dict] = None
+    datalake: Optional[dict] = None
     engine: Optional[JobEngine] = None
     queue_reason: Optional[Literal["in_queue", "starting"]] = None
 
@@ -240,6 +248,8 @@ class DiarizationMetadata(BaseModel):
     turns: List[DiarizationTurn] = []
     generation: Optional[int] = None
     provenance: Optional[Dict[str, Any]] = None
+    analysis_status: Optional[str] = None
+    reason_code: Optional[str] = None
 
 
 class AlignmentMetadata(BaseModel):
@@ -272,6 +282,7 @@ class DocumentMetadata(BaseModel):
 class ConversionResult(BaseModel):
     markdown: str
     metadata: DocumentMetadata
+    image: Optional["ImageJobResult | ImageFullAnalysisResult | ImageFullV2Result | FaceAnalysisResult"] = None
 
 
 class JobResultResponse(BaseModel):
@@ -581,3 +592,249 @@ class VisionCapabilitiesResponse(BaseModel):
     model_loaded: bool
     trust_remote_code: bool
     reason: Optional[str] = None
+    max_image_size_mb: int = 10
+    caption_tasks: List[str] = list(VISION_CAPTION_TASKS)
+    default_caption_task: str = DEFAULT_VISION_CAPTION_TASK
+    tasks: List["VisionTaskInfo"] = Field(default_factory=lambda: [VisionTaskInfo(**item) for item in task_catalog()])
+    generation_schema: dict = Field(default_factory=lambda: VisionGenerationOptions.model_json_schema())
+    generation_defaults: dict = Field(default_factory=lambda: _vision_generation_defaults())
+    analysis_modes: list[str] = ["single", "full"]
+    full_profiles: List[dict] = Field(default_factory=list)
+    faces: Optional[dict] = None
+    full_profile: str = "image-full-v1"
+    full_limits: dict = {"max_queries": 3, "max_regions": 4, "max_calls": 32, "deadline_seconds": 900}
+
+
+class ImageJobResult(BaseModel):
+    """Persisted vision output, including the operation selected at upload."""
+
+    operation: Literal["describe", "ocr", "analyze"]
+    task: str
+    task_label: Optional[str] = None
+    image_base64: Optional[str] = None
+    image_mime_type: Optional[str] = None
+    width: int
+    height: int
+    description: Optional[str] = None
+    text: Optional[str] = None
+    lines: List[OcrLine] = []
+    model: VisionModelInfo
+    duration_ms: int
+    output: Optional[dict | str] = None
+    regions: List["ImageRegion"] = []
+    request: Optional["ImageAnalyzeOptions"] = None
+
+
+class VisionTaskInfo(BaseModel):
+    task: VisionTask
+    label: str
+    output: Literal["text", "ocr", "boxes", "polygons", "mixed"]
+    input: Literal["none", "text", "region"]
+
+
+class VisionGenerationOptions(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    max_new_tokens: Optional[int] = Field(None, ge=1, le=1024, description="Limite de tokens gerados (contexto do checkpoint integrado: 1024); omitido usa a configuração do worker.")
+    num_beams: Optional[int] = Field(None, ge=1, le=8, description="Número de candidatos na busca; omitido usa a configuração do worker.")
+    do_sample: bool = Field(False, description="Amostrar o próximo token em vez de usar busca determinística.")
+    temperature: float = Field(1.0, gt=0, le=2, description="Variação da amostragem; utilizada quando do_sample=true.")
+    top_p: float = Field(1.0, gt=0, le=1, description="Fração acumulada de probabilidade na amostragem.")
+    top_k: int = Field(50, ge=0, le=100, description="Quantidade de candidatos na amostragem; zero não limita.")
+    repetition_penalty: float = Field(1.0, ge=0.5, le=3, description="Penalidade de tokens repetidos.")
+    length_penalty: float = Field(1.0, ge=-2, le=2, description="Preferência por sequências longas na busca por beams.")
+    no_repeat_ngram_size: int = Field(0, ge=0, le=20, description="Impedir repetição de sequências deste tamanho; zero desativa.")
+    early_stopping: bool | Literal["never"] = Field(False, description="Critério de parada da busca por beams.")
+
+    @model_validator(mode="after")
+    def validate_decoding_mode(self):
+        if not self.do_sample and (self.temperature != 1 or self.top_p != 1 or self.top_k != 50):
+            raise ValueError("temperature/top_p/top_k diferentes do padrão exigem do_sample=true")
+        if self.num_beams == 1 and (self.length_penalty != 1 or self.early_stopping is not False):
+            raise ValueError("length_penalty/early_stopping personalizados exigem num_beams > 1")
+        return self
+
+
+class ImageAnalyzeOptions(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    task: VisionTask = Field(DEFAULT_VISION_CAPTION_TASK, json_schema_extra={"x-task-catalog": task_catalog()})
+    text_input: Optional[str] = Field(None, min_length=1, max_length=2000, description="Frase/descrição/objetos nas tarefas que recebem texto.")
+    region: Optional[List[float]] = Field(None, min_length=4, max_length=4, description="Região normalizada [x_min,y_min,x_max,y_max], valores entre 0 e 1.")
+    generation: VisionGenerationOptions = Field(default_factory=VisionGenerationOptions)
+
+    @model_validator(mode="after")
+    def validate_task_input(self):
+        input_kind = VISION_TASKS[self.task][2]
+        if self.text_input is not None:
+            self.text_input = self.text_input.strip()
+        if input_kind == "text" and not self.text_input:
+            raise ValueError(f"{self.task} exige text_input")
+        if input_kind != "text" and self.text_input is not None:
+            raise ValueError(f"{self.task} não recebe text_input")
+        if input_kind == "region" and self.region is None:
+            raise ValueError(f"{self.task} exige region")
+        if input_kind != "region" and self.region is not None:
+            raise ValueError(f"{self.task} não recebe region")
+        if self.region is not None:
+            import math
+            x1, y1, x2, y2 = self.region
+            if not all(math.isfinite(v) and 0 <= v <= 1 for v in self.region) or x1 >= x2 or y1 >= y2:
+                raise ValueError("region exige 0 <= x_min < x_max <= 1 e 0 <= y_min < y_max <= 1")
+        return self
+
+
+class ImageAnalyzeRequest(ImageOcrRequest, ImageAnalyzeOptions):
+    mode: Literal["single"] = "single"
+    wait: bool = Field(False, description="false cria um job e retorna 202; true espera pelo resultado (sujeito ao timeout de visão).")
+
+
+class ImageRegion(BaseModel):
+    label: str = ""
+    score: Optional[float] = None
+    bbox: Optional[List[float]] = None
+    quad_box: Optional[List[float]] = None
+    polygons: List[List[float]] = []
+
+
+class ImageAnalyzeResponse(_ImageEchoResponse):
+    task: VisionTask
+    text: str
+    output: dict | str
+    regions: List[ImageRegion]
+    request: ImageAnalyzeOptions
+
+
+def _vision_generation_defaults():
+    from shared.config import get_settings
+    settings = get_settings()
+    return VisionGenerationOptions(max_new_tokens=settings.vision_max_new_tokens,
+                                   num_beams=settings.vision_num_beams).model_dump()
+
+
+
+from shared.face_analysis import FaceRequestOptions, FullFaceOptions, FaceAnalysisResult, FaceStepResult, FaceModelInfo, FacialBlock
+
+
+class FaceAnalyzeRequest(ImageOcrRequest):
+    model_config = ConfigDict(extra='forbid')
+    face_options: FaceRequestOptions = Field(default_factory=FaceRequestOptions)
+    wait: bool = False
+    datalake: Optional['Destination'] = None
+
+
+class FaceAnalyzeResponse(BaseModel):
+    job_id: str
+    status: str
+    markdown: str
+    image: FaceAnalysisResult
+
+
+class ImageFullOptions(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    profile: Literal['image-full-v1', 'image-full-v2'] = 'image-full-v1'
+    faces: Optional[FullFaceOptions] = None
+    queries: Optional[List[str]] = Field(None, min_length=1, max_length=3)
+    regions: Optional[List[List[float]]] = Field(None, min_length=1, max_length=4)
+    generation: VisionGenerationOptions = Field(default_factory=VisionGenerationOptions)
+    deadline_seconds: int = Field(900, ge=1, le=900)
+
+    @model_validator(mode="after")
+    def validate_inputs(self):
+        if self.profile == 'image-full-v1' and self.faces is not None:
+            raise ValueError('faces exige profile=image-full-v2')
+        if self.profile == 'image-full-v2' and self.faces is None:
+            self.faces = FullFaceOptions()
+        if self.queries is not None:
+            self.queries = [q.strip() for q in self.queries]
+            if any(not q or len(q) > 2000 for q in self.queries) or len('. '.join(self.queries)) > 2000:
+                raise ValueError('queries devem ser não vazias e totalizar no máximo 2000 caracteres')
+        for box in self.regions or []:
+            ImageAnalyzeOptions(task='<REGION_TO_CATEGORY>', region=box)
+        return self
+
+
+class ImageFullAnalyzeRequest(ImageOcrRequest):
+    model_config = ConfigDict(extra="forbid")
+    mode: Literal['full']
+    full_options: ImageFullOptions = Field(default_factory=ImageFullOptions)
+    wait: bool = False
+    datalake: Optional['Destination'] = None
+
+
+class ImageFullStepResult(BaseModel):
+    step_id: str
+    task: VisionTask
+    input: dict = Field(default_factory=dict)
+    status: Literal['pending', 'running', 'succeeded', 'failed', 'skipped', 'not_applicable']
+    reason_code: Optional[str] = None
+    text: str = ''
+    output: dict | str = ''
+    regions: List[ImageRegion] = Field(default_factory=list)
+    lines: List[OcrLine] = Field(default_factory=list)
+    duration_ms: int = 0
+    truncated: bool = False
+    generation_metadata: dict = Field(default_factory=dict)
+    attempts: int = 0
+
+
+class ImageFullAnalysisResult(BaseModel):
+    operation: Literal['full_analysis']
+    schema_version: Literal['image-full-result-v1'] = 'image-full-result-v1'
+    profile: Literal['image-full-v1'] = 'image-full-v1'
+    analysis_status: Literal['completed', 'partial', 'failed', 'cancelled']
+    task: str = 'full'
+    task_label: str = 'Full Analysis'
+    image_base64: Optional[str] = None
+    image_mime_type: str = 'image/png'
+    width: int
+    height: int
+    model: VisionModelInfo
+    duration_ms: int
+    description: str = ''
+    text: str = ''
+    lines: List[OcrLine] = Field(default_factory=list)
+    regions: List[ImageRegion] = Field(default_factory=list)
+    request: Optional[dict] = None
+    coverage: dict
+    resolved_inputs: dict = Field(default_factory=dict)
+    results: List[ImageFullStepResult]
+    calls_started: int = 0
+    reason_code: Optional[str] = None
+    source_sha256: str = ''
+    frame_policy: str = 'first_frame'
+
+
+class FlorenceV2StepResult(ImageFullStepResult):
+    kind: Literal['florence'] = 'florence'
+
+
+class ImageFullV2Result(ImageFullAnalysisResult):
+    schema_version: Literal['image-full-result-v2'] = 'image-full-result-v2'
+    profile: Literal['image-full-v2'] = 'image-full-v2'
+    models: List[FaceModelInfo | dict]
+    faces: FacialBlock
+    results: List[Annotated[FlorenceV2StepResult | FaceStepResult, Field(discriminator='kind')]]
+    calls_by_provider: dict[str, int] = Field(default_factory=dict)
+
+
+class ImageFullQueuedResponse(JobCreatedResponse):
+    status: JobStatus
+    poll_url: str
+    result_url: str
+
+
+class ImageFullAnalyzeResponse(BaseModel):
+    job_id: str
+    status: str
+    markdown: str
+    image: ImageFullAnalysisResult | ImageFullV2Result
+
+
+from shared.datalake.schemas import Destination
+ImageFullAnalyzeRequest.model_rebuild()
+FaceAnalyzeRequest.model_rebuild()
+
+ConversionResult.model_rebuild()
+JobResultResponse.model_rebuild()
+VisionCapabilitiesResponse.model_rebuild()

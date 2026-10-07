@@ -26,6 +26,31 @@ STUB_REVISION = "stub"
 class StubDescriber(ImageDescriber):
     """A zero-dependency ImageDescriber with fixed, dimension-derived output."""
 
+    def analyze(self, image_path: Path, options: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        from shared.schemas import ImageAnalyzeOptions
+        from shared.vision_capabilities import VISION_TASKS
+        from shared.vision_outputs import normalize_output
+        request = ImageAnalyzeOptions.model_validate(options or {})
+        self.load()
+        width, height = self._dimensions(Path(image_path))
+        output_kind = VISION_TASKS[request.task][1]
+        bbox = [0, 0, width, height]
+        polygon = [0, 0, width, 0, width, height, 0, height]
+        if output_kind == "text":
+            output = f"Stub {request.task}: {width}x{height}"
+        elif output_kind == "ocr":
+            output = {"quad_boxes": [polygon], "labels": ["stub text"]}
+        elif output_kind == "polygons":
+            output = {"polygons": [[polygon]], "labels": ["stub region"]}
+        elif output_kind == "mixed":
+            output = {"bboxes": [bbox], "bboxes_labels": ["stub object"], "polygons": [[polygon]], "polygons_labels": ["stub mask"]}
+        else:
+            output = {"bboxes": [bbox], "labels": ["stub object"]}
+        text, regions, lines = normalize_output(output)
+        return {"task": request.task, "text": text, "output": output, "regions": regions,
+                "lines": lines, "width": width, "height": height, "duration_ms": 0,
+                "request": request.model_dump()}
+
     def __init__(self, task: str = "<MORE_DETAILED_CAPTION>") -> None:
         self._task = task
         self._loaded = False
