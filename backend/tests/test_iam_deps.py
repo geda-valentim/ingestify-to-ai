@@ -116,6 +116,10 @@ def client(db):
     def settings_update(user=Depends(require("platform.settings.update", session=True))):
         return {"user": user.id}
 
+    @app.post("/recover")
+    def recover(user=Depends(require("platform.jobs.recover"))):
+        return {"user": user.id}
+
     @app.post("/convert")
     def convert(user=Depends(require("documents.convert"))):
         return {"user": user.id}
@@ -224,12 +228,41 @@ def test_shadow_answers_legacy_and_logs_the_divergence(db, people, client, setti
         assert _get(client, "/stats", alice).status_code == 403  # legacy answers
         assert _get(client, "/stats", root).status_code == 200
         assert _get(client, "/stats", bob).status_code == 403
-    divergences = [r for r in caplog.records if r.getMessage() == "iam_shadow_divergence"]
+    divergences = [r for r in caplog.records if r.getMessage().startswith("iam_shadow_divergence")]
     assert len(divergences) == 1  # only alice: root and bob agree
+    # The fields are in the message: the API's log format prints only %(message)s.
+    formatted = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s").format(divergences[0])
+    assert formatted.endswith(
+        f"iam_shadow_divergence route=GET /stats permission=platform.stats.read "
+        f"subject={alice.id} legacy=False iam=True"
+    )
     d = divergences[0]
     assert (d.permission, d.route, d.subject, d.legacy, d.iam) == (
         "platform.stats.read", "GET /stats", alice.id, False, True
     )
+
+
+def test_shadow_survives_a_failing_new_decision(db, people, client, settings, monkeypatch, caplog):
+    monkeypatch.setattr(settings, "iam_mode", "shadow")
+    root, alice, bob = people
+    from shared.iam.decide import Decider
+
+    def broken(self, *a, **k):
+        raise RuntimeError("iam_bindings does not exist")
+
+    monkeypatch.setattr(Decider, "decide", broken)
+    with caplog.at_level(logging.ERROR, logger="api.iam_deps"):
+        assert _get(client, "/stats", root).status_code == 200
+        assert _get(client, "/stats", bob).status_code == 403
+        assert _get(client, "/jobs/main", alice).json() == {"row": "main"}
+        assert _get(client, "/jobs/main", bob).status_code == 404
+    errors = [r.getMessage() for r in caplog.records if r.getMessage().startswith("iam_shadow_error")]
+    assert errors == [
+        "iam_shadow_error route=GET /stats permission=platform.stats.read",
+        "iam_shadow_error route=GET /stats permission=platform.stats.read",
+        "iam_shadow_error route=GET /jobs/{job_id} permission=jobs.read",
+        "iam_shadow_error route=GET /jobs/{job_id} permission=jobs.read",
+    ]
 
 
 @pytest.mark.parametrize("mode", ["off", "shadow", "enforce"])
@@ -253,6 +286,18 @@ def test_bootstrap_mutation_is_audited_once_per_request(db, people, client, sett
     assert _get(client, "/stats", root).status_code == 200  # reads are not audited
     rows = db.query(AdminAudit).filter(AdminAudit.action == "iam.bootstrap.use").all()
     assert [(r.actor_user_id, r.target_id) for r in rows] == [(root.id, "platform.settings.update")]
+
+
+@pytest.mark.parametrize("mode", ["off", "shadow", "enforce"])
+@pytest.mark.parametrize("headers,credential", [(JWT, "session"), ({"x-api-key": "k"}, "api_key")])
+def test_bootstrap_audit_records_the_real_credential(db, people, client, settings, monkeypatch, mode, headers, credential):
+    monkeypatch.setattr(settings, "iam_mode", mode)
+    root, _, _ = people
+    # A mutation without session=True: an API key passes, and is audited as such.
+    assert client.post("/recover", headers={"x-test-user": root.id, **headers}).status_code == 200
+    [row] = db.query(AdminAudit).filter(AdminAudit.action == "iam.bootstrap.use").all()
+    # audit_auth_method is jwt|cli (unchanged); the exact credential is in `after`.
+    assert (row.auth_method, row.after["credential"]) == ("jwt", credential)
 
 
 @pytest.mark.parametrize("mode", ["off", "shadow", "enforce"])
@@ -309,8 +354,11 @@ def test_shadow_authorized_answers_legacy_and_logs(db, people, client, settings,
     monkeypatch.setattr(deps, "resolve_owned_job", legacy_denies)
     with caplog.at_level(logging.WARNING, logger="shared.iam.decide"):
         assert _get(client, "/jobs/main", alice).status_code == 404
-    [d] = [r for r in caplog.records if r.getMessage() == "iam_shadow_divergence"]
-    assert (d.permission, d.route, d.legacy, d.iam) == ("jobs.read", "GET /jobs/{job_id}", False, True)
+    [d] = [r for r in caplog.records if r.getMessage().startswith("iam_shadow_divergence")]
+    assert d.getMessage() == (
+        f"iam_shadow_divergence route=GET /jobs/{{job_id}} permission=jobs.read "
+        f"subject={alice.id} legacy=False iam=True"
+    )
 
 
 def test_enforce_authorized_does_not_call_the_legacy_path(db, people, client, settings, monkeypatch):

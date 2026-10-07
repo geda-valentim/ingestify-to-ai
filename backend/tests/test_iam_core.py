@@ -345,7 +345,7 @@ def test_mode_shadow_answers_legacy_and_logs_divergence(db, people, settings, mo
     _bind(db, alice, "platform_operator", granted_by=root)
     with caplog.at_level(logging.WARNING, logger="shared.iam.decide"):
         assert not can(db, alice, "platform.stats.read", decider=_decider(db))
-    assert any(r.getMessage() == "iam_shadow_divergence" for r in caplog.records)
+    assert any(r.getMessage().startswith("iam_shadow_divergence ") for r in caplog.records)
 
 
 def test_mode_off_is_exactly_legacy_for_an_inactive_admin(db, people, settings):
