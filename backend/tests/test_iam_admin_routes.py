@@ -18,7 +18,7 @@ from datetime import datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -126,6 +126,8 @@ def client(db):
     app = FastAPI()
 
     def current_user(request: Request):
+        if "x-test-user" not in request.headers:
+            raise HTTPException(status_code=401, detail="Not authenticated")
         user = db.get(User, request.headers["x-test-user"])
         request.state.api_key = object() if request.headers.get("x-api-key") else None
         return user
@@ -292,6 +294,7 @@ def test_grant_list_and_revoke_take_effect_on_the_next_request(db, people, clien
 
 @pytest.mark.parametrize("kwargs,status,code", [
     (dict(role="platform_wizard"), 422, "UNKNOWN_ROLE"),
+    (dict(days=365), 201, None),
     (dict(days=366), 422, "INVALID_EXPIRES_AT"),
     (dict(days=-1), 422, "INVALID_EXPIRES_AT"),
     (dict(expires_at=None), 422, "INVALID_EXPIRES_AT"),
@@ -299,7 +302,25 @@ def test_grant_list_and_revoke_take_effect_on_the_next_request(db, people, clien
 ])
 def test_grant_validation(people, client, kwargs, status, code):
     r = _grant(client, people.admin, people.alice, **kwargs)
-    assert (r.status_code, r.json()["detail"]["code"]) == (status, code)
+    assert (r.status_code, r.json()["detail"]["code"] if code else None) == (status, code), r.text
+
+
+def test_grant_to_a_subject_that_does_not_exist(db, people, client):
+    ghost = SimpleNamespace(id="no-such-user")
+    r = _grant(client, people.admin, ghost)
+    assert (r.status_code, r.json()["detail"]["code"]) == (422, "SUBJECT_NOT_FOUND")
+    assert db.query(IamBinding).filter(IamBinding.subject_id == ghost.id).count() == 0
+
+
+@pytest.mark.parametrize("method,path", [
+    ("GET", "/iam/permissions"),
+    ("POST", "/iam/check"),
+    ("GET", "/admin/iam/bindings"),
+    ("POST", "/admin/iam/bindings"),
+    ("POST", "/admin/iam/bindings/b-1/revoke"),
+])
+def test_iam_routes_need_a_session(people, client, method, path):
+    assert client.request(method, path, json={}).status_code == 401
 
 
 def test_nobody_grants_to_themselves(people, client):
@@ -342,6 +363,9 @@ def test_an_expired_binding_grants_nothing(db, people, client):
 
 
 def _bootstrap_uses(db):
+    # The handlers share this session: drop whatever was only added or flushed,
+    # so only rows that were committed count (production closes without commit).
+    db.rollback()
     rows = db.query(AdminAudit).filter(AdminAudit.action == "iam.bootstrap.use").all()
     return [(r.actor_user_id, r.auth_method, r.target_id, r.after["permission"]) for r in rows]
 
@@ -356,6 +380,11 @@ def test_bootstrap_mutations_are_audited_and_reads_are_not(db, people, client, s
 
     assert call(client, "POST", "/admin/cleanup", root).status_code == 200
     assert call(client, "POST", "/admin/jobs/recover-stuck", root).status_code == 200
+    # These handlers never touch the DB: only the dependency's commit keeps the row.
+    assert sorted(_bootstrap_uses(db)) == sorted([
+        (root.id, "jwt", "platform.jobs.cleanup", "platform.jobs.cleanup"),
+        (root.id, "jwt", "platform.jobs.recover", "platform.jobs.recover"),
+    ])
     # Recorded before the handler runs, so even a failing change leaves its trace.
     assert call(client, "DELETE", "/admin/routing/transcription", root).status_code == 404
     assert _grant(client, root, people.alice, role="remote_engine_user").status_code == 201
@@ -366,6 +395,12 @@ def test_bootstrap_mutations_are_audited_and_reads_are_not(db, people, client, s
         (root.id, "jwt", "platform.routing.update", "platform.routing.update"),
         (root.id, "jwt", "iam.bindings.manage", "iam.bindings.manage"),
     ])
+
+
+def test_bootstrap_use_survives_a_handler_that_rolls_back(db, people, client):
+    r = _grant(client, people.root, people.alice, role="platform_wizard")
+    assert (r.status_code, r.json()["detail"]["code"]) == (422, "UNKNOWN_ROLE")
+    assert _bootstrap_uses(db) == [(people.root.id, "jwt", "iam.bindings.manage", "iam.bindings.manage")]
 
 
 def test_a_binding_holder_is_not_audited_as_bootstrap(db, people, client):

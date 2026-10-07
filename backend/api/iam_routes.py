@@ -8,10 +8,12 @@ IAM API (spec 0014 §4.9).
     POST /admin/iam/bindings                iam.bindings.manage + login session (JWT)
     POST /admin/iam/bindings/{id}/revoke    iam.bindings.manage + login session (JWT)
 
-Errors carry `{"code", "message"}` in `detail`: 401 no session; 403 platform
-permission missing (or an API key on a write); 404 unknown binding; 409 version
-conflict, already revoked or an active binding for the same role; 422 unknown
-role, self-grant, a role above the grantor or an invalid `expires_at`.
+Handler errors carry `{"code", "message"}` in `detail`: 404 unknown binding; 409
+version conflict, already revoked or an active binding for the same role; 422
+unknown role or subject, self-grant, a role above the grantor or an invalid
+`expires_at`. The 401 (no session) and 403 (platform permission missing, or an
+API key on a write) come from the dependencies and keep the legacy plain-string
+`detail` of `require_admin` (CA12).
 
 A platform binding never opens the 0009 engine routes: `access_session` still
 reads only the 0009 grants (§4.9, tested).
