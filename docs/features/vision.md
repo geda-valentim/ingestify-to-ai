@@ -1,4 +1,51 @@
-# Visão: descrição de imagem e OCR (Florence-2)
+# Visão: descrição, OCR, Full Analysis e rostos/expressões
+
+## Rostos e expressões
+
+`POST /images/faces` (JSON) e `POST /images/faces/upload` (multipart) oferecem
+detecção simples (`face_options.mode=detection`) ou detecção, movimentos e
+expressão estimada (`expressions`, padrão). Consulte
+`GET /images/faces/capabilities` para disponibilidade por etapa, modelos e schema.
+Ambas as criações exigem `Idempotency-Key`, localização de projeto e imagem;
+replay devolve o mesmo job. `/jobs/{id}/result` conserva o resultado após F5/Redis expirado.
+
+MediaPipe fornece caixas/confiança/keypoints e landmarks/blendshapes. O modelo
+ONNX EmotiEffLib fixado oferece oito classes de expressão. Scores são estimativas
+não calibradas de expressão visível, sem determinar estado emocional interno.
+IDs de rosto são locais ao job; não existe reconhecimento de identidade.
+Falhas e classificações inconclusivas são distintas de detecção vazia.
+
+Full `image-full-v2` inclui as 15 famílias Florence e três faciais. Envie
+`full_options.profile=image-full-v2`; `full_options.faces` permite thresholds e
+até cinco rostos. O prazo único é de até 900s e o teto é 54 invocações incluindo
+recuperação (32 Florence + 22 faciais). Omissão do perfil conserva v1. Operação
+específica aceita até dez rostos, até 42 invocações e prazo de até 300s.
+Campos exclusivos de expressão são recusados em `detection`; prazo dentro de
+`faces` é recusado no Full. Limites e omissões ficam visíveis nos resultados.
+
+Ativação administrada: aplique `PYTHONPATH=backend alembic upgrade head` com o ambiente do backend antes de usar os novos perfis. As migrações são aditivas e repetíveis.
+
+Depois:
+
+1. Instale `backend/requirements-faces.txt` no worker e as bibliotecas nativas
+   `libegl1`/`libgles2` (incluídas no Dockerfile do worker).
+2. No Compose, execute `make faces-download` para preencher o volume `ingestify-face-cache`,
+   montado em leitura no worker. Fora do Compose, execute
+   `python scripts/download_face_models.py --destination /models/faces` num ambiente
+   com as dependências do backend. O instalador verifica todos os SHA-256.
+3. Configure `FACE_MODEL_CACHE_DIR=/models/faces` e `FACE_ANALYSIS_ENABLED=true`
+   na API e nos workers que atendem a fila de visão; reinicie-os e confira capabilities.
+
+Os pesos não são baixados durante uma requisição. O manifesto
+[`face_models.json`](../../backend/shared/face_models.json) registra origem,
+licenças, versões, labels e pré-processamento. O custo do executor é liquidado
+por lote; contadores e tempos dos adapters ficam separados no resultado/ledger,
+com tentativas sem medição identificadas, sem inventar rate de custo por modelo.
+
+As próximas seções descrevem as operações Florence existentes.
+
+> Contratos dos endpoints revisados em 2026-10-06. Campos, modelos e autorização:
+> [referência completa da API](../api-reference.md). As datas abaixo também registram revisões da implementação/operação.
 
 > Verificado contra o código em 2026-10-05 (branch `main`). Fonte da verdade:
 > [backend/api/image_routes.py](../../backend/api/image_routes.py),
@@ -10,15 +57,17 @@
 
 ## O que faz
 
-Recebe uma imagem e devolve, **na mesma requisição** (síncrono, com prazo):
+Recebe uma imagem e executa uma das tarefas do modelo Florence integrado:
 
 - **describe** — uma legenda/descrição em texto (tarefas Florence-2 `<MORE_DETAILED_CAPTION>`,
   `<DETAILED_CAPTION>` ou `<CAPTION>`);
 - **ocr** — o texto da imagem e, por linha, o quadrilátero (`quad_box`, 8 valores) e o
   retângulo (`bbox`, 4 valores) em pixels da imagem original (`<OCR_WITH_REGION>`).
 
-Não há formulário de inferência no frontend; o uso é via API. O guia bilíngue de uso
-está no frontend em `/docs#imagens`.
+O formulário `/convert` permite descrição, OCR e as demais tarefas de análise,
+incluindo seleção de uma região por arraste e os controles de geração. A página
+do job mostra a imagem original, texto, caixas ou polígonos e permite baixar o
+resultado. O guia bilíngue está em `/docs/images` e `/pt/docs/images`.
 
 ## Como usar
 
@@ -36,6 +85,64 @@ não há deduplicação nessas rotas.
 | `POST /images/ocr` | JSON `{image_base64, project?, project_id?, folder?, folder_id?, filename?, tags?}` |
 | `POST /images/ocr/upload` | multipart `file`, localização, `tags?` |
 | `GET /images/capabilities` | — (estado do subsistema; ver abaixo) |
+| `POST /images/analyze` | JSON: imagem/localização, `mode=single/full`, `wait?`; single usa `task`, `text_input?`, `region?`, `generation?`; full usa `full_options?`, `datalake?` e header `Idempotency-Key` |
+| `POST /images/analyze/upload` | multipart: arquivo/localização + os mesmos controles; `region`, `generation`, `full_options` e `datalake` são campos JSON |
+| `POST /images/{job_id}/cancel` | Sem corpo; somente Full Analysis do dono, 202 em execução e 200 terminal |
+
+As rotas `analyze` retornam **202** com `job_id` por padrão (`wait=false`).
+`wait=true` espera e retorna 200 com o resultado, ou 504 sem cancelar a tarefa.
+As rotas anteriores de descrição/OCR mantêm seu contrato síncrono.
+
+### Todas as tarefas do processor Florence
+
+O catálogo em `/images/capabilities` publica `tasks[]` com tarefa, rótulo,
+entrada exigida e tipo de saída; `generation_schema` e `generation_defaults`
+publicam os controles e os padrões do worker. São 15 tarefas verificadas no
+processor instalado, sem converter tarefas de segmentação em OCR ou Markdown.
+
+| Tarefa | Entrada adicional | Saída |
+|---|---|---|
+| `<CAPTION>` | — | Descrição breve |
+| `<DETAILED_CAPTION>` | — | Descrição detalhada |
+| `<MORE_DETAILED_CAPTION>` | — | Descrição muito detalhada |
+| `<OCR>` | — | Texto |
+| `<OCR_WITH_REGION>` | — | Texto, linhas e quadriláteros |
+| `<OD>` | — | Caixas e classes de objetos |
+| `<DENSE_REGION_CAPTION>` | — | Caixas e descrições |
+| `<REGION_PROPOSAL>` | — | Propostas de regiões |
+| `<CAPTION_TO_PHRASE_GROUNDING>` | `text_input` | Caixas associadas às frases |
+| `<REFERRING_EXPRESSION_SEGMENTATION>` | `text_input` | Polígonos do objeto descrito |
+| `<OPEN_VOCABULARY_DETECTION>` | `text_input` | Caixas e/ou polígonos de objetos descritos |
+| `<REGION_TO_SEGMENTATION>` | `region` | Polígonos da região |
+| `<REGION_TO_CATEGORY>` | `region` | Classe da região |
+| `<REGION_TO_DESCRIPTION>` | `region` | Descrição da região |
+| `<REGION_TO_OCR>` | `region` | Texto da região |
+
+`region=[x_min,y_min,x_max,y_max]` usa coordenadas normalizadas entre 0 e 1,
+com mínimos menores que máximos. Texto obrigatório não pode ser vazio; texto e
+região são rejeitados nas tarefas que não os usam. As **saídas** geométricas
+usam pixels da imagem original. `output` preserva a resposta do processor;
+`regions[]` a normaliza como `label`, `bbox`, `quad_box` e `polygons`.
+
+`generation` aceita `max_new_tokens` (1..1024, contexto do checkpoint integrado), `num_beams` (1..8), `do_sample`,
+`temperature` (>0..2), `top_p` (>0..1), `top_k` (0..100),
+`repetition_penalty` (0.5..3), `length_penalty` (-2..2),
+`no_repeat_ngram_size` (0..20) e `early_stopping` (booleano ou `"never"`).
+Controles de amostragem personalizados exigem `do_sample=true`; controles de
+beam personalizados exigem `num_beams>1`. Campos desconhecidos são rejeitados.
+Tokens/beams omitidos usam a configuração do worker, registrada no resultado.
+
+```bash
+curl https://dev.ingestify.ai/api/images/analyze/upload \
+  -H "X-API-Key: $INGESTIFY_API_KEY" \
+  -F "file=@foto.jpg" -F "project=Documentos" \
+  --form-string 'task=<OPEN_VOCABULARY_DETECTION>' \
+  --form-string 'text_input=a red car' \
+  --form-string 'generation={"max_new_tokens":512,"num_beams":1}'
+```
+
+Referências: [processor Florence](https://huggingface.co/docs/transformers/model_doc/florence2),
+[checkpoint integrado](https://huggingface.co/florence-community/Florence-2-base-ft).
 
 - `image_base64` aceita o prefixo `data:image/...;base64,` e quebras de linha.
 - `task` padrão: `<MORE_DETAILED_CAPTION>` (configurável por `VISION_CAPTION_TASK`).
@@ -113,9 +220,10 @@ Erros de autenticação, tags e validação Pydantic podem usar outro formato de
 | 422 | `IMAGE_TOO_LARGE` | Mais pixels que `VISION_MAX_IMAGE_PIXELS` (proteção contra bomba de descompressão). |
 | 422 | `INVALID_BASE64` / `UNSUPPORTED_IMAGE_FORMAT` / `UNSUPPORTED_CAPTION_TASK` | Entrada inválida. |
 | 503 | `VISION_DISABLED` | `ENABLE_IMAGE_DESCRIPTION=false`. |
+| 503 | `JOB_PERSISTENCE_UNAVAILABLE` | O job e sua configuração não puderam ser salvos; nenhuma imagem foi enfileirada. |
 | 503 | `VISION_ENGINE_UNAVAILABLE` | Roteamento configurado sem motor disponível; respeite o header `Retry-After`. |
 | 503 | `VISION_DEPENDENCIES_MISSING`, `VISION_MODEL_NOT_DOWNLOADED`, `VISION_MODEL_LOAD_FAILED`, `VISION_DEVICE_UNAVAILABLE`, `CELERY_UNAVAILABLE` | Worker sem torch/transformers, pesos ausentes com download desabilitado, falha de carga, `DEVICE=cuda` sem GPU, broker fora. |
-| 504 | `VISION_TIMEOUT` | Passou de `VISION_REQUEST_TIMEOUT_SECONDS`. `detail` traz `job_id`, `poll_url` e `result_url`; **a task continua**, mas a recuperação do resultado tem a limitação de schema descrita abaixo. |
+| 504 | `VISION_TIMEOUT` | Passou do prazo de espera síncrona; detail inclui job_id/poll_url/result_url. A tarefa continua e pode ser consultada pelo mesmo job. |
 
 No `504`, salve `detail.job_id` e acompanhe `poll_url`. Não reenvie automaticamente a
 imagem: uma nova inferência criará outro job. Exemplo ilustrativo:
@@ -144,16 +252,19 @@ não há worker.
 Quando a feature está habilitada, essa sonda retorna `200` mesmo com worker ausente;
 quando `ENABLE_IMAGE_DESCRIPTION=false`, responde `503 VISION_DISABLED`.
 
-## O que acontece por dentro
+## O que acontece por dentro (tarefas individuais)
 
-1. A API valida tamanho e formato, cria um job MAIN (`source_type="image"`) no MySQL e no
-   Redis — por isso a imagem aparece em `GET /jobs?kind=image`.
+1. A API valida tamanho e formato e salva um job MAIN (`source_type="image"`) e sua
+   configuração no MySQL antes de despachar. Se essa gravação falhar, responde
+   `503 JOB_PERSISTENCE_UNAVAILABLE` sem enfileirar a imagem. O Redis recebe uma
+   cópia de cache; o job continua consultável pelo banco quando esse cache expira.
 2. Grava a imagem em `{TEMP_STORAGE_PATH}/images/{job_id}/` (os bytes **não** passam pelo
    broker e **não** vão para o MinIO).
 3. Envia a task para a fila dedicada `VISION_QUEUE` (`ingestify-vision`), consumida pelo
    serviço `worker-vision` (`--concurrency=1`, um modelo residente por máquina).
 4. Espera o resultado sem bloquear o event loop, até `VISION_REQUEST_TIMEOUT_SECONDS`.
-5. O worker roda o Florence-2, grava o resultado no Redis (`job:{id}:result`) e apaga a
+5. O worker roda o Florence-2, grava o resultado no Redis e no objeto privado de
+   resultados do MinIO, atualiza o status no MySQL e apaga a
    imagem num `finally`. Sobras de workers mortos são varridas pela task diária
    `cleanup_old_jobs` (diretórios com mais de `max(4 × VISION_TASK_TIMEOUT_SECONDS, 1 h)`).
 
@@ -187,22 +298,18 @@ A imagem do worker inclui as dependências de visão por padrão
 [docker/Dockerfile.worker](../../docker/Dockerfile.worker)). `make vision-download`
 pré-baixa os pesos.
 
-## Limites e lacunas conhecidas
+## Consulta, persistência e limites
 
-- **Status no MySQL não é atualizado no sucesso.** O worker grava o resultado só no
-  Redis; a linha em `jobs` fica `PENDING` (só falhas a marcam `FAILED`). `GET /jobs` mostra
-  o status correto enquanto o status no Redis existe (24 h) e depois volta a mostrar
-  `queued`.
-- O resultado só vive no Redis (`RESULT_TTL_SECONDS`, 1 h): depois disso
-  `/jobs/{id}/result` devolve `404`. A imagem não é guardada.
-- **Recuperação por `/jobs/{id}/result` incompatível com visão.** Verificado no código:
-  `vision_tasks._store_result()` salva o payload de inferência sem `markdown` e
-  `metadata`; `get_job_result()` passa esse payload para `JobResultResponse`, que exige
-  ambos. Assim, quando só o resultado de visão está no Redis, a validação falha e a rota
-  não devolve a inferência (normalmente `500`). O `result_url` do `504` não é garantia de
-  recuperação. Clientes devem salvar a resposta `200` da própria rota de imagem;
-  corrigir a recuperação exige mudança de backend, fora do escopo deste guia.
-- Um worker de visão por máquina; requisições concorrentes enfileiram e podem dar `504`.
+`GET /jobs/{id}/result?format=markdown` retorna o envelope padrão com `markdown`,
+`metadata` e `image`: tarefa, entrada/configuração, imagem original, dimensões,
+modelo e resultado próprio. O status é mantido no MySQL. O resultado completo é
+salvo em `images/{job_id}/result.json` no bucket privado de resultados, com
+referência em `jobs.minio_result_path`; Redis é um cache. A leitura continua após
+expirar o cache e a exclusão do job remove esse objeto. O handoff temporário é
+apagado ao terminar a tarefa, sem perder a imagem presente no resultado.
+
+Requisições síncronas concorrentes podem ultrapassar o prazo de espera. Prefira
+`analyze` com `wait=false` para acompanhar a fila sem manter uma conexão aberta.
 
 ## Com rota de visão (spec 0003, fatia 8)
 
@@ -211,3 +318,71 @@ motor `local` (capacidade declarada de `vision`) dentro da própria requisição
 ao worker; sem vaga, segue a fila `ingestify-vision` como sem rota; uma rota sem passo local e sem
 motor que atenda agora responde `503 VISION_ENGINE_UNAVAILABLE` com `Retry-After`. Detalhes em
 [engines.md](engines.md#visão-síncrona-fatia-8).
+
+## Full Analysis de imagens
+
+Em `/convert`, **Full Analysis** reúne as 15 famílias num único job: descrições,
+OCR, objetos, grounding, regiões e segmentações. Consultas e regiões são derivadas
+automaticamente; entradas avançadas explícitas substituem as derivadas do mesmo tipo.
+A interface mostra cobertura por tarefa e permite selecionar camadas e baixar JSON/Markdown.
+
+Use as rotas `/images/analyze` (JSON) ou `/images/analyze/upload` (multipart) com
+`mode=full` e header `Idempotency-Key` obrigatório, de 1 a 128 caracteres.
+Repetir chave e payload recupera o mesmo job; payload diferente retorna 409.
+Chave de job excluído retorna 410 por pelo menos 24h e até confirmar a limpeza.
+Use outra chave para uma nova análise intencional.
+
+```bash
+curl "$API_URL/images/analyze/upload" \
+  -H "X-API-Key: $INGESTIFY_API_KEY" \
+  -H "Idempotency-Key: image-full-example-001" \
+  -F "file=@photo.jpg" \
+  -F "project=Análises de imagens" \
+  --form-string 'mode=full' \
+  --form-string 'full_options={"queries":["a red car"],"generation":{"max_new_tokens":1024,"num_beams":3},"deadline_seconds":900}'
+```
+
+JSON equivalente: `{"mode":"full","image_base64":"...","project":"Análises de imagens","full_options":{...}}`.
+Omitir `full_options` usa entradas automáticas. `queries` aceita até 3 textos
+(total até 2000 caracteres); `regions` aceita até 4 retângulos normalizados
+`[x_min,y_min,x_max,y_max]`. O padrão inclui a imagem inteira e até 3 candidatos.
+O máximo inicial é 31 chamadas, com teto de 32 incluindo recuperação.
+Não representa todas as combinações possíveis de parâmetros.
+
+Full rejeita `task`, `text_input`, `region` e `generation` na raiz; geração fica
+em `full_options.generation`. Multipart codifica `full_options` e `datalake`
+como JSON. O destino opcional usa `Destination` com `connection_id`, `bucket`,
+`partitioning` e `partition_values`, congelado na criação. Resultados `partial`
+podem ser exportados; o envelope e o dataset preservam `analysis_status`.
+
+A resposta padrão 202 contém `job_id`, `poll_url` e `result_url`. `wait=true`
+espera até o prazo HTTP; 504 mantém o mesmo job. `GET /jobs/{id}` inclui
+`image_analysis` com progresso, chamadas, cancelamento e deadline. Prazo total
+máximo: 900s desde a admissão, incluindo fila, carga, inferência e persistência.
+`POST /images/{id}/cancel` preserva checkpoints: 202 enquanto processa, 200 terminal.
+
+`GET /jobs/{id}/result` retorna 202 enquanto processa. Ao terminar, o envelope
+contém `image.operation=full_analysis`, `analysis_status`, `coverage`,
+`resolved_inputs`, `calls_started`, `results[]` e Markdown. `?format=json` entrega
+o envelope bruto; `?format=markdown` mantém o envelope padrão. Estados finais:
+`completed`, `partial`, `failed`, `cancelled`. Só `completed` indica cobertura
+integral sem truncamento e persistência durável. Cada etapa mantém output nativo,
+texto, linhas/caixas/polígonos, motivo, tentativas, duração e metadados de geração.
+A imagem PNG canônica mantém as mesmas coordenadas, sem rotação EXIF posterior;
+GIF/TIFF usa o primeiro frame.
+
+Fonte, checkpoints e relatório ficam privados no MinIO; SQL controla claims,
+fences, limites e caminhos selecionados. Redis é cache. A recuperação reutiliza
+checkpoints e repete no máximo uma vez uma etapa incerta, dentro do teto e prazo.
+Com rota de engine ativa, o lote aguarda reserva e contabiliza o processamento;
+indisponibilidade de capacidade não libera execução fora da admissão.
+
+Execute `python scripts/migrate_image_full_analysis.py` antes de reiniciar API,
+worker de visão, worker geral e beat com o mesmo código. Reconstrua o frontend.
+A migração aditiva cria três tabelas `image_analysis_*` e acrescenta `PARTIAL`
+ao enum SQL de jobs. É repetível. Alembic: `01b5000bd5d4`, após `f0a4000ac4c3`.
+Downgrade exige não haver lotes retidos e mantém o enum aditivo histórico.
+`VISION_FULL_TASK_TIMEOUT_SECONDS=900` configura o prazo máximo, limitado a 900s.
+`/images/capabilities` publica `analysis_modes`, `full_profile` e `full_limits`.
+
+O guia publicado em `/pt/docs/images#full-analysis` e `/docs/images#full-analysis` inclui exemplos automáticos/avançados multipart, envio JSON/Python, acompanhamento, cancelamento, formatos de resultado e datalakes. Todas as oito rotas de imagens aparecem na tabela do guia.

@@ -1,6 +1,8 @@
+import type { FaceAnalysisResult, ImageFullV2Result, FaceOptions } from "./faces";
 // Generated from OpenAPI spec
 
 export type JobStatus =
+  | "partial"
   | "queued"
   | "processing"
   | "completed"
@@ -225,11 +227,112 @@ export interface TranscriptJson {
 export interface ConversionResult {
   markdown: string;
   metadata: DocumentMetadata;
+  image?: ImageJobResult | ImageFullAnalysisResult | ImageFullV2Result | FaceAnalysisResult | null;
+}
+
+export type CaptionTask = "<CAPTION>" | "<DETAILED_CAPTION>" | "<MORE_DETAILED_CAPTION>";
+export type VisionTask = CaptionTask | "<OCR>" | "<OCR_WITH_REGION>" | "<OD>" | "<DENSE_REGION_CAPTION>" | "<REGION_PROPOSAL>" | "<CAPTION_TO_PHRASE_GROUNDING>" | "<REFERRING_EXPRESSION_SEGMENTATION>" | "<REGION_TO_SEGMENTATION>" | "<OPEN_VOCABULARY_DETECTION>" | "<REGION_TO_CATEGORY>" | "<REGION_TO_DESCRIPTION>" | "<REGION_TO_OCR>";
+
+export interface ParameterSchema {
+  $ref?: string;
+  readOnly?: boolean;
+  "x-unavailable-reason"?: string;
+  $defs?: Record<string, ParameterSchema>;
+  type?: string;
+  title?: string;
+  description?: string;
+  default?: unknown;
+  enum?: unknown[];
+  const?: unknown;
+  minimum?: number;
+  maximum?: number;
+  exclusiveMinimum?: number;
+  exclusiveMaximum?: number;
+  anyOf?: ParameterSchema[];
+  properties?: Record<string, ParameterSchema>;
+  items?: ParameterSchema;
+}
+
+export interface VisionTaskInfo {
+  task: VisionTask;
+  label: string;
+  input: "none" | "text" | "region";
+  output: "text" | "ocr" | "boxes" | "polygons" | "mixed";
+}
+
+export interface ImageRegion {
+  label: string;
+  score?: number | null;
+  bbox?: number[] | null;
+  quad_box?: number[] | null;
+  polygons: number[][];
+}
+
+export interface ImageJobResult {
+  operation: "describe" | "ocr" | "analyze";
+  task: string;
+  task_label?: string | null;
+  image_base64?: string | null;
+  image_mime_type?: string | null;
+  width: number;
+  height: number;
+  description?: string | null;
+  text?: string | null;
+  lines: { text: string; quad_box: number[]; bbox: number[] }[];
+  model: { model_id: string; revision: string; device: string; dtype: string };
+  duration_ms: number;
+  output?: Record<string, unknown> | string | null;
+  regions?: ImageRegion[];
+  request?: { task: VisionTask; text_input?: string | null; region?: number[] | null; generation: Record<string, unknown> } | null;
+}
+
+export interface ImageFullStepResult {
+  step_id: string;
+  task: VisionTask;
+  input: { text_input?: string; region?: number[]; origin?: string };
+  status: "pending" | "running" | "succeeded" | "failed" | "skipped" | "not_applicable";
+  reason_code?: string | null;
+  text?: string;
+  output?: Record<string, unknown> | string;
+  regions?: ImageRegion[];
+  lines?: ImageJobResult["lines"];
+  duration_ms?: number;
+  truncated?: boolean;
+}
+
+export interface ImageFullAnalysisResult extends Omit<ImageJobResult, "operation" | "request"> {
+  operation: "full_analysis";
+  schema_version: string;
+  profile: string;
+  analysis_status: "completed" | "partial" | "failed" | "cancelled";
+  reason_code?: string | null;
+  coverage: { task_families_total: number; task_families_completed: number; instances_planned: number; instances_completed: number;
+    families: { task: VisionTask; label: string; completed: boolean; instances: number; succeeded: number }[] };
+  resolved_inputs: { queries?: unknown[]; regions?: unknown[]; omitted_candidates?: unknown[] };
+  results: ImageFullStepResult[];
+  calls_started: number;
+  request?: Record<string, unknown> | null;
+}
+
+export interface VisionCapabilities {
+  full_profiles?: { profile: "image-full-v1" | "image-full-v2"; ready: boolean; families: number; max_calls: number; max_faces: number }[];
+  analysis_modes?: string[];
+  full_limits?: { max_queries: number; max_regions: number; max_calls: number; deadline_seconds: number };
+  enabled: boolean;
+  dependencies_installed: boolean;
+  model_downloaded: boolean;
+  reason?: string | null;
+  max_image_size_mb: number;
+  caption_tasks: CaptionTask[];
+  default_caption_task: CaptionTask;
+  tasks: VisionTaskInfo[];
+  generation_schema: ParameterSchema;
+  generation_defaults: Record<string, unknown>;
 }
 
 export interface JobCreatedResponse {
   job_id: string;
-  status: "queued";
+  status: "queued" | "completed";
   created_at: string;
   message: string;
   project?: UploadProjectInfo;
@@ -243,6 +346,9 @@ export interface ChildJobs {
 }
 
 export interface JobStatusResponse {
+  kind?: JobKind | null;
+  configuration?: { operation: string; provider?: string | null; model?: string | null; options: Record<string, unknown> } | null;
+  image_analysis?: { status: string; steps_total: number; steps_completed: number; calls_started: number; cancel_requested: boolean };
   job_id: string;
   type: JobType;
   status: JobStatus;
@@ -349,6 +455,17 @@ export interface ConvertRequest extends UploadLocation {
 }
 
 export interface UploadRequest extends UploadLocation {
+  datalake?: import("./datalake").DatalakeDestination;
+  image_operation?: "describe" | "ocr" | "analyze" | "full" | "faces";
+  face_options?: FaceOptions;
+  image_engine?: "vision" | "docling";
+  image_task?: VisionTask;
+  image_text_input?: string;
+  image_region?: number[];
+  image_generation?: Record<string, unknown>;
+  image_full_options?: { profile?: "image-full-v1" | "image-full-v2"; faces?: FaceOptions; queries?: string[]; regions?: number[][]; deadline_seconds?: number };
+  image_idempotency_key?: string;
+
   file: File;
   name?: string;
   tags?: string[];

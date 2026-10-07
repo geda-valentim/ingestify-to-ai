@@ -1,0 +1,35 @@
+{
+  "manifest_version": "face-models-v1",
+  "models": [
+    {
+      "operation": "face_detection", "provider": "mediapipe", "model_id": "blaze_face_short_range",
+      "revision": "float16/1", "filename": "detector.tflite",
+      "sha256": "b4578f35940bf5a1a655214a1cce5cab13eba73c1297cd78e1a04c2380b0152f",
+      "runtime": "mediapipe", "runtime_version": "1.1.0", "license": "Apache-2.0",
+      "license_url": "https://storage.googleapis.com/mediapipe-assets/MediaPipe%20BlazeFace%20Model%20Card%20(Short%20Range).pdf",
+      "source_url": "https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite",
+      "preprocessing": {"mode": "IMAGE", "color": "RGB", "native": "MediaPipe task"}
+    },
+    {
+      "operation": "face_movements", "provider": "mediapipe", "model_id": "face_landmarker",
+      "revision": "float16/1", "filename": "landmarker.task",
+      "sha256": "64184e229b263107bc2b804c6625db1341ff2bb731874b0bcc2fe6544e0bc9ff",
+      "runtime": "mediapipe", "runtime_version": "1.1.0", "license": "Apache-2.0",
+      "license_url": "https://storage.googleapis.com/mediapipe-assets/Model%20Card%20MediaPipe%20Face%20Mesh%20V2.pdf",
+      "additional_license_urls": ["https://storage.googleapis.com/mediapipe-assets/Model%20Card%20Blendshape%20V2.pdf"],
+      "source_url": "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",
+      "preprocessing": {"mode": "IMAGE", "color": "RGB", "padding": 0.25, "num_faces": 1, "min_face_detection_confidence": 0.5}
+    },
+    {
+      "operation": "face_expression_classification", "provider": "emotiefflib", "model_id": "enet_b0_8_best_afew",
+      "revision": "520a051c64cd191521e5934655314e769a319684", "filename": "expression.onnx",
+      "sha256": "7aa2ea31c1311f4f8aa9d3fdb085d418dd4e7a48c4b9ed41df8c044f91d0213f",
+      "runtime": "onnxruntime", "runtime_version": "1.30.0", "license": "Apache-2.0",
+      "license_url": "https://github.com/sb-ai-lab/EmotiEffLib/blob/520a051c64cd191521e5934655314e769a319684/LICENSE",
+      "source_url": "https://raw.githubusercontent.com/sb-ai-lab/EmotiEffLib/520a051c64cd191521e5934655314e769a319684/models/affectnet_emotions/onnx/enet_b0_8_best_afew.onnx",
+      "license_basis": "Artifact distributed in the pinned Apache-2.0 repository; no separate license or exclusion accompanies this file.",
+      "preprocessing": {"color": "RGB", "size": 224, "resize": "opencv INTER_LINEAR", "padding": 0, "mean": [0.485, 0.456, 0.406], "std": [0.229, 0.224, 0.225], "layout": "NCHW", "dtype": "float32", "scores": "softmax", "calibrated": false},
+      "labels": ["Anger", "Contempt", "Disgust", "Fear", "Happiness", "Neutral", "Sadness", "Surprise"]
+    }
+  ]
+}

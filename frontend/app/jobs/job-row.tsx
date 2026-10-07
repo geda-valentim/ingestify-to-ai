@@ -14,6 +14,7 @@ import type { JobListItem } from "@/types/api";
 const icons = { document: FileText, transcription: Mic, image: Image };
 const statusStyle: Record<string, string> = {
   completed: "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400",
+  partial: "bg-amber-500/10 text-amber-700 dark:text-amber-400",
   failed: "bg-red-500/10 text-red-700 dark:text-red-400",
   processing: "bg-blue-500/10 text-blue-700 dark:text-blue-400",
   queued: "bg-amber-500/10 text-amber-700 dark:text-amber-400",

@@ -6,7 +6,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { FileText, Upload as UploadIcon, Link as LinkIcon, Cloud } from "lucide-react";
 import { useAuthStore } from "@/lib/store/auth";
 import { loginUrl } from "@/lib/session";
-import { ApiError, jobsApi } from "@/lib/api";
+import { ApiError, jobsApi, uploadSourceType } from "@/lib/api";
 import { formatApiError } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
@@ -24,6 +24,7 @@ import {
   TabsList,
   TabsTrigger,
 } from "@/components/ui/tabs";
+import { ImageUploadOptions } from "@/components/upload/image-options";
 import { FileUpload } from "@/components/upload/file-upload";
 import { TagInput } from "@/components/tag-input";
 import { Input } from "@/components/ui/input";
@@ -71,6 +72,10 @@ function ConversionWorkspace() {
   const isAuthenticated = useAuthStore((state) => state.token !== null && state.user !== null);
   const hasHydrated = useAuthStore((state) => state._hasHydrated);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const isImage = !!selectedFile && uploadSourceType(selectedFile.name) === "image";
+  const [imageRequest, setImageRequest] = useState<Partial<UploadRequest>>({});
+  const [imageValid, setImageValid] = useState(false);
+  const imageKey = useRef<{ signature: string; key: string } | null>(null);
   const [customName, setCustomName] = useState("");
   const [tags, setTags] = useState<string[]>([]);
   const [uploadSuccess, setUploadSuccess] = useState<string | null>(null);
@@ -158,6 +163,7 @@ function ConversionWorkspace() {
       queryClient.invalidateQueries({ queryKey: ["projects"] });
       queryClient.invalidateQueries({ queryKey: ["jobs"] });
       // Clear all forms
+      imageKey.current = null;
       setSelectedFile(null);
       setCustomName("");
       setTags([]);
@@ -175,9 +181,17 @@ function ConversionWorkspace() {
 
   const handleFileUpload = () => {
     if (!selectedFile || !project) return;
+    if (isImage && !imageValid) return;
+    let image_idempotency_key: string | undefined;
+    if (isImage && ["full", "faces"].includes(imageRequest.image_operation ?? "")) {
+      const signature = JSON.stringify([selectedFile.name, selectedFile.size, selectedFile.lastModified, imageRequest, tags, project, folder]);
+      if (imageKey.current?.signature !== signature) imageKey.current = { signature, key: crypto.randomUUID() };
+      image_idempotency_key = imageKey.current.key;
+    }
     uploadMutation.mutate({
+      ...(isImage ? { ...imageRequest, image_idempotency_key } : {}),
       file: selectedFile,
-      name: customName || undefined,
+      name: isImage ? undefined : customName || undefined,
       tags,
       ...toUploadLocation(project, folder),
     });
@@ -302,7 +316,8 @@ function ConversionWorkspace() {
                     onClear={() => setSelectedFile(null)}
                   />
 
-                  <div className="space-y-2">
+                  {isImage && selectedFile && <ImageUploadOptions key={selectedFile.name + selectedFile.lastModified} file={selectedFile} disabled={uploadMutation.isPending} onChange={setImageRequest} onValid={setImageValid} />}
+                  {!isImage && <div className="space-y-2">
                     <Label htmlFor="customNameFile">Custom Name (Optional)</Label>
                     <Input
                       id="customNameFile"
@@ -311,7 +326,7 @@ function ConversionWorkspace() {
                       value={customName}
                       onChange={(e) => setCustomName(e.target.value)}
                     />
-                  </div>
+                  </div>}
 
                   <div className="space-y-2">
                     <Label htmlFor="tagsFile">Tags (Optional)</Label>
@@ -320,11 +335,11 @@ function ConversionWorkspace() {
 
                   <Button
                     onClick={handleFileUpload}
-                    disabled={!selectedFile || !project || uploadMutation.isPending}
+                    disabled={!selectedFile || !project || uploadMutation.isPending || (isImage && !imageValid)}
                     className="w-full"
                     size="lg"
                   >
-                    {uploadMutation.isPending ? "Converting..." : "Convert to Markdown"}
+                    {uploadMutation.isPending ? "Processando..." : isImage ? "Processar imagem" : "Convert to Markdown"}
                   </Button>
                   {projectHint}
                 </TabsContent>
