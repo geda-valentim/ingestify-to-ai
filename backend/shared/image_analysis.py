@@ -1,6 +1,7 @@
 """SQL authority and immutable objects for full image analysis."""
 import json
 from datetime import datetime, timedelta
+from shared.job_source import purge_requested
 from shared.database import SessionLocal
 from shared.models import Job, JobStatus, ImageAnalysisRun as Run, ImageAnalysisStep as Step, EngineUsage, User
 from shared.minio_client import get_minio_client
@@ -280,7 +281,8 @@ def finish(job_id, holder, fence, storage, *, reason=None, recovery=False, sessi
         snapshot = {'options': dict(run.options), 'width': run.width, 'height': run.height,
                     'preview_path': run.preview_path, 'resolved_inputs': dict(run.resolved_inputs),
                     'calls_started': run.calls_started, 'calls_by_provider': dict(run.calls_by_provider or {}), 'source_sha256': job.file_checksum or '',
-                    'started_at': job.started_at or job.created_at, 'filename': job.filename, 'mime_type': job.mime_type or 'image/png', 'size_bytes': job.file_size_bytes or 0}
+                    'started_at': job.started_at or job.created_at, 'filename': job.filename, 'mime_type': job.mime_type or 'image/png', 'size_bytes': job.file_size_bytes or 0,
+                    'purge_source': purge_requested(job)}
         rows = step_snapshot(db, job_id)
         db.commit()
     results = read_steps(rows, storage)
@@ -300,6 +302,10 @@ def finish(job_id, holder, fence, storage, *, reason=None, recovery=False, sessi
                 reason = reason or 'preview_unavailable'
             else:
                 raise
+    if snapshot['purge_source']:
+        # The report (results bucket, Redis, datalake delivery) never carries the
+        # normalized copy of the original; the purge deletes the rest below
+        preview = None
     # Deadline or cancellation can arrive during object I/O. Rebuild the envelope
     # with the new reason instead of committing the earlier successful report.
     for _ in range(3):
@@ -402,6 +408,10 @@ def finish(job_id, holder, fence, storage, *, reason=None, recovery=False, sessi
         pass
     from shared.datalake.service import enqueue_export
     enqueue_export(job_id, session_factory=session_factory)
+    # Settled for good: purge_source deletes the source, the preview and the local
+    # copies now (never raises; it re-checks the job under its row lock)
+    from shared.job_source import purge_source_if_requested
+    purge_source_if_requested(job_id, session_factory=factory, minio_factory=lambda: storage)
     return payload
 
 

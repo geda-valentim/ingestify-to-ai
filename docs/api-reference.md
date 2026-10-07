@@ -739,6 +739,7 @@ Content-Type: `application/json`. Esquema: [FaceAnalyzeRequest](#model-faceanaly
 | `project_id` | não | string / null |  | ID de um projeto existente (alternativa a `project`). |
 | `folder` | não | string / null |  | Nome da pasta no projeto (opcional, get-or-add, sem '/'). |
 | `folder_id` | não | string / null |  | ID de uma pasta existente do projeto. |
+| `purge_source` | não | boolean | default=false | Se true, apaga todas as cópias guardadas da imagem original enviada quando o job termina: `completed`, ou `failed`/`partial`/`cancelled` (as rotas de imagem não têm retry automático). Apaga a cópia local de processamento, o original e a cópia normalizada (prévia em tamanho real) da análise completa/facial no armazenamento, e a imagem embutida no resultado guardado (`image.image_base64` de GET /jobs/{job_id}/result fica null). O resultado da inferência (descrição, OCR, regiões, rostos, markdown) fica. Com wait=true a resposta síncrona ainda ecoa `image_base64`: vem dos bytes desta requisição, não de uma cópia guardada. GET /jobs/{job_id} informa `source_available` e `source_deleted_at`. Padrão false (mantém). Para apagar depois: DELETE /jobs/{job_id}/source. Análise completa e facial: purge_source não faz parte da Idempotency-Key; repetir a chave com outro purge_source devolve a tentativa existente, sem mudar nada. |
 | `face_options` | não | [FaceRequestOptions](#model-facerequestoptions) |  |  |
 | `wait` | não | boolean | default=false |  |
 | `datalake` | não | [Destination](#model-destination) / null |  |  |
@@ -781,6 +782,7 @@ Content-Type: `multipart/form-data`. Esquema: [Body_upload_images_faces_upload_p
 | `folder_id` | não | string / null |  |  |
 | `tags` | não | string / null |  |  |
 | `datalake` | não | string / null |  |  |
+| `purge_source` | não | boolean | default=false | Se true, apaga todas as cópias guardadas da imagem original enviada quando o job termina: `completed`, ou `failed`/`partial`/`cancelled` (as rotas de imagem não têm retry automático). Apaga a cópia local de processamento, o original e a cópia normalizada (prévia em tamanho real) da análise completa/facial no armazenamento, e a imagem embutida no resultado guardado (`image.image_base64` de GET /jobs/{job_id}/result fica null). O resultado da inferência (descrição, OCR, regiões, rostos, markdown) fica. Com wait=true a resposta síncrona ainda ecoa `image_base64`: vem dos bytes desta requisição, não de uma cópia guardada. GET /jobs/{job_id} informa `source_available` e `source_deleted_at`. Padrão false (mantém). Para apagar depois: DELETE /jobs/{job_id}/source. Análise completa e facial: purge_source não faz parte da Idempotency-Key; repetir a chave com outro purge_source devolve a tentativa existente, sem mudar nada. |
 
 Respostas declaradas:
 
@@ -829,6 +831,7 @@ Content-Type: `application/json`. Esquema: [ImageDescribeRequest](#model-imagede
 | `project_id` | não | string / null |  | ID de um projeto existente (alternativa a `project`). |
 | `folder` | não | string / null |  | Nome da pasta no projeto (opcional, get-or-add, sem '/'). |
 | `folder_id` | não | string / null |  | ID de uma pasta existente do projeto. |
+| `purge_source` | não | boolean | default=false | Se true, apaga todas as cópias guardadas da imagem original enviada quando o job termina: `completed`, ou `failed`/`partial`/`cancelled` (as rotas de imagem não têm retry automático). Apaga a cópia local de processamento, o original e a cópia normalizada (prévia em tamanho real) da análise completa/facial no armazenamento, e a imagem embutida no resultado guardado (`image.image_base64` de GET /jobs/{job_id}/result fica null). O resultado da inferência (descrição, OCR, regiões, rostos, markdown) fica. Com wait=true a resposta síncrona ainda ecoa `image_base64`: vem dos bytes desta requisição, não de uma cópia guardada. GET /jobs/{job_id} informa `source_available` e `source_deleted_at`. Padrão false (mantém). Para apagar depois: DELETE /jobs/{job_id}/source. Análise completa e facial: purge_source não faz parte da Idempotency-Key; repetir a chave com outro purge_source devolve a tentativa existente, sem mudar nada. |
 | `task` | não | string | default="<MORE_DETAILED_CAPTION>"; enum=["<MORE_DETAILED_CAPTION>", "<DETAILED_CAPTION>", "<CAPTION>"] | Prompt de caption do Florence-2. |
 
 Respostas declaradas:
@@ -925,6 +928,7 @@ Content-Type: `multipart/form-data`. Esquema: [Body_analyze_image_upload_images_
 | `generation` | não | string / null |  | Objeto JSON conforme VisionGenerationOptions; omitido usa os padrões do worker. |
 | `wait` | não | boolean | default=false | false retorna 202 com job_id; true espera pelo resultado. |
 | `tags` | não | string / null |  | Tags separadas por vírgula (ex.: 'cliente-x, reunião'). Viram minúsculas; até 20 tags de até 50 caracteres. Enviar um arquivo repetido adiciona as tags ao job existente. |
+| `purge_source` | não | boolean | default=false | Se true, apaga todas as cópias guardadas da imagem original enviada quando o job termina: `completed`, ou `failed`/`partial`/`cancelled` (as rotas de imagem não têm retry automático). Apaga a cópia local de processamento, o original e a cópia normalizada (prévia em tamanho real) da análise completa/facial no armazenamento, e a imagem embutida no resultado guardado (`image.image_base64` de GET /jobs/{job_id}/result fica null). O resultado da inferência (descrição, OCR, regiões, rostos, markdown) fica. Com wait=true a resposta síncrona ainda ecoa `image_base64`: vem dos bytes desta requisição, não de uma cópia guardada. GET /jobs/{job_id} informa `source_available` e `source_deleted_at`. Padrão false (mantém). Para apagar depois: DELETE /jobs/{job_id}/source. Análise completa e facial: purge_source não faz parte da Idempotency-Key; repetir a chave com outro purge_source devolve a tentativa existente, sem mudar nada. |
 | `project` | não | string / null |  | Nome do projeto (obrigatório, a menos que a API key esteja vinculada a um projeto). É criado se não existir; grafias equivalentes ('Reunião', ' reuniao ') são o mesmo projeto. |
 | `project_id` | não | string / null |  | ID de um projeto existente (alternativa a 'project'; nunca cria). |
 | `folder` | não | string / null |  | Nome da pasta dentro do projeto (opcional; criada se não existir; sem '/'). |
@@ -961,6 +965,7 @@ Content-Type: `multipart/form-data`. Esquema: [Body_describe_image_upload_images
 | `file` | sim | string (binary) |  | Imagem (PNG, JPEG, WEBP, BMP, GIF, TIFF) |
 | `task` | não | string | default="<MORE_DETAILED_CAPTION>" | <MORE_DETAILED_CAPTION>, <DETAILED_CAPTION> ou <CAPTION> |
 | `tags` | não | string / null |  | Tags separadas por vírgula (ex.: 'cliente-x, reunião'). Viram minúsculas; até 20 tags de até 50 caracteres. Enviar um arquivo repetido adiciona as tags ao job existente. |
+| `purge_source` | não | boolean | default=false | Se true, apaga todas as cópias guardadas da imagem original enviada quando o job termina: `completed`, ou `failed`/`partial`/`cancelled` (as rotas de imagem não têm retry automático). Apaga a cópia local de processamento, o original e a cópia normalizada (prévia em tamanho real) da análise completa/facial no armazenamento, e a imagem embutida no resultado guardado (`image.image_base64` de GET /jobs/{job_id}/result fica null). O resultado da inferência (descrição, OCR, regiões, rostos, markdown) fica. Com wait=true a resposta síncrona ainda ecoa `image_base64`: vem dos bytes desta requisição, não de uma cópia guardada. GET /jobs/{job_id} informa `source_available` e `source_deleted_at`. Padrão false (mantém). Para apagar depois: DELETE /jobs/{job_id}/source. Análise completa e facial: purge_source não faz parte da Idempotency-Key; repetir a chave com outro purge_source devolve a tentativa existente, sem mudar nada. |
 | `project` | não | string / null |  | Nome do projeto (obrigatório, a menos que a API key esteja vinculada a um projeto). É criado se não existir; grafias equivalentes ('Reunião', ' reuniao ') são o mesmo projeto. |
 | `project_id` | não | string / null |  | ID de um projeto existente (alternativa a 'project'; nunca cria). |
 | `folder` | não | string / null |  | Nome da pasta dentro do projeto (opcional; criada se não existir; sem '/'). |
@@ -1001,6 +1006,7 @@ Content-Type: `application/json`. Esquema: [ImageOcrRequest](#model-imageocrrequ
 | `project_id` | não | string / null |  | ID de um projeto existente (alternativa a `project`). |
 | `folder` | não | string / null |  | Nome da pasta no projeto (opcional, get-or-add, sem '/'). |
 | `folder_id` | não | string / null |  | ID de uma pasta existente do projeto. |
+| `purge_source` | não | boolean | default=false | Se true, apaga todas as cópias guardadas da imagem original enviada quando o job termina: `completed`, ou `failed`/`partial`/`cancelled` (as rotas de imagem não têm retry automático). Apaga a cópia local de processamento, o original e a cópia normalizada (prévia em tamanho real) da análise completa/facial no armazenamento, e a imagem embutida no resultado guardado (`image.image_base64` de GET /jobs/{job_id}/result fica null). O resultado da inferência (descrição, OCR, regiões, rostos, markdown) fica. Com wait=true a resposta síncrona ainda ecoa `image_base64`: vem dos bytes desta requisição, não de uma cópia guardada. GET /jobs/{job_id} informa `source_available` e `source_deleted_at`. Padrão false (mantém). Para apagar depois: DELETE /jobs/{job_id}/source. Análise completa e facial: purge_source não faz parte da Idempotency-Key; repetir a chave com outro purge_source devolve a tentativa existente, sem mudar nada. |
 
 Respostas declaradas:
 
@@ -1025,6 +1031,7 @@ Content-Type: `multipart/form-data`. Esquema: [Body_ocr_image_upload_images_ocr_
 | --- | --- | --- | --- | --- |
 | `file` | sim | string (binary) |  | Imagem (PNG, JPEG, WEBP, BMP, GIF, TIFF) |
 | `tags` | não | string / null |  | Tags separadas por vírgula (ex.: 'cliente-x, reunião'). Viram minúsculas; até 20 tags de até 50 caracteres. Enviar um arquivo repetido adiciona as tags ao job existente. |
+| `purge_source` | não | boolean | default=false | Se true, apaga todas as cópias guardadas da imagem original enviada quando o job termina: `completed`, ou `failed`/`partial`/`cancelled` (as rotas de imagem não têm retry automático). Apaga a cópia local de processamento, o original e a cópia normalizada (prévia em tamanho real) da análise completa/facial no armazenamento, e a imagem embutida no resultado guardado (`image.image_base64` de GET /jobs/{job_id}/result fica null). O resultado da inferência (descrição, OCR, regiões, rostos, markdown) fica. Com wait=true a resposta síncrona ainda ecoa `image_base64`: vem dos bytes desta requisição, não de uma cópia guardada. GET /jobs/{job_id} informa `source_available` e `source_deleted_at`. Padrão false (mantém). Para apagar depois: DELETE /jobs/{job_id}/source. Análise completa e facial: purge_source não faz parte da Idempotency-Key; repetir a chave com outro purge_source devolve a tentativa existente, sem mudar nada. |
 | `project` | não | string / null |  | Nome do projeto (obrigatório, a menos que a API key esteja vinculada a um projeto). É criado se não existir; grafias equivalentes ('Reunião', ' reuniao ') são o mesmo projeto. |
 | `project_id` | não | string / null |  | ID de um projeto existente (alternativa a 'project'; nunca cria). |
 | `folder` | não | string / null |  | Nome da pasta dentro do projeto (opcional; criada se não existir; sem '/'). |
@@ -3560,8 +3567,14 @@ e as cópias locais, e grava quando isso aconteceu. Depois disso
 `GET /jobs/{job_id}/pages/{n}/pdf` responde 410 `SOURCE_PURGED` e o retry de
 página responde 409 `SOURCE_NOT_AVAILABLE`.
 
+Job de imagem (`/images/*`): apaga toda cópia guardada da imagem original — a
+cópia local de processamento, o original e a prévia normalizada da análise
+completa/facial (`images/{job_id}/source` e `images/{job_id}/preview/` no bucket
+de resultados) e a imagem embutida no resultado guardado (`image.image_base64`
+passa a null); o resultado da inferência fica.
+
 Para apagar automaticamente quando o job terminar, envie `purge_source=true` em
-`/upload`, `/convert` ou `/transcribe`.
+`/upload`, `/convert`, `/transcribe` ou em qualquer rota `/images/*`.
 
 ## Retorno
 - 200: `{"job_id": "...", "source_deleted": true, "source_deleted_at": "..."}`
@@ -4689,6 +4702,7 @@ Esquema JSON completo:
 | `generation` | não | string / null |  | Objeto JSON conforme VisionGenerationOptions; omitido usa os padrões do worker. |
 | `wait` | não | boolean | default=false | false retorna 202 com job_id; true espera pelo resultado. |
 | `tags` | não | string / null |  | Tags separadas por vírgula (ex.: 'cliente-x, reunião'). Viram minúsculas; até 20 tags de até 50 caracteres. Enviar um arquivo repetido adiciona as tags ao job existente. |
+| `purge_source` | não | boolean | default=false | Se true, apaga todas as cópias guardadas da imagem original enviada quando o job termina: `completed`, ou `failed`/`partial`/`cancelled` (as rotas de imagem não têm retry automático). Apaga a cópia local de processamento, o original e a cópia normalizada (prévia em tamanho real) da análise completa/facial no armazenamento, e a imagem embutida no resultado guardado (`image.image_base64` de GET /jobs/{job_id}/result fica null). O resultado da inferência (descrição, OCR, regiões, rostos, markdown) fica. Com wait=true a resposta síncrona ainda ecoa `image_base64`: vem dos bytes desta requisição, não de uma cópia guardada. GET /jobs/{job_id} informa `source_available` e `source_deleted_at`. Padrão false (mantém). Para apagar depois: DELETE /jobs/{job_id}/source. Análise completa e facial: purge_source não faz parte da Idempotency-Key; repetir a chave com outro purge_source devolve a tentativa existente, sem mudar nada. |
 | `project` | não | string / null |  | Nome do projeto (obrigatório, a menos que a API key esteja vinculada a um projeto). É criado se não existir; grafias equivalentes ('Reunião', ' reuniao ') são o mesmo projeto. |
 | `project_id` | não | string / null |  | ID de um projeto existente (alternativa a 'project'; nunca cria). |
 | `folder` | não | string / null |  | Nome da pasta dentro do projeto (opcional; criada se não existir; sem '/'). |
@@ -4813,6 +4827,12 @@ Esquema JSON completo:
       ],
       "title": "Tags",
       "description": "Tags separadas por vírgula (ex.: 'cliente-x, reunião'). Viram minúsculas; até 20 tags de até 50 caracteres. Enviar um arquivo repetido adiciona as tags ao job existente."
+    },
+    "purge_source": {
+      "type": "boolean",
+      "title": "Purge Source",
+      "description": "Se true, apaga todas as cópias guardadas da imagem original enviada quando o job termina: `completed`, ou `failed`/`partial`/`cancelled` (as rotas de imagem não têm retry automático). Apaga a cópia local de processamento, o original e a cópia normalizada (prévia em tamanho real) da análise completa/facial no armazenamento, e a imagem embutida no resultado guardado (`image.image_base64` de GET /jobs/{job_id}/result fica null). O resultado da inferência (descrição, OCR, regiões, rostos, markdown) fica. Com wait=true a resposta síncrona ainda ecoa `image_base64`: vem dos bytes desta requisição, não de uma cópia guardada. GET /jobs/{job_id} informa `source_available` e `source_deleted_at`. Padrão false (mantém). Para apagar depois: DELETE /jobs/{job_id}/source. Análise completa e facial: purge_source não faz parte da Idempotency-Key; repetir a chave com outro purge_source devolve a tentativa existente, sem mudar nada.",
+      "default": false
     },
     "project": {
       "anyOf": [
@@ -5085,6 +5105,7 @@ Esquema JSON completo:
 | `file` | sim | string (binary) |  | Imagem (PNG, JPEG, WEBP, BMP, GIF, TIFF) |
 | `task` | não | string | default="<MORE_DETAILED_CAPTION>" | <MORE_DETAILED_CAPTION>, <DETAILED_CAPTION> ou <CAPTION> |
 | `tags` | não | string / null |  | Tags separadas por vírgula (ex.: 'cliente-x, reunião'). Viram minúsculas; até 20 tags de até 50 caracteres. Enviar um arquivo repetido adiciona as tags ao job existente. |
+| `purge_source` | não | boolean | default=false | Se true, apaga todas as cópias guardadas da imagem original enviada quando o job termina: `completed`, ou `failed`/`partial`/`cancelled` (as rotas de imagem não têm retry automático). Apaga a cópia local de processamento, o original e a cópia normalizada (prévia em tamanho real) da análise completa/facial no armazenamento, e a imagem embutida no resultado guardado (`image.image_base64` de GET /jobs/{job_id}/result fica null). O resultado da inferência (descrição, OCR, regiões, rostos, markdown) fica. Com wait=true a resposta síncrona ainda ecoa `image_base64`: vem dos bytes desta requisição, não de uma cópia guardada. GET /jobs/{job_id} informa `source_available` e `source_deleted_at`. Padrão false (mantém). Para apagar depois: DELETE /jobs/{job_id}/source. Análise completa e facial: purge_source não faz parte da Idempotency-Key; repetir a chave com outro purge_source devolve a tentativa existente, sem mudar nada. |
 | `project` | não | string / null |  | Nome do projeto (obrigatório, a menos que a API key esteja vinculada a um projeto). É criado se não existir; grafias equivalentes ('Reunião', ' reuniao ') são o mesmo projeto. |
 | `project_id` | não | string / null |  | ID de um projeto existente (alternativa a 'project'; nunca cria). |
 | `folder` | não | string / null |  | Nome da pasta dentro do projeto (opcional; criada se não existir; sem '/'). |
@@ -5118,6 +5139,12 @@ Esquema JSON completo:
       ],
       "title": "Tags",
       "description": "Tags separadas por vírgula (ex.: 'cliente-x, reunião'). Viram minúsculas; até 20 tags de até 50 caracteres. Enviar um arquivo repetido adiciona as tags ao job existente."
+    },
+    "purge_source": {
+      "type": "boolean",
+      "title": "Purge Source",
+      "description": "Se true, apaga todas as cópias guardadas da imagem original enviada quando o job termina: `completed`, ou `failed`/`partial`/`cancelled` (as rotas de imagem não têm retry automático). Apaga a cópia local de processamento, o original e a cópia normalizada (prévia em tamanho real) da análise completa/facial no armazenamento, e a imagem embutida no resultado guardado (`image.image_base64` de GET /jobs/{job_id}/result fica null). O resultado da inferência (descrição, OCR, regiões, rostos, markdown) fica. Com wait=true a resposta síncrona ainda ecoa `image_base64`: vem dos bytes desta requisição, não de uma cópia guardada. GET /jobs/{job_id} informa `source_available` e `source_deleted_at`. Padrão false (mantém). Para apagar depois: DELETE /jobs/{job_id}/source. Análise completa e facial: purge_source não faz parte da Idempotency-Key; repetir a chave com outro purge_source devolve a tentativa existente, sem mudar nada.",
+      "default": false
     },
     "project": {
       "anyOf": [
@@ -5216,6 +5243,7 @@ Esquema JSON completo:
 | --- | --- | --- | --- | --- |
 | `file` | sim | string (binary) |  | Imagem (PNG, JPEG, WEBP, BMP, GIF, TIFF) |
 | `tags` | não | string / null |  | Tags separadas por vírgula (ex.: 'cliente-x, reunião'). Viram minúsculas; até 20 tags de até 50 caracteres. Enviar um arquivo repetido adiciona as tags ao job existente. |
+| `purge_source` | não | boolean | default=false | Se true, apaga todas as cópias guardadas da imagem original enviada quando o job termina: `completed`, ou `failed`/`partial`/`cancelled` (as rotas de imagem não têm retry automático). Apaga a cópia local de processamento, o original e a cópia normalizada (prévia em tamanho real) da análise completa/facial no armazenamento, e a imagem embutida no resultado guardado (`image.image_base64` de GET /jobs/{job_id}/result fica null). O resultado da inferência (descrição, OCR, regiões, rostos, markdown) fica. Com wait=true a resposta síncrona ainda ecoa `image_base64`: vem dos bytes desta requisição, não de uma cópia guardada. GET /jobs/{job_id} informa `source_available` e `source_deleted_at`. Padrão false (mantém). Para apagar depois: DELETE /jobs/{job_id}/source. Análise completa e facial: purge_source não faz parte da Idempotency-Key; repetir a chave com outro purge_source devolve a tentativa existente, sem mudar nada. |
 | `project` | não | string / null |  | Nome do projeto (obrigatório, a menos que a API key esteja vinculada a um projeto). É criado se não existir; grafias equivalentes ('Reunião', ' reuniao ') são o mesmo projeto. |
 | `project_id` | não | string / null |  | ID de um projeto existente (alternativa a 'project'; nunca cria). |
 | `folder` | não | string / null |  | Nome da pasta dentro do projeto (opcional; criada se não existir; sem '/'). |
@@ -5243,6 +5271,12 @@ Esquema JSON completo:
       ],
       "title": "Tags",
       "description": "Tags separadas por vírgula (ex.: 'cliente-x, reunião'). Viram minúsculas; até 20 tags de até 50 caracteres. Enviar um arquivo repetido adiciona as tags ao job existente."
+    },
+    "purge_source": {
+      "type": "boolean",
+      "title": "Purge Source",
+      "description": "Se true, apaga todas as cópias guardadas da imagem original enviada quando o job termina: `completed`, ou `failed`/`partial`/`cancelled` (as rotas de imagem não têm retry automático). Apaga a cópia local de processamento, o original e a cópia normalizada (prévia em tamanho real) da análise completa/facial no armazenamento, e a imagem embutida no resultado guardado (`image.image_base64` de GET /jobs/{job_id}/result fica null). O resultado da inferência (descrição, OCR, regiões, rostos, markdown) fica. Com wait=true a resposta síncrona ainda ecoa `image_base64`: vem dos bytes desta requisição, não de uma cópia guardada. GET /jobs/{job_id} informa `source_available` e `source_deleted_at`. Padrão false (mantém). Para apagar depois: DELETE /jobs/{job_id}/source. Análise completa e facial: purge_source não faz parte da Idempotency-Key; repetir a chave com outro purge_source devolve a tentativa existente, sem mudar nada.",
+      "default": false
     },
     "project": {
       "anyOf": [
@@ -5697,6 +5731,7 @@ Esquema JSON completo:
 | `folder_id` | não | string / null |  |  |
 | `tags` | não | string / null |  |  |
 | `datalake` | não | string / null |  |  |
+| `purge_source` | não | boolean | default=false | Se true, apaga todas as cópias guardadas da imagem original enviada quando o job termina: `completed`, ou `failed`/`partial`/`cancelled` (as rotas de imagem não têm retry automático). Apaga a cópia local de processamento, o original e a cópia normalizada (prévia em tamanho real) da análise completa/facial no armazenamento, e a imagem embutida no resultado guardado (`image.image_base64` de GET /jobs/{job_id}/result fica null). O resultado da inferência (descrição, OCR, regiões, rostos, markdown) fica. Com wait=true a resposta síncrona ainda ecoa `image_base64`: vem dos bytes desta requisição, não de uma cópia guardada. GET /jobs/{job_id} informa `source_available` e `source_deleted_at`. Padrão false (mantém). Para apagar depois: DELETE /jobs/{job_id}/source. Análise completa e facial: purge_source não faz parte da Idempotency-Key; repetir a chave com outro purge_source devolve a tentativa existente, sem mudar nada. |
 
 Esquema JSON completo:
 
@@ -5789,6 +5824,12 @@ Esquema JSON completo:
         }
       ],
       "title": "Datalake"
+    },
+    "purge_source": {
+      "type": "boolean",
+      "title": "Purge Source",
+      "description": "Se true, apaga todas as cópias guardadas da imagem original enviada quando o job termina: `completed`, ou `failed`/`partial`/`cancelled` (as rotas de imagem não têm retry automático). Apaga a cópia local de processamento, o original e a cópia normalizada (prévia em tamanho real) da análise completa/facial no armazenamento, e a imagem embutida no resultado guardado (`image.image_base64` de GET /jobs/{job_id}/result fica null). O resultado da inferência (descrição, OCR, regiões, rostos, markdown) fica. Com wait=true a resposta síncrona ainda ecoa `image_base64`: vem dos bytes desta requisição, não de uma cópia guardada. GET /jobs/{job_id} informa `source_available` e `source_deleted_at`. Padrão false (mantém). Para apagar depois: DELETE /jobs/{job_id}/source. Análise completa e facial: purge_source não faz parte da Idempotency-Key; repetir a chave com outro purge_source devolve a tentativa existente, sem mudar nada.",
+      "default": false
     }
   },
   "type": "object",
@@ -7666,6 +7707,7 @@ Esquema JSON completo:
 | `project_id` | não | string / null |  | ID de um projeto existente (alternativa a `project`). |
 | `folder` | não | string / null |  | Nome da pasta no projeto (opcional, get-or-add, sem '/'). |
 | `folder_id` | não | string / null |  | ID de uma pasta existente do projeto. |
+| `purge_source` | não | boolean | default=false | Se true, apaga todas as cópias guardadas da imagem original enviada quando o job termina: `completed`, ou `failed`/`partial`/`cancelled` (as rotas de imagem não têm retry automático). Apaga a cópia local de processamento, o original e a cópia normalizada (prévia em tamanho real) da análise completa/facial no armazenamento, e a imagem embutida no resultado guardado (`image.image_base64` de GET /jobs/{job_id}/result fica null). O resultado da inferência (descrição, OCR, regiões, rostos, markdown) fica. Com wait=true a resposta síncrona ainda ecoa `image_base64`: vem dos bytes desta requisição, não de uma cópia guardada. GET /jobs/{job_id} informa `source_available` e `source_deleted_at`. Padrão false (mantém). Para apagar depois: DELETE /jobs/{job_id}/source. Análise completa e facial: purge_source não faz parte da Idempotency-Key; repetir a chave com outro purge_source devolve a tentativa existente, sem mudar nada. |
 | `face_options` | não | [FaceRequestOptions](#model-facerequestoptions) |  |  |
 | `wait` | não | boolean | default=false |  |
 | `datalake` | não | [Destination](#model-destination) / null |  |  |
@@ -7754,6 +7796,12 @@ Esquema JSON completo:
       ],
       "title": "Folder Id",
       "description": "ID de uma pasta existente do projeto."
+    },
+    "purge_source": {
+      "type": "boolean",
+      "title": "Purge Source",
+      "description": "Se true, apaga todas as cópias guardadas da imagem original enviada quando o job termina: `completed`, ou `failed`/`partial`/`cancelled` (as rotas de imagem não têm retry automático). Apaga a cópia local de processamento, o original e a cópia normalizada (prévia em tamanho real) da análise completa/facial no armazenamento, e a imagem embutida no resultado guardado (`image.image_base64` de GET /jobs/{job_id}/result fica null). O resultado da inferência (descrição, OCR, regiões, rostos, markdown) fica. Com wait=true a resposta síncrona ainda ecoa `image_base64`: vem dos bytes desta requisição, não de uma cópia guardada. GET /jobs/{job_id} informa `source_available` e `source_deleted_at`. Padrão false (mantém). Para apagar depois: DELETE /jobs/{job_id}/source. Análise completa e facial: purge_source não faz parte da Idempotency-Key; repetir a chave com outro purge_source devolve a tentativa existente, sem mudar nada.",
+      "default": false
     },
     "face_options": {
       "$ref": "#/components/schemas/FaceRequestOptions"
@@ -9048,6 +9096,7 @@ Esquema JSON completo:
 | `project_id` | não | string / null |  | ID de um projeto existente (alternativa a `project`). |
 | `folder` | não | string / null |  | Nome da pasta no projeto (opcional, get-or-add, sem '/'). |
 | `folder_id` | não | string / null |  | ID de uma pasta existente do projeto. |
+| `purge_source` | não | boolean | default=false | Se true, apaga todas as cópias guardadas da imagem original enviada quando o job termina: `completed`, ou `failed`/`partial`/`cancelled` (as rotas de imagem não têm retry automático). Apaga a cópia local de processamento, o original e a cópia normalizada (prévia em tamanho real) da análise completa/facial no armazenamento, e a imagem embutida no resultado guardado (`image.image_base64` de GET /jobs/{job_id}/result fica null). O resultado da inferência (descrição, OCR, regiões, rostos, markdown) fica. Com wait=true a resposta síncrona ainda ecoa `image_base64`: vem dos bytes desta requisição, não de uma cópia guardada. GET /jobs/{job_id} informa `source_available` e `source_deleted_at`. Padrão false (mantém). Para apagar depois: DELETE /jobs/{job_id}/source. Análise completa e facial: purge_source não faz parte da Idempotency-Key; repetir a chave com outro purge_source devolve a tentativa existente, sem mudar nada. |
 | `mode` | não | string | default="single"; const="single" |  |
 | `wait` | não | boolean | default=false | false cria um job e retorna 202; true espera pelo resultado (sujeito ao timeout de visão). |
 
@@ -9284,6 +9333,12 @@ Esquema JSON completo:
       "title": "Folder Id",
       "description": "ID de uma pasta existente do projeto."
     },
+    "purge_source": {
+      "type": "boolean",
+      "title": "Purge Source",
+      "description": "Se true, apaga todas as cópias guardadas da imagem original enviada quando o job termina: `completed`, ou `failed`/`partial`/`cancelled` (as rotas de imagem não têm retry automático). Apaga a cópia local de processamento, o original e a cópia normalizada (prévia em tamanho real) da análise completa/facial no armazenamento, e a imagem embutida no resultado guardado (`image.image_base64` de GET /jobs/{job_id}/result fica null). O resultado da inferência (descrição, OCR, regiões, rostos, markdown) fica. Com wait=true a resposta síncrona ainda ecoa `image_base64`: vem dos bytes desta requisição, não de uma cópia guardada. GET /jobs/{job_id} informa `source_available` e `source_deleted_at`. Padrão false (mantém). Para apagar depois: DELETE /jobs/{job_id}/source. Análise completa e facial: purge_source não faz parte da Idempotency-Key; repetir a chave com outro purge_source devolve a tentativa existente, sem mudar nada.",
+      "default": false
+    },
     "mode": {
       "type": "string",
       "const": "single",
@@ -9480,6 +9535,7 @@ Corpo JSON de `POST /images/describe`.
 | `project_id` | não | string / null |  | ID de um projeto existente (alternativa a `project`). |
 | `folder` | não | string / null |  | Nome da pasta no projeto (opcional, get-or-add, sem '/'). |
 | `folder_id` | não | string / null |  | ID de uma pasta existente do projeto. |
+| `purge_source` | não | boolean | default=false | Se true, apaga todas as cópias guardadas da imagem original enviada quando o job termina: `completed`, ou `failed`/`partial`/`cancelled` (as rotas de imagem não têm retry automático). Apaga a cópia local de processamento, o original e a cópia normalizada (prévia em tamanho real) da análise completa/facial no armazenamento, e a imagem embutida no resultado guardado (`image.image_base64` de GET /jobs/{job_id}/result fica null). O resultado da inferência (descrição, OCR, regiões, rostos, markdown) fica. Com wait=true a resposta síncrona ainda ecoa `image_base64`: vem dos bytes desta requisição, não de uma cópia guardada. GET /jobs/{job_id} informa `source_available` e `source_deleted_at`. Padrão false (mantém). Para apagar depois: DELETE /jobs/{job_id}/source. Análise completa e facial: purge_source não faz parte da Idempotency-Key; repetir a chave com outro purge_source devolve a tentativa existente, sem mudar nada. |
 | `task` | não | string | default="<MORE_DETAILED_CAPTION>"; enum=["<MORE_DETAILED_CAPTION>", "<DETAILED_CAPTION>", "<CAPTION>"] | Prompt de caption do Florence-2. |
 
 Esquema JSON completo:
@@ -9566,6 +9622,12 @@ Esquema JSON completo:
       ],
       "title": "Folder Id",
       "description": "ID de uma pasta existente do projeto."
+    },
+    "purge_source": {
+      "type": "boolean",
+      "title": "Purge Source",
+      "description": "Se true, apaga todas as cópias guardadas da imagem original enviada quando o job termina: `completed`, ou `failed`/`partial`/`cancelled` (as rotas de imagem não têm retry automático). Apaga a cópia local de processamento, o original e a cópia normalizada (prévia em tamanho real) da análise completa/facial no armazenamento, e a imagem embutida no resultado guardado (`image.image_base64` de GET /jobs/{job_id}/result fica null). O resultado da inferência (descrição, OCR, regiões, rostos, markdown) fica. Com wait=true a resposta síncrona ainda ecoa `image_base64`: vem dos bytes desta requisição, não de uma cópia guardada. GET /jobs/{job_id} informa `source_available` e `source_deleted_at`. Padrão false (mantém). Para apagar depois: DELETE /jobs/{job_id}/source. Análise completa e facial: purge_source não faz parte da Idempotency-Key; repetir a chave com outro purge_source devolve a tentativa existente, sem mudar nada.",
+      "default": false
     },
     "task": {
       "type": "string",
@@ -9917,6 +9979,7 @@ Esquema JSON completo:
 | `project_id` | não | string / null |  | ID de um projeto existente (alternativa a `project`). |
 | `folder` | não | string / null |  | Nome da pasta no projeto (opcional, get-or-add, sem '/'). |
 | `folder_id` | não | string / null |  | ID de uma pasta existente do projeto. |
+| `purge_source` | não | boolean | default=false | Se true, apaga todas as cópias guardadas da imagem original enviada quando o job termina: `completed`, ou `failed`/`partial`/`cancelled` (as rotas de imagem não têm retry automático). Apaga a cópia local de processamento, o original e a cópia normalizada (prévia em tamanho real) da análise completa/facial no armazenamento, e a imagem embutida no resultado guardado (`image.image_base64` de GET /jobs/{job_id}/result fica null). O resultado da inferência (descrição, OCR, regiões, rostos, markdown) fica. Com wait=true a resposta síncrona ainda ecoa `image_base64`: vem dos bytes desta requisição, não de uma cópia guardada. GET /jobs/{job_id} informa `source_available` e `source_deleted_at`. Padrão false (mantém). Para apagar depois: DELETE /jobs/{job_id}/source. Análise completa e facial: purge_source não faz parte da Idempotency-Key; repetir a chave com outro purge_source devolve a tentativa existente, sem mudar nada. |
 | `mode` | sim | string | const="full" |  |
 | `full_options` | não | [ImageFullOptions](#model-imagefulloptions) |  |  |
 | `wait` | não | boolean | default=false |  |
@@ -10006,6 +10069,12 @@ Esquema JSON completo:
       ],
       "title": "Folder Id",
       "description": "ID de uma pasta existente do projeto."
+    },
+    "purge_source": {
+      "type": "boolean",
+      "title": "Purge Source",
+      "description": "Se true, apaga todas as cópias guardadas da imagem original enviada quando o job termina: `completed`, ou `failed`/`partial`/`cancelled` (as rotas de imagem não têm retry automático). Apaga a cópia local de processamento, o original e a cópia normalizada (prévia em tamanho real) da análise completa/facial no armazenamento, e a imagem embutida no resultado guardado (`image.image_base64` de GET /jobs/{job_id}/result fica null). O resultado da inferência (descrição, OCR, regiões, rostos, markdown) fica. Com wait=true a resposta síncrona ainda ecoa `image_base64`: vem dos bytes desta requisição, não de uma cópia guardada. GET /jobs/{job_id} informa `source_available` e `source_deleted_at`. Padrão false (mantém). Para apagar depois: DELETE /jobs/{job_id}/source. Análise completa e facial: purge_source não faz parte da Idempotency-Key; repetir a chave com outro purge_source devolve a tentativa existente, sem mudar nada.",
+      "default": false
     },
     "mode": {
       "type": "string",
@@ -10866,6 +10935,7 @@ chamador.
 | `project_id` | não | string / null |  | ID de um projeto existente (alternativa a `project`). |
 | `folder` | não | string / null |  | Nome da pasta no projeto (opcional, get-or-add, sem '/'). |
 | `folder_id` | não | string / null |  | ID de uma pasta existente do projeto. |
+| `purge_source` | não | boolean | default=false | Se true, apaga todas as cópias guardadas da imagem original enviada quando o job termina: `completed`, ou `failed`/`partial`/`cancelled` (as rotas de imagem não têm retry automático). Apaga a cópia local de processamento, o original e a cópia normalizada (prévia em tamanho real) da análise completa/facial no armazenamento, e a imagem embutida no resultado guardado (`image.image_base64` de GET /jobs/{job_id}/result fica null). O resultado da inferência (descrição, OCR, regiões, rostos, markdown) fica. Com wait=true a resposta síncrona ainda ecoa `image_base64`: vem dos bytes desta requisição, não de uma cópia guardada. GET /jobs/{job_id} informa `source_available` e `source_deleted_at`. Padrão false (mantém). Para apagar depois: DELETE /jobs/{job_id}/source. Análise completa e facial: purge_source não faz parte da Idempotency-Key; repetir a chave com outro purge_source devolve a tentativa existente, sem mudar nada. |
 
 Esquema JSON completo:
 
@@ -10951,6 +11021,12 @@ Esquema JSON completo:
       ],
       "title": "Folder Id",
       "description": "ID de uma pasta existente do projeto."
+    },
+    "purge_source": {
+      "type": "boolean",
+      "title": "Purge Source",
+      "description": "Se true, apaga todas as cópias guardadas da imagem original enviada quando o job termina: `completed`, ou `failed`/`partial`/`cancelled` (as rotas de imagem não têm retry automático). Apaga a cópia local de processamento, o original e a cópia normalizada (prévia em tamanho real) da análise completa/facial no armazenamento, e a imagem embutida no resultado guardado (`image.image_base64` de GET /jobs/{job_id}/result fica null). O resultado da inferência (descrição, OCR, regiões, rostos, markdown) fica. Com wait=true a resposta síncrona ainda ecoa `image_base64`: vem dos bytes desta requisição, não de uma cópia guardada. GET /jobs/{job_id} informa `source_available` e `source_deleted_at`. Padrão false (mantém). Para apagar depois: DELETE /jobs/{job_id}/source. Análise completa e facial: purge_source não faz parte da Idempotency-Key; repetir a chave com outro purge_source devolve a tentativa existente, sem mudar nada.",
+      "default": false
     }
   },
   "type": "object",

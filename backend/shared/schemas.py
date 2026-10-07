@@ -494,6 +494,24 @@ class VisionModelInfo(BaseModel):
     dtype: str
 
 
+# `purge_source` of every /images/* route (JSON field and multipart Form field):
+# one text, so the eight operations of the contract cannot drift apart.
+IMAGE_PURGE_SOURCE_DESCRIPTION = (
+    "Se true, apaga todas as cópias guardadas da imagem original enviada quando o "
+    "job termina: `completed`, ou `failed`/`partial`/`cancelled` (as rotas de imagem "
+    "não têm retry automático). Apaga a cópia local de processamento, o original e a "
+    "cópia normalizada (prévia em tamanho real) da análise completa/facial no "
+    "armazenamento, e a imagem embutida no resultado guardado (`image.image_base64` "
+    "de GET /jobs/{job_id}/result fica null). O resultado da inferência (descrição, "
+    "OCR, regiões, rostos, markdown) fica. Com wait=true a resposta síncrona ainda "
+    "ecoa `image_base64`: vem dos bytes desta requisição, não de uma cópia guardada. "
+    "GET /jobs/{job_id} informa `source_available` e `source_deleted_at`. Padrão "
+    "false (mantém). Para apagar depois: DELETE /jobs/{job_id}/source. Análise "
+    "completa e facial: purge_source não faz parte da Idempotency-Key; repetir a "
+    "chave com outro purge_source devolve a tentativa existente, sem mudar nada."
+)
+
+
 class ImageDescribeRequest(BaseModel):
     """Corpo JSON de `POST /images/describe`."""
 
@@ -516,6 +534,7 @@ class ImageDescribeRequest(BaseModel):
     project_id: Optional[str] = Field(None, description="ID de um projeto existente (alternativa a `project`).")
     folder: Optional[str] = Field(None, description="Nome da pasta no projeto (opcional, get-or-add, sem '/').")
     folder_id: Optional[str] = Field(None, description="ID de uma pasta existente do projeto.")
+    purge_source: bool = Field(False, description=IMAGE_PURGE_SOURCE_DESCRIPTION)
     task: Literal[
         "<MORE_DETAILED_CAPTION>",
         "<DETAILED_CAPTION>",
@@ -551,6 +570,7 @@ class ImageOcrRequest(BaseModel):
     project_id: Optional[str] = Field(None, description="ID de um projeto existente (alternativa a `project`).")
     folder: Optional[str] = Field(None, description="Nome da pasta no projeto (opcional, get-or-add, sem '/').")
     folder_id: Optional[str] = Field(None, description="ID de uma pasta existente do projeto.")
+    purge_source: bool = Field(False, description=IMAGE_PURGE_SOURCE_DESCRIPTION)
 
 
 class OcrLine(BaseModel):

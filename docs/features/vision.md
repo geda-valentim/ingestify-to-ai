@@ -315,6 +315,66 @@ apagado ao terminar a tarefa, sem perder a imagem presente no resultado.
 Requisições síncronas concorrentes podem ultrapassar o prazo de espera. Prefira
 `analyze` com `wait=false` para acompanhar a fila sem manter uma conexão aberta.
 
+## Guardar ou apagar a imagem original (`purge_source`)
+
+Todas as rotas de imagem aceitam `purge_source` (padrão `false`, mesmo nome e sentido de
+`/upload`, `/convert` e `/transcribe`): campo de formulário em `/images/describe/upload`,
+`/images/ocr/upload`, `/images/analyze/upload` e `/images/faces/upload`; campo booleano do
+corpo JSON em `/images/describe`, `/images/ocr`, `/images/analyze` (single e `mode=full`) e
+`/images/faces`. Valor que não é booleano → `422`, sem criar job.
+
+Onde o original de um job de imagem fica guardado hoje (todas contam como "original"):
+
+| Cópia | Rotas | Ciclo de vida sem `purge_source` |
+|---|---|---|
+| handoff local `{TEMP_STORAGE_PATH}/images/{job_id}/` | todas (Full/rostos: `.../{job_id}/{holder}/full-source`) | a própria task apaga no `finally`; `cleanup_old_jobs` (`sweep_image_handoffs`) varre o que um worker morto deixou |
+| `image.image_base64` do resultado (`images/{job_id}/result.json` + `job:{id}:result`) | describe, ocr, analyze single | fica enquanto o job existir |
+| `images/{job_id}/source` (bucket de resultados, `ImageAnalysisRun.source_path`) | Full, rostos | fica enquanto o job existir |
+| prévia PNG em tamanho real, normalizada (`images/{job_id}/preview/…`) e embutida no relatório (`image.image_base64`) | Full, rostos | fica enquanto o job existir |
+
+O resto é resultado derivado e fica sempre: descrição, OCR, regiões, rostos (caixas,
+landmarks e expressões são coordenadas e rótulos, nunca recortes), markdown e as saídas
+por etapa (`images/{job_id}/steps/…`). O eco `image_base64` da resposta síncrona
+(`wait=true`) vem dos bytes da própria requisição, não de uma cópia guardada; o valor que a
+task devolve ao backend de resultados do Celery nunca carrega a imagem.
+
+Com `purge_source=true`:
+
+- a opção fica no job (`jobs.purge_source`, e em `configuration.options.purge_source`);
+- os workers gravam o resultado/relatório **sem** a imagem (`image.image_base64: null`,
+  também no Redis e no que vai para o datalake);
+- quando o job termina — `completed`, `failed`, `partial` ou `cancelled` (rotas de imagem
+  não têm retry automático: as tasks nativas usam `max_retries=0`, e a Full Analysis só
+  termina quando `finish` grava o estado final) — o worker apaga o handoff, o
+  `images/{job_id}/source`, todas as prévias e grava `jobs.source_deleted_at`. Uma falha
+  antes de chegar ao worker (fila fora, sem motor) também grava `source_deleted_at`: o
+  handoff, única cópia, já foi apagado;
+- falha ao apagar nunca muda o job; `DELETE /jobs/{id}/source` termina depois.
+
+`GET /jobs/{id}` diz a verdade para jobs de imagem: `source_available` é `true` só enquanto
+alguma cópia acima existe (handoff com arquivo, `source_path`/`preview_path` do run, ou um
+resultado nativo que ainda embute a imagem). Um job nativo que falhou sem `purge_source`
+responde `source_available: false` com `source_deleted_at: null` (a task já apagou o
+handoff, a única cópia). `DELETE /jobs/{id}/source` funciona para jobs de imagem: apaga as
+cópias que restam (reescreve o resultado sem `image_base64`; o relatório da Full Analysis é
+gravado sob o novo hash e o antigo é apagado), `404` quando não há nenhuma, `409
+JOB_STILL_PROCESSING` enquanto o job está na fila ou processando. Entregas já feitas a um
+datalake do usuário não são alcançadas por `DELETE` (com `purge_source=true` elas nunca
+recebem a imagem).
+
+Sem deduplicação: rotas de imagem continuam criando um job por requisição. Na Full Analysis
+e em rostos, `purge_source` **não** faz parte do fingerprint da `Idempotency-Key`: repetir a
+chave com outro `purge_source` devolve a tentativa existente sem mudar nada (nem liga nem
+desliga o purge daquele job; use `DELETE /jobs/{id}/source`). Depois de uma tentativa
+`failed`, a próxima tentativa da mesma chave usa o `purge_source` do novo pedido. O
+formulário do front gera uma chave nova quando a opção muda.
+
+```bash
+curl -X POST http://localhost:8000/images/ocr/upload \
+  -H "X-API-Key: $INGESTIFY_API_KEY" \
+  -F "file=@recibo.png" -F "project=Cursos" -F "purge_source=true"
+```
+
 ## Com rota de visão (spec 0003, fatia 8)
 
 Opcional. Com `engines.py routes set vision --step local`, cada requisição reserva uma vaga do

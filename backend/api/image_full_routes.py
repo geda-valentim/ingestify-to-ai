@@ -80,6 +80,9 @@ def submit(request, http_request, image_bytes, filename, current_user, db, tags,
         'mode': mode, 'options': raw_options, 'location': {'project': request.project, 'project_id': request.project_id,
         'folder': request.folder, 'folder_id': request.folder_id}, 'tags': tags,
         'datalake': request.datalake.model_dump(mode='json') if request.datalake else None})
+    # purge_source is deliberately not part of request_hash: a replay of the key
+    # returns the existing attempt unchanged, whatever purge_source it carries (it
+    # neither turns purging on nor off for that job: DELETE /jobs/{id}/source does)
     previous = lookup(db, current_user.id, key_hash, request_hash)
     if previous is not None and not previous.failed:
         return previous.job_id, previous.attempt
@@ -127,6 +130,11 @@ def submit(request, http_request, image_bytes, filename, current_user, db, tags,
         set_job_tags(job, tags)
         save_configuration(db, job, operation='image', options=configuration, provider='facial' if standalone_faces else settings.vision_provider, model='enet_b0_8_best_afew' if standalone_faces else settings.vision_model_id)
         bind_destination(db, job, destination)
+        if getattr(request, 'purge_source', False):
+            # Durable on the job: finish() writes the report without the image and
+            # the purge runs once the job settles (shared.job_source, "Image jobs")
+            from shared.job_source import save_purge_option
+            save_purge_option(db, job)
         if previous is None:
             attempt = 1
             db.add(Submission(user_id=current_user.id, key_hash=key_hash, request_hash=request_hash,

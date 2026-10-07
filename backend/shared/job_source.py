@@ -33,6 +33,10 @@ the dedup `operation_key`) lives in `jobs` columns, never in
 `JobConfiguration.options`: that is the configuration the user requested, shown
 as such by `GET /jobs/{id}` and the UI.
 
+Image jobs (`source_type == "image"`, every `/images/*` route) keep their
+original elsewhere; see "Image jobs" below. The same functions (`source_available`,
+`delete_source`, `purge_source_if_requested`) cover them.
+
 Locking: every purge (worker hook, duplicate request, `DELETE /jobs/{id}/source`)
 and every page retry take the MAIN job's row lock (`lock_job`, SELECT ... FOR
 UPDATE) and decide under it. A purge re-checks `purge_due` / `has_pending_work`
@@ -161,6 +165,8 @@ def source_available(job: Optional[Job]) -> bool:
     """True while any source file still exists (original, local copy, page PDFs)."""
     if job is None:
         return False
+    if is_image_job(job):
+        return image_source_available(job)
     return bool(job.minio_upload_path) or _has_page_pdfs(job) or _has_local_copy(job.id)
 
 
@@ -211,6 +217,9 @@ def delete_source(db, job: Job, minio_factory: Callable) -> bool:
     finishes the job.
     """
     from shared.models import Page
+
+    if is_image_job(job):
+        return delete_image_source(db, job, minio_factory)
 
     found = False
     minio = None
@@ -266,6 +275,9 @@ def purge_due(db, job: Optional[Job], *, locked: bool = False) -> bool:
         return False
     if job.status == JobStatus.COMPLETED:
         return not has_pending_work(db, job, locked=locked)
+    if job.status == JobStatus.CANCELLED and is_image_job(job):
+        # A cancelled Full / face analysis is settled too (its run is terminal)
+        return True
     return job.status in (JobStatus.FAILED, JobStatus.PARTIAL) and not has_pending_work(db, job, locked=locked)
 
 
@@ -372,3 +384,205 @@ def apply_purge_to_duplicate(db, job: Job, minio_factory: Callable) -> str:
         return DUPLICATE_KEPT
     logger.info(f"[MAIN JOB {job_id}] Source files purged (purge_source on a duplicate request)")
     return DUPLICATE_PURGED
+
+
+# ---------------------------------------------------------------------------
+# Image jobs (POST /images/*)
+# ---------------------------------------------------------------------------
+#
+# Where the ORIGINAL of an image job lives (every copy counts):
+#
+# - the local handoff `{TEMP_STORAGE_PATH}/images/{job_id}/`: the API writes the
+#   upload there for the native tasks (describe / ocr / analyze), and the Full /
+#   face worker downloads its durable source into `.../{job_id}/{holder}/`. Both
+#   tasks remove it in their `finally`, and `workers.monitoring.cleanup_old_jobs`
+#   (`sweep_image_handoffs`) sweeps what a killed worker left behind, so it
+#   normally outlives the task only briefly. `wait=true` changes nothing here:
+#   the echoed `image_base64` of a synchronous answer comes from the request's
+#   own bytes, never from a stored copy;
+# - native tasks: the stored result embeds it, `image.image_base64` of
+#   `job:{id}:result` (Redis) and `images/{job_id}/result.json` (results bucket,
+#   `Job.minio_result_path`), which GET /jobs/{id}/result serves;
+# - Full / face analysis: the durable source `images/{job_id}/source`
+#   (`ImageAnalysisRun.source_path`), the normalized full-size PNG of it
+#   `images/{job_id}/preview/...` (`ImageAnalysisRun.preview_path`), and that
+#   preview embedded in the report (`image.image_base64` of
+#   `images/{job_id}/reports/...json` and of the Redis result).
+#
+# Everything else is the derived result and is kept: the description / OCR /
+# regions / face boxes and landmarks (coordinates, never crops), the markdown and
+# the per-step outputs (`images/{job_id}/steps/...`).
+#
+# With `purge_source=true` the workers never embed the image in the result they
+# write, and the purge (when the job settles: completed, failed, partial or
+# cancelled; image routes have no automatic retry) deletes the rest. Images are
+# never deduplicated, so a duplicate request never reaches them.
+
+IMAGE_SOURCE_TYPE = "image"
+IMAGE_HANDOFF_AREA = "images"  # == workers.vision.image_input.IMAGE_HANDOFF_ROOT
+
+
+def is_image_job(job: Optional[Job]) -> bool:
+    return getattr(job, "source_type", None) == IMAGE_SOURCE_TYPE
+
+
+def image_handoff_path(job_id: str) -> Path:
+    """`{TEMP_STORAGE_PATH}/images/{job_id}`: every local copy of an image job's original."""
+    return Path(get_settings().temp_storage_path) / IMAGE_HANDOFF_AREA / str(job_id)
+
+
+def _image_run(job: Job, db=None):
+    from sqlalchemy.orm import object_session
+    from shared.models import ImageAnalysisRun
+
+    session = db or object_session(job)
+    if session is None:
+        return None
+    try:
+        return session.get(ImageAnalysisRun, job.id)
+    except Exception:  # noqa: BLE001 - no run table: a native job
+        return None
+
+
+def _image_result_embeds_original(job: Job) -> bool:
+    """
+    The stored result still carries the image (`image.image_base64`): written
+    without it when the job asked for purge_source, stripped when the original was
+    deleted. Durable, from the DB only (never reads the object).
+    """
+    return bool(job.minio_result_path) and job.source_deleted_at is None and not purge_requested(job)
+
+
+def image_source_available(job: Job) -> bool:
+    """True while any copy of an image job's original remains (see above)."""
+    if job.minio_upload_path or _has_files(image_handoff_path(job.id)):
+        return True
+    run = _image_run(job)
+    if run is not None and (run.source_path or run.preview_path):
+        return True
+    return _image_result_embeds_original(job)
+
+
+def strip_embedded_image(payload) -> bool:
+    """Drop the original embedded in a vision result (`image.image_base64`). True when it had one."""
+    image = payload.get("image") if isinstance(payload, dict) else None
+    if not isinstance(image, dict) or not image.get("image_base64"):
+        return False
+    image["image_base64"] = None
+    return True
+
+
+def _missing_object(exc: Exception) -> bool:
+    return isinstance(exc, KeyError) or getattr(exc, "code", None) in ("NoSuchKey", "NoSuchObject")
+
+
+def _strip_stored_result(job: Job, minio) -> bool:
+    """
+    Rewrite the job's stored result without the embedded image. A Full / face
+    report is named after its content hash, so it is written under its new hash
+    and the old object deleted; a native `result.json` is rewritten in place.
+    Raises when the storage refuses.
+    """
+    import json
+
+    path = job.minio_result_path
+    try:
+        payload = json.loads(minio.download_file(minio.bucket_results, path))
+    except Exception as e:  # noqa: BLE001
+        if _missing_object(e):
+            return False
+        raise
+    if not strip_embedded_image(payload):
+        return False
+    data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    directory, _, name = path.rpartition("/")
+    if directory.endswith("/reports") and "-" in name:
+        from shared.image_full import fingerprint
+
+        new_path = f"{directory}/{name.split('-', 1)[0]}-{fingerprint(payload)}.json"
+        minio.upload_file(bucket_name=minio.bucket_results, object_name=new_path,
+                          file_data=data, content_type="application/json")
+        job.minio_result_path = new_path
+        if new_path != path and not minio.delete_file(minio.bucket_results, path):
+            raise SourceDeleteError(f"MinIO did not delete {path}")
+    else:
+        minio.upload_file(bucket_name=minio.bucket_results, object_name=path,
+                          file_data=data, content_type="application/json")
+    return True
+
+
+def _strip_cached_result(job_id: str) -> bool:
+    """Best effort: the Redis result is a TTL cache (RESULT_TTL_SECONDS)."""
+    try:
+        from shared.redis_client import get_redis_client
+
+        cache = get_redis_client()
+        payload = cache.get_job_result(job_id)
+        if payload and strip_embedded_image(payload):
+            cache.set_job_result(job_id, payload)
+            return True
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"[IMAGE JOB {job_id}] Could not strip the cached result: {e}")
+    return False
+
+
+def delete_image_source(db, job: Job, minio_factory: Callable) -> bool:
+    """
+    Delete every copy of an image job's original (see "Image jobs" above) and keep
+    the result. Records `source_deleted_at` when something was deleted or the job
+    asked for purge_source (its workers already wrote the result without the
+    image and removed their local copies: from then on nothing of it remains).
+
+    Same contract as `delete_source`: the caller holds the row lock and checked
+    `has_pending_work`; a storage failure commits what is already gone and raises
+    SourceDeleteError, and calling again finishes the job.
+    """
+    found = False
+    minio = None
+    run = _image_run(job, db)
+
+    def storage():
+        nonlocal minio
+        minio = minio or minio_factory()
+        return minio
+
+    try:
+        if job.minio_upload_path:  # an original kept like a document's (uploads bucket)
+            object_name = job.minio_upload_path
+            if not storage().delete_file(source_bucket(minio, object_name), object_name):
+                raise SourceDeleteError(f"MinIO did not delete {object_name}")
+            job.minio_upload_path = None
+            found = True
+        if run is not None:
+            if run.source_path:
+                if not storage().delete_file(minio.bucket_results, run.source_path):
+                    raise SourceDeleteError(f"MinIO did not delete {run.source_path}")
+                run.source_path = ""  # NOT NULL column: empty means "deleted"
+                found = True
+            if run.preview_path:
+                found = True
+            # Every fence writes its own preview: delete them all
+            if not storage().delete_folder(minio.bucket_results, f"images/{job.id}/preview/"):
+                raise SourceDeleteError(f"MinIO did not delete images/{job.id}/preview/")
+            run.preview_path = None
+        if job.minio_result_path and job.source_deleted_at is None:
+            found = _strip_stored_result(job, storage()) or found
+    except Exception as e:  # noqa: BLE001 - reported to the caller as one error
+        try:
+            db.commit()  # record what is already gone (releases the lock)
+        except Exception:  # noqa: BLE001
+            db.rollback()
+        if isinstance(e, SourceDeleteError):
+            raise
+        raise SourceDeleteError(str(e)) from e
+
+    found = _strip_cached_result(job.id) or found
+    handoff = image_handoff_path(job.id)
+    if handoff.exists():
+        found = _has_files(handoff) or found
+        shutil.rmtree(handoff, ignore_errors=True)
+
+    if found or purge_requested(job):
+        job.source_deleted_at = job.source_deleted_at or datetime.utcnow()
+    db.commit()
+    return found

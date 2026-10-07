@@ -244,6 +244,8 @@ export const jobsApi = {
       const body = new FormData();
       body.append("file", request.file);
       if (request.tags?.length) body.append("tags", request.tags.join(","));
+      // Every /images/* route takes it: the original image is deleted once the job settles
+      if (request.purge_source) body.append("purge_source", "true");
       appendLocation(body, request);
       const operation = request.image_operation ?? "describe";
       const full = operation === "full";

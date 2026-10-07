@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 from shared.config import get_settings
 from shared.database import get_db
 from shared.models import User
-from shared.schemas import FaceAnalyzeRequest, FaceAnalyzeResponse, ImageFullQueuedResponse
+from shared.schemas import IMAGE_PURGE_SOURCE_DESCRIPTION, FaceAnalyzeRequest, FaceAnalyzeResponse, ImageFullQueuedResponse
 from shared.face_analysis import FaceOptions, FaceRequestOptions, FullFaceOptions
 from api.iam_deps import require
 
@@ -61,19 +61,22 @@ async def analyze(request: FaceAnalyzeRequest, http_request: Request,
 async def upload(http_request: Request, file: UploadFile = File(...), face_options: str | None = Form(None),
                  wait: bool = Form(False), project: str | None = Form(None), project_id: str | None = Form(None),
                  folder: str | None = Form(None), folder_id: str | None = Form(None), tags: str | None = Form(None),
-                 datalake: str | None = Form(None), idempotency_key: str = Header(..., min_length=1, max_length=128),
+                 datalake: str | None = Form(None),
+                 purge_source: bool = Form(False, description=IMAGE_PURGE_SOURCE_DESCRIPTION),
+                 idempotency_key: str = Header(..., min_length=1, max_length=128),
                  user: User = Depends(require("images.analyze")), db: Session = Depends(get_db)):
     from api.image_routes import _plan_location, _json_location
     from api.image_full_routes import run_full
     from shared.tags import parse_tags
     from pydantic import ValidationError
     fields = await http_request.form()
-    allowed = {'file', 'face_options', 'wait', 'project', 'project_id', 'folder', 'folder_id', 'tags', 'datalake'}
+    allowed = {'file', 'face_options', 'wait', 'project', 'project_id', 'folder', 'folder_id', 'tags', 'datalake', 'purge_source'}
     if set(fields)-allowed or any(len(fields.getlist(name)) != 1 for name in fields):
         raise HTTPException(422, 'Campos desconhecidos ou repetidos no upload facial')
     try:
         request = FaceAnalyzeRequest(image_base64='multipart', filename=file.filename,
             project=project, project_id=project_id, folder=folder, folder_id=folder_id, wait=wait,
+            purge_source=purge_source,
             face_options=json.loads(face_options) if face_options else {}, datalake=json.loads(datalake) if datalake else None)
         parsed_tags = parse_tags(tags)
     except (ValueError, TypeError, ValidationError) as exc:
