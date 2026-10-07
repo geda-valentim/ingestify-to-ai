@@ -72,9 +72,10 @@ import { formatDistanceToNow } from "date-fns";
 import { useToast } from "@/hooks/use-toast";
 import dynamic from "next/dynamic";
 import { ImageJobWorkspace } from "@/components/job/image-job-workspace";
-import { DocumentView, TranscriptView } from "@/components/job/result-views";
+import { DocumentView } from "@/components/job/document-view";
+import { JobResultPanel } from "@/components/job/job-result-panel";
+import { engineKindLabel, queueReasonText, transcriptionProgress } from "@/components/job/job-progress";
 import { JobTagsCard } from "@/components/job/job-tags-card";
-import { LiveTranscriptView, useLiveTranscript } from "@/components/job/live-transcript";
 import type { JobResultResponse, JobStatusResponse } from "@/types/api";
 
 // Dynamically import PDF viewer to avoid canvas module issues
@@ -99,33 +100,6 @@ interface PageInfo {
   url: string;
   error_message?: string | null;
   retry_count: number;
-}
-
-/** "12:30 of 57:27 transcribed" while a transcription runs, else null. */
-function transcriptionProgress(status?: JobStatusResponse | null): string | null {
-  if (!status || status.status !== "processing" || !status.media_duration) return null;
-  const done = Math.min(status.transcribed_seconds ?? 0, status.media_duration);
-  return `${formatDuration(done)} of ${formatDuration(status.media_duration)} transcribed`;
-}
-
-/** Where a routed job runs (spec 0003): the class only, never the engine's name or cost. */
-function engineKindLabel(status?: JobStatusResponse | null): string | null {
-  if (!status?.engine) return null;
-  return status.engine.kind === "cloud" ? "Cloud GPU" : "Local server";
-}
-
-/** Why a routed job still waits; null for jobs without routing. */
-function queueReasonText(status?: JobStatusResponse | null): string | null {
-  if (!status?.queue_reason || status.status === "completed" || status.status === "failed" || status.status === "cancelled") {
-    return null;
-  }
-  if (status.queue_reason === "in_queue") {
-    return "Waiting for a free engine. It starts automatically as soon as one has room.";
-  }
-  const where = engineKindLabel(status);
-  return where === "Cloud GPU"
-    ? "Starting on a cloud GPU… this can take a little while the first time."
-    : `Starting${where ? ` on the ${where.toLowerCase()}` : ""}…`;
 }
 
 export default function JobStatusPage({ params }: PageProps) {
@@ -1101,99 +1075,6 @@ function DetailItem({
         <p className="text-muted-foreground text-xs">{label}</p>
         <p className="font-medium truncate">{value}</p>
       </div>
-    </div>
-  );
-}
-
-/**
- * What the main panel shows when no PDF page is selected: progress while the
- * job runs, the error if it failed, otherwise the result in the view that fits
- * it - a transcript for audio/video, rendered Markdown for documents.
- */
-function JobResultPanel({
-  status,
-  result,
-  isTranscript,
-  hasPages,
-  fileName,
-  token,
-}: {
-  status: JobStatusResponse;
-  result?: JobResultResponse;
-  isTranscript: boolean;
-  hasPages: boolean;
-  fileName: string;
-  token: string | null;
-}) {
-  const { segments: liveSegments, preloaded: livePreloaded } = useLiveTranscript(
-    status.job_id,
-    status.status === "processing"
-  );
-  if (status.status === "failed") {
-    return (
-      <div className="flex-1 flex flex-col items-center justify-center p-8 text-center">
-        <XCircle className="h-16 w-16 text-destructive mb-4" />
-        <h3 className="text-lg font-semibold mb-2">Processing failed</h3>
-        <p className="text-sm text-muted-foreground max-w-md break-words">
-          {status.error || "An unknown error occurred"}
-        </p>
-      </div>
-    );
-  }
-
-  // faster-whisper reports media time and streams its text: show the captions as they come
-  if (status.status === "processing" && (status.media_duration || liveSegments.length > 0)) {
-    return <LiveTranscriptView status={status} segments={liveSegments} preloaded={livePreloaded} />;
-  }
-
-  if (status.status !== "completed") {
-    return (
-      <div className="flex-1 flex flex-col items-center justify-center p-8 text-center">
-        <Loader2 className="h-12 w-12 text-primary animate-spin mb-4" />
-        <h3 className="text-lg font-semibold mb-1">
-          {status.status === "processing" ? "Processing…" : "Waiting in the queue…"}
-        </h3>
-        <p className="text-sm text-muted-foreground">
-          {status.progress}% — the result shows up here as soon as it is ready.
-        </p>
-        {transcriptionProgress(status) && (
-          <p className="text-sm text-muted-foreground mt-1">{transcriptionProgress(status)}</p>
-        )}
-        {queueReasonText(status) && (
-          <p className="text-sm text-muted-foreground mt-1">{queueReasonText(status)}</p>
-        )}
-      </div>
-    );
-  }
-
-  if (!result) {
-    return (
-      <div className="flex-1 flex items-center justify-center">
-        <Loader2 className="h-8 w-8 animate-spin text-primary" />
-      </div>
-    );
-  }
-
-  return (
-    <div className="flex-1 overflow-y-auto p-4 md:p-6 space-y-4">
-      <div>
-        <h2 className="text-xl font-semibold">{isTranscript ? "Transcription" : "Converted document"}</h2>
-        {hasPages && (
-          <p className="text-sm text-muted-foreground">
-            All pages merged. Select a page in the sidebar to see its PDF next to its text.
-          </p>
-        )}
-      </div>
-      {isTranscript ? (
-        <TranscriptView
-          jobId={status.job_id}
-          markdown={result.result.markdown}
-          fileName={fileName}
-          token={token}
-        />
-      ) : (
-        <DocumentView markdown={result.result.markdown} fileName={fileName} />
-      )}
     </div>
   );
 }

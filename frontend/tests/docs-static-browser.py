@@ -21,10 +21,13 @@ class ArticleHTML(HTMLParser):
         self.canonical = None
         self.description = None
         self.languages = set()
+        self.links = set()
     def handle_starttag(self, tag, attrs):
         a = dict(attrs)
         if tag in ('script', 'style', 'template'):
             self.skip += 1
+        if tag == 'a' and a.get('href'):
+            self.links.add(a['href'])
         if tag == 'main' and a.get('id') == 'docs-content':
             self.in_main = True
         if tag == 'h1' and self.in_main:
@@ -57,7 +60,11 @@ async def main():
         ns = {'s':'http://www.sitemaps.org/schemas/sitemap/0.9'}
         paths = [urlsplit(item.text).path for item in tree.findall('s:url/s:loc', ns)]
         docs = [path for path in paths if '/docs' in path]
-        assert len(docs) == 32 and len(set(docs)) == 32, docs
+        index = await nojs.request.get(URL+'/docs')
+        article = ArticleHTML(); article.feed(await index.text())
+        english = {urlsplit(link).path for link in article.links if link.startswith('/docs')}
+        expected = english | {'/pt'+path for path in english}
+        assert set(docs) == expected and len(docs) == len(expected), docs
         for path in docs:
             response = await nojs.request.get(URL+path)
             assert response.status == 200, (path,response.status)
@@ -71,9 +78,18 @@ async def main():
             assert article.description and {'en','pt-BR','x-default'} <= article.languages
             if path.endswith('/transcription'):
                 assert 'import requests' in text and 'const API' in text and 'curl -X POST' in text
+            if path.endswith('/images'):
+                import json
+                from pathlib import Path
+                schema = json.loads((Path(__file__).resolve().parents[1]/'docs/doc2md_openapi.json').read_text())
+                image_routes={method.upper()+' '+route for route,item in schema['paths'].items() if route.startswith('/images/') for method in item if method in {'get','post'}}
+                assert all(endpoint in text for endpoint in image_routes), (path,image_routes)
+                for term in ('Full Analysis','mode=full','Idempotency-Key','full_options.queries','full_options.regions','full_options.deadline_seconds','partition_values','cancel_requested','generation_metadata','analysis_modes','full_profile','full_limits','?format=json','partial','409','410','504'):
+                    assert term in text, (path,term)
+                assert 'import base64' in text and '"mode": "full"' in text, path
             if path.endswith('/results'):
                 assert 'WEBVTT' in text and 'application/json' in text
-        print('32 documentation pages contain article HTML, one H1, canonical, description and language alternates.',flush=True)
+        print(f'{len(docs)} documentation pages contain article HTML, one H1, canonical, description and language alternates.',flush=True)
         for old, new in [('/docs?lang=pt','/pt/docs'),('/docs?lang=en','/docs'),('/docs/images?lang=pt','/pt/docs/images'),('/pt/docs/images?lang=en','/docs/images')]:
             response = await nojs.request.get(URL+old,max_redirects=0)
             assert response.status == 308, (old,response.status)
@@ -96,7 +112,7 @@ async def main():
         await page.wait_for_url(URL+'/pt/docs/transcription')
         assert 'Transcrição' in await page.locator('#docs-content h1').inner_text()
         await page.locator('summary').filter(has_text='Explorar tópicos').click()
-        await page.get_by_role('navigation',name='Tópicos da documentação').get_by_role('link',name='Imagens: descrição e OCR').click()
+        await page.get_by_role('navigation',name='Tópicos da documentação').locator('a[href="/pt/docs/images"]').click()
         await page.wait_for_url(URL+'/pt/docs/images')
         assert await page.locator('#docs-content h1').is_visible()
         print('No-JS language switch, mobile topic navigation, and native code examples passed.',flush=True)
