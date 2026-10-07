@@ -2,7 +2,7 @@ import { ImagesGuide } from "./images/images-guide";
 import { ComputeGuide, ComputeGuideLinks } from "./compute-guides";
 import Link from "next/link";
 import { DOCS_API_URL as API_URL } from "./config";
-import { CodeBlock } from "./code-block";
+import { CodeBlock, CodeExamples } from "./code-block";
 import { Badge } from "@/components/ui/badge";
 
 import type { DocsLang as Lang } from "./topics";
@@ -1942,22 +1942,15 @@ export function TopicContent({ topic, lang }: { topic: string; lang: Lang }) {
           {t.filesNote}
 
           <Subheading>{t.exampleTitle}</Subheading>
-          <div className="space-y-3">
-            <details open className="rounded-lg border p-4">
-              <summary className="cursor-pointer font-medium">curl</summary>
-              <div className="pt-3">{block(code.curlCreate)}</div>
-            </details>
-            <details className="rounded-lg border p-4">
-              <summary className="cursor-pointer font-medium">Python</summary>
-              <div className="pt-3">{block(code.python)}</div>
-            </details>
-            <details className="rounded-lg border p-4">
-              <summary className="cursor-pointer font-medium">
-                JavaScript
-              </summary>
-              <div className="pt-3">{block(code.javascript)}</div>
-            </details>
-          </div>
+          <CodeExamples
+            label={t.exampleTitle}
+            copyLabel={t.copy}
+            examples={[
+              { label: "curl", code: code.curlCreate },
+              { label: "Python", code: code.python },
+              { label: "JavaScript", code: code.javascript },
+            ]}
+          />
 
           <Subheading>{t.responseTitle}</Subheading>
           {block(RESPONSES.create)}
@@ -2005,38 +1998,17 @@ export function TopicContent({ topic, lang }: { topic: string; lang: Lang }) {
             ])}
           />
 
-          <div className="space-y-3">
-            <details open className="rounded-lg border p-4">
-              <summary className="cursor-pointer font-medium">markdown</summary>
-              <div className="pt-3">
-                {block(RESPONSES.markdown)}
-                <p className="pt-2 text-sm text-muted-foreground">
-                  {t.deviceNote}
-                </p>
-              </div>
-            </details>
-            <details className="rounded-lg border p-4">
-              <summary className="cursor-pointer font-medium">vtt</summary>
-              <div className="pt-3">{block(RESPONSES.vtt)}</div>
-            </details>
-            <details className="rounded-lg border p-4">
-              <summary className="cursor-pointer font-medium">srt</summary>
-              <div className="pt-3">{block(RESPONSES.srt)}</div>
-            </details>
-            <details className="rounded-lg border p-4">
-              <summary className="cursor-pointer font-medium">txt</summary>
-              <div className="pt-3">{block(RESPONSES.txt)}</div>
-            </details>
-            <details className="rounded-lg border p-4">
-              <summary className="cursor-pointer font-medium">json</summary>
-              <div className="pt-3">
-                {block(RESPONSES.json)}
-                <p className="pt-2 text-sm text-muted-foreground">
-                  {t.wordsNote}
-                </p>
-              </div>
-            </details>
-          </div>
+          <CodeExamples
+            label={lang === "pt" ? "Formatos de resultado" : "Result formats"}
+            copyLabel={t.copy}
+            examples={[
+              { label: "markdown", code: RESPONSES.markdown, note: t.deviceNote },
+              { label: "vtt", code: RESPONSES.vtt },
+              { label: "srt", code: RESPONSES.srt },
+              { label: "txt", code: RESPONSES.txt },
+              { label: "json", code: RESPONSES.json, note: t.wordsNote },
+            ]}
+          />
         </Section>
       );
     case "errors":
