@@ -10,6 +10,7 @@ import { chapters, GITHUB } from "./content";
 import "./landing.css";
 import { LandingSections, useLandingMotion } from "./landing-sections";
 import { Brand } from "@/components/brand";
+import { PublicHeader } from "@/components/public-header";
 import { SpectralLines } from "./landing-svg";
 
 function frame(chapter: number, end = false) {
@@ -162,44 +163,22 @@ export function LandingPage() {
       <a className="landing-skip" href="#operacoes">
         Skip the introduction
       </a>
-      <header className="landing-header">
-        <Link className="landing-brand" href="/" aria-label="Ingestify home">
-          <Brand />
-        </Link>
-        <nav aria-label="Main navigation">
+      <PublicHeader
+        motionControl={
           <button
-            className="motion-toggle"
             onClick={() => setMotionPaused(!motionPaused)}
             aria-pressed={motionPaused}
             aria-label={motionPaused ? "Resume motion" : "Pause motion"}
           >
             <span>{motionPaused ? "Resume motion" : "Pause motion"}</span>
-            {motionPaused ? <Play size={15} /> : <Pause size={15} />}
+            {motionPaused ? (
+              <Play size={15} aria-hidden="true" />
+            ) : (
+              <Pause size={15} aria-hidden="true" />
+            )}
           </button>
-          <a href="#operacoes">Platform</a>
-          <Link href="/agents" className="landing-agents">
-            Agents
-          </Link>
-          <Link href="/business" className="landing-business">
-            Business
-          </Link>
-          <Link href="/docs">Docs</Link>
-          <a
-            href={GITHUB}
-            className="landing-github"
-            aria-label="Ingestify on GitHub"
-          >
-            <Github size={18} />
-          </a>
-          <Link
-            className="landing-button small"
-            href={signedIn ? "/dashboard" : "/login"}
-          >
-            {signedIn ? "Open dashboard" : "Sign in"}
-            <ArrowUpRight size={14} />
-          </Link>
-        </nav>
-      </header>
+        }
+      />
       <main>
         <h1 className="sr-only">Data Engineering and AI-ready conversion</h1>
         <noscript>
