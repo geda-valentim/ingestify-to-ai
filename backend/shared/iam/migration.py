@@ -28,7 +28,7 @@ This module, the rollback mirror and the frozen copy of
 
 from datetime import datetime
 
-from sqlalchemy import Column, inspect, select, text
+from sqlalchemy import Column, and_, inspect, or_, select, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.schema import CreateColumn
 
@@ -57,6 +57,8 @@ COLUMNS_0018 = {
     "delegation": None,
     "parent_id": "iam_bindings",
 }
+# The audit action of a revoke through /admin/iam/bindings (shared.iam.bindings).
+REVOKE_AUDIT_ACTION = "iam.binding.revoke"
 FOREIGN_KEYS_0018 = {
     "condition_ref": "fk_iam_bindings_condition_ref",
     "parent_id": "fk_iam_bindings_parent",
@@ -230,13 +232,22 @@ def _bump_epoch(conn):
 
 
 def _revoked_by(conn, grant_id):
-    """Who revoked a 0009 grant: the last `access.revoked` audit row, if that user exists."""
+    """
+    Who revoked a grant: the last revoke audit row, if that user exists.
+
+    Both the 0009 row (`access.revoked` on `access`) and the IAM one
+    (`iam.binding.revoke` on `iam_binding`, CA12) count: `access_role_grants`
+    has no `revoked_by`, so after a downgrade/upgrade round trip the audit is
+    the only place a binding revoked through the IAM route keeps its revoker.
+    """
     actor = conn.execute(
         select(_audit.c.actor_user_id)
         .where(
-            _audit.c.action == "access.revoked",
-            _audit.c.target_type == "access",
             _audit.c.target_id == str(grant_id),
+            or_(
+                and_(_audit.c.action == "access.revoked", _audit.c.target_type == "access"),
+                and_(_audit.c.action == REVOKE_AUDIT_ACTION, _audit.c.target_type == "iam_binding"),
+            ),
         )
         .order_by(_audit.c.created_at.desc(), _audit.c.id.desc())
         .limit(1)
@@ -376,6 +387,10 @@ def verify_engine_bindings(conn):
             f"missing {sorted(set(grants) - engines)}, extra {sorted(engines - set(grants))}"
         )
     for k, g in grants.items():
+        if g["role"] not in catalog.ENGINE_ROLES:
+            # Its binding would fall in neither family: listed and revocable by the
+            # platform family without the epoch, dropped silently by the reader.
+            problems.append(f"{k}: grant role {g['role']!r} outside the engines family")
         b = bindings.get(k)
         if b is None:
             continue

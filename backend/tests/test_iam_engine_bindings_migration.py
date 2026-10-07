@@ -17,7 +17,7 @@ from shared.database import Base
 from shared.iam import bindings, catalog, engine_bindings, migration
 from shared.iam.decide import Decider, principal_for_user
 from shared.iam.models import IamBinding
-from shared.models import AppMigration, User
+from shared.models import AdminAudit, AppMigration, User
 from tests.test_execution_profiles import grant, world  # noqa: F401
 from tests.test_iam_engine_equivalence import legacy_state
 
@@ -206,6 +206,18 @@ def test_a_tampered_binding_fails_validation(world):  # noqa: F811
             migration.reconcile_engine_grants(conn)
 
 
+def test_a_grant_whose_role_left_the_engines_family_aborts_the_migration(world):  # noqa: F811
+    with world() as db:
+        g = grant(db, actor="observer", role="observer")["id"]
+        db.get(RoleGrant, g).role = "legacy_role"
+        db.commit()
+    with pytest.raises(RuntimeError, match="outside the engines family"):
+        migration.upgrade_0018(_engine(world))
+    with world() as db:
+        assert db.query(IamBinding).count() == 0
+        assert migration.MARKER_0018 not in _markers(world)
+
+
 # -- the platform family never sees an engines binding ---------------------------------
 
 
@@ -222,6 +234,11 @@ def test_the_decider_and_platform_listing_ignore_engines_bindings(world):  # noq
         db.add(IamBinding(id="auditor", subject_type="user", subject_id="observer",
                           role="platform_auditor", granted_by="bootstrap",
                           expires_at=datetime.utcnow() + timedelta(days=1)))
+        # A copied grant whose role is in neither family is still an engines binding.
+        db.add(IamBinding(id="orphan-role", subject_type="user", subject_id="operator",
+                          role="legacy_role", permissions=["engines.read"],
+                          condition_ref=db.get(IamBinding, ids["op_plan"]).condition_ref,
+                          granted_by="bootstrap", expires_at=datetime.utcnow() + timedelta(days=1)))
         db.commit()
         decider = Decider(db)
         operator = principal_for_user(db.get(User, "operator"))
@@ -234,15 +251,44 @@ def test_the_decider_and_platform_listing_ignore_engines_bindings(world):  # noq
             bindings.revoke(db, db.get(User, "bootstrap"), ids["op_plan"], version=0,
                                     decider=Decider(db))
         assert refused.value.code == "BINDING_NOT_FOUND"
+        with pytest.raises(bindings.IamError) as refused:
+            bindings.revoke(db, db.get(User, "bootstrap"), "orphan-role", version=0,
+                            decider=Decider(db))
+        assert refused.value.code == "BINDING_NOT_FOUND"
 
 
 # -- CA18: schema, downgrade, round trips ------------------------------------------
 
 
+# iam_bindings as the 0014 revision created it, frozen: the "existing_0014" start
+# state must not be produced by `_drop_columns_0018`, which is under test.
+IAM_BINDINGS_0014 = (
+    """CREATE TABLE iam_bindings (
+        id VARCHAR(36) NOT NULL PRIMARY KEY,
+        subject_type VARCHAR(32) NOT NULL,
+        subject_id VARCHAR(80) NOT NULL,
+        role VARCHAR(64) NOT NULL,
+        scope_type VARCHAR(32) NOT NULL,
+        scope_id VARCHAR(80),
+        granted_by VARCHAR(36) NOT NULL REFERENCES users (id),
+        expires_at DATETIME NOT NULL,
+        revoked_at DATETIME,
+        revoked_by VARCHAR(36) REFERENCES users (id),
+        version INTEGER NOT NULL,
+        created_at DATETIME NOT NULL
+    )""",
+    "CREATE INDEX ix_iam_bindings_subject ON iam_bindings (subject_type, subject_id, revoked_at)",
+    "CREATE INDEX ix_iam_bindings_scope ON iam_bindings (scope_type, scope_id)",
+)
+
+
 def _strip_0018(engine):
-    """Turn a fresh schema into one that stopped at 0014 (no engines columns)."""
+    """Replace the fresh iam_bindings with the frozen 0014 one (no engines columns)."""
     with engine.begin() as conn:
-        migration._drop_columns_0018(conn)
+        assert conn.execute(text("SELECT COUNT(*) FROM iam_bindings")).scalar() == 0
+        conn.execute(text("DROP TABLE iam_bindings"))
+        for ddl in IAM_BINDINGS_0014:
+            conn.execute(text(ddl))
     cols = {c["name"] for c in inspect(engine).get_columns("iam_bindings")}
     assert not cols & set(migration.COLUMNS_0018)
 
@@ -277,7 +323,11 @@ def test_upgrade_downgrade_upgrade_round_trip(world, start, settings_off):  # no
     # restrictive state, and a binding it lacks.
     with world() as db:
         b = db.get(IamBinding, ids["op_plan"])
-        b.revoked_at, b.version = datetime.utcnow(), b.version + 1
+        b.revoked_at, b.version, b.revoked_by = datetime.utcnow(), b.version + 1, "bootstrap"
+        # As the unified revoke route (CA12) audits it: the only trace of the
+        # revoker once the downgrade drops the binding.
+        db.add(AdminAudit(actor_user_id="bootstrap", auth_method="jwt", action="iam.binding.revoke",
+                          target_type="iam_binding", target_id=ids["op_plan"]))
         parent = db.get(IamBinding, ids["parent"])
         db.add(IamBinding(id="new-child", subject_type="user", subject_id="child2",
                           role="observer", permissions=["engines.read"],
@@ -311,6 +361,7 @@ def test_upgrade_downgrade_upgrade_round_trip(world, start, settings_off):  # no
         again = {b.id: b for b in db.query(IamBinding)}
         assert set(again) == {i for i, *_ in snapshot} | {"new-child", "platform-1"}
         assert again[ids["op_plan"]].revoked_at is not None
+        assert again[ids["op_plan"]].revoked_by == "bootstrap"
         assert again["platform-1"].permissions is None
 
 

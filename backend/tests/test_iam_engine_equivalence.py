@@ -124,7 +124,9 @@ def test_the_fixtures_exercise_both_outcomes(migrated):
             assert engine_bindings.grants(db, uid) == [], uid
             assert engine_equivalence.legacy_grants(db, uid) == [], uid
         engine_a = db.get(Engine, "engine-a")
-        assert policy.allowed(db, "observer", "engines.read", engine=engine_a)
+        with _swap(engine_bindings.grants):
+            assert policy.allowed(db, "observer", "engines.read", engine=engine_a)
+            assert policy.allowed(db, "editor", "execution_profiles.read")
 
 
 def test_a_restriction_made_only_in_iam_bindings_is_reported(migrated):
@@ -160,8 +162,9 @@ def test_a_malformed_engines_binding_contributes_nothing(migrated, corruption):
     factory, ids = migrated
     with factory() as db:
         engine_a = db.get(Engine, "engine-a")
-        assert policy.allowed(db, "editor", "execution_profiles.read")
         with _swap(engine_bindings.grants):
+            # The allow baseline on the iam side, so the denials below are the corruption's.
+            assert policy.allowed(db, "editor", "execution_profiles.read")
             assert policy.navigation(db, db.get(User, "editor"))["permissions"]
         db.execute(text("PRAGMA foreign_keys=OFF"))
         b = db.get(IamBinding, ids["editor"])
