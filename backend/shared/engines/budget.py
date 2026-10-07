@@ -3,7 +3,8 @@ Money an engine may still commit, from the ledger (spec 0003, section 4.7).
 
     admits <=> max(ledger, provider_reported) + reserved + estimate <= limit - min_remaining
                and spend_cap of the step: settled + reserved in the window + estimate <= usd
-               and (remote_allowed_for=all => the user's settled + reserved + estimate <= their limit)
+               and (remote engine and user_period_limit_usd set => the user's settled + reserved + estimate
+                    <= their limit; any remote_allowed_for, bootstrap included: spec 0014 CA10)
 
 The local engine costs nothing, so only capacity limits it. Values are Decimal;
 every sum is read under the engine's row lock by the caller.

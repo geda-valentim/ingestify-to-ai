@@ -86,6 +86,8 @@ class _Tick:
     alive: Callable[[str], Optional[int]]
     result: TickResult
     local_unhealthy: Dict[Tuple[str, str], bool] = field(default_factory=dict)
+    # engines.remote.use of each item's user, decided at most once per tick (spec 0014 §4.6)
+    remote_use: Dict[Optional[str], bool] = field(default_factory=dict)
 
 
 def _session(session_factory) -> Session:
@@ -362,10 +364,45 @@ def _try_place(tick: _Tick, db: Session, route, cand: JobDispatch, engines: Dict
     return None, refusals
 
 
+def _remote(engine: Engine, executor) -> bool:
+    """Work placed here leaves the platform (a provider, or a host outside it)"""
+    from shared.engine_control.registry import external_data
+    return bool(executor.remote or external_data(engine.adapter_type))
+
+
+def _may_use_remote(tick: _Tick, db: Session, route, cand: JobDispatch) -> bool:
+    """
+    engines.remote.use of the item's user (`JobDispatch.user_id`, today the job's
+    owner), re-decided when a remote executor is chosen on a restricted route
+    (`remote_allowed_for='admins'`, spec 0014 §4.6, CA9). `remote_allowed` frozen at
+    submit is only the first filter: a revocation reaches what is already queued.
+
+    One decision per user per tick (a primary-key read of the user and the indexed
+    bindings query), never per chunk: a tick is one moment, the next one sees the
+    revocation (CA11).
+    """
+    if route.remote_allowed_for != "admins":
+        return True
+    key = cand.user_id
+    if key not in tick.remote_use:
+        from shared.iam.remote import can_use_remote_by_id
+        try:
+            tick.remote_use[key] = can_use_remote_by_id(db, key)
+        except Exception as e:  # cannot tell: never spend on someone we cannot vouch for
+            logger.warning(f"[ENGINES] engines.remote.use of user {key} could not be decided, no remote: {e}")
+            db.rollback()
+            tick.remote_use[key] = False
+    return tick.remote_use[key]
+
+
 def _place(tick: _Tick, db: Session, route, cand: JobDispatch, engine: Engine, index: int, step: dict,
            reason: str) -> str:
     feature = route.feature
     executor = executors.get(engine.adapter_type)
+    if _remote(engine, executor) and not _may_use_remote(tick, db, route, cand):
+        # As if the route had no remote executor for this item: the next engine or
+        # step (the local path) is tried, else on_no_engine decides (hold or fail).
+        return "not_remote_allowed"
     binding = bindings(engine.config or {})[feature]
     estimate = _estimate(executor, engine, binding, cand, db)
     now = tick.now
@@ -388,7 +425,8 @@ def _place(tick: _Tick, db: Session, route, cand: JobDispatch, engine: Engine, i
             refusal = "budget"
         elif not budget.spend_cap_ok(db, locked, feature, step.get("spend_cap"), estimate, now):
             refusal = "spend_cap"
-        elif (executor.remote and route.remote_allowed_for == "all" and route.user_period_limit_usd is not None
+        elif (executor.remote and route.user_period_limit_usd is not None
+                # Every route with a remote executor, `admins` too, bootstrap not exempt (0014 CA10)
                 and cand.user_id and budget.user_committed(db, cand.user_id, period) + estimate
                 > Decimal(str(route.user_period_limit_usd))):
             refusal = "user_cap"
@@ -506,6 +544,8 @@ def _could_run_on(tick: _Tick, db: Session, route, cand: JobDispatch, engine: En
         return False
     if executor.remote and (not cand.remote_allowed or cand.media_seconds is None):
         return False
+    if _remote(engine, executor) and not _may_use_remote(tick, db, route, cand):
+        return False  # it could never run there: passing it over is not a skip
     max_media = (engine.config or {}).get("max_media_seconds")
     if max_media and cand.media_seconds is not None and float(cand.media_seconds) > float(max_media):
         return False

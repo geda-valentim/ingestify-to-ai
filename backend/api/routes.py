@@ -38,7 +38,7 @@ from api.deps import owned_folder_or_404, owned_project_or_404
 from api.iam_deps import Scope, authorized, owned_page, require, visible
 from shared.utils import sanitize_upload_filename
 from shared.tags import set_job_tags
-from shared.admin import is_effective_admin
+from shared.iam.remote import can_use_remote
 from shared.engines import dispatch as engine_dispatch
 from shared.transcription import is_media_filename
 from api.transcription_options import admission as transcription_admission, media_input_kind
@@ -367,7 +367,8 @@ def _enqueue_maybe_routed(filename, job_id, file_path, user, file_size_bytes, en
             )
 
     engine_dispatch.submit(
-        feature="transcription", job_id=str(job_id), user_id=user.id, is_admin=is_effective_admin(user),
+        feature="transcription", job_id=str(job_id), user_id=user.id,
+        remote_use=lambda: can_use_remote(user, session_factory=SessionLocal),
         payload=engine_dispatch.transcription_payload(job_id, file_path,
                                                       {**engine_dispatch.DEFAULT_TRANSCRIPTION_OPTIONS, **(options or {})},
                                                       queue),
@@ -741,7 +742,7 @@ async def transcribe_audio(
             # without one, submit() just calls enqueue()
             engine_dispatch.submit(
                 feature="transcription", job_id=str(job_id), user_id=current_user.id,
-                is_admin=is_effective_admin(current_user),
+                remote_use=lambda: can_use_remote(current_user, session_factory=SessionLocal),
                 payload=engine_dispatch.transcription_payload(job_id, temp_file_path, options,
                                                               settings.transcription_queue),
                 today=enqueue, celery=_engine_celery(), media_bytes=file_size_bytes,
@@ -2482,7 +2483,8 @@ async def retry_failed_page(
 
         engine_dispatch.submit(
             feature="document_conversion", job_id=job_id, subject_type="page", subject_id=new_page_job_id,
-            user_id=current_user.id, is_admin=is_effective_admin(current_user),
+            user_id=current_user.id,
+            remote_use=lambda: can_use_remote(current_user, session_factory=SessionLocal),
             payload=engine_dispatch.page_payload(
                 page_job_id=new_page_job_id, parent_job_id=job_id, page_number=page_number, options={},
                 source_pdf_path=pdf_path, today_queue=settings.celery_task_default_queue),
