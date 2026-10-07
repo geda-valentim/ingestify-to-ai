@@ -1,6 +1,6 @@
 // Generated from OpenAPI spec
 
-export type JobStatus = "queued" | "processing" | "completed" | "failed" | "cancelled";
+export type JobStatus = "partial" | "queued" | "processing" | "completed" | "failed" | "cancelled";
 export type JobType = "main" | "split" | "page" | "merge" | "download";
 export type SourceType = "file" | "url" | "gdrive" | "dropbox";
 
@@ -23,6 +23,8 @@ export interface UserResponse {
   created_at: string;
   /** Effective admin (users.is_admin or ADMIN_USER_IDS). Absent in sessions saved by older builds. */
   is_admin?: boolean;
+  permissions?: string[];
+  engine_access_enabled?: boolean;
 }
 
 export interface Token {
@@ -98,6 +100,11 @@ export interface Project {
   root_job_count: number;
   failed_count: number;
   active_count: number;
+  completed_count: number;
+  partial_count?: number;
+  cancelled_count: number;
+  /** Sum of original source sizes, not retained storage usage. */
+  total_bytes: number;
   last_job_at: string | null;
   /** API keys whose uploads default to this project. */
   api_keys: { id: string; name: string }[];
@@ -152,6 +159,9 @@ export interface UploadLocation {
 }
 
 export interface DocumentMetadata {
+  output_format?: string;
+  source_page_number?: number;
+  source_page_numbers?: number[];
   pages?: number | null;
   words?: number | null;
   format: string;
@@ -163,6 +173,14 @@ export interface DocumentMetadata {
   duration?: number | null;
   device?: string | null; // "cuda", "cpu" or "remote"
   available_formats?: TranscriptFormat[] | null;
+  provider?: string | null;
+  model?: string | null;
+  language_probability?: number | null;
+  configuration?: Record<string, unknown> | null;
+  schema_version?: number | null;
+  speakers?: TranscriptSpeaker[] | null;
+  diarization?: TranscriptJson["diarization"] | null;
+  alignment?: TranscriptJson["alignment"] | null;
 }
 
 /** Formats `GET /jobs/{id}/result?format=` serves for transcription jobs. */
@@ -172,7 +190,7 @@ export interface TranscriptWord {
   word: string;
   start: number;
   end: number;
-  probability: number;
+  probability?: number;
 }
 
 export interface TranscriptSegment {
@@ -183,8 +201,29 @@ export interface TranscriptSegment {
 }
 
 /** Body of `?format=json` on a transcription job. */
+export interface TranscriptSpeaker {
+  id: string;
+  label: string;
+}
+export interface TranscriptTurn {
+  start: number;
+  end: number;
+  speaker_id: string;
+}
 export interface TranscriptJson {
-  language: string;
+  schema_version?: 2;
+  speakers?: TranscriptSpeaker[];
+  diarization?: {
+    status: "completed" | "disabled";
+    speaker_count: number | null;
+    turns: TranscriptTurn[];
+    engine?: string;
+  };
+  alignment?: { status: "completed" | "unavailable"; model?: string | null };
+  operation?: "transcribe" | "detect_language" | "inspect";
+  media_info?: Record<string, unknown>;
+  language_probability?: number | null;
+  language: string | null;
   duration: number;
   text: string;
   segments: TranscriptSegment[];
@@ -193,11 +232,113 @@ export interface TranscriptJson {
 export interface ConversionResult {
   markdown: string;
   metadata: DocumentMetadata;
+  exports?: Partial<Record<DocumentFormat, string>>;
+  assets?: { name: string; url: string; content_type: string; object_name: string }[];
+  image?: ImageJobResult | ImageFullAnalysisResult | null;
+}
+
+export type CaptionTask = "<CAPTION>" | "<DETAILED_CAPTION>" | "<MORE_DETAILED_CAPTION>";
+export type VisionTask = CaptionTask | "<OCR>" | "<OCR_WITH_REGION>" | "<OD>" | "<DENSE_REGION_CAPTION>" | "<REGION_PROPOSAL>" | "<CAPTION_TO_PHRASE_GROUNDING>" | "<REFERRING_EXPRESSION_SEGMENTATION>" | "<REGION_TO_SEGMENTATION>" | "<OPEN_VOCABULARY_DETECTION>" | "<REGION_TO_CATEGORY>" | "<REGION_TO_DESCRIPTION>" | "<REGION_TO_OCR>";
+
+export interface ParameterSchema {
+  $ref?: string;
+  readOnly?: boolean;
+  "x-unavailable-reason"?: string;
+  $defs?: Record<string, ParameterSchema>;
+  type?: string;
+  title?: string;
+  description?: string;
+  default?: unknown;
+  enum?: unknown[];
+  const?: unknown;
+  minimum?: number;
+  maximum?: number;
+  exclusiveMinimum?: number;
+  exclusiveMaximum?: number;
+  anyOf?: ParameterSchema[];
+  properties?: Record<string, ParameterSchema>;
+  items?: ParameterSchema;
+}
+
+export interface VisionTaskInfo {
+  task: VisionTask;
+  label: string;
+  input: "none" | "text" | "region";
+  output: "text" | "ocr" | "boxes" | "polygons" | "mixed";
+}
+
+export interface ImageRegion {
+  label: string;
+  score?: number | null;
+  bbox?: number[] | null;
+  quad_box?: number[] | null;
+  polygons: number[][];
+}
+
+export interface ImageJobResult {
+  operation: "describe" | "ocr" | "analyze";
+  task: string;
+  task_label?: string | null;
+  image_base64?: string | null;
+  image_mime_type?: string | null;
+  width: number;
+  height: number;
+  description?: string | null;
+  text?: string | null;
+  lines: { text: string; quad_box: number[]; bbox: number[] }[];
+  model: { model_id: string; revision: string; device: string; dtype: string };
+  duration_ms: number;
+  output?: Record<string, unknown> | string | null;
+  regions?: ImageRegion[];
+  request?: { task: VisionTask; text_input?: string | null; region?: number[] | null; generation: Record<string, unknown> } | null;
+}
+
+export interface ImageFullStepResult {
+  step_id: string;
+  task: VisionTask;
+  input: { text_input?: string; region?: number[]; origin?: string };
+  status: "pending" | "running" | "succeeded" | "failed" | "skipped" | "not_applicable";
+  reason_code?: string | null;
+  text?: string;
+  output?: Record<string, unknown> | string;
+  regions?: ImageRegion[];
+  lines?: ImageJobResult["lines"];
+  duration_ms?: number;
+  truncated?: boolean;
+}
+
+export interface ImageFullAnalysisResult extends Omit<ImageJobResult, "operation" | "request"> {
+  operation: "full_analysis";
+  schema_version: string;
+  profile: string;
+  analysis_status: "completed" | "partial" | "failed" | "cancelled";
+  reason_code?: string | null;
+  coverage: { task_families_total: number; task_families_completed: number; instances_planned: number; instances_completed: number;
+    families: { task: VisionTask; label: string; completed: boolean; instances: number; succeeded: number }[] };
+  resolved_inputs: { queries?: unknown[]; regions?: unknown[]; omitted_candidates?: unknown[] };
+  results: ImageFullStepResult[];
+  calls_started: number;
+  request?: Record<string, unknown> | null;
+}
+
+export interface VisionCapabilities {
+  analysis_modes?: string[];
+  full_limits?: { max_queries: number; max_regions: number; max_calls: number; deadline_seconds: number };
+  enabled: boolean;
+  dependencies_installed: boolean;
+  model_downloaded: boolean;
+  reason?: string | null;
+  max_image_size_mb: number;
+  caption_tasks: CaptionTask[];
+  default_caption_task: CaptionTask;
+  tasks: VisionTaskInfo[];
+  generation_schema: ParameterSchema;
+  generation_defaults: Record<string, unknown>;
 }
 
 export interface JobCreatedResponse {
   job_id: string;
-  status: "queued";
+  status: "queued" | "completed";
   created_at: string;
   message: string;
   project?: UploadProjectInfo;
@@ -211,9 +352,12 @@ export interface ChildJobs {
 }
 
 export interface JobStatusResponse {
+  configuration?: { operation: string; provider?: string | null; model?: string | null; options: Record<string, unknown> } | null;
   job_id: string;
   type: JobType;
+  kind?: JobKind | null;
   status: JobStatus;
+  image_analysis?: { status: string; steps_total: number; steps_completed: number; calls_started: number; cancel_requested: boolean };
   progress: number;
   created_at: string;
   started_at?: string | null;
@@ -301,6 +445,8 @@ export interface PagePdfUrlResponse {
   job_id: string;
   page_number: number;
   url: string;
+  /** Authenticated API preview, usable from HTTPS without public MinIO access. */
+  preview_url?: string;
   expires_in: number;
   expires_at: string;
 }
@@ -313,7 +459,32 @@ export interface HealthCheckResponse {
   timestamp: string;
 }
 
+export type DocumentFormat = "markdown" | "json" | "html" | "txt" | "doclang" | "doctags" | "document_tokens" | "element_tree" | "vtt";
+export interface DocumentOptions {
+  pipeline?: Record<string, unknown>;
+  formats?: DocumentFormat[];
+  output_format?: DocumentFormat;
+  export_options?: Partial<Record<DocumentFormat, Record<string, unknown>>>;
+  page_range?: [number, number] | null;
+  max_num_pages?: number | null;
+  max_file_size?: number | null;
+  raises_on_error?: boolean;
+}
+export interface DocumentCapabilities {
+  provider: string; version: string; core_version: string;
+  image_extensions: string[];
+  pipeline_schema: ParameterSchema;
+  exports: Record<DocumentFormat, { method: string; parameters_schema: ParameterSchema }>;
+  presets: Record<string, Record<string, unknown>>;
+  restrictions: string[]; server_managed: string[];
+  workers_running: boolean; worker_prerequisites: { catalog_matches: boolean; ocr_dependencies: Record<string, boolean>; enrichment_dependencies?: Record<string, boolean>; automatic_model_downloads: boolean; models: Record<string, { repo_id: string | null; default_weights_cached: boolean | null }> }[];
+}
+
 export interface ConvertRequest extends UploadLocation {
+  docling_preset?: string;
+  conversion_options?: DocumentOptions;
+  audio_options?: AudioConversionOptions;
+  datalake?: import("./datalake").DatalakeDestination;
   source_type: SourceType;
   source?: string;
   file?: File;
@@ -323,9 +494,44 @@ export interface ConvertRequest extends UploadLocation {
 }
 
 export interface UploadRequest extends UploadLocation {
+  docling_preset?: string;
+  conversion_options?: DocumentOptions;
+  datalake?: import("./datalake").DatalakeDestination;
   file: File;
   name?: string;
   tags?: string[];
+  image_operation?: "describe" | "ocr" | "analyze" | "full";
+  image_engine?: "vision" | "docling";
+  image_task?: VisionTask;
+  image_text_input?: string;
+  image_region?: number[];
+  image_generation?: Record<string, unknown>;
+  image_full_options?: { queries?: string[]; regions?: number[][]; deadline_seconds?: number };
+  image_idempotency_key?: string;
+  audio_decoding?: Record<string, unknown>;
+  audio_operation?: "transcribe" | "detect_language" | "inspect";
+  include_timestamps?: boolean;
+  include_word_timestamps?: boolean;
+  output_format?: string;
+  purge_source?: boolean;
+}
+
+export interface AudioCapabilities {
+  enabled: boolean; provider: string; model: string; tasks: string[];
+  formats: string[]; max_audio_size_mb: number; max_video_size_mb: number;
+  parameters_schema: ParameterSchema; restrictions: string[];
+  operations: ("transcribe" | "detect_language" | "inspect")[];
+  workers_running?: boolean | null;
+  execution_reason?: string | null;
+}
+
+export interface AudioConversionOptions {
+  operation?: "transcribe" | "detect_language" | "inspect";
+  decoding?: Record<string, unknown>;
+  include_timestamps?: boolean;
+  include_word_timestamps?: boolean;
+  output_format?: TranscriptFormat;
+  purge_source?: boolean;
 }
 
 /** What a job is, from the user's point of view (derived from its source). */

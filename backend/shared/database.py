@@ -47,10 +47,44 @@ def init_db():
     existing = "jobs" in inspect(engine).get_table_names()
     # Existing deployments use the explicit 0005 migration. Disabled live must
     # not introduce DDL or require its table on a routine API restart.
-    tables = [table for table in Base.metadata.sorted_tables
-              if not (existing and table.name == "live_sessions")]
+    tables = [
+        table
+        for table in Base.metadata.sorted_tables
+        if not (
+            existing
+            and (
+                table.name == "live_sessions"
+                or table.name.startswith("engine_control_")
+                or table.name.startswith("engine_operation")
+                or table.name == "engine_runtime_profiles"
+                or table.name.startswith("access_")
+                or table.name.startswith("execution_profile")
+            )
+        )
+    ]
     Base.metadata.create_all(bind=engine, tables=tables)
+    if settings.engine_control_enabled:
+        from shared.engine_control.migration import TABLES
+        missing={table.name for table in TABLES}-set(inspect(engine).get_table_names())
+        if missing:
+            raise RuntimeError('Engine control requires the explicit 0007 migration before enabling it')
     _add_missing_columns()
+    if settings.engine_control_enabled:
+        # The additive runtime columns are used even when delegated access is off.
+        from shared.access.migration import RUNTIME_COLUMNS as COLUMNS
+
+        inspector = inspect(engine)
+        if any(
+            not set(columns).issubset({c["name"] for c in inspector.get_columns(table)})
+            for table, columns in COLUMNS.items()
+        ):
+            raise RuntimeError(
+                "Engine control requires the additive 0009 migration for this release"
+            )
+    if settings.engine_access_enabled:
+        from shared.access.migration import validate_schema
+
+        validate_schema(engine)
 
     # The built-in local engine (spec 0003): this server's workers, no bindings until declared
     from shared.engines.store import ensure_local_engine, ensure_lease_row

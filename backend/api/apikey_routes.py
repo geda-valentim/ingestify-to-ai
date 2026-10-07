@@ -5,6 +5,7 @@ from typing import Dict, List, Optional
 from uuid import UUID
 
 from api.deps import owned_project_or_404
+from api.project_management import locked_project, ensure_active
 from shared.database import get_db
 from shared.models import User, APIKey, Project
 from shared.projects import InvalidNameError, get_or_create_project
@@ -98,6 +99,10 @@ async def create_api_key(
             project, _created = get_or_create_project(db, current_user.id, project_name, origin="api_key_create")
         except InvalidNameError as e:
             raise HTTPException(status_code=422, detail=str(e))
+
+    if project is not None:
+        project = locked_project(db, project.id, current_user.id)
+        ensure_active(project)
 
     # Generate API key
     plain_key = generate_api_key()
@@ -195,7 +200,9 @@ async def update_api_key_project(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="API key not found")
 
     project_id = (body.project_id or "").strip() or None
-    project = owned_project_or_404(db, project_id, current_user) if project_id else None
+    project = locked_project(db, project_id, current_user.id) if project_id else None
+    if project is not None:
+        ensure_active(project)
     key.project_id = project.id if project is not None else None
     db.commit()
     db.refresh(key)

@@ -47,6 +47,7 @@ def world(monkeypatch):
     monkeypatch.setattr(live_routes.get_settings(), 'environment', 'development')
     monkeypatch.setattr(live_routes.get_settings(), 'live_internal_token', 'test-' + 'x' * 40)
     es = MagicMock()
+    es.job_results_write_ready.return_value = True
     es.store_job_result.return_value = True
     es.get_job_result.return_value = None
     monkeypatch.setattr(routes, 'get_es_client', lambda: es)
@@ -142,6 +143,23 @@ def test_bad_project_does_not_consume_capacity(world):
     assert world.client.post('/transcribe/live/sessions', json={'project_id': 'p'}).status_code == 503
 
 
+@pytest.mark.parametrize('raises', [False, True])
+def test_index_unavailable_rejects_before_creating_job_or_reserving_capacity(world, raises):
+    world.es.job_results_write_ready.return_value = False
+    if raises:
+        world.es.job_results_write_ready.side_effect = RuntimeError('index unavailable')
+    response = world.client.post('/transcribe/live/sessions', json={'project_id': 'p'})
+    assert response.status_code == 503
+    assert response.json()['detail']['code'] == 'LIVE_INDEX_UNAVAILABLE'
+    assert response.headers['retry-after'] == '5'
+    with world.db() as db:
+        assert db.query(Job).count() == 0
+        assert db.query(LiveSession).count() == 0
+    world.es.job_results_write_ready.side_effect = None
+    world.es.job_results_write_ready.return_value = True
+    assert world.client.post('/transcribe/live/sessions', json={'project_id': 'p'}).status_code == 201
+
+
 def create_finalizing(world):
     data = world.client.post('/transcribe/live/sessions', json={'project_id': 'p'}).json()
     job_id = data['job_id']
@@ -165,14 +183,17 @@ def finish(world, job_id, gen):
 def test_durable_formats_and_reads_after_cache_expiry(world):
     job_id, gen = create_finalizing(world)
     finish(world, job_id, gen)
-    assert len(world.minio.objects) == 4
+    assert len(world.minio.objects) == 5
     assert world.client.get(f'/jobs/{job_id}/result?format=json').json()['segments'] == RESULT['segments']
     world.redis.client.delete(f'job:{job_id}:status', f'job:{job_id}:result')
     assert world.client.get(f'/jobs/{job_id}').json()['status'] == 'completed'
     for fmt in ['json', 'txt', 'vtt', 'srt']:
         assert world.client.get(f'/jobs/{job_id}/result?format={fmt}').status_code == 200
-    world.es.get_job_result.return_value = {'markdown_content': '# Transcrição', 'metadata': {'format': 'pcm', 'size_bytes': 32000}}
-    assert world.client.get(f'/jobs/{job_id}/result').status_code == 200
+    world.es.get_job_result.side_effect = OSError('index unavailable')
+    response = world.client.get(f'/jobs/{job_id}/result')
+    assert response.status_code == 200
+    assert response.json()['result']['metadata']['device'] == 'cuda'
+    assert RESULT['segments'][0]['text'].strip() in response.json()['result']['markdown']
 
 
 def test_storage_error_never_completes_or_leaves_generation_objects(world):
@@ -187,6 +208,20 @@ def test_storage_error_never_completes_or_leaves_generation_objects(world):
     assert not world.minio.objects
     with world.db() as db:
         assert db.get(LiveSession, job_id).state == 'finalizing'
+        assert db.get(Job, job_id).status != JobStatus.COMPLETED
+
+
+def test_index_failure_after_admission_keeps_confirmed_partial_without_publishing(world):
+    job_id, gen = create_finalizing(world)
+    world.store.append_confirmed(job_id, gen, RESULT['segments'])
+    world.es.store_job_result.return_value = False
+    with pytest.raises(LiveError, match='LIVE_INDEX_FAILED'):
+        finish(world, job_id, gen)
+    assert world.es.store_job_result.call_count == 3
+    assert not world.minio.objects
+    assert world.redis.get_job_result(job_id) is None
+    assert world.redis.get_partial_transcript(job_id)[0] == RESULT['segments']
+    with world.db() as db:
         assert db.get(Job, job_id).status != JobStatus.COMPLETED
 
 

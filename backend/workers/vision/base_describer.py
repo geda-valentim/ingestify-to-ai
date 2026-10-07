@@ -20,6 +20,11 @@ from typing import Any, Dict, Optional
 class ImageDescriber(ABC):
     """Interface every vision provider implements."""
 
+    def analyze(self, image_path: Path, options: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Run a task from the provider's advertised vocabulary."""
+        from workers.vision.errors import VisionUnsupportedTaskError
+        raise VisionUnsupportedTaskError("This provider does not support general image analysis")
+
     @abstractmethod
     def describe(
         self, image_path: Path, options: Optional[Dict[str, Any]] = None

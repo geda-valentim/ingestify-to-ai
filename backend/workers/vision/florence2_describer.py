@@ -108,6 +108,8 @@ class Florence2Describer(ImageDescriber):
         self._torch_dtype = None
         self._resolved_dtype_name: Optional[str] = None
         self._lock = threading.Lock()
+        self._full_context = None
+        self._generation_metadata = {}
 
     # ------------------------------------------------------------------
     # Loading
@@ -343,17 +345,51 @@ class Florence2Describer(ImageDescriber):
             "duration_ms": duration_ms,
         }
 
+    def prepare_full(self, image_path, check):
+        self.load()
+        image, width, height = self._open_image(Path(image_path), self._backend)
+        self._full_context = {'image': image, 'check': check}
+        return image, width, height
+
+    def close_full(self):
+        if self._full_context:
+            self._full_context['image'].close()
+        self._full_context = None
+
     def _default_caption_task(self) -> str:
         from shared.config import get_settings
 
         return get_settings().vision_caption_task
 
-    def _generate(self, image_path: Path, task_prompt: str):
+    def analyze(self, image_path: Path, options: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        from shared.schemas import ImageAnalyzeOptions
+        from shared.vision_outputs import normalize_output
+        request = ImageAnalyzeOptions.model_validate(options or {})
+        prompt = request.task
+        if request.text_input:
+            prompt += request.text_input
+        elif request.region is not None:
+            prompt += "".join(f"<loc_{min(999, int(value * 1000))}>" for value in request.region)
+        parsed, width, height, duration_ms = self._generate(
+            image_path, prompt, task=request.task, generation=request.generation.model_dump(exclude_none=True))
+        output = parsed.get(request.task, "") if isinstance(parsed, dict) else parsed
+        text, regions, lines = normalize_output(output)
+        resolved = request.model_dump()
+        resolved["generation"]["max_new_tokens"] = request.generation.max_new_tokens or self.max_new_tokens
+        resolved["generation"]["num_beams"] = request.generation.num_beams or self.num_beams
+        return {"task": request.task, "text": text, "output": output,
+                "regions": regions, "lines": lines, "width": width, "height": height,
+                "duration_ms": duration_ms, "request": resolved,
+                "generation_metadata": dict(self._generation_metadata),
+                "truncated": self._generation_metadata.get("finish_reason") == "length"}
+
+    def _generate(self, image_path: Path, task_prompt: str, *, task=None, generation=None):
         """Run one generation pass and return (parsed, width, height, duration_ms)."""
         self.load()
         backend = self._backend
 
-        image, width, height = self._open_image(Path(image_path), backend)
+        image, width, height = (self._full_context["image"], *self._full_context["image"].size) if self._full_context else self._open_image(Path(image_path), backend)
+        self._generation_metadata = {}
 
         started = time.perf_counter()
         try:
@@ -363,14 +399,43 @@ class Florence2Describer(ImageDescriber):
 
             # inference_mode() is mandatory, not an optimisation: without it every
             # request retains an autograd graph and the resident footprint grows.
+            generation_args = {"max_new_tokens": self.max_new_tokens, "num_beams": self.num_beams,
+                               "do_sample": False, **(generation or {})}
+            if not generation_args["do_sample"]:
+                for name in ("temperature", "top_p", "top_k"):
+                    generation_args.pop(name, None)
+            # Sampling parameters and beam-only controls are passed only when
+            # they apply, avoiding Transformers silently ignoring the request.
+            if generation_args["num_beams"] == 1:
+                for name in ("length_penalty", "early_stopping"):
+                    generation_args.pop(name, None)
+            if self._full_context:
+                from transformers import StoppingCriteria, StoppingCriteriaList
+                context = self._full_context
+                context.pop('stop_reason', None)
+                check = context['check']
+                class FullStop(StoppingCriteria):
+                    def __call__(self, input_ids, scores, **kwargs):
+                        stopped = not check()
+                        if stopped:
+                            context['stop_reason'] = getattr(getattr(check, '__self__', None), 'reason', None) or 'interrupted'
+                        return stopped
+                generation_args['stopping_criteria'] = StoppingCriteriaList([FullStop()])
             with backend.torch.inference_mode():
                 generated_ids = self._model.generate(
                     **inputs,
-                    max_new_tokens=self.max_new_tokens,
-                    num_beams=self.num_beams,
-                    do_sample=False,
+                    **generation_args,
                 )
 
+            if self._full_context:
+                ids = generated_ids[0].tolist()
+                config = self._model.generation_config
+                eos = config.eos_token_id
+                eos = eos if isinstance(eos, list) else [eos]
+                tokens = ids[1:]
+                stopped = any(token in eos for token in tokens)
+                self._generation_metadata = {'generated_tokens': len(tokens), 'eos': stopped,
+                    'finish_reason': self._full_context.get('stop_reason') or ('stop' if stopped else 'length')}
             generated_text = self._processor.batch_decode(
                 generated_ids, skip_special_tokens=False
             )[0]
@@ -378,7 +443,7 @@ class Florence2Describer(ImageDescriber):
             # image_size is what makes the returned coordinates absolute pixels
             # in the ORIGINAL image rather than in Florence-2's 1000x1000 grid.
             parsed = self._processor.post_process_generation(
-                generated_text, task=task_prompt, image_size=(width, height)
+                generated_text, task=task or task_prompt, image_size=(width, height)
             )
         except VisionError as exc:
             raise exc

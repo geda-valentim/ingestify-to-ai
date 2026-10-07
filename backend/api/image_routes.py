@@ -41,13 +41,14 @@ nenhum caso especial.
 import asyncio
 import base64
 import logging
+import json
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Request, UploadFile
 from sqlalchemy.orm import Session
 
 from shared.admin import is_effective_admin
@@ -58,6 +59,14 @@ from shared.engines import dispatch as engine_dispatch
 from shared.models import Job, JobStatus as DBJobStatus, User
 from shared.redis_client import VISION_HEARTBEAT_TTL_SECONDS, get_redis_client
 from shared.schemas import (
+    ImageAnalyzeRequest,
+    ImageFullAnalyzeRequest,
+    ImageFullAnalyzeResponse,
+    ImageFullQueuedResponse,
+    ImageFullOptions,
+    ImageAnalyzeOptions,
+    ImageAnalyzeResponse,
+    JobCreatedResponse,
     DEFAULT_VISION_CAPTION_TASK,
     VISION_CAPTION_TASKS,
     ImageDescribeRequest,
@@ -68,6 +77,8 @@ from shared.schemas import (
     VisionCapabilitiesResponse,
     VisionModelInfo,
 )
+from shared.vision_capabilities import VisionTask
+from starlette.responses import JSONResponse
 from shared.tags import set_job_tags
 from shared.utils import calculate_file_checksum
 from api.tag_routes import TAGS_FORM_DESCRIPTION, parse_tags_or_422
@@ -248,9 +259,9 @@ def _dispatch_vision_task(kind: str, **kwargs: Any):
     O roteamento para `settings.vision_queue` vem de `task_routes` no
     `celery_app`, não daqui.
     """
-    from workers.vision_tasks import describe_image_task, ocr_image_task
+    from workers.vision_tasks import describe_image_task, ocr_image_task, analyze_image_task
 
-    task = {"describe": describe_image_task, "ocr": ocr_image_task}[kind]
+    task = {"describe": describe_image_task, "ocr": ocr_image_task, "analyze": analyze_image_task}[kind]
     return task.delay(**kwargs)
 
 
@@ -338,7 +349,8 @@ def _create_vision_job(
     db: Session,
     tags: Optional[List[str]] = None,
     location: Optional[UploadLocation] = None,
-) -> Optional[Job]:
+    configuration: Optional[dict] = None,
+) -> Job:
     """
     Cria o job antes do despacho, exatamente como `/transcribe`.
 
@@ -348,17 +360,6 @@ def _create_vision_job(
     (`String(50)`), então "image" não precisa de migração.
     """
     created_at = datetime.utcnow()
-
-    redis_client = get_redis_client()
-    redis_client.set_job_status(
-        job_id=job_id,
-        job_type="main",
-        status="queued",
-        progress=0,
-        name=filename,
-    )
-    redis_client.set_job_owner(job_id, current_user.id)
-    redis_client.add_job_to_user(current_user.id, job_id)
 
     db_job = Job(
         id=job_id,
@@ -377,14 +378,32 @@ def _create_vision_job(
     )
     try:
         db.add(db_job)
+        if configuration is not None:
+            from shared.job_configuration import save_configuration
+            save_configuration(db, db_job, operation='image', options=configuration,
+                               provider=settings.vision_provider, model=settings.vision_model_id)
         set_job_tags(db_job, tags or [])
         db.commit()
     except Exception as e:
-        # Mesmo tratamento do resto do repositório: o MySQL fora do ar degrada
-        # a listagem de jobs, não pode derrubar a requisição.
         logger.error(f"Error creating image job in MySQL: {e}", exc_info=True)
         db.rollback()
-        return None
+        raise _error(
+            503,
+            "JOB_PERSISTENCE_UNAVAILABLE",
+            "Não foi possível salvar o job e sua configuração. Tente novamente.",
+        ) from e
+
+    # SQL owns both the job and its configuration. A cache outage must not lose
+    # that durable request or prevent the worker from processing it.
+    try:
+        redis_client = get_redis_client()
+        redis_client.set_job_status(
+            job_id=job_id, job_type="main", status="queued", progress=0, name=filename,
+        )
+        redis_client.set_job_owner(job_id, current_user.id)
+        redis_client.add_job_to_user(current_user.id, job_id)
+    except Exception:
+        logger.warning("Could not cache image job %s; SQL configuration is saved", job_id, exc_info=True)
 
     return db_job
 
@@ -537,6 +556,8 @@ async def _run_vision(
     tags: Optional[List[str]] = None,
     plan: Optional[UploadPlan] = None,
     path: str = "",
+    options: Optional[dict] = None,
+    wait: bool = True,
 ) -> Dict[str, Any]:
     """
     Valida, cria o job, despacha e espera — para os quatro pontos de entrada.
@@ -565,6 +586,7 @@ async def _run_vision(
         db=db,
         tags=tags,
         location=location,
+        configuration=options if kind == 'analyze' else {'task': task or (DEFAULT_VISION_CAPTION_TASK if kind == 'describe' else '<OCR_WITH_REGION>')},
     )
 
     logger.info(
@@ -590,6 +612,8 @@ async def _run_vision(
     kwargs: Dict[str, Any] = {"job_id": job_id, "image_path": str(image_path)}
     if kind == "describe":
         kwargs["task"] = task or DEFAULT_VISION_CAPTION_TASK
+    elif kind == "analyze":
+        kwargs["options"] = options
 
     # Com uma rota de visão (spec 0003, fatia 8) a requisição é colocada aqui mesmo,
     # sem backlog: uma vaga livre vira uma reserva que o worker reivindica; sem vaga
@@ -641,6 +665,13 @@ async def _run_vision(
             f"Não foi possível enfileirar o job de visão: {e}",
             job_id=job_id,
         )
+
+    if not wait:
+        return {"job_id": job_id, "status": "queued",
+                "created_at": db_job.created_at if db_job else datetime.utcnow(),
+                "message": "Análise de imagem enfileirada",
+                "project": location.project_info() if location else None,
+                "folder": location.folder_info() if location else None}
 
     result = await _wait_for_result(async_result, settings.vision_request_timeout_seconds)
 
@@ -753,6 +784,118 @@ async def describe_image(
         path=http_request.url.path,
     )
     return _describe_response(common, request.task)
+
+
+def _analyze_response(common: Dict[str, Any], wait: bool):
+    if not wait:
+        return JSONResponse(status_code=202, content=JobCreatedResponse(**common).model_dump(mode="json"))
+    payload = common.pop("_payload")
+    return ImageAnalyzeResponse(task=payload["task"], text=payload["text"],
+        output=payload["output"], regions=payload["regions"], request=payload["request"], **common)
+
+
+@router.post("/analyze", response_model=ImageAnalyzeResponse | ImageFullAnalyzeResponse | ImageFullQueuedResponse | JobCreatedResponse,
+             responses={202: {"model": ImageFullQueuedResponse | JobCreatedResponse}}, summary="Executar tarefa de visão (JSON base64)")
+async def analyze_image(request: ImageFullAnalyzeRequest | ImageAnalyzeRequest, http_request: Request,
+                        idempotency_key: Optional[str] = Header(None, max_length=128, description="Obrigatória somente em mode=full; repetir mesma solicitação devolve o mesmo job."),
+                        current_user: User = Depends(get_current_active_user), db: Session = Depends(get_db)):
+    """Todas as tarefas do Florence integrado, descobríveis em GET /images/capabilities.
+
+    Captions/OCR/detecção/propostas não recebem entradas adicionais. Grounding,
+    detecção por vocabulário e segmentação por expressão exigem text_input.
+    Tarefas REGION_TO_* exigem region=[x_min,y_min,x_max,y_max] normalizada (0..1).
+    generation controla a decodificação. Parâmetros incompatíveis são rejeitados.
+
+    Por padrão retorna 202 com job_id; consulte /jobs/{job_id}/result. wait=true
+    retorna o resultado completo ou 504 com o mesmo job_id, sem cancelar a tarefa.
+    A resposta preserva output do modelo e regions em pixels da imagem original.
+
+    mode=full executa as 15famílias num único job, com entradas derivadas da
+    imagem. Idempotency-Key é obrigatória; full_options aceita queries (até 3),
+    regions (até 4), generation e deadline_seconds (até 900, incluindo fila).
+    Full rejeita task/text_input/region/generation na raiz. datalake opcional
+    recebe Destination com partitioning/partition_values. Resultado full possui
+    coverage/results/resolved_inputs e pode terminar partial/failed/cancelled.
+    """
+    _require_vision_enabled()
+    if isinstance(request, ImageFullAnalyzeRequest):
+        from api.image_full_routes import run_full
+        tags = parse_tags_or_422(request.tags)
+        plan = _plan_location(db, current_user, http_request, _json_location(request))
+        return await run_full(request, http_request, _decode_base64_image(request.image_base64), request.filename,
+                              current_user, db, tags, plan)
+    options = ImageAnalyzeOptions.model_validate(request.model_dump(include=set(ImageAnalyzeOptions.model_fields)))
+    tags = parse_tags_or_422(request.tags)
+    plan = _plan_location(db, current_user, http_request, _json_location(request))
+    common = await _run_vision(kind="analyze", image_bytes=_decode_base64_image(request.image_base64),
+        filename=request.filename, task=request.task, current_user=current_user, db=db, tags=tags,
+        plan=plan, path=http_request.url.path, options=options.model_dump(), wait=request.wait)
+    return _analyze_response(common, request.wait)
+
+
+@router.post("/analyze/upload", response_model=ImageAnalyzeResponse | ImageFullAnalyzeResponse | ImageFullQueuedResponse | JobCreatedResponse,
+             responses={202: {"model": ImageFullQueuedResponse | JobCreatedResponse}}, summary="Executar tarefa de visão (multipart)")
+async def analyze_image_upload(
+    mode: Literal["single", "full"] = Form("single"),
+    idempotency_key: Optional[str] = Header(None, max_length=128, description="Obrigatória somente em mode=full (1..128 caracteres)."),
+    full_options: Optional[str] = Form(None, description="JSON ImageFullOptions para mode=full"),
+    datalake: Optional[str] = Form(None, description="JSON Destination opcional para mode=full"),
+    file: UploadFile = File(..., description="Imagem PNG, JPEG, WEBP, BMP, GIF ou TIFF"),
+    task: VisionTask = Form(DEFAULT_VISION_CAPTION_TASK),
+    text_input: Optional[str] = Form(None, max_length=2000),
+    region: Optional[str] = Form(None, description="Array JSON [x_min,y_min,x_max,y_max], normalizado entre 0 e 1."),
+    generation: Optional[str] = Form(None, description="Objeto JSON conforme VisionGenerationOptions; omitido usa os padrões do worker."),
+    wait: bool = Form(False, description="false retorna 202 com job_id; true espera pelo resultado."),
+    tags: Optional[str] = Form(None, description=TAGS_FORM_DESCRIPTION),
+    http_request: Request = None,
+    location: LocationFields = Depends(upload_location_form),
+    current_user: User = Depends(get_current_active_user), db: Session = Depends(get_db),
+):
+    """Mesmas tarefas/validações do JSON /images/analyze. region e generation são JSON nos campos multipart.
+
+    Para regiões, 0 representa esquerda/topo e 1 direita/base. Não aceita regiões
+    invertidas/vazias nem texto em tarefas que não o utilizam. Nenhum job é criado
+    quando as opções são inválidas. Front e integração podem consultar o catálogo
+    de tarefas e o schema de geração em /images/capabilities.
+
+    mode=full: header Idempotency-Key obrigatório, full_options e datalake
+    codificados como JSON. task, text_input, region e generation na raiz são
+    incompatíveis com full, mesmo quando explicitamente vazios/padrão.
+    """
+    _require_vision_enabled()
+    if mode not in ('single', 'full'):
+        raise _error(422, 'INVALID_VISION_OPTIONS', 'mode deve ser single ou full')
+    if mode == 'full':
+        from api.image_full_routes import run_full
+        fields = await http_request.form()
+        allowed = {'file', 'mode', 'full_options', 'datalake', 'wait', 'tags', 'project', 'project_id', 'folder', 'folder_id'}
+        if set(fields) - allowed:
+            raise _error(422, 'INVALID_VISION_OPTIONS', 'Campos incompatíveis com mode=full: ' + ', '.join(sorted(set(fields)-allowed)))
+        try:
+            full = ImageFullAnalyzeRequest(mode='full', image_base64='multipart', filename=file.filename,
+                full_options=json.loads(full_options) if full_options else {},
+                datalake=json.loads(datalake) if datalake else None, wait=wait,
+                **{key: getattr(location, key) for key in ("project", "project_id", "folder", "folder_id")})
+        except (ValueError, TypeError) as exc:
+            raise _error(422, 'INVALID_VISION_OPTIONS', str(exc)) from exc
+        plan = _plan_location(db, current_user, http_request, location)
+        data = await file.read(settings.vision_max_image_size_mb * 1024 * 1024 + 1)
+        return await run_full(full, http_request, data, file.filename, current_user, db, parse_tags_or_422(tags), plan)
+    if full_options is not None or datalake is not None:
+        raise _error(422, 'INVALID_VISION_OPTIONS', 'full_options/datalake exigem mode=full')
+    try:
+        options = ImageAnalyzeOptions(task=task, text_input=text_input,
+            region=json.loads(region) if region else None,
+            generation=json.loads(generation) if generation else {})
+    except (ValueError, TypeError) as exc:
+        raise _error(422, "INVALID_VISION_OPTIONS", str(exc)) from exc
+    tag_list = parse_tags_or_422(tags)
+    plan = _plan_location(db, current_user, http_request, location)
+    image_bytes = await file.read(settings.vision_max_image_size_mb * 1024 * 1024 + 1)
+    common = await _run_vision(kind="analyze", image_bytes=image_bytes, filename=file.filename,
+        task=options.task, current_user=current_user, db=db, tags=tag_list,
+        plan=plan, path=http_request.url.path, options=options.model_dump(), wait=wait)
+    return _analyze_response(common, wait)
 
 
 @router.post(
@@ -933,6 +1076,8 @@ async def vision_capabilities(
         model_loaded=False,
         trust_remote_code=settings.vision_trust_remote_code,
         reason=NO_VISION_WORKER_REASON,
+        max_image_size_mb=settings.vision_max_image_size_mb,
+        full_limits={"max_queries": 3, "max_regions": 4, "max_calls": 32, "deadline_seconds": min(settings.vision_full_task_timeout_seconds, 900)},
     )
 
     try:
@@ -955,3 +1100,19 @@ async def vision_capabilities(
     # saudável simplesmente não manda `reason`.
     merged["reason"] = heartbeat.get("reason")
     return VisionCapabilitiesResponse(**merged)
+
+
+@router.post('/{job_id}/cancel', summary='Cancelar Full Analysis de imagem')
+def cancel_full_image(job_id: str, current_user: User = Depends(get_current_active_user), db: Session = Depends(get_db)):
+    from shared.models import ImageAnalysisRun
+    job = db.query(Job).filter(Job.id == job_id, Job.user_id == current_user.id).with_for_update().first()
+    run = db.get(ImageAnalysisRun, job_id) if job else None
+    if run is None:
+        raise HTTPException(404, 'Full Analysis não encontrada')
+    from shared.image_full import TERMINAL
+    terminal = run.status in TERMINAL
+    if not terminal:
+        run.cancel_requested = True
+        db.commit()
+    return JSONResponse(status_code=200 if terminal else 202,
+        content={'job_id': job_id, 'status': run.status, 'cancel_requested': run.cancel_requested})

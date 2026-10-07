@@ -1,5 +1,8 @@
 # Fontes de documentos: arquivo, URL, Google Drive, Dropbox
 
+> Contratos dos endpoints revisados em 2026-10-06. Campos, modelos e autorização:
+> [referência completa da API](../api-reference.md). As datas abaixo também registram revisões da implementação/operação.
+
 > Verificado contra o código em 2026-10-04. Fonte da verdade:
 > [backend/workers/sources.py](../../backend/workers/sources.py),
 > [backend/api/routes.py](../../backend/api/routes.py) (`POST /convert`),
@@ -12,12 +15,16 @@
 conversão Docling (ver [conversion.md](conversion.md)). `POST /upload` é equivalente a
 `source_type=file`.
 
+Arquivos em S3/MinIO/GCS/Azure usam `POST /datalakes/import`, não um novo
+`source_type` no `/convert`. Origem e destino são independentes; veja
+[datalakes.md](datalakes.md). As chamadas exigem projeto salvo API key vinculada.
+
 | `source_type` | `source` | Credencial | Status |
 |---|---|---|---|
 | `file` | ignorado | — | Funciona (`/upload` ou `/convert`). |
 | `url` | URL `http(s)` pública | — | Funciona, com proteção SSRF. |
-| `gdrive` | file ID do Google Drive | token OAuth2 no header `Authorization` | **Não utilizável hoje** (ver lacunas). |
-| `dropbox` | path (ex.: `/docs/a.pdf`) | access token no header `Authorization` | **Não utilizável hoje** (ver lacunas). |
+| `gdrive` | file ID do Google Drive | token OAuth2 no header `X-Source-Token` | Handler disponível; veja limites abaixo. |
+| `dropbox` | path (ex.: `/docs/a.pdf`) | access token no header `X-Source-Token` | Handler disponível; exige o token do provedor. |
 
 ## Como usar
 
@@ -25,7 +32,7 @@ conversão Docling (ver [conversion.md](conversion.md)). `POST /upload` é equiv
 
 ```bash
 curl -X POST http://localhost:8000/convert -H "X-API-Key: $INGESTIFY_API_KEY" \
-  -F "source_type=file" -F "file=@documento.docx"
+  -F "source_type=file" -F "file=@documento.docx" -F "project=Documentos"
 ```
 
 Para `source_type=file`, a API **descarta** qualquer `source` enviado pelo cliente: o
@@ -37,7 +44,7 @@ sanitizado (`sanitize_upload_filename`) para impedir path traversal.
 
 ```bash
 curl -X POST http://localhost:8000/convert -H "X-API-Key: $INGESTIFY_API_KEY" \
-  -F "source_type=url" -F "source=https://example.com/relatorio.pdf" -F "name=Relatório Q3"
+  -F "source_type=url" -F "source=https://example.com/relatorio.pdf" -F "name=Relatório Q3" -F "project=Documentos"
 ```
 
 O `URLHandler`:
@@ -58,7 +65,7 @@ O frontend expõe essa fonte na aba "URL" do dashboard.
 curl -X POST http://localhost:8000/convert \
   -H "Authorization: Bearer <jwt-do-ingestify>" \
   -H "X-Source-Token: <token-do-provedor>" \
-  -F "source_type=gdrive" -F "source=<file-id>"
+  -F "source_type=gdrive" -F "source=<file-id>" -F "project=Documentos"
 ```
 
 `Authorization` (ou `X-API-Key`) autentica no Ingestify e **nunca** é repassado ao provedor nem

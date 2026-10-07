@@ -1,5 +1,8 @@
 # Motores de execução: guia do operador
 
+> Contratos dos endpoints revisados em 2026-10-06. Campos, modelos e autorização:
+> [referência completa da API](../api-reference.md). As datas abaixo também registram revisões da implementação/operação.
+
 > Verificado contra o código em 2026-10-05 (spec 0003, fatias 0a a 8; a 4d, `E > 1` remoto, não
 > existe ainda). Fonte da verdade:
 > [backend/shared/engines/](../../backend/shared/engines/) (`routing.py`, `dispatch.py`,
@@ -23,6 +26,8 @@
 [Orçamento e alertas](#orçamento-e-alertas) · [Velocidade e benchmark](#velocidade-aprendida-e-benchmark) ·
 [Custos](#custos) · [API admin](#api-admin) · [Solução de problemas](#solução-de-problemas) ·
 [Pendências com as contas reais](#a-rodar-com-as-contas-reais)
+
+> Perfis, acesso e controle atualizados em **2026-10-06**; rollout da 0009 opt-in.
 
 ## Compute: o que configura
 
@@ -75,13 +80,24 @@ ativação separados. Ela permanece desabilitada por padrão; os critérios de p
 
 ## Diagnóstico rápido
 
-A UI Compute é somente leitura: mostra estado e comandos para o operador executar. Leituras
-exigem usuário admin (JWT ou API key de admin); alterações HTTP exigem sessão JWT de admin.
-O header Compute só aparece para admins; o backend também verifica a permissão.
+A UI Compute permite configurar e operar engines pelo controlador, além de mostrar os
+comandos Docker/CLI existentes. As leituras de engines e o controle usam sessão JWT. Com
+`ENGINE_ACCESS_ENABLED=true`, usuários delegados veem apenas engines, perfis e ações
+permitidos por seus grants; o servidor revalida a autorização em cada etapa. Diagnósticos
+globais de GPU, routing e status continuam restritos ao administrador de bootstrap.
+
+Configure as opções de runtime em **Compute → Perfis de execução**
+(`/admin/execution-profiles`), publique uma revisão e selecione-a em
+**Engine → Configuração → Perfil de execução**. Vincular altera apenas o desejado;
+aplicar exige uma prévia e execução separadas. Administre papéis e escopos em
+**Compute → Acesso** (`/admin/access`). Veja o [guia de perfis e acesso](execution-profiles.md)
+e o [runbook de migração/ativação](../runbooks/execution-profiles-access.md).
 
 | Tela | O que interpretar |
 |---|---|
 | `/admin/engines` e `/admin/engines/{id}` | Status/saúde, bindings, em voo, orçamento, teste e deploy; `paused` barra novas colocações |
+| `/admin/execution-profiles` | Criar, revisar, publicar e vincular modelos de configuração de runtime |
+| `/admin/access` | Políticas, grants, delegação, ambientes e consumidores de recursos |
 | `/admin/gpus` | VRAM orçada × usada e GPUs detectadas sem declaração; valor desconhecido não é zero |
 | `/admin/routing` | Ordem dos motores e backlog de cada feature; sem rota vale a fila local habitual |
 | `/admin/status` | Lease do despachante, disponibilidade do worker remoto e workers configurados × vivos |
@@ -213,8 +229,11 @@ docker compose exec api python scripts/engines.py routes set transcription \
 
 ## Capacidade e VRAM
 
-A capacidade é **declarada**, nunca medida: o Ingestify não escala containers Docker. Ele mostra
-"configurado X, vivos Y" e o comando a rodar (`scale_hint`).
+A capacidade do binding legado é **declarada**, não medida. Alterá-la não escala
+containers Docker: a UI mostra "configurado X, vivos Y" e o comando (`scale_hint`).
+Com o controle da spec 0007 habilitado, operações explícitas aplicam o perfil ao
+serviço registrado pelo agente; o executor verifica réplicas e readiness antes
+de atualizar o aplicado. Veja o [guia de operações](https://dev.ingestify.ai/pt/docs/engine-operations).
 
 | Feature | Serviço local | Pegada padrão por processo (com contexto CUDA) | Como mudar réplicas |
 |---|---|---|---|
@@ -474,7 +493,10 @@ docker compose exec api python scripts/engines.py speed [--engine modal_1]
 
 ## API admin
 
-Leituras exigem admin; mudanças exigem sessão JWT (API key ⇒ 403), gravam `admin_audit` e nunca
+Listagem/detalhe de engines e descritores exigem JWT; com acesso habilitado, aplicam escopos
+de grants. Diagnósticos globais e alterações legadas exigem bootstrap; credenciais podem ser
+delegadas ao papel `connection_manager`. Mudanças exigem sessão JWT (API key ⇒ 403),
+gravam `admin_audit` e nunca
 ecoam valores de credenciais.
 
 | Método e caminho | O que faz |
@@ -491,8 +513,10 @@ ecoam valores de credenciais.
 | `GET /admin/routing` · `PUT` · `DELETE /admin/routing/{feature}` | rotas e backlog por feature |
 | `GET /admin/engines/status` | lease, em voo/capacidade por motor e feature, vivos × configurados, backlog |
 
-A UI somente leitura fica em `/admin/engines`, `/admin/gpus`, `/admin/routing` e
-`/admin/status` (item "Compute" do cabeçalho, só admins); cada tela mostra o comando que a muda.
+A UI fica em `/admin/engines`, `/admin/gpus`, `/admin/routing` e `/admin/status`.
+O item Compute e suas abas respeitam as permissões do usuário. Os comandos Docker
+continuam disponíveis; operações gerenciadas usam planos do controlador e autorização atual.
+APIs de biblioteca, IAM e vinculação estão em [perfis de execução](execution-profiles.md).
 
 ## Solução de problemas
 
@@ -550,3 +574,14 @@ $R test --all && $R reconcile
 # 4. Local (opcional, grátis): imprime o comando do container avulso; rode-o com a placa ociosa
 docker compose exec api python scripts/engines.py benchmark --engine local --sample /tmp/ingestify/bench/a.mp3:240 --concurrency 1,2 --pause-local
 ```
+
+## Requisitos, funcionalidades e aplicações na documentação web
+
+O índice público em [/docs/compute](https://dev.ingestify.ai/pt/docs/compute) reúne:
+
+- [Recursos de engines](https://dev.ingestify.ai/pt/docs/engines): ENG-01 a ENG-08, conexões, adapters, capacidade/VRAM, rotas, orçamento, desempenho e casos de uso.
+- [Operações](https://dev.ingestify.ai/pt/docs/engine-operations): OPS-01 a OPS-07, dependências, estados, ações por adapter, prévia, idempotência, drain, logs/SSE, cancelamento e recovery.
+- [Perfis](https://dev.ingestify.ai/pt/docs/execution-profiles): PRF-01 a PRF-06, campos, revisões, catálogo e vínculo.
+- [Acesso](https://dev.ingestify.ai/pt/docs/engine-access): ACL-01 a ACL-08, papéis, ABAC, grants, delegação, consumidores, revogação e principal CLI.
+
+Versões em inglês usam os mesmos paths sem `/pt`. Rastreabilidade em [RF012](../RF.md#rf012---engines-operações-perfis-e-acesso).

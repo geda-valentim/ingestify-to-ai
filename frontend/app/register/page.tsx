@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { useMutation } from "@tanstack/react-query";
 import { authApi } from "@/lib/api";
+import { useRegistrationSettings } from "@/lib/use-registration-settings";
 import { formatApiError } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -20,6 +21,7 @@ import {
 import { AlertCircle, Loader2 } from "lucide-react";
 
 export default function RegisterPage() {
+  const registration = useRegistrationSettings();
   const router = useRouter();
   const [email, setEmail] = useState("");
   const [username, setUsername] = useState("");
@@ -37,12 +39,14 @@ export default function RegisterPage() {
     },
     onError: (error: any) => {
       setError(formatApiError(error));
+      void registration.refetch();
     },
   });
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
+    if (registration.isError || !registration.data?.signup_enabled) return;
     registerMutation.mutate({ email, username, password });
   };
 
@@ -56,6 +60,29 @@ export default function RegisterPage() {
               Your account has been created. Redirecting to login...
             </CardDescription>
           </CardHeader>
+        </Card>
+      </div>
+    );
+  }
+
+  if (registration.isPending || registration.isError || !registration.data?.signup_enabled) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-background to-muted p-4">
+        <Card className="w-full max-w-md">
+          <CardHeader>
+            <CardTitle className="text-center text-2xl">
+              {registration.isPending ? "Checking registration…" : registration.isError ? "Registration unavailable" : "Registration is closed"}
+            </CardTitle>
+            <CardDescription className="text-center" role="status">
+              {registration.isPending ? "Please wait." : registration.isError
+                ? "We could not check registration availability. Please try again."
+                : "New accounts are currently disabled. Contact your administrator for access."}
+            </CardDescription>
+          </CardHeader>
+          <CardFooter className="flex flex-col gap-3">
+            {registration.isError && <Button onClick={() => void registration.refetch()} disabled={registration.isFetching}>Try again</Button>}
+            <Link href="/login" className="text-primary hover:underline">Back to sign in</Link>
+          </CardFooter>
         </Card>
       </div>
     );

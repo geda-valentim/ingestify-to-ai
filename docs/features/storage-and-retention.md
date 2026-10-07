@@ -1,6 +1,6 @@
 # Armazenamento e retenção
 
-> Verificado contra o código em 2026-10-04. Fonte da verdade:
+> Verificado contra o código em 2026-10-06. Fonte da verdade:
 > [backend/shared/minio_client.py](../../backend/shared/minio_client.py),
 > [backend/shared/redis_client.py](../../backend/shared/redis_client.py),
 > [backend/shared/elasticsearch_client.py](../../backend/shared/elasticsearch_client.py),
@@ -15,7 +15,7 @@
 | **MySQL** | Fonte da verdade: usuários, API keys, jobs, páginas, tags. Decide autorização. | Permanente até `DELETE /jobs/{id}`. |
 | **Elasticsearch** | Markdown final (`job_results`) e por página (`page_results`); busca. | Permanente até `DELETE /jobs/{id}`. |
 | **MinIO** | Arquivos: originais, PDFs por página, Markdown por página, áudio/legendas. | Sem expiração (ver lacunas). |
-| **Redis** | Cache com TTL: status ao vivo, resultados recentes, filas Celery, rate limit. | Toda chave expira. |
+| **Redis** | Cache: status ao vivo, resultados recentes, filas Celery, rate limit. | Status e resultados expiram; não são a cópia durável de transcrições. |
 | **Disco** (`TEMP_STORAGE_PATH`) | Área de trabalho compartilhada entre API e workers. | Apagado ao concluir; sobras varridas após 72 h. |
 
 O MySQL **não** faz parte do compose: a `DATABASE_URL` padrão do compose aponta para
@@ -43,6 +43,21 @@ Leitura pelo navegador: só via URL pré-assinada de 15 min em
 `MINIO_PUBLIC_ENDPOINT` (ou, se não definido, o host da requisição na porta do MinIO).
 
 Imagens de `/images/*` **não** vão para o MinIO.
+
+Transcrições de arquivo só são marcadas como concluídas após salvar todos os
+formatos (`transcript.vtt`, `.srt`, `.txt`, `.json`) e o resultado completo
+`transcripts/{job_id}/result.json`. Esse resultado preserva Markdown original,
+metadados de execução e formato padrão. Falhas de gravação interrompem a
+finalização e preservam a origem para retry; o worker não publica sucesso apenas
+com uma cópia no Redis. Falhas de indexação são registradas em
+`jobs.has_elasticsearch_result`, mas não impedem ler o resultado durável.
+
+Sessões live salvam os mesmos cinco objetos em
+`transcripts/{job_id}/live/{generation}/`, mantendo os controles de geração,
+cancelamento e publicação. A finalização live continua exigindo indexação.
+Os arquivos e `result.json` são removidos junto com o prefixo de transcrição ao
+excluir o job. Depois da expiração do status no Redis, o status do próprio job
+continua disponível pelo MySQL.
 
 Se o MinIO estiver indisponível no upload, a API loga o erro e segue com o arquivo só no
 disco (o retry de página depende do original no MinIO depois que o disco é limpo).

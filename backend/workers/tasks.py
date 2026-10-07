@@ -29,7 +29,10 @@ from shared.database import SessionLocal
 from shared.models import Job, Page, JobStatus
 from shared.config import get_settings
 from shared.pdf_splitter import PDFSplitter, should_split_pdf
-from shared.engines.media import AUDIO_EXTENSIONS
+from shared.engines.media import AUDIO_EXTENSIONS, VIDEO_EXTENSIONS
+from shared.audio_capabilities import AudioConversionOptions
+from shared.audio_decoding import PROVIDER_OPTIONS
+from shared.job_configuration import configuration_fingerprint, save_configuration
 # Moved to workers.engines.pipeline; the old names stay importable from here
 from workers.engines.pipeline import (  # noqa: F401
     finish_transcription,
@@ -88,6 +91,38 @@ def _remove_job_files(job_id: str) -> None:
 # Transcription owns this slice of a job's overall progress (see process_conversion)
 TRANSCRIPTION_PROGRESS_START = 30
 TRANSCRIPTION_PROGRESS_END = 70
+
+
+def _resolve_discovered_audio_options(job_id, options):
+    """Persist the effective model/configuration when download reveals audio."""
+    if options.get('processing_mode') == 'document' or options.get('_document_requested'):
+        raise ValueError('A fonte contém áudio/vídeo e não aceita opções Docling; envie audio_options no /convert')
+    if not settings.enable_audio_transcription:
+        raise ValueError('A fonte contém áudio/vídeo, mas a transcrição está desabilitada')
+    provider = settings.audio_transcriber_provider
+    decoding = {key: value for key, value in options.items() if key in PROVIDER_OPTIONS[provider] and key != 'word_timestamps'}
+    if options.get('audio_language'):
+        decoding['language'] = options['audio_language']
+    flags = {key: options[key] for key in ('operation', 'include_timestamps', 'include_word_timestamps', 'output_format', 'purge_source') if key in options}
+    provider, model, configured = AudioConversionOptions.model_validate({**flags, 'decoding': decoding}).resolve(settings)
+    db = SessionLocal()
+    try:
+        job = db.query(Job).filter(Job.id == job_id).first()
+        if job is None:
+            raise ValueError('Não foi possível recuperar o job para salvar a configuração de áudio')
+        row = job.configuration_row
+        if row is None:
+            save_configuration(db, job, operation='transcription', options=configured, provider=provider, model=model)
+        else:
+            row.operation, row.options, row.provider, row.model = 'transcription', configured, provider, model
+            row.fingerprint = configuration_fingerprint('transcription', configured, provider, model)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+    return {**configured, 'is_audio': True, 'transcriber_provider': provider}
 
 # Live text is pushed to Redis in batches, at most this often (wall-clock seconds)
 LIVE_TRANSCRIPT_FLUSH_SECONDS = 2.0
@@ -162,12 +197,8 @@ def _transcribe_audio(job_id: str, file_path: Path, options: dict, redis_client,
     redis_client.update_job_progress(job_id, TRANSCRIPTION_PROGRESS_START)
 
     # Transcribe audio
-    transcription_options = {
-        'language': options.get('audio_language') or options.get('language'),
-        'include_word_timestamps': options.get('include_word_timestamps', False),
-        'temperature': options.get('temperature', 0.0),
-        'beam_size': options.get('beam_size', 5)
-    }
+    transcription_options = dict(options)
+    transcription_options['language'] = options.get('audio_language') or options.get('language')
 
     # Uses the GPU when available (detected once per worker) and falls back to CPU
     transcription_started = time.monotonic()
@@ -438,10 +469,12 @@ def process_conversion(
 
         # 2. Check if this is an audio file for transcription
         is_audio = options.get('is_audio', False) or source_type == 'audio'
-        audio_extensions = AUDIO_EXTENSIONS
+        audio_extensions = AUDIO_EXTENSIONS + VIDEO_EXTENSIONS
         file_ext = file_path.suffix.lower()
 
         if is_audio or file_ext in audio_extensions:
+            if not is_audio:
+                options = _resolve_discovered_audio_options(job_id, options)
             # With a transcription route, audio that only revealed itself here (URL,
             # Drive, Dropbox, or a route created after the upload) joins the backlog
             # instead of transcribing in this worker. No route: nothing changes.
@@ -486,6 +519,13 @@ def process_conversion(
                 logger.error(f"[MAIN JOB {job_id}] ✗ Audio transcription failed")
                 raise
 
+        # Enforce conversion limits on the source before parallel page work.
+        document_configuration = options.get('document_options') or {}
+        if document_configuration.get('max_file_size') and file_path.stat().st_size > document_configuration['max_file_size']:
+            raise ValueError('Documento excede max_file_size')
+        if file_path.suffix.lower() == '.pdf' and document_configuration.get('max_num_pages'):
+            if PDFSplitter(file_path.parent).get_page_count(file_path) > document_configuration['max_num_pages']:
+                raise ValueError('Documento excede max_num_pages')
         # 3. Check if PDF needs splitting
         if should_split_pdf(file_path, min_pages=2):
             logger.info(f"[MAIN JOB {job_id}] PDF multi-page detected - creating split job")
@@ -511,8 +551,14 @@ def process_conversion(
             # Documento não-PDF ou PDF single page - processar direto
             logger.info(f"[MAIN JOB {job_id}] Single document - converting directly")
 
-            converter = get_converter(preset=preset)
-            result = converter.convert_to_markdown(file_path, options)
+            converter = get_converter(preset=preset, pipeline_options=(options.get('document_options') or {}).get('pipeline'))
+            result = converter.convert_to_markdown(file_path, {**options, '_asset_url_prefix': f'/jobs/{job_id}/assets'})
+            document_result_path = None
+            if 'document' in result:
+                from workers.document_outputs import store_document_result
+                document_result_path = store_document_result(job_id, result)
+            from shared.datalake.service import stage_result
+            stage_result(job_id, result, session_factory=SessionLocal)
 
             logger.info(f"[MAIN JOB {job_id}] Conversion complete")
             redis_client.update_job_progress(job_id, 80)
@@ -550,6 +596,8 @@ def process_conversion(
                     job.status = JobStatus.COMPLETED
                     job.completed_at = datetime.utcnow()
                     job.char_count = len(markdown_content)
+                    if document_result_path:
+                        job.minio_result_path = document_result_path
                     job.has_elasticsearch_result = es_success
                     db.commit()
             except Exception as e:
@@ -575,6 +623,8 @@ def process_conversion(
             if callback_url:
                 send_callback(callback_url, job_id, "completed", result)
 
+        from shared.datalake.service import enqueue_export
+        enqueue_export(job_id, session_factory=SessionLocal)
         return {"job_id": job_id, "status": "completed"}
 
     except SoftTimeLimitExceeded:
@@ -704,57 +754,57 @@ def split_pdf_task(
         splitter = PDFSplitter(temp_dir)
         page_files = splitter.split_pdf(Path(file_path), job_id=parent_job_id)
 
+        page_range = (options.get('document_options') or {}).get('page_range')
+        if page_range:
+            page_files = [item for item in page_files if page_range[0] <= item[0] <= page_range[1]]
+            if not page_files:
+                raise ValueError('page_range não contém páginas do documento')
         total_pages = len(page_files)
         logger.info(f"[SPLIT JOB {split_job_id}] PDF split into {total_pages} pages")
 
         # Store total pages in parent job (Redis)
         redis_client.set_job_pages(parent_job_id, total_pages)
 
-        # Update MySQL: Update parent job with total_pages
+        # Persist the whole split before publishing tasks. A schema/write error
+        # must retry the split, never produce a completed job with missing pages.
+        page_tasks = []
         db = SessionLocal()
         try:
             job = db.query(Job).filter(Job.id == parent_job_id).first()
-            if job:
-                job.total_pages = total_pages
-                db.commit()
-        except Exception as e:
-            logger.error(f"[SPLIT JOB {split_job_id}] MySQL update error: {e}")
+            if job is None:
+                raise ValueError(f"Parent job {parent_job_id} no longer exists")
+            job.total_pages = total_pages
+            for page_num, page_file_path, minio_path in page_files:
+                page = db.query(Page).filter_by(job_id=parent_job_id, page_number=page_num).first()
+                if page is None:
+                    page = Page(id=str(uuid4()), job_id=parent_job_id, page_number=page_num,
+                                page_job_id=str(uuid4()), minio_page_path=minio_path,
+                                status=JobStatus.PENDING)
+                    db.add(page)
+                elif not page.page_job_id:
+                    page.page_job_id = str(uuid4())
+                if page.status == JobStatus.PENDING:
+                    page_tasks.append((page.page_job_id, page_num, page_file_path))
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise
         finally:
             db.close()
+
+        # Register the entire fan-out before the first page can finish, so merge
+        # always sees the complete set, including on a split retry.
+        registered_ids = set(redis_client.get_page_jobs(parent_job_id))
+        for page_job_id, _, _ in page_tasks:
+            if page_job_id not in registered_ids:
+                redis_client.add_child_job(parent_job_id, "page", page_job_id)
 
         # With a document_conversion route each page joins the backlog and the
         # dispatcher places it (spec 0003, 4.14); without one, nothing changes
         page_route = _page_route()
 
-        # Create PAGE records in MySQL and PAGE JOBS for each page
-        for page_num, page_file_path, minio_path in page_files:
-            page_job_id = str(uuid4())
-
-            logger.info(f"[SPLIT JOB {split_job_id}] Creating page job {page_job_id} for page {page_num}")
-
-            # Create Page record in MySQL
-            db = SessionLocal()
-            try:
-                from shared.models import Page as PageModel
-                page = PageModel(
-                    id=str(uuid4()),
-                    job_id=parent_job_id,
-                    page_number=page_num,
-                    page_job_id=page_job_id,
-                    minio_page_path=minio_path,
-                    status=JobStatus.PENDING
-                )
-                db.add(page)
-                db.commit()
-            except Exception as e:
-                logger.error(f"[SPLIT JOB {split_job_id}] MySQL page creation error: {e}")
-            finally:
-                db.close()
-
-            # Add page job as child of main job (Redis); before a routed page can run,
-            # so the merge trigger always sees every page
+        for page_job_id, page_num, page_file_path in page_tasks:
             if page_route is not None:
-                redis_client.add_child_job(parent_job_id, "page", page_job_id)
                 _submit_page(page_job_id, parent_job_id, page_num, options, page_file_path=str(page_file_path))
                 continue
 
@@ -766,9 +816,6 @@ def split_pdf_task(
                 page_file_path=str(page_file_path),
                 options=options
             )
-
-            # Add page job as child of main job (Redis)
-            redis_client.add_child_job(parent_job_id, "page", page_job_id)
 
         # Mark split job as completed in Redis
         redis_client.set_job_status(
@@ -795,6 +842,28 @@ def split_pdf_task(
             error=str(exc),
             completed_at=datetime.utcnow(),
         )
+
+        # Once retries are exhausted, the main job cannot make progress.
+        # Persist a terminal state instead of leaving the UI polling forever.
+        if self.request.retries >= self.max_retries:
+            db = SessionLocal()
+            try:
+                parent = db.query(Job).filter(Job.id == parent_job_id).first()
+                if parent is not None and parent.status in (JobStatus.PENDING, JobStatus.PROCESSING):
+                    parent.status = JobStatus.FAILED
+                    parent.error_message = f"PDF split failed: {exc}"
+                    parent.completed_at = datetime.utcnow()
+                    db.commit()
+                    redis_client.set_job_status(
+                        job_id=parent_job_id, job_type="main", status="failed",
+                        error=parent.error_message, completed_at=parent.completed_at,
+                        child_job_ids=redis_client.get_child_jobs(parent_job_id),
+                    )
+            except Exception:
+                db.rollback()
+                logger.exception("Could not persist terminal split failure for job %s", parent_job_id)
+            finally:
+                db.close()
 
         raise self.retry(exc=exc, countdown=30 * (2 ** self.request.retries))
 
@@ -931,7 +1000,7 @@ def _run_page_conversion(
 
     redis_client = get_redis_client()
     es_client = get_es_client()
-    converter = get_converter(preset=options.get("docling_preset"))
+    converter = get_converter(preset=options.get("docling_preset"), pipeline_options=(options.get("document_options") or {}).get("pipeline"))
 
     log_prefix = f"[PAGE JOB {page_job_id}]"
     logger.info(f"{log_prefix} Processing page {page_number} of job {parent_job_id}")
@@ -984,7 +1053,23 @@ def _run_page_conversion(
             logger.info(f"{log_prefix} Extracted page {page_number} to {page_path}")
 
         # Convert page
-        result = converter.convert_to_markdown(page_path, options)
+        page_options = {**options, '_asset_url_prefix': f'/jobs/{parent_job_id}/pages/{page_number}/assets'}
+        if options.get('document_options'):
+            import copy
+            configuration = copy.deepcopy(options['document_options'])
+            configuration['page_range'] = None
+            for parameters in configuration.get('export_options', {}).values():
+                if parameters.get('page_no') is not None:
+                    parameters['page_no'] = 1 if parameters['page_no'] == page_number else -1
+                if parameters.get('pages') is not None:
+                    parameters['pages'] = [1] if page_number in parameters['pages'] else []
+            page_options['document_options'] = configuration
+        result = converter.convert_to_markdown(page_path, page_options)
+        if 'document' in result:
+            from workers.document_outputs import store_document_result
+            result['metadata']['source_page_number'] = page_number
+            result['metadata']['configuration'] = options.get('document_options')
+            store_document_result(parent_job_id, result, page_number=page_number)
 
         # Store page result in Redis
         redis_client.set_job_result(page_job_id, result)
@@ -1278,48 +1363,58 @@ def merge_pages_task(
             started_at=datetime.utcnow(),
         )
 
-        # Get all page jobs
-        page_job_ids = redis_client.get_page_jobs(parent_job_id)
-        total_pages = len(page_job_ids)
-
-        logger.info(f"[MERGE JOB {merge_job_id}] Merging {total_pages} pages")
-
-        # Collect all page results in order
+        db = SessionLocal()
+        try:
+            parent = db.query(Job).filter(Job.id == parent_job_id).first()
+            configuration_row = getattr(parent, 'configuration_row', None)
+            configuration = configuration_row.options if configuration_row else {}
+            persisted_pages = db.query(Page).filter(Page.job_id == parent_job_id).order_by(Page.page_number).all()
+            page_entries = [(page.page_number, page.page_job_id, page.markdown_content) for page in persisted_pages]
+        finally:
+            db.close()
+        if not page_entries:
+            page_entries = [((redis_client.get_job_status(pid) or {}).get('page_number'), pid, None)
+                            for pid in redis_client.get_page_jobs(parent_job_id)]
         page_results = []
+        native_documents = []
         total_words = 0
-
-        for page_job_id in page_job_ids:
-            page_status = redis_client.get_job_status(page_job_id)
-            if not page_status:
-                continue
-
-            page_num = page_status.get("page_number")
+        for page_num, page_job_id, stored_markdown in page_entries:
             page_result = redis_client.get_job_result(page_job_id)
-
-            if page_result:
-                page_results.append((page_num, page_result["markdown"]))
-                total_words += page_result.get("metadata", {}).get("words", 0)
-
-        # Sort by page number
-        page_results.sort(key=lambda x: x[0])
-
-        # Combine all pages
-        combined_markdown = "\n\n---\n\n".join([markdown for _, markdown in page_results])
-
-        # Create merged result
-        merged_result = {
-            "markdown": combined_markdown,
-            "metadata": {
-                "pages": total_pages,
-                "words": total_words,
-                "format": "pdf",
-                "size_bytes": 0,
-                "title": None,
-                "author": None,
-            }
-        }
+            if not page_result or (configuration.get('document_options') and 'document' not in page_result):
+                try:
+                    from workers.document_outputs import load_document_result
+                    page_result = load_document_result(parent_job_id, page_number=page_num)
+                except Exception:
+                    if configuration.get('document_options'):
+                        raise RuntimeError(f'Resultado durável da página {page_num} indisponível') from None
+                    page_result = {'markdown': stored_markdown, 'metadata': {}} if stored_markdown is not None else page_result
+            if not page_result:
+                raise RuntimeError(f'Resultado da página {page_num} indisponível')
+            page_results.append((page_num, page_result['markdown']))
+            total_words += page_result.get('metadata', {}).get('words', 0)
+            if 'document' in page_result:
+                from docling_core.types.doc import DoclingDocument
+                native_documents.append(DoclingDocument.model_validate(page_result['document']))
+        page_results.sort(key=lambda item: item[0])
+        total_pages = len(page_results)
+        combined_markdown = '\n\n---\n\n'.join(text for _, text in page_results)
+        merged_result = {'markdown': combined_markdown, 'metadata': {
+            'pages': total_pages, 'words': total_words, 'format': 'pdf', 'size_bytes': 0, 'title': None, 'author': None}}
+        document_result_path = None
+        if native_documents:
+            from workers.document_outputs import export_document, store_document_result, preserve_source_page_numbers
+            document = preserve_source_page_numbers(DoclingDocument.concatenate(native_documents), [number for number, _ in page_results])
+            merged_result.update(export_document(document, {**configuration, '_asset_url_prefix': f'/jobs/{parent_job_id}/assets'},
+                Path(settings.temp_storage_path) / parent_job_id / 'merged_assets'))
+            merged_result['metadata'].update(provider='docling', configuration=configuration.get('document_options'),
+                output_format=(configuration.get('document_options') or {}).get('output_format', 'markdown'),
+                available_formats=list(merged_result['exports']), source_page_numbers=[number for number, _ in page_results])
+            combined_markdown = merged_result['markdown']
+            document_result_path = store_document_result(parent_job_id, merged_result)
 
         # Store merged result in main job (Redis)
+        from shared.datalake.service import stage_result
+        stage_result(parent_job_id, merged_result, session_factory=SessionLocal)
         redis_client.set_job_result(parent_job_id, merged_result)
 
         # Store merged result in Elasticsearch
@@ -1348,6 +1443,8 @@ def merge_pages_task(
                 job.status = JobStatus.COMPLETED
                 job.completed_at = datetime.utcnow()
                 job.char_count = len(combined_markdown)
+                if document_result_path:
+                    job.minio_result_path = document_result_path
                 job.has_elasticsearch_result = es_success
                 db.commit()
         except Exception as e:
@@ -1371,9 +1468,12 @@ def merge_pages_task(
             status="completed",
             progress=100,
             completed_at=datetime.utcnow(),
+            child_job_ids=redis_client.get_child_jobs(parent_job_id),
         )
 
         logger.info(f"[MERGE JOB {merge_job_id}] Completed - main job {parent_job_id} finished")
+        from shared.datalake.service import enqueue_export
+        enqueue_export(parent_job_id, session_factory=SessionLocal)
 
         # Cleanup temp files (pages, merged output and the uploaded file; the original stays in MinIO)
         _remove_job_files(parent_job_id)
@@ -1437,5 +1537,3 @@ def send_callback(callback_url: str, job_id: str, status: str, result: dict = No
     except Exception as e:
         logger.error(f"Failed to send callback: {e}")
         raise
-
-

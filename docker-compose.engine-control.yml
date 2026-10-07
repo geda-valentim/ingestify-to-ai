@@ -1,0 +1,63 @@
+# Opt in after the explicit 0007 migration and host registration.
+# Merge with the actual GPU/live/production overlays used by the installation.
+services:
+  api:
+    environment:
+      ENGINE_CONTROL_ENABLED: 'true'
+      ENGINE_ACCESS_ENABLED: '${ENGINE_ACCESS_ENABLED:-false}'
+      ENGINE_INSTALLATION_PRINCIPAL_ID: '${ENGINE_INSTALLATION_PRINCIPAL_ID:-}'
+      ENGINE_HOST_IDENTITIES_FILE: /run/secrets/engine_host_identities
+    volumes:
+      - ./secrets/engine_host_identities.json:/run/secrets/engine_host_identities:ro
+  worker:
+    environment:
+      ENGINE_CONTROL_ENABLED: 'true'
+      ENGINE_ACCESS_ENABLED: '${ENGINE_ACCESS_ENABLED:-false}'
+      ENGINE_INSTALLATION_PRINCIPAL_ID: '${ENGINE_INSTALLATION_PRINCIPAL_ID:-}'
+  worker-audio:
+    environment:
+      ENGINE_CONTROL_ENABLED: 'true'
+      ENGINE_ACCESS_ENABLED: '${ENGINE_ACCESS_ENABLED:-false}'
+      ENGINE_INSTALLATION_PRINCIPAL_ID: '${ENGINE_INSTALLATION_PRINCIPAL_ID:-}'
+  worker-vision:
+    environment:
+      ENGINE_CONTROL_ENABLED: 'true'
+      ENGINE_ACCESS_ENABLED: '${ENGINE_ACCESS_ENABLED:-false}'
+      ENGINE_INSTALLATION_PRINCIPAL_ID: '${ENGINE_INSTALLATION_PRINCIPAL_ID:-}'
+  worker-remote:
+    environment:
+      ENGINE_CONTROL_ENABLED: 'true'
+      ENGINE_ACCESS_ENABLED: '${ENGINE_ACCESS_ENABLED:-false}'
+      ENGINE_INSTALLATION_PRINCIPAL_ID: '${ENGINE_INSTALLATION_PRINCIPAL_ID:-}'
+  worker-dispatch:
+    environment:
+      ENGINE_CONTROL_ENABLED: 'true'
+      ENGINE_ACCESS_ENABLED: '${ENGINE_ACCESS_ENABLED:-false}'
+      ENGINE_INSTALLATION_PRINCIPAL_ID: '${ENGINE_INSTALLATION_PRINCIPAL_ID:-}'
+  worker-control:
+    extends:
+      file: docker-compose.yml
+      service: worker-remote
+    profiles: [engine-control]
+    command: celery -A workers.celery_app worker --loglevel=info --pool=threads --concurrency=4 -Q ingestify-engine-control -n ingestify-control@%h -B --schedule /tmp/celerybeat-control
+    environment:
+      ENGINE_CONTROL_ENABLED: 'true'
+      ENGINE_ACCESS_ENABLED: '${ENGINE_ACCESS_ENABLED:-false}'
+      ENGINE_INSTALLATION_PRINCIPAL_ID: '${ENGINE_INSTALLATION_PRINCIPAL_ID:-}'
+      ENGINE_CONTROL_BEAT: 'true'
+      ENGINES_REMOTE_BEAT: 'false'
+    deploy:
+      replicas: 1
+  worker-control-watchdog:
+    extends:
+      file: docker-compose.yml
+      service: worker-remote
+    profiles: [engine-control]
+    command: python -m workers.engine_control.watchdog
+    environment:
+      ENGINE_CONTROL_ENABLED: 'true'
+      ENGINE_ACCESS_ENABLED: '${ENGINE_ACCESS_ENABLED:-false}'
+      ENGINE_INSTALLATION_PRINCIPAL_ID: '${ENGINE_INSTALLATION_PRINCIPAL_ID:-}'
+      ENGINES_REMOTE_BEAT: 'false'
+    deploy:
+      replicas: 1

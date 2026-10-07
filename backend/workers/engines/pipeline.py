@@ -15,7 +15,7 @@ from typing import Any, Dict, Optional
 from shared.database import SessionLocal
 from shared.minio_client import get_minio_client
 from shared.models import Job, JobStatus
-from shared.transcripts import TRANSCRIPT_CONTENT_TYPES, transcript_object_name
+from shared.transcripts import TRANSCRIPT_CONTENT_TYPES, transcript_object_name, transcript_result_object_name
 from workers.audio.base_transcriber import format_markdown, format_srt, format_text, format_vtt
 
 logger = logging.getLogger(__name__)
@@ -48,7 +48,7 @@ def finish_transcription(
             'size_bytes': file_path.stat().st_size,
         }, processing_seconds=processing_seconds, compute_type=compute_type)
     markdown_content = result_with_markdown['markdown']
-    store_transcript_outputs(job_id, transcript_outputs)
+    store_transcript_outputs(job_id, transcript_outputs, result_with_markdown)
 
     redis_client.set_job_result(job_id, result_with_markdown)
     redis_client.delete_partial_transcript(job_id)  # the full result supersedes it
@@ -63,14 +63,18 @@ def finish_transcription(
     finally:
         db.close()
 
-    es_success = es_client.store_job_result(
-        job_id=job_id,
-        markdown_content=markdown_content,
-        user_id=user_id,
-        filename=filename,
-        total_pages=None,  # Audio files don't have pages
-        metadata=result_with_markdown['metadata']
-    )
+    try:
+        es_success = es_client.store_job_result(
+            job_id=job_id,
+            markdown_content=markdown_content,
+            user_id=user_id,
+            filename=filename,
+            total_pages=None,  # Audio files don't have pages
+            metadata=result_with_markdown['metadata']
+        )
+    except Exception:
+        logger.exception("[MAIN JOB %s] Indexing failed; durable result is available", job_id)
+        es_success = False
 
     if es_success:
         logger.info(f"[MAIN JOB {job_id}] Result stored in Elasticsearch")
@@ -83,15 +87,15 @@ def finish_transcription(
     db = SessionLocal()
     try:
         job = db.query(Job).filter(Job.id == job_id).first()
-        if job:
-            job.status = JobStatus.COMPLETED
-            job.completed_at = datetime.utcnow()
-            job.char_count = result['char_count']
-            job.has_elasticsearch_result = es_success
-            db.commit()
-            logger.info(f"[MAIN JOB {job_id}] MySQL updated with completion")
-    except Exception as e:
-        logger.error(f"[MAIN JOB {job_id}] MySQL update error: {e}")
+        if job is None:
+            raise RuntimeError(f"Job {job_id} no longer exists")
+        job.status = JobStatus.COMPLETED
+        job.progress = 100
+        job.completed_at = datetime.utcnow()
+        job.char_count = result['char_count']
+        job.has_elasticsearch_result = es_success
+        db.commit()
+        logger.info(f"[MAIN JOB {job_id}] MySQL updated with completion")
     finally:
         db.close()
 
@@ -103,6 +107,8 @@ def finish_transcription(
         progress=100,
         completed_at=datetime.utcnow()
     )
+    from shared.datalake.service import enqueue_export
+    enqueue_export(job_id, session_factory=SessionLocal)
 
     # Shared with the document path, so it stays in tasks; imported here to keep
     # tasks -> pipeline the only import direction at module load
@@ -131,33 +137,33 @@ def purge_audio_source(job_id: str) -> None:
         db.close()
 
 
-def store_transcript_outputs(job_id: str, outputs: dict) -> None:
-    """Persist transcript formats in the private audio bucket so they outlive the Redis result TTL"""
-    try:
-        minio_client = get_minio_client()
-    except Exception as e:
-        logger.warning(f"[MAIN JOB {job_id}] MinIO unavailable, transcript files kept only in Redis: {e}")
-        return
-
+def store_transcript_outputs(job_id: str, outputs: dict, payload=None) -> None:
+    """All writes must succeed before SQL completion or removal of source files."""
+    minio_client = get_minio_client()
     for fmt, content in outputs.items():
         # Empty outputs are valid (e.g. SRT of a recording without speech) and stored too
-        try:
-            minio_client.upload_file(
-                bucket_name=minio_client.bucket_audio,
-                object_name=transcript_object_name(job_id, fmt),
-                file_data=content.encode('utf-8'),
-                content_type=TRANSCRIPT_CONTENT_TYPES[fmt],
-            )
-        except Exception as e:
-            logger.warning(f"[MAIN JOB {job_id}] Failed to store transcript.{fmt} in MinIO: {e}")
+        if not minio_client.upload_file(
+            bucket_name=minio_client.bucket_audio,
+            object_name=transcript_object_name(job_id, fmt),
+            file_data=content.encode('utf-8'),
+            content_type=TRANSCRIPT_CONTENT_TYPES[fmt],
+        ):
+            raise RuntimeError(f"Transcript {fmt} was not persisted for job {job_id}")
+    if payload is not None:
+        if not minio_client.upload_file(
+            bucket_name=minio_client.bucket_audio,
+            object_name=transcript_result_object_name(job_id),
+            file_data=json.dumps(payload, ensure_ascii=False).encode('utf-8'),
+            content_type='application/json',
+        ):
+            raise RuntimeError(f"Full transcript result was not persisted for job {job_id}")
 
 
 def build_transcription_outputs(result, *, options, input_metadata, processing_seconds, compute_type):
     """Shared formats/metadata for file input and strict live finalization."""
     outputs = {
         'vtt': format_vtt(result), 'srt': format_srt(result), 'txt': format_text(result),
-        'json': json.dumps({k: result.get(k) for k in ('language', 'duration', 'text', 'segments')},
-                           ensure_ascii=False),
+        'json': json.dumps({**result, 'configuration': options}, ensure_ascii=False),
     }
     metadata = {
         **input_metadata, 'words': result['word_count'], 'language': result['language'],
@@ -167,6 +173,7 @@ def build_transcription_outputs(result, *, options, input_metadata, processing_s
         'compute_type': compute_type, 'language_probability': result.get('language_probability'),
         'processing_seconds': processing_seconds, 'output_format': options.get('output_format', 'markdown'),
         'available_formats': ['markdown'] + list(outputs),
+        'configuration': options,
     }
     return {'markdown': format_markdown(result, options.get('include_timestamps', True)),
             'metadata': metadata, 'transcript': outputs}, outputs

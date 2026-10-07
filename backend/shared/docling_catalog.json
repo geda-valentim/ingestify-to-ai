@@ -1,0 +1,3749 @@
+{
+  "docling_core_version": "2.100.0",
+  "docling_version": "2.87.0",
+  "engine_option_classes": {
+    "BaseImageClassificationEngineOptions": {
+      "api_kserve_v2": {
+        "class": "ApiKserveV2ImageClassificationEngineOptions",
+        "module": "docling.datamodel.image_classification_engine_options"
+      },
+      "onnxruntime": {
+        "class": "OnnxRuntimeImageClassificationEngineOptions",
+        "module": "docling.datamodel.image_classification_engine_options"
+      },
+      "transformers": {
+        "class": "TransformersImageClassificationEngineOptions",
+        "module": "docling.datamodel.image_classification_engine_options"
+      }
+    },
+    "BaseVlmEngineOptions": {
+      "api": {
+        "class": "ApiVlmEngineOptions",
+        "module": "docling.datamodel.vlm_engine_options"
+      },
+      "auto_inline": {
+        "class": "AutoInlineVlmEngineOptions",
+        "module": "docling.datamodel.vlm_engine_options"
+      },
+      "mlx": {
+        "class": "MlxVlmEngineOptions",
+        "module": "docling.datamodel.vlm_engine_options"
+      },
+      "transformers": {
+        "class": "TransformersVlmEngineOptions",
+        "module": "docling.datamodel.vlm_engine_options"
+      },
+      "vllm": {
+        "class": "VllmVlmEngineOptions",
+        "module": "docling.datamodel.vlm_engine_options"
+      }
+    }
+  },
+  "exports": {
+    "doclang": {
+      "method": "export_to_doclang",
+      "parameters_schema": {
+        "$defs": {
+          "ImageRefMode": {
+            "description": "ImageRefMode.",
+            "enum": [
+              "placeholder",
+              "embedded",
+              "referenced"
+            ],
+            "title": "ImageRefMode",
+            "type": "string"
+          }
+        },
+        "additionalProperties": false,
+        "properties": {
+          "add_named_groups": {
+            "default": false,
+            "title": "Add Named Groups",
+            "type": "boolean"
+          },
+          "image_mode": {
+            "$ref": "#/$defs/ImageRefMode",
+            "default": "placeholder"
+          }
+        },
+        "title": "ExportDoclang",
+        "type": "object"
+      }
+    },
+    "doctags": {
+      "method": "export_to_doctags",
+      "parameters_schema": {
+        "$defs": {
+          "DocItemLabel": {
+            "description": "DocItemLabel.",
+            "enum": [
+              "caption",
+              "chart",
+              "footnote",
+              "formula",
+              "list_item",
+              "page_footer",
+              "page_header",
+              "picture",
+              "section_header",
+              "table",
+              "text",
+              "title",
+              "document_index",
+              "code",
+              "checkbox_selected",
+              "checkbox_unselected",
+              "form",
+              "key_value_region",
+              "grading_scale",
+              "handwritten_text",
+              "empty_value",
+              "paragraph",
+              "reference",
+              "field_region",
+              "field_heading",
+              "field_item",
+              "field_key",
+              "field_value",
+              "field_hint",
+              "marker"
+            ],
+            "title": "DocItemLabel",
+            "type": "string"
+          }
+        },
+        "additionalProperties": false,
+        "properties": {
+          "add_content": {
+            "default": true,
+            "title": "Add Content",
+            "type": "boolean"
+          },
+          "add_location": {
+            "default": true,
+            "title": "Add Location",
+            "type": "boolean"
+          },
+          "add_page_index": {
+            "default": true,
+            "title": "Add Page Index",
+            "type": "boolean"
+          },
+          "add_table_cell_location": {
+            "default": false,
+            "title": "Add Table Cell Location",
+            "type": "boolean"
+          },
+          "add_table_cell_text": {
+            "default": true,
+            "title": "Add Table Cell Text",
+            "type": "boolean"
+          },
+          "delim": {
+            "default": "",
+            "title": "Delim",
+            "type": "string"
+          },
+          "from_element": {
+            "default": 0,
+            "title": "From Element",
+            "type": "integer"
+          },
+          "labels": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/$defs/DocItemLabel"
+                },
+                "type": "array",
+                "uniqueItems": true
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Labels"
+          },
+          "minified": {
+            "default": false,
+            "title": "Minified",
+            "type": "boolean"
+          },
+          "pages": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "integer"
+                },
+                "type": "array",
+                "uniqueItems": true
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Pages"
+          },
+          "to_element": {
+            "default": 9223372036854775807,
+            "title": "To Element",
+            "type": "integer"
+          },
+          "xsize": {
+            "default": 500,
+            "title": "Xsize",
+            "type": "integer"
+          },
+          "ysize": {
+            "default": 500,
+            "title": "Ysize",
+            "type": "integer"
+          }
+        },
+        "title": "ExportDoctags",
+        "type": "object"
+      }
+    },
+    "document_tokens": {
+      "method": "export_to_document_tokens",
+      "parameters_schema": {
+        "$defs": {
+          "DocItemLabel": {
+            "description": "DocItemLabel.",
+            "enum": [
+              "caption",
+              "chart",
+              "footnote",
+              "formula",
+              "list_item",
+              "page_footer",
+              "page_header",
+              "picture",
+              "section_header",
+              "table",
+              "text",
+              "title",
+              "document_index",
+              "code",
+              "checkbox_selected",
+              "checkbox_unselected",
+              "form",
+              "key_value_region",
+              "grading_scale",
+              "handwritten_text",
+              "empty_value",
+              "paragraph",
+              "reference",
+              "field_region",
+              "field_heading",
+              "field_item",
+              "field_key",
+              "field_value",
+              "field_hint",
+              "marker"
+            ],
+            "title": "DocItemLabel",
+            "type": "string"
+          }
+        },
+        "additionalProperties": false,
+        "properties": {
+          "add_content": {
+            "default": true,
+            "title": "Add Content",
+            "type": "boolean"
+          },
+          "add_location": {
+            "default": true,
+            "title": "Add Location",
+            "type": "boolean"
+          },
+          "add_page_index": {
+            "default": true,
+            "title": "Add Page Index",
+            "type": "boolean"
+          },
+          "add_table_cell_location": {
+            "default": false,
+            "title": "Add Table Cell Location",
+            "type": "boolean"
+          },
+          "add_table_cell_text": {
+            "default": true,
+            "title": "Add Table Cell Text",
+            "type": "boolean"
+          },
+          "delim": {
+            "default": "",
+            "title": "Delim",
+            "type": "string"
+          },
+          "from_element": {
+            "default": 0,
+            "title": "From Element",
+            "type": "integer"
+          },
+          "labels": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/$defs/DocItemLabel"
+                },
+                "type": "array",
+                "uniqueItems": true
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Labels"
+          },
+          "minified": {
+            "default": false,
+            "title": "Minified",
+            "type": "boolean"
+          },
+          "pages": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "integer"
+                },
+                "type": "array",
+                "uniqueItems": true
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Pages"
+          },
+          "to_element": {
+            "default": 9223372036854775807,
+            "title": "To Element",
+            "type": "integer"
+          },
+          "xsize": {
+            "default": 500,
+            "title": "Xsize",
+            "type": "integer"
+          },
+          "ysize": {
+            "default": 500,
+            "title": "Ysize",
+            "type": "integer"
+          }
+        },
+        "title": "ExportDoctags",
+        "type": "object"
+      }
+    },
+    "element_tree": {
+      "method": "export_to_element_tree",
+      "parameters_schema": {
+        "additionalProperties": false,
+        "properties": {},
+        "title": "ExportElementTree",
+        "type": "object"
+      }
+    },
+    "html": {
+      "method": "export_to_html",
+      "parameters_schema": {
+        "$defs": {
+          "ContentLayer": {
+            "description": "ContentLayer.",
+            "enum": [
+              "body",
+              "furniture",
+              "background",
+              "invisible",
+              "notes"
+            ],
+            "title": "ContentLayer",
+            "type": "string"
+          },
+          "DocItemLabel": {
+            "description": "DocItemLabel.",
+            "enum": [
+              "caption",
+              "chart",
+              "footnote",
+              "formula",
+              "list_item",
+              "page_footer",
+              "page_header",
+              "picture",
+              "section_header",
+              "table",
+              "text",
+              "title",
+              "document_index",
+              "code",
+              "checkbox_selected",
+              "checkbox_unselected",
+              "form",
+              "key_value_region",
+              "grading_scale",
+              "handwritten_text",
+              "empty_value",
+              "paragraph",
+              "reference",
+              "field_region",
+              "field_heading",
+              "field_item",
+              "field_key",
+              "field_value",
+              "field_hint",
+              "marker"
+            ],
+            "title": "DocItemLabel",
+            "type": "string"
+          },
+          "ImageRefMode": {
+            "description": "ImageRefMode.",
+            "enum": [
+              "placeholder",
+              "embedded",
+              "referenced"
+            ],
+            "title": "ImageRefMode",
+            "type": "string"
+          }
+        },
+        "additionalProperties": false,
+        "properties": {
+          "enable_chart_tables": {
+            "default": true,
+            "title": "Enable Chart Tables",
+            "type": "boolean"
+          },
+          "formula_to_mathml": {
+            "default": true,
+            "title": "Formula To Mathml",
+            "type": "boolean"
+          },
+          "from_element": {
+            "default": 0,
+            "title": "From Element",
+            "type": "integer"
+          },
+          "html_head": {
+            "default": "null",
+            "title": "Html Head",
+            "type": "string"
+          },
+          "html_lang": {
+            "default": "en",
+            "title": "Html Lang",
+            "type": "string"
+          },
+          "image_mode": {
+            "$ref": "#/$defs/ImageRefMode",
+            "default": "placeholder"
+          },
+          "include_annotations": {
+            "default": true,
+            "title": "Include Annotations",
+            "type": "boolean"
+          },
+          "included_content_layers": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/$defs/ContentLayer"
+                },
+                "type": "array",
+                "uniqueItems": true
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Included Content Layers"
+          },
+          "labels": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/$defs/DocItemLabel"
+                },
+                "type": "array",
+                "uniqueItems": true
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Labels"
+          },
+          "page_no": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Page No"
+          },
+          "split_page_view": {
+            "default": false,
+            "title": "Split Page View",
+            "type": "boolean"
+          },
+          "to_element": {
+            "default": 9223372036854775807,
+            "title": "To Element",
+            "type": "integer"
+          }
+        },
+        "title": "ExportHtml",
+        "type": "object"
+      }
+    },
+    "json": {
+      "method": "export_to_dict",
+      "parameters_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "by_alias": {
+            "default": true,
+            "title": "By Alias",
+            "type": "boolean"
+          },
+          "confid_precision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Confid Precision"
+          },
+          "coord_precision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Coord Precision"
+          },
+          "exclude_none": {
+            "default": true,
+            "title": "Exclude None",
+            "type": "boolean"
+          },
+          "mode": {
+            "default": "json",
+            "title": "Mode",
+            "type": "string"
+          }
+        },
+        "title": "ExportDict",
+        "type": "object"
+      }
+    },
+    "markdown": {
+      "method": "export_to_markdown",
+      "parameters_schema": {
+        "$defs": {
+          "CaptionPlacement": {
+            "description": "Placement of captions relative to the item they caption.",
+            "enum": [
+              "standard",
+              "layout"
+            ],
+            "title": "CaptionPlacement",
+            "type": "string"
+          },
+          "ContentLayer": {
+            "description": "ContentLayer.",
+            "enum": [
+              "body",
+              "furniture",
+              "background",
+              "invisible",
+              "notes"
+            ],
+            "title": "ContentLayer",
+            "type": "string"
+          },
+          "DocItemLabel": {
+            "description": "DocItemLabel.",
+            "enum": [
+              "caption",
+              "chart",
+              "footnote",
+              "formula",
+              "list_item",
+              "page_footer",
+              "page_header",
+              "picture",
+              "section_header",
+              "table",
+              "text",
+              "title",
+              "document_index",
+              "code",
+              "checkbox_selected",
+              "checkbox_unselected",
+              "form",
+              "key_value_region",
+              "grading_scale",
+              "handwritten_text",
+              "empty_value",
+              "paragraph",
+              "reference",
+              "field_region",
+              "field_heading",
+              "field_item",
+              "field_key",
+              "field_value",
+              "field_hint",
+              "marker"
+            ],
+            "title": "DocItemLabel",
+            "type": "string"
+          },
+          "ImageRefMode": {
+            "description": "ImageRefMode.",
+            "enum": [
+              "placeholder",
+              "embedded",
+              "referenced"
+            ],
+            "title": "ImageRefMode",
+            "type": "string"
+          }
+        },
+        "additionalProperties": false,
+        "properties": {
+          "allowed_meta_names": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array",
+                "uniqueItems": true
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Allowed Meta Names"
+          },
+          "blocked_meta_names": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array",
+                "uniqueItems": true
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Blocked Meta Names"
+          },
+          "caption_placement": {
+            "$ref": "#/$defs/CaptionPlacement",
+            "default": "standard"
+          },
+          "compact_tables": {
+            "default": false,
+            "title": "Compact Tables",
+            "type": "boolean"
+          },
+          "delim": {
+            "default": "\n\n",
+            "title": "Delim",
+            "type": "string"
+          },
+          "enable_chart_tables": {
+            "default": true,
+            "title": "Enable Chart Tables",
+            "type": "boolean"
+          },
+          "escape_html": {
+            "default": true,
+            "title": "Escape Html",
+            "type": "boolean"
+          },
+          "escape_underscores": {
+            "default": true,
+            "title": "Escape Underscores",
+            "type": "boolean"
+          },
+          "from_element": {
+            "default": 0,
+            "title": "From Element",
+            "type": "integer"
+          },
+          "image_mode": {
+            "$ref": "#/$defs/ImageRefMode",
+            "default": "placeholder"
+          },
+          "image_placeholder": {
+            "default": "<!-- image -->",
+            "title": "Image Placeholder",
+            "type": "string"
+          },
+          "include_annotations": {
+            "default": true,
+            "title": "Include Annotations",
+            "type": "boolean"
+          },
+          "include_picture_classification": {
+            "default": true,
+            "title": "Include Picture Classification",
+            "type": "boolean"
+          },
+          "included_content_layers": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/$defs/ContentLayer"
+                },
+                "type": "array",
+                "uniqueItems": true
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Included Content Layers"
+          },
+          "indent": {
+            "default": 4,
+            "title": "Indent",
+            "type": "integer"
+          },
+          "labels": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/$defs/DocItemLabel"
+                },
+                "type": "array",
+                "uniqueItems": true
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Labels"
+          },
+          "mark_annotations": {
+            "default": false,
+            "title": "Mark Annotations",
+            "type": "boolean"
+          },
+          "mark_meta": {
+            "default": false,
+            "title": "Mark Meta",
+            "type": "boolean"
+          },
+          "page_break_placeholder": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Page Break Placeholder"
+          },
+          "page_no": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Page No"
+          },
+          "strict_text": {
+            "default": false,
+            "title": "Strict Text",
+            "type": "boolean"
+          },
+          "text_width": {
+            "default": -1,
+            "title": "Text Width",
+            "type": "integer"
+          },
+          "to_element": {
+            "default": 9223372036854775807,
+            "title": "To Element",
+            "type": "integer"
+          },
+          "traverse_pictures": {
+            "default": false,
+            "title": "Traverse Pictures",
+            "type": "boolean"
+          },
+          "use_legacy_annotations": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Use Legacy Annotations"
+          }
+        },
+        "title": "ExportMarkdown",
+        "type": "object"
+      }
+    },
+    "txt": {
+      "method": "export_to_text",
+      "parameters_schema": {
+        "$defs": {
+          "ContentLayer": {
+            "description": "ContentLayer.",
+            "enum": [
+              "body",
+              "furniture",
+              "background",
+              "invisible",
+              "notes"
+            ],
+            "title": "ContentLayer",
+            "type": "string"
+          },
+          "DocItemLabel": {
+            "description": "DocItemLabel.",
+            "enum": [
+              "caption",
+              "chart",
+              "footnote",
+              "formula",
+              "list_item",
+              "page_footer",
+              "page_header",
+              "picture",
+              "section_header",
+              "table",
+              "text",
+              "title",
+              "document_index",
+              "code",
+              "checkbox_selected",
+              "checkbox_unselected",
+              "form",
+              "key_value_region",
+              "grading_scale",
+              "handwritten_text",
+              "empty_value",
+              "paragraph",
+              "reference",
+              "field_region",
+              "field_heading",
+              "field_item",
+              "field_key",
+              "field_value",
+              "field_hint",
+              "marker"
+            ],
+            "title": "DocItemLabel",
+            "type": "string"
+          }
+        },
+        "additionalProperties": false,
+        "properties": {
+          "delim": {
+            "default": "\n\n",
+            "title": "Delim",
+            "type": "string"
+          },
+          "from_element": {
+            "default": 0,
+            "title": "From Element",
+            "type": "integer"
+          },
+          "included_content_layers": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/$defs/ContentLayer"
+                },
+                "type": "array",
+                "uniqueItems": true
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Included Content Layers"
+          },
+          "labels": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/$defs/DocItemLabel"
+                },
+                "type": "array",
+                "uniqueItems": true
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Labels"
+          },
+          "page_break_placeholder": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Page Break Placeholder"
+          },
+          "page_no": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Page No"
+          },
+          "to_element": {
+            "default": 9223372036854775807,
+            "title": "To Element",
+            "type": "integer"
+          },
+          "traverse_pictures": {
+            "default": false,
+            "title": "Traverse Pictures",
+            "type": "boolean"
+          }
+        },
+        "title": "ExportText",
+        "type": "object"
+      }
+    },
+    "vtt": {
+      "method": "export_to_vtt",
+      "parameters_schema": {
+        "$defs": {
+          "ContentLayer": {
+            "description": "ContentLayer.",
+            "enum": [
+              "body",
+              "furniture",
+              "background",
+              "invisible",
+              "notes"
+            ],
+            "title": "ContentLayer",
+            "type": "string"
+          }
+        },
+        "additionalProperties": false,
+        "properties": {
+          "included_content_layers": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/$defs/ContentLayer"
+                },
+                "type": "array",
+                "uniqueItems": true
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Included Content Layers"
+          },
+          "omit_hours_if_zero": {
+            "default": false,
+            "title": "Omit Hours If Zero",
+            "type": "boolean"
+          },
+          "omit_voice_end": {
+            "default": false,
+            "title": "Omit Voice End",
+            "type": "boolean"
+          }
+        },
+        "title": "ExportVtt",
+        "type": "object"
+      }
+    }
+  },
+  "image_extensions": [
+    "jpg",
+    "jpeg",
+    "png",
+    "tif",
+    "tiff",
+    "bmp",
+    "webp"
+  ],
+  "pipeline_option_classes": {
+    "accelerator_options": {
+      "default": "AcceleratorOptions"
+    },
+    "chart_extraction_options": {
+      "default": "ChartExtractionModelOptions"
+    },
+    "code_formula_options": {
+      "default": "CodeFormulaVlmOptions"
+    },
+    "layout_options": {
+      "docling_layout_default": "LayoutOptions"
+    },
+    "ocr_options": {
+      "auto": "OcrAutoOptions",
+      "easyocr": "EasyOcrOptions",
+      "kserve_v2_ocr": "KserveV2OcrOptions",
+      "ocrmac": "OcrMacOptions",
+      "rapidocr": "RapidOcrOptions",
+      "tesseract": "TesseractCliOcrOptions",
+      "tesserocr": "TesseractOcrOptions"
+    },
+    "picture_classification_options": {
+      "document_picture_classifier": "DocumentPictureClassifierOptions"
+    },
+    "picture_description_options": {
+      "api": "PictureDescriptionApiOptions",
+      "picture_description_vlm_engine": "PictureDescriptionVlmEngineOptions",
+      "vlm": "PictureDescriptionVlmOptions"
+    },
+    "table_structure_options": {
+      "docling_tableformer": "TableStructureOptions"
+    }
+  },
+  "pipeline_schema": {
+    "$defs": {
+      "AcceleratorDevice": {
+        "description": "Devices to run model inference",
+        "enum": [
+          "auto",
+          "cpu",
+          "cuda",
+          "mps",
+          "xpu"
+        ],
+        "title": "AcceleratorDevice",
+        "type": "string"
+      },
+      "AcceleratorOptions": {
+        "additionalProperties": false,
+        "description": "Hardware acceleration configuration for model inference.\n\nCan be configured via environment variables with DOCLING_ prefix.",
+        "properties": {
+          "cuda_use_flash_attention2": {
+            "default": false,
+            "description": "Enable Flash Attention 2 optimization for CUDA devices. Provides significant speedup and memory reduction for transformer models on compatible NVIDIA GPUs (Ampere or newer). Requires flash-attn package installation. Can be set via DOCLING_CUDA_USE_FLASH_ATTENTION2 environment variable.",
+            "title": "Cuda Use Flash Attention2",
+            "type": "boolean"
+          },
+          "device": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "$ref": "#/$defs/AcceleratorDevice"
+              }
+            ],
+            "default": "auto",
+            "description": "Hardware device for model inference. Options: `auto` (automatic detection), `cpu` (CPU only), `cuda` (NVIDIA GPU), `cuda:N` (specific GPU), `mps` (Apple Silicon), `xpu` (Intel GPU). Auto mode selects the best available device. Can be set via DOCLING_DEVICE environment variable.",
+            "title": "Device"
+          },
+          "num_threads": {
+            "default": 4,
+            "description": "Number of CPU threads to use for model inference. Higher values can improve throughput on multi-core systems but may increase memory usage. Can be set via DOCLING_NUM_THREADS or OMP_NUM_THREADS environment variables. Recommended: number of physical CPU cores.",
+            "title": "Num Threads",
+            "type": "integer"
+          }
+        },
+        "title": "AcceleratorOptions",
+        "type": "object"
+      },
+      "ApiKserveV2ImageClassificationEngineOptions": {
+        "additionalProperties": false,
+        "description": "Runtime configuration for remote KServe v2 inference.",
+        "properties": {
+          "engine_type": {
+            "const": "api_kserve_v2",
+            "default": "api_kserve_v2",
+            "title": "Engine Type",
+            "type": "string"
+          },
+          "grpc_max_message_bytes": {
+            "default": 67108864,
+            "description": "Max send/receive gRPC message size in bytes.",
+            "minimum": 1,
+            "title": "Grpc Max Message Bytes",
+            "type": "integer"
+          },
+          "grpc_metadata": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Optional gRPC metadata for authentication/routing when transport='grpc'. No HTTP headers are reused in gRPC mode.",
+            "title": "Grpc Metadata",
+            "type": "object"
+          },
+          "grpc_use_binary_data": {
+            "default": true,
+            "description": "Whether to request/expect binary tensor payloads on gRPC output tensors. Set to False for servers that do not support binary_data output parameters.",
+            "title": "Grpc Use Binary Data",
+            "type": "boolean"
+          },
+          "grpc_use_tls": {
+            "default": false,
+            "description": "Whether to use TLS for the gRPC channel. When omitted, plain-text h2c is used.",
+            "title": "Grpc Use Tls",
+            "type": "boolean"
+          },
+          "headers": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Optional HTTP headers for authentication/routing when transport='http'.",
+            "title": "Headers",
+            "type": "object"
+          },
+          "model_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Remote model name registered in the KServe v2 endpoint. If omitted, a repo_id-derived default is used.",
+            "title": "Model Name"
+          },
+          "model_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Optional model version. If omitted, the server default is used.",
+            "title": "Model Version"
+          },
+          "request_parameters": {
+            "additionalProperties": true,
+            "description": "Optional top-level KServe v2 infer request parameters.",
+            "title": "Request Parameters",
+            "type": "object"
+          },
+          "timeout": {
+            "default": 60.0,
+            "description": "Per-request timeout in seconds for both HTTP and gRPC calls.",
+            "title": "Timeout",
+            "type": "number"
+          },
+          "top_k": {
+            "anyOf": [
+              {
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Maximum number of classes to return. If None, all classes are returned.",
+            "title": "Top K"
+          },
+          "transport": {
+            "default": "grpc",
+            "description": "Transport protocol for KServe v2 calls. Use 'grpc' for binary tensor payloads (default), or 'http' for JSON REST.",
+            "enum": [
+              "grpc",
+              "http"
+            ],
+            "title": "Transport",
+            "type": "string"
+          },
+          "url": {
+            "description": "Endpoint URL for KServe v2 transport. For transport='http', use http(s)://host[:port] or plain host:port. For transport='grpc', use plain host:port.",
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "url"
+        ],
+        "title": "ApiKserveV2ImageClassificationEngineOptions",
+        "type": "object"
+      },
+      "ApiModelConfig": {
+        "description": "API-specific model configuration.\n\nFor API engines, configuration is simpler - just params to send.",
+        "properties": {
+          "params": {
+            "additionalProperties": true,
+            "description": "API parameters (model name, max_tokens, etc.)",
+            "title": "Params",
+            "type": "object"
+          }
+        },
+        "title": "ApiModelConfig",
+        "type": "object"
+      },
+      "ApiVlmEngineOptions": {
+        "additionalProperties": false,
+        "description": "Options for API-based VLM services.\n\nSupports multiple API variants:\n- Generic OpenAI-compatible API\n- Ollama\n- LM Studio\n- OpenAI",
+        "properties": {
+          "concurrency": {
+            "default": 1,
+            "description": "Number of concurrent requests",
+            "title": "Concurrency",
+            "type": "integer"
+          },
+          "engine_type": {
+            "const": "api",
+            "default": "api",
+            "description": "API variant to use",
+            "type": "string"
+          },
+          "headers": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "HTTP headers for authentication",
+            "title": "Headers",
+            "type": "object"
+          },
+          "params": {
+            "additionalProperties": true,
+            "description": "Additional API parameters (model, max_tokens, etc.)",
+            "title": "Params",
+            "type": "object"
+          },
+          "timeout": {
+            "default": 60.0,
+            "description": "Request timeout in seconds",
+            "title": "Timeout",
+            "type": "number"
+          },
+          "url": {
+            "default": "http://localhost:11434/v1/chat/completions",
+            "description": "API endpoint URL",
+            "format": "uri",
+            "minLength": 1,
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "title": "ApiVlmEngineOptions",
+        "type": "object"
+      },
+      "AutoInlineVlmEngineOptions": {
+        "additionalProperties": false,
+        "description": "Options for auto-selecting the best local inference engine.\n\nAutomatically selects the best available local engine based on:\n- Platform (macOS -> MLX, Linux/Windows -> Transformers/VLLM)\n- Available hardware (CUDA, MPS, CPU)\n- Model support",
+        "properties": {
+          "engine_type": {
+            "const": "auto_inline",
+            "default": "auto_inline",
+            "title": "Engine Type",
+            "type": "string"
+          },
+          "prefer_vllm": {
+            "default": false,
+            "description": "Prefer VLLM over Transformers when both are available on CUDA",
+            "title": "Prefer Vllm",
+            "type": "boolean"
+          }
+        },
+        "title": "AutoInlineVlmEngineOptions",
+        "type": "object"
+      },
+      "BaseImageClassificationEngineOptions": {
+        "description": "Base configuration shared across image-classification engines.",
+        "properties": {
+          "engine_type": {
+            "$ref": "#/$defs/ImageClassificationEngineType",
+            "description": "Type of inference engine to use"
+          },
+          "top_k": {
+            "anyOf": [
+              {
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Maximum number of classes to return. If None, all classes are returned.",
+            "title": "Top K"
+          }
+        },
+        "required": [
+          "engine_type"
+        ],
+        "title": "BaseImageClassificationEngineOptions",
+        "type": "object"
+      },
+      "BaseLayoutOptions": {
+        "description": "Base options for document layout analysis models.\n\nLayout analysis detects the structural regions of a document page\n(text blocks, tables, figures, headers, etc.) and assigns content\ncells to those regions. This base class provides the shared controls\nfor empty-cluster retention and cell-assignment skipping.\n\nSee Also:\n    `LayoutOptions`: Default layout model configuration (Heron).\n    `LayoutObjectDetectionOptions`: Object-detection runtime layout\n        with preset support.",
+        "properties": {
+          "keep_empty_clusters": {
+            "default": false,
+            "description": "Retain empty clusters in layout analysis results. When False, clusters without content are removed. Enable for debugging or when empty regions are semantically important.",
+            "title": "Keep Empty Clusters",
+            "type": "boolean"
+          },
+          "skip_cell_assignment": {
+            "default": false,
+            "description": "Skip assignment of cells to table structures during layout analysis. When True, cells are detected but not associated with tables. Use for performance optimization when table structure is not needed.",
+            "title": "Skip Cell Assignment",
+            "type": "boolean"
+          }
+        },
+        "title": "BaseLayoutOptions",
+        "type": "object"
+      },
+      "BaseTableStructureOptions": {
+        "description": "Base options for table structure extraction models.\n\nServes as the abstract base for all table structure backends. Concrete\nimplementations (e.g., `TableStructureOptions` for TableFormer) inherit\nfrom this class and register their own `kind` discriminator.\n\nSee Also:\n    `TableStructureOptions`: Default TableFormer-based implementation.",
+        "properties": {},
+        "title": "BaseTableStructureOptions",
+        "type": "object"
+      },
+      "BaseVlmEngineOptions": {
+        "description": "Base configuration for VLM inference engines.\n\nEngine options are independent of model specifications and prompts.\nThey only control how the inference is executed.",
+        "properties": {
+          "engine_type": {
+            "$ref": "#/$defs/VlmEngineType",
+            "description": "Type of inference engine to use"
+          }
+        },
+        "required": [
+          "engine_type"
+        ],
+        "title": "BaseVlmEngineOptions",
+        "type": "object"
+      },
+      "ChartExtractionModelKind": {
+        "enum": [
+          "granite-vision",
+          "granite-vision-v4"
+        ],
+        "title": "ChartExtractionModelKind",
+        "type": "string"
+      },
+      "ChartExtractionModelOptions": {
+        "additionalProperties": false,
+        "properties": {
+          "chart2code": {
+            "default": false,
+            "title": "Chart2Code",
+            "type": "boolean"
+          },
+          "chart2csv": {
+            "default": true,
+            "title": "Chart2Csv",
+            "type": "boolean"
+          },
+          "chart2summary": {
+            "default": false,
+            "title": "Chart2Summary",
+            "type": "boolean"
+          },
+          "kind": {
+            "const": "chart_extraction",
+            "default": "chart_extraction",
+            "title": "Kind",
+            "type": "string"
+          },
+          "model": {
+            "$ref": "#/$defs/ChartExtractionModelKind",
+            "default": "granite-vision-v4"
+          }
+        },
+        "title": "ChartExtractionModelOptions",
+        "type": "object"
+      },
+      "CodeFormulaVlmOptions": {
+        "additionalProperties": false,
+        "description": "Configuration for VLM-based code and formula extraction.\n\nThis stage uses vision-language models to extract code blocks and\nmathematical formulas from document images. Supports preset-based\nconfiguration via StagePresetMixin.\n\nExamples:\n    # Use CodeFormulaV2 preset\n    options = CodeFormulaVlmOptions.from_preset(\"codeformulav2\")\n\n    # Use Granite Docling preset\n    options = CodeFormulaVlmOptions.from_preset(\"granite_docling\")",
+        "properties": {
+          "engine_options": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ApiVlmEngineOptions"
+              },
+              {
+                "$ref": "#/$defs/AutoInlineVlmEngineOptions"
+              },
+              {
+                "$ref": "#/$defs/MlxVlmEngineOptions"
+              },
+              {
+                "$ref": "#/$defs/TransformersVlmEngineOptions"
+              },
+              {
+                "$ref": "#/$defs/VllmVlmEngineOptions"
+              }
+            ],
+            "description": "Runtime configuration (transformers, mlx, api, etc.)"
+          },
+          "extract_code": {
+            "default": true,
+            "description": "Extract code blocks",
+            "title": "Extract Code",
+            "type": "boolean"
+          },
+          "extract_formulas": {
+            "default": true,
+            "description": "Extract mathematical formulas",
+            "title": "Extract Formulas",
+            "type": "boolean"
+          },
+          "max_size": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Maximum image dimension (width or height)",
+            "title": "Max Size"
+          },
+          "model_spec": {
+            "$ref": "#/$defs/VlmModelSpec",
+            "description": "Model specification with runtime-specific overrides"
+          },
+          "scale": {
+            "default": 2.0,
+            "description": "Image scaling factor for preprocessing",
+            "title": "Scale",
+            "type": "number"
+          }
+        },
+        "required": [
+          "engine_options",
+          "model_spec"
+        ],
+        "title": "CodeFormulaVlmOptions",
+        "type": "object"
+      },
+      "DocumentPictureClassifierOptions": {
+        "additionalProperties": false,
+        "description": "Options for configuring the DocumentPictureClassifier stage.",
+        "properties": {
+          "engine_options": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ApiKserveV2ImageClassificationEngineOptions"
+              },
+              {
+                "$ref": "#/$defs/OnnxRuntimeImageClassificationEngineOptions"
+              },
+              {
+                "$ref": "#/$defs/TransformersImageClassificationEngineOptions"
+              }
+            ],
+            "description": "Runtime configuration for the image-classification engine."
+          },
+          "kind": {
+            "const": "document_picture_classifier",
+            "default": "document_picture_classifier",
+            "title": "Engine",
+            "type": "string"
+          },
+          "model_spec": {
+            "$ref": "#/$defs/ImageClassificationModelSpec",
+            "description": "Image-classification model specification for picture classification."
+          }
+        },
+        "required": [
+          "engine_options"
+        ],
+        "title": "DocumentPictureClassifierOptions",
+        "type": "object"
+      },
+      "EasyOcrOptions": {
+        "additionalProperties": false,
+        "description": "Configuration for EasyOCR engine.",
+        "properties": {
+          "bitmap_area_threshold": {
+            "default": 0.05,
+            "description": "Percentage of the page area for a bitmap to be processed with OCR.",
+            "examples": [
+              0.05,
+              0.1
+            ],
+            "title": "Bitmap Area Threshold",
+            "type": "number"
+          },
+          "confidence_threshold": {
+            "default": 0.5,
+            "description": "Minimum confidence score for text recognition. Text with confidence below this threshold is filtered out. Range: 0.0-1.0. Lower values include more text but may reduce accuracy.",
+            "title": "Confidence Threshold",
+            "type": "number"
+          },
+          "download_enabled": {
+            "default": true,
+            "description": "Allow automatic download of EasyOCR models on first use. Disable for offline environments where models must be pre-installed.",
+            "title": "Download Enabled",
+            "type": "boolean"
+          },
+          "force_full_page_ocr": {
+            "default": false,
+            "description": "If enabled, a full-page OCR is always applied.",
+            "examples": [
+              false
+            ],
+            "title": "Force Full Page Ocr",
+            "type": "boolean"
+          },
+          "kind": {
+            "const": "easyocr",
+            "default": "easyocr",
+            "title": "Engine",
+            "type": "string"
+          },
+          "lang": {
+            "default": [
+              "fr",
+              "de",
+              "es",
+              "en"
+            ],
+            "description": "List of language codes for OCR. EasyOCR supports 80+ languages. Use ISO 639-1 codes (e.g., `en`, `fr`, `de`). Multiple languages can be specified for multilingual documents.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Lang",
+            "type": "array"
+          },
+          "model_storage_directory": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Directory path for storing downloaded EasyOCR models. If None, uses default EasyOCR cache location. Useful for offline environments or custom model management.",
+            "title": "Model Storage Directory"
+          },
+          "recog_network": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": "standard",
+            "description": "Recognition network architecture to use. Options: `standard` (default, balanced), `craft` (higher accuracy). Different networks may perform better on specific document types.",
+            "title": "Recog Network"
+          },
+          "suppress_mps_warnings": {
+            "default": true,
+            "description": "Suppress Metal Performance Shaders (MPS) warnings on macOS. Reduces console noise when using Apple Silicon GPUs with EasyOCR.",
+            "title": "Suppress Mps Warnings",
+            "type": "boolean"
+          },
+          "use_gpu": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Enable GPU acceleration for EasyOCR. If None, automatically detects and uses GPU if available. Set to False to force CPU-only processing.",
+            "title": "Use Gpu"
+          }
+        },
+        "title": "EasyOcrOptions",
+        "type": "object"
+      },
+      "EngineModelConfig": {
+        "description": "Engine-specific model configuration.\n\nAllows overriding model settings for specific engines.\nFor example, MLX might use a different repo_id than Transformers.",
+        "properties": {
+          "extra_config": {
+            "additionalProperties": true,
+            "description": "Additional engine-specific configuration",
+            "title": "Extra Config",
+            "type": "object"
+          },
+          "repo_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Override model repository ID for this engine",
+            "title": "Repo Id"
+          },
+          "revision": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Override model revision for this engine",
+            "title": "Revision"
+          },
+          "torch_dtype": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Override torch dtype for this engine (e.g., 'bfloat16')",
+            "title": "Torch Dtype"
+          }
+        },
+        "title": "EngineModelConfig",
+        "type": "object"
+      },
+      "ImageClassificationEngineType": {
+        "description": "Supported inference engine types for image-classification models.",
+        "enum": [
+          "onnxruntime",
+          "transformers",
+          "api_kserve_v2"
+        ],
+        "title": "ImageClassificationEngineType",
+        "type": "string"
+      },
+      "ImageClassificationModelSpec": {
+        "description": "Specification for an image-classification model.",
+        "properties": {
+          "engine_overrides": {
+            "additionalProperties": {
+              "$ref": "#/$defs/EngineModelConfig"
+            },
+            "description": "Engine-specific configuration overrides",
+            "propertyNames": {
+              "$ref": "#/$defs/ImageClassificationEngineType"
+            },
+            "title": "Engine Overrides",
+            "type": "object"
+          },
+          "name": {
+            "description": "Human-readable model name",
+            "title": "Name",
+            "type": "string"
+          },
+          "repo_id": {
+            "description": "Default HuggingFace repository ID",
+            "title": "Repo Id",
+            "type": "string"
+          },
+          "revision": {
+            "default": "main",
+            "description": "Default model revision",
+            "title": "Revision",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "repo_id"
+        ],
+        "title": "ImageClassificationModelSpec",
+        "type": "object"
+      },
+      "KserveV2OcrOptions": {
+        "additionalProperties": false,
+        "description": "Configuration for KServe v2-based OCR (e.g., Triton Inference Server).\n\nThis OCR engine connects to a remote KServe v2-compatible inference server\n(such as Triton) to perform OCR via gRPC or HTTP. It combines standard OCR\noptions with KServe v2 connection settings inherited from KserveV2OptionsMixin.\n\nThe engine handles custom preprocessing (RGB conversion, transpose, batching)\nto match the expected input format of typical OCR models deployed on KServe v2\nendpoints.\n\nSee Also:\n    `KserveV2OptionsMixin`: Provides all KServe v2 connection configuration.\n    `RapidOcrOptions`: Local OCR engine for comparison.",
+        "properties": {
+          "bitmap_area_threshold": {
+            "default": 0.05,
+            "description": "Percentage of the page area for a bitmap to be processed with OCR.",
+            "examples": [
+              0.05,
+              0.1
+            ],
+            "title": "Bitmap Area Threshold",
+            "type": "number"
+          },
+          "force_full_page_ocr": {
+            "default": false,
+            "description": "If enabled, a full-page OCR is always applied.",
+            "examples": [
+              false
+            ],
+            "title": "Force Full Page Ocr",
+            "type": "boolean"
+          },
+          "grpc_max_message_bytes": {
+            "default": 67108864,
+            "description": "Max send/receive gRPC message size in bytes.",
+            "minimum": 1,
+            "title": "Grpc Max Message Bytes",
+            "type": "integer"
+          },
+          "grpc_metadata": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Optional gRPC metadata for authentication/routing when transport='grpc'. No HTTP headers are reused in gRPC mode.",
+            "title": "Grpc Metadata",
+            "type": "object"
+          },
+          "grpc_use_binary_data": {
+            "default": true,
+            "description": "Whether to request/expect binary tensor payloads on gRPC output tensors. Set to False for servers that do not support binary_data output parameters.",
+            "title": "Grpc Use Binary Data",
+            "type": "boolean"
+          },
+          "grpc_use_tls": {
+            "default": false,
+            "description": "Whether to use TLS for the gRPC channel. When omitted, plain-text h2c is used.",
+            "title": "Grpc Use Tls",
+            "type": "boolean"
+          },
+          "headers": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Optional HTTP headers for authentication/routing when transport='http'.",
+            "title": "Headers",
+            "type": "object"
+          },
+          "kind": {
+            "const": "kserve_v2_ocr",
+            "default": "kserve_v2_ocr",
+            "title": "Engine",
+            "type": "string"
+          },
+          "lang": {
+            "default": [
+              "english",
+              "chinese"
+            ],
+            "description": "List of OCR languages. Note: Language selection depends on the deployed model. This parameter is passed to the server but may not be used by all models.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Lang",
+            "type": "array"
+          },
+          "model_name": {
+            "default": "ocr",
+            "description": "Remote model name registered in the KServe v2 endpoint.",
+            "title": "Model Name",
+            "type": "string"
+          },
+          "model_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Optional model version. If omitted, the server default is used.",
+            "title": "Model Version"
+          },
+          "request_parameters": {
+            "additionalProperties": true,
+            "description": "Optional top-level KServe v2 infer request parameters.",
+            "title": "Request Parameters",
+            "type": "object"
+          },
+          "scale": {
+            "default": 2.0,
+            "description": "Image scale multiplier for OCR processing. Higher values increase resolution for better text recognition. Default 2.0 converts 72 DPI to 144 DPI.",
+            "exclusiveMinimum": 0.0,
+            "title": "Scale",
+            "type": "number"
+          },
+          "timeout": {
+            "default": 60.0,
+            "description": "Per-request timeout in seconds for both HTTP and gRPC calls.",
+            "title": "Timeout",
+            "type": "number"
+          },
+          "transport": {
+            "default": "grpc",
+            "description": "Transport protocol for KServe v2 calls. Use 'grpc' for binary tensor payloads (default), or 'http' for JSON REST.",
+            "enum": [
+              "grpc",
+              "http"
+            ],
+            "title": "Transport",
+            "type": "string"
+          },
+          "url": {
+            "description": "Endpoint URL for KServe v2 transport. For transport='http', use http(s)://host[:port] or plain host:port. For transport='grpc', use plain host:port.",
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "url"
+        ],
+        "title": "KserveV2OcrOptions",
+        "type": "object"
+      },
+      "LayoutModelConfig": {
+        "description": "Configuration for document layout analysis models from HuggingFace.",
+        "properties": {
+          "model_path": {
+            "description": "Relative path within the repository to model artifacts. Empty string indicates artifacts are in the repository root. Used for repositories with multiple models or nested structures.",
+            "title": "Model Path",
+            "type": "string"
+          },
+          "name": {
+            "description": "Human-readable name identifier for the layout model. Used for logging, debugging, and model selection.",
+            "examples": [
+              "docling_layout_heron",
+              "docling_layout_egret_large"
+            ],
+            "title": "Name",
+            "type": "string"
+          },
+          "repo_id": {
+            "description": "HuggingFace repository ID where the model is hosted. Used to download model weights and configuration files from HuggingFace Hub.",
+            "examples": [
+              "docling-project/docling-layout-heron",
+              "docling-project/docling-layout-egret-large"
+            ],
+            "title": "Repo Id",
+            "type": "string"
+          },
+          "revision": {
+            "description": "Git revision (branch, tag, or commit hash) of the model repository to use. Allows pinning to specific model versions for reproducibility.",
+            "examples": [
+              "main",
+              "v1.0.0"
+            ],
+            "title": "Revision",
+            "type": "string"
+          },
+          "supported_devices": {
+            "default": [
+              "cpu",
+              "cuda",
+              "mps",
+              "xpu"
+            ],
+            "description": "List of hardware accelerators supported by this model. The model can only run on devices in this list.",
+            "items": {
+              "$ref": "#/$defs/AcceleratorDevice"
+            },
+            "title": "Supported Devices",
+            "type": "array"
+          }
+        },
+        "required": [
+          "name",
+          "repo_id",
+          "revision",
+          "model_path"
+        ],
+        "title": "LayoutModelConfig",
+        "type": "object"
+      },
+      "LayoutOptions": {
+        "additionalProperties": false,
+        "description": "Options for layout processing using Docling's built-in layout model.\n\nProvides configuration for the default layout analysis path, including\nmodel selection (e.g., Heron, Egret variants) and orphan cluster\ncreation for elements not assigned to any detected structure.\n\nNotes:\n    The default model is ``DOCLING_LAYOUT_HERON``. For higher accuracy\n    on complex documents, consider ``DOCLING_LAYOUT_EGRET_LARGE`` or\n    ``DOCLING_LAYOUT_EGRET_XLARGE``.",
+        "properties": {
+          "create_orphan_clusters": {
+            "default": true,
+            "description": "Create clusters for orphaned elements not assigned to any structure. When True, isolated text or elements are grouped into their own clusters. Recommended for complete document coverage.",
+            "title": "Create Orphan Clusters",
+            "type": "boolean"
+          },
+          "keep_empty_clusters": {
+            "default": false,
+            "description": "Retain empty clusters in layout analysis results. When False, clusters without content are removed. Enable for debugging or when empty regions are semantically important.",
+            "title": "Keep Empty Clusters",
+            "type": "boolean"
+          },
+          "kind": {
+            "const": "docling_layout_default",
+            "default": "docling_layout_default",
+            "title": "Engine",
+            "type": "string"
+          },
+          "model_spec": {
+            "$ref": "#/$defs/LayoutModelConfig",
+            "default": {
+              "model_path": "",
+              "name": "docling_layout_heron",
+              "repo_id": "docling-project/docling-layout-heron",
+              "revision": "main",
+              "supported_devices": [
+                "cpu",
+                "cuda",
+                "mps",
+                "xpu"
+              ]
+            },
+            "description": "Layout model configuration specifying which model to use for document layout analysis. Options include DOCLING_LAYOUT_HERON (default, balanced), DOCLING_LAYOUT_EGRET_* (higher accuracy), etc."
+          },
+          "skip_cell_assignment": {
+            "default": false,
+            "description": "Skip assignment of cells to table structures during layout analysis. When True, cells are detected but not associated with tables. Use for performance optimization when table structure is not needed.",
+            "title": "Skip Cell Assignment",
+            "type": "boolean"
+          }
+        },
+        "title": "LayoutOptions",
+        "type": "object"
+      },
+      "MlxVlmEngineOptions": {
+        "additionalProperties": false,
+        "description": "Options for Apple MLX inference engine (Apple Silicon only).",
+        "properties": {
+          "engine_type": {
+            "const": "mlx",
+            "default": "mlx",
+            "title": "Engine Type",
+            "type": "string"
+          },
+          "trust_remote_code": {
+            "default": false,
+            "description": "Allow execution of custom code from model repo",
+            "title": "Trust Remote Code",
+            "type": "boolean"
+          }
+        },
+        "title": "MlxVlmEngineOptions",
+        "type": "object"
+      },
+      "OcrAutoOptions": {
+        "additionalProperties": false,
+        "description": "Automatic OCR engine selection based on system availability.\n\nWhen this option is used, Docling probes the runtime environment at\npipeline initialization and selects the best available OCR engine\n(e.g., EasyOCR if GPU is present, Tesseract otherwise). Language\nsettings are deferred to the chosen engine's defaults.\n\nNotes:\n    The `lang` field is intentionally defaulted to an empty list.\n    To control language selection, specify an explicit OCR engine\n    option class instead.",
+        "properties": {
+          "bitmap_area_threshold": {
+            "default": 0.05,
+            "description": "Percentage of the page area for a bitmap to be processed with OCR.",
+            "examples": [
+              0.05,
+              0.1
+            ],
+            "title": "Bitmap Area Threshold",
+            "type": "number"
+          },
+          "force_full_page_ocr": {
+            "default": false,
+            "description": "If enabled, a full-page OCR is always applied.",
+            "examples": [
+              false
+            ],
+            "title": "Force Full Page Ocr",
+            "type": "boolean"
+          },
+          "kind": {
+            "const": "auto",
+            "default": "auto",
+            "title": "Engine",
+            "type": "string"
+          },
+          "lang": {
+            "default": [],
+            "description": "The automatic OCR engine will use the default values of the engine. Please specify the engine explicitly to change the language selection.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Lang",
+            "type": "array"
+          }
+        },
+        "title": "OcrAutoOptions",
+        "type": "object"
+      },
+      "OcrMacOptions": {
+        "additionalProperties": false,
+        "description": "Configuration for native macOS OCR using Vision framework.",
+        "properties": {
+          "bitmap_area_threshold": {
+            "default": 0.05,
+            "description": "Percentage of the page area for a bitmap to be processed with OCR.",
+            "examples": [
+              0.05,
+              0.1
+            ],
+            "title": "Bitmap Area Threshold",
+            "type": "number"
+          },
+          "force_full_page_ocr": {
+            "default": false,
+            "description": "If enabled, a full-page OCR is always applied.",
+            "examples": [
+              false
+            ],
+            "title": "Force Full Page Ocr",
+            "type": "boolean"
+          },
+          "framework": {
+            "default": "vision",
+            "description": "macOS framework to use for OCR. Currently supports `vision` (Apple Vision framework). Future versions may support additional frameworks.",
+            "title": "Framework",
+            "type": "string"
+          },
+          "kind": {
+            "const": "ocrmac",
+            "default": "ocrmac",
+            "title": "Engine",
+            "type": "string"
+          },
+          "lang": {
+            "default": [
+              "fr-FR",
+              "de-DE",
+              "es-ES",
+              "en-US"
+            ],
+            "description": "List of language locale codes for macOS OCR. Use format `language-REGION` (e.g., `en-US`, `fr-FR`). Leverages native macOS Vision framework for OCR on Apple platforms.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Lang",
+            "type": "array"
+          },
+          "recognition": {
+            "default": "accurate",
+            "description": "Recognition accuracy level. Options: `accurate` (higher quality, slower) or `fast` (lower quality, faster). Choose based on speed vs. accuracy requirements.",
+            "title": "Recognition",
+            "type": "string"
+          }
+        },
+        "title": "OcrMacOptions",
+        "type": "object"
+      },
+      "OcrOptions": {
+        "description": "Base configuration for Optical Character Recognition engines.\n\nDefines the common interface shared by all OCR engine implementations.\nSubclasses provide engine-specific parameters while inheriting the shared\nlanguage selection, full-page OCR toggle, and bitmap area threshold.\n\nSee Also:\n    `OcrAutoOptions`: Automatic engine selection based on availability.\n    `EasyOcrOptions`, `TesseractCliOcrOptions`, `TesseractOcrOptions`,\n    `RapidOcrOptions`, `OcrMacOptions`: Engine-specific configurations.",
+        "properties": {
+          "bitmap_area_threshold": {
+            "default": 0.05,
+            "description": "Percentage of the page area for a bitmap to be processed with OCR.",
+            "examples": [
+              0.05,
+              0.1
+            ],
+            "title": "Bitmap Area Threshold",
+            "type": "number"
+          },
+          "force_full_page_ocr": {
+            "default": false,
+            "description": "If enabled, a full-page OCR is always applied.",
+            "examples": [
+              false
+            ],
+            "title": "Force Full Page Ocr",
+            "type": "boolean"
+          },
+          "lang": {
+            "description": "List of OCR languages to use. The format must match the values of the OCR engine of choice.",
+            "examples": [
+              [
+                "deu",
+                "eng"
+              ]
+            ],
+            "items": {
+              "type": "string"
+            },
+            "title": "Lang",
+            "type": "array"
+          }
+        },
+        "required": [
+          "lang"
+        ],
+        "title": "OcrOptions",
+        "type": "object"
+      },
+      "OnnxRuntimeImageClassificationEngineOptions": {
+        "additionalProperties": false,
+        "description": "Runtime configuration for ONNX Runtime based image-classification models.",
+        "properties": {
+          "engine_type": {
+            "const": "onnxruntime",
+            "default": "onnxruntime",
+            "title": "Engine Type",
+            "type": "string"
+          },
+          "graph_optimization_level": {
+            "default": 99,
+            "description": "ONNX Runtime graph optimization level. Accepts onnxruntime.GraphOptimizationLevel int values: 0 (ORT_DISABLE_ALL), 1 (ORT_ENABLE_BASIC), 2 (ORT_ENABLE_EXTENDED), 99 (ORT_ENABLE_ALL). Default enables all optimizations including layout optimizations.",
+            "title": "Graph Optimization Level",
+            "type": "integer"
+          },
+          "model_filename": {
+            "default": "model.onnx",
+            "description": "Filename of the ONNX export inside the model repository",
+            "title": "Model Filename",
+            "type": "string"
+          },
+          "providers": {
+            "description": "Ordered list of ONNX Runtime execution providers to try",
+            "items": {
+              "type": "string"
+            },
+            "title": "Providers",
+            "type": "array"
+          },
+          "top_k": {
+            "anyOf": [
+              {
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Maximum number of classes to return. If None, all classes are returned.",
+            "title": "Top K"
+          }
+        },
+        "title": "OnnxRuntimeImageClassificationEngineOptions",
+        "type": "object"
+      },
+      "PictureClassificationLabel": {
+        "description": "PictureClassificationLabel.",
+        "enum": [
+          "bar_chart",
+          "box_plot",
+          "flow_chart",
+          "line_chart",
+          "pie_chart",
+          "scatter_plot",
+          "table",
+          "other_chart",
+          "full_page_image",
+          "page_thumbnail",
+          "photograph",
+          "chemistry_structure",
+          "bar_code",
+          "icon",
+          "logo",
+          "qr_code",
+          "signature",
+          "stamp",
+          "engineering_drawing",
+          "screenshot_from_computer",
+          "screenshot_from_manual",
+          "geographical_map",
+          "topographical_map",
+          "calendar",
+          "crossword_puzzle",
+          "music",
+          "other",
+          "cad_drawing",
+          "electrical_diagram",
+          "map",
+          "heatmap",
+          "chemistry_markush_structure",
+          "chemistry_molecular_structure",
+          "natural_image",
+          "picture_group",
+          "remote_sensing",
+          "scatter_chart",
+          "screenshot",
+          "stacked_bar_chart",
+          "stratigraphic_chart"
+        ],
+        "title": "PictureClassificationLabel",
+        "type": "string"
+      },
+      "PictureDescriptionApiOptions": {
+        "additionalProperties": false,
+        "description": "Configuration for API-based picture description services.\n\nSends images to an OpenAI-compatible chat completions endpoint for\ndescription generation. Supports custom headers for authentication,\nconfigurable timeouts, and concurrent request control.\n\nNotes:\n    Requires ``enable_remote_services=True`` on the parent pipeline\n    options to permit external API calls.",
+        "properties": {
+          "batch_size": {
+            "default": 8,
+            "description": "Number of images to process in a single batch during picture description. Higher values improve throughput but increase memory usage. Adjust based on available GPU/CPU memory.",
+            "minimum": 1,
+            "title": "Batch Size",
+            "type": "integer"
+          },
+          "classification_allow": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/$defs/PictureClassificationLabel"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "List of picture classification labels to allow for description. Only pictures classified with these labels will be processed. If None, all picture types are allowed unless explicitly denied. Use to focus description on specific image types (e.g., diagrams, charts).",
+            "title": "Classification Allow"
+          },
+          "classification_deny": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/$defs/PictureClassificationLabel"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "List of picture classification labels to exclude from description. Pictures classified with these labels will be skipped. If None, no picture types are denied unless not in allow list. Use to exclude unwanted image types (e.g., decorative images, logos).",
+            "title": "Classification Deny"
+          },
+          "classification_min_confidence": {
+            "default": 0.0,
+            "description": "Minimum classification confidence score (0.0-1.0) required for a picture to be processed. Pictures with classification confidence below this threshold are skipped. Higher values ensure only confidently classified images are described. Range: 0.0 (no filtering) to 1.0 (maximum confidence).",
+            "title": "Classification Min Confidence",
+            "type": "number"
+          },
+          "concurrency": {
+            "default": 1,
+            "description": "Number of concurrent API requests allowed. Higher values improve throughput but may hit API rate limits. Adjust based on API service quotas and network capacity.",
+            "title": "Concurrency",
+            "type": "integer"
+          },
+          "headers": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "default": {},
+            "description": "HTTP headers to include in API requests. Use for authentication or custom headers required by your API service.",
+            "examples": [
+              {
+                "Authorization": "Bearer TOKEN"
+              }
+            ],
+            "title": "Headers",
+            "type": "object"
+          },
+          "kind": {
+            "const": "api",
+            "default": "api",
+            "title": "Engine",
+            "type": "string"
+          },
+          "params": {
+            "additionalProperties": true,
+            "default": {},
+            "description": "Additional query parameters to include in API requests. Service-specific parameters for customizing API behavior beyond standard options.",
+            "title": "Params",
+            "type": "object"
+          },
+          "picture_area_threshold": {
+            "default": 0.05,
+            "description": "Minimum picture area as fraction of page area (0.0-1.0) to trigger description. Pictures smaller than this threshold are skipped. Use lower values (e.g., 0.01) to describe small images.",
+            "title": "Picture Area Threshold",
+            "type": "number"
+          },
+          "prompt": {
+            "default": "Describe this image in a few sentences.",
+            "description": "Prompt template sent to the vision model for image description. Customize to guide the model's output style, detail level, or focus.",
+            "examples": [
+              "Provide a technical description of this diagram"
+            ],
+            "title": "Prompt",
+            "type": "string"
+          },
+          "provenance": {
+            "default": "",
+            "description": "Provenance information to track the source or method of picture descriptions. Used for metadata and auditing purposes in the output document.",
+            "title": "Provenance",
+            "type": "string"
+          },
+          "scale": {
+            "default": 2.0,
+            "description": "Scaling factor for image resolution before processing. Higher values (e.g., 2.0) provide more detail for the vision model but increase processing time and memory. Range: 0.5-4.0 typical.",
+            "exclusiveMinimum": 0,
+            "title": "Scale",
+            "type": "number"
+          },
+          "timeout": {
+            "default": 20.0,
+            "description": "Maximum time in seconds to wait for API response before timing out. Increase for slow networks or complex image descriptions. Recommended: 10-60 seconds.",
+            "title": "Timeout",
+            "type": "number"
+          },
+          "url": {
+            "default": "http://localhost:8000/v1/chat/completions",
+            "description": "API endpoint URL for picture description service. Must be OpenAI-compatible chat completions endpoint. Default points to local server; update for cloud services or custom deployments.",
+            "format": "uri",
+            "minLength": 1,
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "title": "PictureDescriptionApiOptions",
+        "type": "object"
+      },
+      "PictureDescriptionBaseOptions": {
+        "description": "Base configuration for picture description models.\n\nProvides shared parameters for all picture description backends,\nincluding batch processing, image scaling, area thresholds, and\nclassification-based filtering (allow/deny lists). Concrete\nimplementations supply the actual model integration.\n\nSee Also:\n    `PictureDescriptionApiOptions`: OpenAI-compatible API backend.\n    `PictureDescriptionVlmOptions`: Legacy HuggingFace Transformers\n        backend.\n    `PictureDescriptionVlmEngineOptions`: New runtime-based backend\n        with preset support (recommended).",
+        "properties": {
+          "batch_size": {
+            "default": 8,
+            "description": "Number of images to process in a single batch during picture description. Higher values improve throughput but increase memory usage. Adjust based on available GPU/CPU memory.",
+            "minimum": 1,
+            "title": "Batch Size",
+            "type": "integer"
+          },
+          "classification_allow": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/$defs/PictureClassificationLabel"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "List of picture classification labels to allow for description. Only pictures classified with these labels will be processed. If None, all picture types are allowed unless explicitly denied. Use to focus description on specific image types (e.g., diagrams, charts).",
+            "title": "Classification Allow"
+          },
+          "classification_deny": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/$defs/PictureClassificationLabel"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "List of picture classification labels to exclude from description. Pictures classified with these labels will be skipped. If None, no picture types are denied unless not in allow list. Use to exclude unwanted image types (e.g., decorative images, logos).",
+            "title": "Classification Deny"
+          },
+          "classification_min_confidence": {
+            "default": 0.0,
+            "description": "Minimum classification confidence score (0.0-1.0) required for a picture to be processed. Pictures with classification confidence below this threshold are skipped. Higher values ensure only confidently classified images are described. Range: 0.0 (no filtering) to 1.0 (maximum confidence).",
+            "title": "Classification Min Confidence",
+            "type": "number"
+          },
+          "picture_area_threshold": {
+            "default": 0.05,
+            "description": "Minimum picture area as fraction of page area (0.0-1.0) to trigger description. Pictures smaller than this threshold are skipped. Use lower values (e.g., 0.01) to describe small images.",
+            "title": "Picture Area Threshold",
+            "type": "number"
+          },
+          "scale": {
+            "default": 2.0,
+            "description": "Scaling factor for image resolution before processing. Higher values (e.g., 2.0) provide more detail for the vision model but increase processing time and memory. Range: 0.5-4.0 typical.",
+            "exclusiveMinimum": 0,
+            "title": "Scale",
+            "type": "number"
+          }
+        },
+        "title": "PictureDescriptionBaseOptions",
+        "type": "object"
+      },
+      "PictureDescriptionVlmEngineOptions": {
+        "additionalProperties": false,
+        "description": "Configuration for VLM runtime-based picture description.\n\nThis is the new implementation that uses the pluggable runtime system with preset support.\nSupports all runtime types (Transformers, MLX, API, etc.) through the unified runtime interface.\n\nUse `from_preset()` to create instances from registered presets.\n\nExamples:\n    # Use preset with default runtime\n    options = PictureDescriptionVlmEngineOptions.from_preset(\"smolvlm\")\n\n    # Use preset with runtime override\n    from docling.datamodel.vlm_engine_options import MlxVlmEngineOptions, VlmEngineType\n    options = PictureDescriptionVlmEngineOptions.from_preset(\n        \"smolvlm\",\n        engine_options=MlxVlmEngineOptions(engine_type=VlmEngineType.MLX)\n    )",
+        "properties": {
+          "batch_size": {
+            "default": 8,
+            "description": "Number of images to process in a single batch during picture description. Higher values improve throughput but increase memory usage. Adjust based on available GPU/CPU memory.",
+            "minimum": 1,
+            "title": "Batch Size",
+            "type": "integer"
+          },
+          "classification_allow": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/$defs/PictureClassificationLabel"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "List of picture classification labels to allow for description. Only pictures classified with these labels will be processed. If None, all picture types are allowed unless explicitly denied. Use to focus description on specific image types (e.g., diagrams, charts).",
+            "title": "Classification Allow"
+          },
+          "classification_deny": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/$defs/PictureClassificationLabel"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "List of picture classification labels to exclude from description. Pictures classified with these labels will be skipped. If None, no picture types are denied unless not in allow list. Use to exclude unwanted image types (e.g., decorative images, logos).",
+            "title": "Classification Deny"
+          },
+          "classification_min_confidence": {
+            "default": 0.0,
+            "description": "Minimum classification confidence score (0.0-1.0) required for a picture to be processed. Pictures with classification confidence below this threshold are skipped. Higher values ensure only confidently classified images are described. Range: 0.0 (no filtering) to 1.0 (maximum confidence).",
+            "title": "Classification Min Confidence",
+            "type": "number"
+          },
+          "engine_options": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ApiVlmEngineOptions"
+              },
+              {
+                "$ref": "#/$defs/AutoInlineVlmEngineOptions"
+              },
+              {
+                "$ref": "#/$defs/MlxVlmEngineOptions"
+              },
+              {
+                "$ref": "#/$defs/TransformersVlmEngineOptions"
+              },
+              {
+                "$ref": "#/$defs/VllmVlmEngineOptions"
+              }
+            ],
+            "description": "Runtime configuration (transformers, mlx, api, etc.)"
+          },
+          "generation_config": {
+            "additionalProperties": true,
+            "default": {
+              "do_sample": false,
+              "max_new_tokens": 200
+            },
+            "description": "Generation configuration for text generation. Controls output length, sampling strategy, temperature, etc.",
+            "title": "Generation Config",
+            "type": "object"
+          },
+          "kind": {
+            "const": "picture_description_vlm_engine",
+            "default": "picture_description_vlm_engine",
+            "title": "Engine",
+            "type": "string"
+          },
+          "model_spec": {
+            "$ref": "#/$defs/VlmModelSpec",
+            "description": "Model specification with runtime-specific overrides"
+          },
+          "picture_area_threshold": {
+            "default": 0.05,
+            "description": "Minimum picture area as fraction of page area (0.0-1.0) to trigger description. Pictures smaller than this threshold are skipped. Use lower values (e.g., 0.01) to describe small images.",
+            "title": "Picture Area Threshold",
+            "type": "number"
+          },
+          "prompt": {
+            "default": "Describe this image in a few sentences.",
+            "description": "Prompt template for the vision model. Customize to control description style, detail level, or focus.",
+            "examples": [
+              "What is shown in this image?",
+              "Provide a detailed technical description"
+            ],
+            "title": "Prompt",
+            "type": "string"
+          },
+          "scale": {
+            "default": 2.0,
+            "description": "Scaling factor for image resolution before processing. Higher values (e.g., 2.0) provide more detail for the vision model but increase processing time and memory. Range: 0.5-4.0 typical.",
+            "exclusiveMinimum": 0,
+            "title": "Scale",
+            "type": "number"
+          }
+        },
+        "required": [
+          "engine_options",
+          "model_spec"
+        ],
+        "title": "PictureDescriptionVlmEngineOptions",
+        "type": "object"
+      },
+      "PictureDescriptionVlmOptions": {
+        "additionalProperties": false,
+        "description": "Configuration for inline vision-language models for picture description.\n\nThis is the legacy implementation that uses direct HuggingFace Transformers integration.\nFor the new runtime-based system with preset support, use PictureDescriptionVlmEngineOptions.",
+        "properties": {
+          "batch_size": {
+            "default": 8,
+            "description": "Number of images to process in a single batch during picture description. Higher values improve throughput but increase memory usage. Adjust based on available GPU/CPU memory.",
+            "minimum": 1,
+            "title": "Batch Size",
+            "type": "integer"
+          },
+          "classification_allow": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/$defs/PictureClassificationLabel"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "List of picture classification labels to allow for description. Only pictures classified with these labels will be processed. If None, all picture types are allowed unless explicitly denied. Use to focus description on specific image types (e.g., diagrams, charts).",
+            "title": "Classification Allow"
+          },
+          "classification_deny": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/$defs/PictureClassificationLabel"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "List of picture classification labels to exclude from description. Pictures classified with these labels will be skipped. If None, no picture types are denied unless not in allow list. Use to exclude unwanted image types (e.g., decorative images, logos).",
+            "title": "Classification Deny"
+          },
+          "classification_min_confidence": {
+            "default": 0.0,
+            "description": "Minimum classification confidence score (0.0-1.0) required for a picture to be processed. Pictures with classification confidence below this threshold are skipped. Higher values ensure only confidently classified images are described. Range: 0.0 (no filtering) to 1.0 (maximum confidence).",
+            "title": "Classification Min Confidence",
+            "type": "number"
+          },
+          "generation_config": {
+            "additionalProperties": true,
+            "default": {
+              "do_sample": false,
+              "max_new_tokens": 200
+            },
+            "description": "HuggingFace generation configuration for text generation. Controls output length, sampling strategy, temperature, etc. See: https://huggingface.co/docs/transformers/en/main_classes/text_generation#transformers.GenerationConfig",
+            "title": "Generation Config",
+            "type": "object"
+          },
+          "kind": {
+            "const": "vlm",
+            "default": "vlm",
+            "title": "Engine",
+            "type": "string"
+          },
+          "padding_side": {
+            "default": "left",
+            "description": "Tokenizer padding side used for batched generation. Defaults to left to preserve the legacy behavior, but can be overridden for models that require right padding.",
+            "enum": [
+              "left",
+              "right"
+            ],
+            "title": "Padding Side",
+            "type": "string"
+          },
+          "picture_area_threshold": {
+            "default": 0.05,
+            "description": "Minimum picture area as fraction of page area (0.0-1.0) to trigger description. Pictures smaller than this threshold are skipped. Use lower values (e.g., 0.01) to describe small images.",
+            "title": "Picture Area Threshold",
+            "type": "number"
+          },
+          "prompt": {
+            "default": "Describe this image in a few sentences.",
+            "description": "Prompt template for the vision model. Customize to control description style, detail level, or focus.",
+            "examples": [
+              "What is shown in this image?",
+              "Provide a detailed technical description"
+            ],
+            "title": "Prompt",
+            "type": "string"
+          },
+          "repo_id": {
+            "description": "HuggingFace model repository ID for the vision-language model. Must be a model capable of image-to-text generation for picture descriptions.",
+            "examples": [
+              "HuggingFaceTB/SmolVLM-256M-Instruct",
+              "ibm-granite/granite-vision-3.3-2b"
+            ],
+            "title": "Repo Id",
+            "type": "string"
+          },
+          "scale": {
+            "default": 2.0,
+            "description": "Scaling factor for image resolution before processing. Higher values (e.g., 2.0) provide more detail for the vision model but increase processing time and memory. Range: 0.5-4.0 typical.",
+            "exclusiveMinimum": 0,
+            "title": "Scale",
+            "type": "number"
+          }
+        },
+        "required": [
+          "repo_id"
+        ],
+        "title": "PictureDescriptionVlmOptions",
+        "type": "object"
+      },
+      "RapidOcrOptions": {
+        "additionalProperties": false,
+        "description": "Configuration for RapidOCR engine with multiple backend support.\n\nSee Also:\n    - https://rapidai.github.io/RapidOCRDocs/install_usage/api/RapidOCR/\n    - https://rapidai.github.io/RapidOCRDocs/main/install_usage/rapidocr/usage/#__tabbed_3_4",
+        "properties": {
+          "backend": {
+            "default": "onnxruntime",
+            "description": "Inference backend for RapidOCR. Options: `onnxruntime` (default, cross-platform), `openvino` (Intel), `paddle` (PaddlePaddle), `torch` (PyTorch). Choose based on your hardware and available libraries.",
+            "enum": [
+              "onnxruntime",
+              "openvino",
+              "paddle",
+              "torch"
+            ],
+            "title": "Backend",
+            "type": "string"
+          },
+          "bitmap_area_threshold": {
+            "default": 0.05,
+            "description": "Percentage of the page area for a bitmap to be processed with OCR.",
+            "examples": [
+              0.05,
+              0.1
+            ],
+            "title": "Bitmap Area Threshold",
+            "type": "number"
+          },
+          "cls_model_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Custom path to text classification model. If None, uses default RapidOCR model.",
+            "title": "Cls Model Path"
+          },
+          "det_model_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Custom path to text detection model. If None, uses default RapidOCR model.",
+            "title": "Det Model Path"
+          },
+          "font_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Custom path to font file for text rendering in visualization.",
+            "title": "Font Path"
+          },
+          "force_full_page_ocr": {
+            "default": false,
+            "description": "If enabled, a full-page OCR is always applied.",
+            "examples": [
+              false
+            ],
+            "title": "Force Full Page Ocr",
+            "type": "boolean"
+          },
+          "kind": {
+            "const": "rapidocr",
+            "default": "rapidocr",
+            "title": "Engine",
+            "type": "string"
+          },
+          "lang": {
+            "default": [
+              "english",
+              "chinese"
+            ],
+            "description": "List of OCR languages. Note: RapidOCR does not currently support language selection; this parameter is reserved for future compatibility. See RapidOCR documentation for supported languages.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Lang",
+            "type": "array"
+          },
+          "print_verbose": {
+            "default": false,
+            "description": "Enable verbose logging output from RapidOCR for debugging purposes.",
+            "title": "Print Verbose",
+            "type": "boolean"
+          },
+          "rapidocr_params": {
+            "additionalProperties": true,
+            "default": {},
+            "description": "Additional parameters to pass through to RapidOCR engine. Use this to override or extend default RapidOCR configuration with engine-specific options.",
+            "title": "Rapidocr Params",
+            "type": "object"
+          },
+          "rec_font_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "deprecated": true,
+            "description": "Deprecated. Use font_path instead.",
+            "title": "Rec Font Path"
+          },
+          "rec_keys_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Custom path to recognition keys file. If None, uses default RapidOCR keys.",
+            "title": "Rec Keys Path"
+          },
+          "rec_model_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Custom path to text recognition model. If None, uses default RapidOCR model.",
+            "title": "Rec Model Path"
+          },
+          "text_score": {
+            "default": 0.5,
+            "description": "Minimum confidence score for text detection. Text regions with scores below this threshold are filtered out. Range: 0.0-1.0. Lower values detect more text but may include false positives.",
+            "title": "Text Score",
+            "type": "number"
+          },
+          "use_cls": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Enable text direction classification stage. If None, uses RapidOCR default behavior.",
+            "title": "Use Cls"
+          },
+          "use_det": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Enable text detection stage. If None, uses RapidOCR default behavior.",
+            "title": "Use Det"
+          },
+          "use_rec": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Enable text recognition stage. If None, uses RapidOCR default behavior.",
+            "title": "Use Rec"
+          }
+        },
+        "title": "RapidOcrOptions",
+        "type": "object"
+      },
+      "ResponseFormat": {
+        "enum": [
+          "doctags",
+          "markdown",
+          "deepseekocr_markdown",
+          "html",
+          "otsl",
+          "plaintext"
+        ],
+        "title": "ResponseFormat",
+        "type": "string"
+      },
+      "TableFormerMode": {
+        "description": "Operating modes for TableFormer table structure extraction model.\n\nControls the trade-off between processing speed and extraction accuracy.\nChoose based on your performance requirements and document complexity.\n\nAttributes:\n    FAST: Fast mode prioritizes speed over precision. Suitable for simple tables or high-volume\n        processing.\n    ACCURATE: Accurate mode provides higher quality results with slower processing. Recommended for complex\n        tables and production use.",
+        "enum": [
+          "fast",
+          "accurate"
+        ],
+        "title": "TableFormerMode",
+        "type": "string"
+      },
+      "TableStructureOptions": {
+        "additionalProperties": false,
+        "description": "Options for the table structure (TableFormer V1).",
+        "properties": {
+          "do_cell_matching": {
+            "default": true,
+            "description": "Enable cell matching to align detected table cells with their content. When enabled, the model attempts to match table structure predictions with actual cell content for improved accuracy.",
+            "title": "Do Cell Matching",
+            "type": "boolean"
+          },
+          "kind": {
+            "const": "docling_tableformer",
+            "default": "docling_tableformer",
+            "title": "Engine",
+            "type": "string"
+          },
+          "mode": {
+            "$ref": "#/$defs/TableFormerMode",
+            "default": "accurate",
+            "description": "Table structure extraction mode. `accurate` provides higher quality results with slower processing, while `fast` prioritizes speed over precision. Recommended: `accurate` for production use."
+          }
+        },
+        "title": "TableStructureOptions",
+        "type": "object"
+      },
+      "TesseractCliOcrOptions": {
+        "additionalProperties": false,
+        "description": "Configuration for Tesseract OCR via command-line interface.",
+        "properties": {
+          "bitmap_area_threshold": {
+            "default": 0.05,
+            "description": "Percentage of the page area for a bitmap to be processed with OCR.",
+            "examples": [
+              0.05,
+              0.1
+            ],
+            "title": "Bitmap Area Threshold",
+            "type": "number"
+          },
+          "force_full_page_ocr": {
+            "default": false,
+            "description": "If enabled, a full-page OCR is always applied.",
+            "examples": [
+              false
+            ],
+            "title": "Force Full Page Ocr",
+            "type": "boolean"
+          },
+          "kind": {
+            "const": "tesseract",
+            "default": "tesseract",
+            "title": "Engine",
+            "type": "string"
+          },
+          "lang": {
+            "default": [
+              "fra",
+              "deu",
+              "spa",
+              "eng"
+            ],
+            "description": "List of Tesseract language codes. Use 3-letter ISO 639-2 codes (e.g., `eng`, `fra`, `deu`). Multiple languages enable multilingual OCR. Requires corresponding Tesseract language data files.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Lang",
+            "type": "array"
+          },
+          "path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Path to Tesseract data directory containing language files. If None, uses Tesseract's default TESSDATA_PREFIX location.",
+            "title": "Path"
+          },
+          "psm": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Page Segmentation Mode for Tesseract. Values 0-13 control how Tesseract segments the page. Common values: 3 (auto), 6 (uniform block), 11 (sparse text). If None, uses Tesseract default.",
+            "title": "Psm"
+          },
+          "tesseract_cmd": {
+            "default": "tesseract",
+            "description": "Command or path to Tesseract executable. Use `tesseract` if in system PATH, or provide full path for custom installations (e.g., `/usr/local/bin/tesseract`).",
+            "title": "Tesseract Cmd",
+            "type": "string"
+          }
+        },
+        "title": "TesseractCliOcrOptions",
+        "type": "object"
+      },
+      "TesseractOcrOptions": {
+        "additionalProperties": false,
+        "description": "Configuration for Tesseract OCR via Python bindings (tesserocr).",
+        "properties": {
+          "bitmap_area_threshold": {
+            "default": 0.05,
+            "description": "Percentage of the page area for a bitmap to be processed with OCR.",
+            "examples": [
+              0.05,
+              0.1
+            ],
+            "title": "Bitmap Area Threshold",
+            "type": "number"
+          },
+          "force_full_page_ocr": {
+            "default": false,
+            "description": "If enabled, a full-page OCR is always applied.",
+            "examples": [
+              false
+            ],
+            "title": "Force Full Page Ocr",
+            "type": "boolean"
+          },
+          "kind": {
+            "const": "tesserocr",
+            "default": "tesserocr",
+            "title": "Engine",
+            "type": "string"
+          },
+          "lang": {
+            "default": [
+              "fra",
+              "deu",
+              "spa",
+              "eng"
+            ],
+            "description": "List of Tesseract language codes. Use 3-letter ISO 639-2 codes (e.g., `eng`, `fra`, `deu`). Multiple languages enable multilingual OCR. Requires corresponding Tesseract language data files.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Lang",
+            "type": "array"
+          },
+          "path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Path to Tesseract data directory containing language files. If None, uses Tesseract's default TESSDATA_PREFIX location.",
+            "title": "Path"
+          },
+          "psm": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Page Segmentation Mode for Tesseract. Values 0-13 control how Tesseract segments the page. Common values: 3 (auto), 6 (uniform block), 11 (sparse text). If None, uses Tesseract default.",
+            "title": "Psm"
+          }
+        },
+        "title": "TesseractOcrOptions",
+        "type": "object"
+      },
+      "TransformersImageClassificationEngineOptions": {
+        "additionalProperties": false,
+        "description": "Runtime configuration for Transformers-based image-classification models.",
+        "properties": {
+          "compile_model": {
+            "description": "Whether to compile the model with torch.compile() for better performance.",
+            "title": "Compile Model",
+            "type": "boolean"
+          },
+          "engine_type": {
+            "const": "transformers",
+            "default": "transformers",
+            "title": "Engine Type",
+            "type": "string"
+          },
+          "top_k": {
+            "anyOf": [
+              {
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Maximum number of classes to return. If None, all classes are returned.",
+            "title": "Top K"
+          },
+          "torch_dtype": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "PyTorch dtype for model inference (e.g., 'float32', 'float16', 'bfloat16')",
+            "title": "Torch Dtype"
+          }
+        },
+        "title": "TransformersImageClassificationEngineOptions",
+        "type": "object"
+      },
+      "TransformersVlmEngineOptions": {
+        "additionalProperties": false,
+        "description": "Options for HuggingFace Transformers inference engine.",
+        "properties": {
+          "compile_model": {
+            "description": "Whether to compile the model with torch.compile() for better performance.",
+            "title": "Compile Model",
+            "type": "boolean"
+          },
+          "device": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AcceleratorDevice"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Device to use (auto-detected if None)"
+          },
+          "engine_type": {
+            "const": "transformers",
+            "default": "transformers",
+            "title": "Engine Type",
+            "type": "string"
+          },
+          "llm_int8_threshold": {
+            "default": 6.0,
+            "description": "Threshold for LLM.int8() quantization",
+            "title": "Llm Int8 Threshold",
+            "type": "number"
+          },
+          "load_in_8bit": {
+            "default": true,
+            "description": "Load model in 8-bit precision using bitsandbytes",
+            "title": "Load In 8Bit",
+            "type": "boolean"
+          },
+          "quantized": {
+            "default": false,
+            "description": "Whether the model is pre-quantized",
+            "title": "Quantized",
+            "type": "boolean"
+          },
+          "torch_dtype": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "PyTorch dtype (e.g., 'float16', 'bfloat16')",
+            "title": "Torch Dtype"
+          },
+          "trust_remote_code": {
+            "default": false,
+            "description": "Allow execution of custom code from model repo",
+            "title": "Trust Remote Code",
+            "type": "boolean"
+          },
+          "use_kv_cache": {
+            "default": true,
+            "description": "Enable key-value caching for attention",
+            "title": "Use Kv Cache",
+            "type": "boolean"
+          }
+        },
+        "title": "TransformersVlmEngineOptions",
+        "type": "object"
+      },
+      "VllmCudaGraphMode": {
+        "description": "CUDA graph capture mode for the vLLM v1 engine.\n\nControls whether and how vLLM captures CUDA graphs to speed up inference.\nCUDA graphs reduce kernel-launch overhead by replaying a recorded sequence\nof CUDA operations instead of launching each kernel individually.\n\nNONE:\n    Disable CUDA graphs entirely; everything runs in eager mode.\n    Fastest startup, lowest steady-state throughput.\n    Best for short-lived processes, notebooks, and debugging.\n\nFULL:\n    Capture the entire forward pass as one monolithic CUDA graph.\n    Maximum graph coverage but requires very static execution shapes;\n    may fail with some models or dynamic workloads.\n\nPIECEWISE:\n    Capture segments of the model (e.g. transformer blocks) as multiple\n    smaller graphs between selected ops.  Handles dynamic shapes better\n    than FULL while still accelerating most of the forward pass.\n\nFULL_AND_PIECEWISE:\n    Hybrid mode (default in many vLLM versions): FULL graphs for\n    decode-only batches; PIECEWISE graphs for prefill and mixed\n    prefill+decode batches.  Usually the best throughput option for\n    typical LLM serving workloads.\n\nFULL_DECODE_ONLY:\n    FULL CUDA graphs only for decode batches; prefill and mixed batches\n    run in eager mode.  Dramatically reduces graph-capture time and\n    memory footprint compared to FULL_AND_PIECEWISE while still\n    accelerating token generation.",
+        "enum": [
+          "NONE",
+          "FULL",
+          "PIECEWISE",
+          "FULL_AND_PIECEWISE",
+          "FULL_DECODE_ONLY"
+        ],
+        "title": "VllmCudaGraphMode",
+        "type": "string"
+      },
+      "VllmVlmEngineOptions": {
+        "additionalProperties": false,
+        "description": "Options for vLLM inference engine (high-throughput serving).",
+        "properties": {
+          "cudagraph_mode": {
+            "$ref": "#/$defs/VllmCudaGraphMode",
+            "default": "PIECEWISE",
+            "description": "CUDA graph capture mode (vLLM v1 engine only). See VllmCudaGraphMode for the available options and their trade-offs."
+          },
+          "device": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AcceleratorDevice"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Device to use (auto-detected if None)"
+          },
+          "engine_type": {
+            "const": "vllm",
+            "default": "vllm",
+            "title": "Engine Type",
+            "type": "string"
+          },
+          "gpu_memory_utilization": {
+            "default": 0.9,
+            "description": "Fraction of GPU memory to use",
+            "title": "Gpu Memory Utilization",
+            "type": "number"
+          },
+          "tensor_parallel_size": {
+            "default": 1,
+            "description": "Number of GPUs for tensor parallelism",
+            "title": "Tensor Parallel Size",
+            "type": "integer"
+          },
+          "trust_remote_code": {
+            "default": false,
+            "description": "Allow execution of custom code from model repo",
+            "title": "Trust Remote Code",
+            "type": "boolean"
+          }
+        },
+        "title": "VllmVlmEngineOptions",
+        "type": "object"
+      },
+      "VlmEngineType": {
+        "description": "Types of VLM inference engines available.",
+        "enum": [
+          "transformers",
+          "mlx",
+          "vllm",
+          "api",
+          "api_ollama",
+          "api_lmstudio",
+          "api_openai",
+          "auto_inline"
+        ],
+        "title": "VlmEngineType",
+        "type": "string"
+      },
+      "VlmModelSpec": {
+        "description": "Specification for a VLM model.\n\nThis defines the model configuration that is independent of the engine.\nIt includes:\n- Default model repository ID\n- Prompt template\n- Response format\n- Engine-specific overrides",
+        "properties": {
+          "api_overrides": {
+            "additionalProperties": {
+              "$ref": "#/$defs/ApiModelConfig"
+            },
+            "description": "API-specific configuration overrides",
+            "propertyNames": {
+              "$ref": "#/$defs/VlmEngineType"
+            },
+            "title": "Api Overrides",
+            "type": "object"
+          },
+          "default_repo_id": {
+            "description": "Default HuggingFace repository ID",
+            "title": "Default Repo Id",
+            "type": "string"
+          },
+          "engine_overrides": {
+            "additionalProperties": {
+              "$ref": "#/$defs/EngineModelConfig"
+            },
+            "description": "Engine-specific configuration overrides",
+            "propertyNames": {
+              "$ref": "#/$defs/VlmEngineType"
+            },
+            "title": "Engine Overrides",
+            "type": "object"
+          },
+          "max_new_tokens": {
+            "default": 4096,
+            "description": "Maximum number of new tokens to generate",
+            "title": "Max New Tokens",
+            "type": "integer"
+          },
+          "name": {
+            "description": "Human-readable model name",
+            "title": "Name",
+            "type": "string"
+          },
+          "prompt": {
+            "description": "Prompt template for this model",
+            "title": "Prompt",
+            "type": "string"
+          },
+          "response_format": {
+            "$ref": "#/$defs/ResponseFormat",
+            "description": "Expected response format from the model"
+          },
+          "revision": {
+            "default": "main",
+            "description": "Default model revision",
+            "title": "Revision",
+            "type": "string"
+          },
+          "stop_strings": {
+            "description": "Stop strings for generation",
+            "items": {
+              "type": "string"
+            },
+            "title": "Stop Strings",
+            "type": "array"
+          },
+          "supported_engines": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/$defs/VlmEngineType"
+                },
+                "type": "array",
+                "uniqueItems": true
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Set of supported engines (None = all supported)",
+            "title": "Supported Engines"
+          },
+          "trust_remote_code": {
+            "default": false,
+            "description": "Whether to trust remote code for this model",
+            "title": "Trust Remote Code",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "name",
+          "default_repo_id",
+          "prompt",
+          "response_format"
+        ],
+        "title": "VlmModelSpec",
+        "type": "object"
+      }
+    },
+    "additionalProperties": false,
+    "description": "Configuration options for the PDF document processing pipeline.\n\nNotes:\n    - Enabling multiple features (OCR, table structure, formulas) increases the processing time significantly.\n        Enable only necessary features for your use case.\n    - For production systems processing large document volumes, implement a timeout protection (for instance, 90-120\n        seconds via `document_timeout` parameter).\n    - OCR requires a system installation of engines (Tesseract, EasyOCR). Verify the installation before enabling\n        OCR via `do_ocr=True`.\n    - RapidOCR has known issues with read-only filesystems (e.g., Databricks). Consider Tesseract or alternative\n        backends for distributed systems.\n\nSee Also:\n    - `examples/pipeline_options_advanced.py`: Comprehensive configuration examples.",
+    "properties": {
+      "accelerator_options": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/AcceleratorOptions"
+          }
+        ],
+        "default": {
+          "cuda_use_flash_attention2": false,
+          "device": "auto",
+          "num_threads": 4
+        },
+        "description": "Hardware acceleration configuration for model inference. Controls GPU device selection, memory management, and execution optimization settings for layout, OCR, and table structure models."
+      },
+      "allow_external_plugins": {
+        "default": false,
+        "description": "Allow loading external third-party plugins for OCR, layout, table structure, or picture description models. Enables custom model implementations via plugin system. Disabled by default for security.",
+        "examples": [
+          false
+        ],
+        "title": "Allow External Plugins",
+        "type": "boolean"
+      },
+      "artifacts_path": {
+        "anyOf": [
+          {
+            "format": "path",
+            "type": "string"
+          },
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Local directory containing pre-downloaded model artifacts (weights, configs). If None, models are fetched from remote sources on first use. Use `docling-tools models download` to pre-fetch artifacts for offline operation or faster initialization.",
+        "examples": [
+          "./artifacts",
+          "/tmp/docling_outputs"
+        ],
+        "title": "Artifacts Path"
+      },
+      "batch_polling_interval_seconds": {
+        "default": 0.5,
+        "description": "Polling interval in seconds for batch collection in threaded pipeline stages. Each stage waits up to this duration to accumulate items before processing. Lower values reduce latency but may decrease batching efficiency. Only used by `StandardPdfPipeline` (threaded mode).",
+        "title": "Batch Polling Interval Seconds",
+        "type": "number"
+      },
+      "chart_extraction_options": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/ChartExtractionModelOptions"
+          }
+        ],
+        "default": {
+          "chart2code": false,
+          "chart2csv": true,
+          "chart2summary": false,
+          "kind": "chart_extraction",
+          "model": "granite-vision-v4"
+        },
+        "description": "Configuration for the chart extraction model, including which model variant to use and which output formats to generate (CSV, code, summary)."
+      },
+      "code_formula_options": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/CodeFormulaVlmOptions"
+          }
+        ],
+        "default": {
+          "engine_options": {
+            "engine_type": "auto_inline"
+          },
+          "extract_code": true,
+          "extract_formulas": true,
+          "max_size": null,
+          "model_spec": {
+            "api_overrides": {},
+            "default_repo_id": "docling-project/CodeFormulaV2",
+            "engine_overrides": {
+              "transformers": {
+                "extra_config": {
+                  "extra_generation_config": {
+                    "skip_special_tokens": false
+                  },
+                  "torch_dtype": "bfloat16",
+                  "transformers_model_type": "automodel-imagetexttotext"
+                },
+                "repo_id": null,
+                "revision": null,
+                "torch_dtype": null
+              }
+            },
+            "max_new_tokens": 4096,
+            "name": "CodeFormulaV2",
+            "prompt": "",
+            "response_format": "plaintext",
+            "revision": "main",
+            "stop_strings": [
+              "</doctag>",
+              "<end_of_utterance>"
+            ],
+            "supported_engines": null,
+            "trust_remote_code": false
+          },
+          "scale": 2.0
+        },
+        "description": "Configuration for code and formula extraction using VLM. Uses new preset system (recommended). Default: 'default' preset. Only applicable when `do_code_enrichment=True` or `do_formula_enrichment=True`. Example: CodeFormulaVlmOptions.from_preset('granite_vision')"
+      },
+      "do_chart_extraction": {
+        "default": false,
+        "description": "Enable chart data extraction to convert bar, pie, and line charts into structured tabular data. Automatically enables picture classification. Only applicable when `do_chart_extraction=True`.",
+        "title": "Do Chart Extraction",
+        "type": "boolean"
+      },
+      "do_code_enrichment": {
+        "default": false,
+        "description": "Enable specialized processing for code blocks. Applies code-aware OCR and formatting to improve accuracy of programming language snippets, terminal output, and structured code content.",
+        "title": "Do Code Enrichment",
+        "type": "boolean"
+      },
+      "do_formula_enrichment": {
+        "default": false,
+        "description": "Enable mathematical formula recognition and LaTeX conversion. Uses specialized models to detect and extract mathematical expressions, converting them to LaTeX format for accurate representation.",
+        "title": "Do Formula Enrichment",
+        "type": "boolean"
+      },
+      "do_ocr": {
+        "default": true,
+        "description": "Enable Optical Character Recognition for scanned or image-based PDFs. Replaces or supplements programmatic text extraction with OCR-detected text. Required for scanned documents with no embedded text layer. Note: OCR significantly increases processing time.",
+        "title": "Do Ocr",
+        "type": "boolean"
+      },
+      "do_picture_classification": {
+        "default": false,
+        "description": "Enable picture classification to categorize images by type (photo, diagram, chart, etc.). Useful for downstream processing that requires image type awareness.",
+        "title": "Do Picture Classification",
+        "type": "boolean"
+      },
+      "do_picture_description": {
+        "default": false,
+        "description": "Enable automatic generation of textual descriptions for pictures using vision-language models. Descriptions are added to the document for accessibility and searchability.",
+        "title": "Do Picture Description",
+        "type": "boolean"
+      },
+      "do_table_structure": {
+        "default": true,
+        "description": "Enable table structure extraction and reconstruction. Detects table regions, extracts cell content with row/column relationships, and reconstructs the logical table structure for downstream processing.",
+        "title": "Do Table Structure",
+        "type": "boolean"
+      },
+      "document_timeout": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Maximum processing time in seconds before aborting document conversion. When exceeded, the pipeline stops processing and returns partial results with PARTIAL_SUCCESS status. If None, no timeout is enforced. Recommended: 90-120 seconds for production systems.",
+        "examples": [
+          10.0,
+          20.0
+        ],
+        "title": "Document Timeout"
+      },
+      "enable_remote_services": {
+        "default": false,
+        "description": "Allow pipeline to call external APIs or cloud services during processing. Required for API-based picture description models. Disabled by default for security and offline operation.",
+        "examples": [
+          false
+        ],
+        "title": "Enable Remote Services",
+        "type": "boolean"
+      },
+      "force_backend_text": {
+        "default": false,
+        "description": "Force use of PDF backend's native text extraction instead of layout model predictions. When enabled, bypasses the layout model's text detection and uses the embedded text from the PDF file directly. Useful for PDFs with reliable programmatic text layers.",
+        "title": "Force Backend Text",
+        "type": "boolean"
+      },
+      "generate_page_images": {
+        "default": false,
+        "description": "Generate rendered page images during extraction. Creates PNG representations of each page for visual preview, validation, or downstream image-based machine learning tasks.",
+        "title": "Generate Page Images",
+        "type": "boolean"
+      },
+      "generate_parsed_pages": {
+        "default": false,
+        "description": "Retain intermediate parsed page representations after processing. When enabled, keeps detailed page-level parsing data structures for debugging or advanced post-processing. Increases memory usage. Automatically disabled after document assembly unless explicitly enabled.",
+        "title": "Generate Parsed Pages",
+        "type": "boolean"
+      },
+      "generate_picture_images": {
+        "default": false,
+        "description": "Extract and save embedded images from the PDF. Exports individual images (figures, photos, diagrams, charts) found in the document as separate image files for downstream use.",
+        "title": "Generate Picture Images",
+        "type": "boolean"
+      },
+      "generate_table_images": {
+        "default": false,
+        "deprecated": true,
+        "title": "Generate Table Images",
+        "type": "boolean"
+      },
+      "images_scale": {
+        "default": 1.0,
+        "description": "Scaling factor for generated images. Higher values produce higher resolution but increase processing time and storage requirements. Recommended values: 1.0 (standard quality), 2.0 (high resolution), 0.5 (lower resolution for previews).",
+        "title": "Images Scale",
+        "type": "number"
+      },
+      "layout_batch_size": {
+        "default": 4,
+        "description": "Batch size for layout analysis stage in threaded pipeline. Pages are grouped and processed together by the layout model. Higher values improve throughput but increase memory usage. Only used by `StandardPdfPipeline` (threaded mode).",
+        "title": "Layout Batch Size",
+        "type": "integer"
+      },
+      "layout_options": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/LayoutOptions"
+          }
+        ],
+        "default": {
+          "create_orphan_clusters": true,
+          "keep_empty_clusters": false,
+          "kind": "docling_layout_default",
+          "model_spec": {
+            "model_path": "",
+            "name": "docling_layout_heron",
+            "repo_id": "docling-project/docling-layout-heron",
+            "revision": "main",
+            "supported_devices": [
+              "cpu",
+              "cuda",
+              "mps",
+              "xpu"
+            ]
+          },
+          "skip_cell_assignment": false
+        },
+        "description": "Configuration for document layout analysis model. Controls layout detection behavior including cluster creation for orphaned elements, cell assignment to table structures, and handling of empty regions. Specifies which layout model to use (default: Heron)."
+      },
+      "ocr_batch_size": {
+        "default": 4,
+        "description": "Batch size for OCR processing stage in threaded pipeline. Pages are grouped and processed together to improve throughput. Higher values increase GPU/CPU utilization but require more memory. Only used by `StandardPdfPipeline` (threaded mode).",
+        "title": "Ocr Batch Size",
+        "type": "integer"
+      },
+      "ocr_options": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/EasyOcrOptions"
+          },
+          {
+            "$ref": "#/$defs/KserveV2OcrOptions"
+          },
+          {
+            "$ref": "#/$defs/OcrAutoOptions"
+          },
+          {
+            "$ref": "#/$defs/OcrMacOptions"
+          },
+          {
+            "$ref": "#/$defs/RapidOcrOptions"
+          },
+          {
+            "$ref": "#/$defs/TesseractCliOcrOptions"
+          },
+          {
+            "$ref": "#/$defs/TesseractOcrOptions"
+          }
+        ],
+        "default": {
+          "bitmap_area_threshold": 0.05,
+          "force_full_page_ocr": false,
+          "kind": "auto",
+          "lang": []
+        },
+        "description": "Configuration for OCR engine. Specifies which OCR engine to use (Tesseract, EasyOCR, RapidOCR, etc.) and engine-specific settings. Only applicable when `do_ocr=True`."
+      },
+      "picture_classification_options": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/DocumentPictureClassifierOptions"
+          }
+        ],
+        "default": {
+          "engine_options": {
+            "engine_type": "transformers",
+            "top_k": null
+          },
+          "kind": "document_picture_classifier",
+          "model_spec": {
+            "engine_overrides": {},
+            "name": "document_figure_classifier_v2",
+            "repo_id": "docling-project/DocumentFigureClassifier-v2.5",
+            "revision": "main"
+          }
+        },
+        "description": "Configuration for picture classification model/runtime. Supports selecting transformers, onnxruntime, or remote api_kserve_v2 inference engines."
+      },
+      "picture_description_options": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/PictureDescriptionApiOptions"
+          },
+          {
+            "$ref": "#/$defs/PictureDescriptionVlmEngineOptions"
+          },
+          {
+            "$ref": "#/$defs/PictureDescriptionVlmOptions"
+          }
+        ],
+        "default": {
+          "batch_size": 8,
+          "classification_allow": null,
+          "classification_deny": null,
+          "classification_min_confidence": 0.0,
+          "engine_options": {
+            "engine_type": "auto_inline"
+          },
+          "generation_config": {
+            "do_sample": false,
+            "max_new_tokens": 200
+          },
+          "kind": "picture_description_vlm_engine",
+          "model_spec": {
+            "api_overrides": {
+              "api_lmstudio": {
+                "params": {
+                  "model": "smolvlm-256m-instruct"
+                }
+              }
+            },
+            "default_repo_id": "HuggingFaceTB/SmolVLM-256M-Instruct",
+            "engine_overrides": {
+              "mlx": {
+                "extra_config": {},
+                "repo_id": "moot20/SmolVLM-256M-Instruct-MLX",
+                "revision": null,
+                "torch_dtype": null
+              },
+              "transformers": {
+                "extra_config": {
+                  "transformers_model_type": "automodel-imagetexttotext"
+                },
+                "repo_id": null,
+                "revision": null,
+                "torch_dtype": "bfloat16"
+              }
+            },
+            "max_new_tokens": 4096,
+            "name": "SmolVLM-256M-Instruct",
+            "prompt": "Describe this image in a few sentences.",
+            "response_format": "plaintext",
+            "revision": "main",
+            "stop_strings": [],
+            "supported_engines": null,
+            "trust_remote_code": false
+          },
+          "picture_area_threshold": 0.05,
+          "prompt": "Describe this image in a few sentences.",
+          "scale": 2.0
+        },
+        "description": "Configuration for picture description model. Uses new preset system (recommended). Default: 'smolvlm' preset. Only applicable when `do_picture_description=True`. Example: PictureDescriptionVlmOptions.from_preset('granite_vision')"
+      },
+      "queue_max_size": {
+        "default": 100,
+        "description": "Maximum queue size for inter-stage communication in threaded pipeline. Limits the number of items buffered between processing stages to prevent memory overflow. When full, upstream stages block until space is available. Only used by `StandardPdfPipeline` (threaded mode).",
+        "title": "Queue Max Size",
+        "type": "integer"
+      },
+      "table_batch_size": {
+        "default": 4,
+        "description": "Batch size for table structure extraction stage in threaded pipeline. Tables from multiple pages are processed together. Higher values improve throughput but increase memory usage. Only used by `StandardPdfPipeline` (threaded mode).",
+        "title": "Table Batch Size",
+        "type": "integer"
+      },
+      "table_structure_options": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/TableStructureOptions"
+          }
+        ],
+        "default": {
+          "do_cell_matching": true,
+          "kind": "docling_tableformer",
+          "mode": "accurate"
+        },
+        "description": "Configuration for table structure extraction. Controls table detection accuracy, cell matching behavior, and table formatting. Only applicable when `do_table_structure=True`."
+      }
+    },
+    "title": "PdfPipelineOptions",
+    "type": "object"
+  },
+  "server_managed": [
+    "artifacts_path",
+    "accelerator_options",
+    "enable_remote_services",
+    "allow_external_plugins"
+  ],
+  "server_managed_export_parameters": [
+    "image_dir",
+    "image_uri_prefix"
+  ]
+}

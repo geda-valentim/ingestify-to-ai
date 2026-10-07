@@ -68,6 +68,29 @@ def make_admin(email=None, user_id=None, assume_yes=False) -> int:
                 print("Aborted.")
                 return 1
 
+        from shared.access import policy
+
+        if policy.enabled():
+            authority = policy.epoch(db, True)
+            from shared.models import User, AdminAudit
+
+            user = (
+                db.query(User)
+                .filter_by(id=user.id)
+                .populate_existing()
+                .with_for_update()
+                .one()
+            )
+            authority.version += 1
+            db.add(
+                AdminAudit(
+                    actor_user_id="installation:make_admin",
+                    auth_method="cli",
+                    action="access.bootstrap_promoted",
+                    target_type="user",
+                    target_id=user.id,
+                )
+            )
         user.is_admin = True
         db.commit()
         logger.warning(f"[ADMIN] User {user.id} ({user.email}) promoted to admin by make_admin.py")

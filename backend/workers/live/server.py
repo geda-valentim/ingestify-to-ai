@@ -13,6 +13,7 @@ from shared.redis_client import get_redis_client
 from shared.live.protocol import AudioClock, LiveError, control, RATE
 from shared.live.store import LiveStore
 from workers.live.decoder import OnlineWhisper
+from shared.live.capabilities import LiveOptions
 
 app = FastAPI(docs_url=None, redoc_url=None)
 settings = get_settings()
@@ -73,7 +74,8 @@ async def heartbeat():
             'device': 'cuda', 'resident_vram_gb': settings.live_vram_footprint_gb,
             'gpu_ref': settings.live_gpu_ref, 'gpu': gpu,
             'compute_type': compute_type, 'cold_start_seconds': cold_start_seconds,
-            'active_jobs': sorted(active),
+            'active_jobs': sorted(active), 'options_protocol': 1,
+            'languages': list(model.supported_languages) if model is not None else [],
         })
         await asyncio.sleep(2)
 
@@ -99,7 +101,9 @@ async def shutdown():
 
 @app.get('/health')
 def health():
-    return {'ready': model is not None, 'active': len(active), 'capacity': settings.live_max_sessions}
+    return {'ready': model is not None, 'active': len(active), 'capacity': settings.live_max_sessions,
+            'runtime_revision':os.environ.get('INGESTIFY_RUNTIME_REVISION'),
+            'model_profile_id':os.environ.get('INGESTIFY_MODEL_PROFILE'),'model':settings.whisper_model}
 
 
 @app.websocket('/internal/stream')
@@ -158,7 +162,7 @@ async def stream(ws: WebSocket):
 
     async def decode():
         nonlocal queued_samples, inference_future
-        decoder = OnlineWhisper(model)
+        decoder = OnlineWhisper(model, language=session_language, options=session_options.model_dump())
         loop = asyncio.get_running_loop()
         while True:
             pcm = await audio.get()
@@ -186,7 +190,11 @@ async def stream(ws: WebSocket):
                 return
 
     try:
-        hello = control(await asyncio.wait_for(ws.receive_text(), 5))
+        hello = control(await asyncio.wait_for(ws.receive_text(), 5), limit=65536)
+        session_options = LiveOptions.model_validate(hello.get("options") or {})
+        session_language = hello.get("language", "pt")
+        if session_language not in model.supported_languages:
+            raise LiveError("LIVE_UNSUPPORTED_LANGUAGE")
         job_id, generation = hello.get('job_id'), hello.get('generation')
         if not isinstance(job_id, str) or type(generation) is not int or not store.valid(job_id, generation, 'streaming'):
             raise LiveError('LIVE_INVALID_RESERVATION', 4401)

@@ -1,6 +1,6 @@
 "use client";
 
-import { use, useEffect, useState } from "react";
+import { use, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -71,9 +71,13 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { formatDistanceToNow } from "date-fns";
 import { useToast } from "@/hooks/use-toast";
 import dynamic from "next/dynamic";
-import { DocumentView, TranscriptView } from "@/components/job/result-views";
+import { DocumentView } from "@/components/job/document-view";
+import { JobResultPanel } from "@/components/job/job-result-panel";
+import { engineKindLabel, queueReasonText, transcriptionProgress } from "@/components/job/job-progress";
+import { FullAnalysisJobSidebar } from "@/components/job/image-analysis/full-job-sidebar";
 import { JobTagsCard } from "@/components/job/job-tags-card";
-import { LiveTranscriptView, useLiveTranscript } from "@/components/job/live-transcript";
+import { JobLocationCard } from "@/components/job/job-location-card";
+import { JobDatalakeDelivery } from "@/components/datalake/job-delivery";
 import type { JobResultResponse, JobStatusResponse } from "@/types/api";
 
 // Dynamically import PDF viewer to avoid canvas module issues
@@ -100,33 +104,6 @@ interface PageInfo {
   retry_count: number;
 }
 
-/** "12:30 of 57:27 transcribed" while a transcription runs, else null. */
-function transcriptionProgress(status?: JobStatusResponse | null): string | null {
-  if (!status || status.status !== "processing" || !status.media_duration) return null;
-  const done = Math.min(status.transcribed_seconds ?? 0, status.media_duration);
-  return `${formatDuration(done)} of ${formatDuration(status.media_duration)} transcribed`;
-}
-
-/** Where a routed job runs (spec 0003): the class only, never the engine's name or cost. */
-function engineKindLabel(status?: JobStatusResponse | null): string | null {
-  if (!status?.engine) return null;
-  return status.engine.kind === "cloud" ? "Cloud GPU" : "Local server";
-}
-
-/** Why a routed job still waits; null for jobs without routing. */
-function queueReasonText(status?: JobStatusResponse | null): string | null {
-  if (!status?.queue_reason || status.status === "completed" || status.status === "failed" || status.status === "cancelled") {
-    return null;
-  }
-  if (status.queue_reason === "in_queue") {
-    return "Waiting for a free engine. It starts automatically as soon as one has room.";
-  }
-  const where = engineKindLabel(status);
-  return where === "Cloud GPU"
-    ? "Starting on a cloud GPU… this can take a little while the first time."
-    : `Starting${where ? ` on the ${where.toLowerCase()}` : ""}…`;
-}
-
 export default function JobStatusPage({ params }: PageProps) {
   const resolvedParams = use(params);
   const router = useRouter();
@@ -137,7 +114,7 @@ export default function JobStatusPage({ params }: PageProps) {
   const hasHydrated = useAuthStore((state) => state._hasHydrated);
 
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
-  const [selectedPage, setSelectedPage] = useState<PageInfo | null>(null);
+  const [selectedPageNumber, setSelectedPageNumber] = useState<number | null>(null);
 
   const [activeTab, setActiveTab] = useState<"pdf" | "markdown">("pdf");
   const [numPdfPages, setNumPdfPages] = useState<number>(0);
@@ -157,15 +134,15 @@ export default function JobStatusPage({ params }: PageProps) {
     enabled: !!token,
     refetchInterval: (query) => {
       const status = query.state.data?.status;
-      return status === "completed" || status === "failed" ? false : 3000;
+      return status && ["completed", "partial", "failed", "cancelled"].includes(status) ? false : 3000;
     },
   });
 
   // Fetch result when job is completed
-  const { data: result } = useQuery({
+  const { data: result, isError: isResultError, isFetching: isFetchingResult, refetch: refetchResult } = useQuery({
     queryKey: ["job-result", resolvedParams.id, token],
     queryFn: () => jobsApi.getResult(resolvedParams.id),
-    enabled: status?.status === "completed" && !!token,
+    enabled: !!token && !!status && (status.status === "completed" || status.status === "partial" || (!!status.image_analysis && ["failed", "cancelled"].includes(status.status))),
   });
 
   // Fetch pages for PDF documents
@@ -181,17 +158,18 @@ export default function JobStatusPage({ params }: PageProps) {
     },
   });
 
-  const pages = pagesData?.pages || status?.pages || [];
+  const cancelFullMutation = useMutation({ mutationFn: () => jobsApi.cancelFullImage(resolvedParams.id),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["job-status", resolvedParams.id] }) });
+  const pages = status?.pages?.length ? status.pages : pagesData?.pages || [];
+  // Derive from the polled list so an open page updates when conversion finishes.
+  const selectedPage = pages.find((page) => page.page_number === selectedPageNumber) ?? null;
 
   // Fetch specific page result
   const { data: pageResult, isLoading: isLoadingPage } = useQuery({
-    queryKey: ["page-result", selectedPage?.job_id, token],
-    queryFn: () => jobsApi.getResult(selectedPage!.job_id!),
-    // A page with no job id has nothing to fetch (it is not "completed" either,
-    // but the id is what the request needs, so gate on it explicitly).
+    queryKey: ["page-result", resolvedParams.id, selectedPage?.page_number, token],
+    queryFn: () => jobsApi.getPageResultByNumber(resolvedParams.id, selectedPage!.page_number),
     enabled:
       !!selectedPage &&
-      !!selectedPage.job_id &&
       !!token &&
       selectedPage.status === "completed",
   });
@@ -207,9 +185,9 @@ export default function JobStatusPage({ params }: PageProps) {
     isError: isPdfUrlError,
     refetch: refetchPdfUrl,
   } = useQuery({
-    queryKey: ["page-pdf-url", resolvedParams.id, selectedPage?.page_number, token],
+    queryKey: ["page-pdf-url", resolvedParams.id, selectedPage?.page_number, selectedPage?.job_id, token],
     queryFn: () => jobsApi.getPagePdf(resolvedParams.id, selectedPage!.page_number),
-    enabled: !!selectedPage && !!token && selectedPage.status === "completed",
+    enabled: !!selectedPage && !!token,
     staleTime: 0,
     gcTime: 0,
     retry: 1,
@@ -219,10 +197,16 @@ export default function JobStatusPage({ params }: PageProps) {
     refetchOnWindowFocus: false,
   });
 
-  // Treat a URL that is about to expire as already gone: it would only fail
-  // halfway through loading. Margin absorbs clock skew and slow requests.
+  // The authenticated API preview is governed by the session, not the MinIO
+  // signature's TTL. Only direct storage URLs expire after this window.
   const pdfUrlExpiresAt = pdfUrlData ? Date.parse(pdfUrlData.expires_at) : 0;
-  const isPdfUrlUsable = () => pdfUrlExpiresAt - Date.now() > PDF_URL_EXPIRY_MARGIN_MS;
+  const isPdfUrlUsable = () => !!pdfUrlData?.preview_url || pdfUrlExpiresAt - Date.now() > PDF_URL_EXPIRY_MARGIN_MS;
+  // Keep the react-pdf file object stable across status polls. Authorization
+  // belongs only on the API preview, never on a presigned storage request.
+  const pdfSource = useMemo(() => pdfUrlData?.preview_url
+    ? { url: pdfUrlData.preview_url, httpHeaders: { Authorization: `Bearer ${token}` } }
+    : pdfUrlData?.url,
+  [pdfUrlData?.preview_url, pdfUrlData?.url, token]);
 
   // Retry mutation with real API
   // Retry is addressed by page number on the main job, not by the failed page's
@@ -305,6 +289,8 @@ export default function JobStatusPage({ params }: PageProps) {
     switch (status) {
       case "completed":
         return <CheckCircle2 className="h-5 w-5 text-green-500" />;
+      case "partial":
+        return <Clock className="h-5 w-5 text-amber-500" />;
       case "failed":
         return <XCircle className="h-5 w-5 text-red-500" />;
       case "processing":
@@ -318,6 +304,8 @@ export default function JobStatusPage({ params }: PageProps) {
     switch (status) {
       case "completed":
         return "text-green-500";
+      case "partial":
+        return "text-amber-500";
       case "failed":
         return "text-red-500";
       case "processing":
@@ -336,12 +324,9 @@ export default function JobStatusPage({ params }: PageProps) {
   };
 
   const handlePageClick = (page: PageInfo) => {
-    if (page.status === "completed" || page.status === "failed") {
-      setSelectedPage(page);
-      setPdfError(null);
-      // Set initial tab based on status
-      setActiveTab(page.status === "completed" ? "pdf" : "markdown");
-    }
+    setSelectedPageNumber(page.page_number);
+    setPdfError(null);
+    setActiveTab(page.status === "failed" ? "markdown" : "pdf");
   };
 
   const handleRetryPage = (page: PageInfo, e: React.MouseEvent) => {
@@ -434,13 +419,14 @@ export default function JobStatusPage({ params }: PageProps) {
 
   const metadata = result?.result.metadata;
   // Only /transcribe jobs produce subtitle formats.
-  const isTranscript = !!metadata?.available_formats?.includes("vtt");
+  const isTranscript = status.kind === "transcription" || (metadata?.provider !== "docling" && !!metadata?.available_formats?.includes("vtt"));
   const hasPages = pages.length > 0;
   const fileName = status.name || resolvedParams.id;
+  const isFullAnalysis = !!status.image_analysis || result?.result.image?.operation === "full_analysis";
 
   // No cache-buster: the query string is part of the presigned signature, and
   // appending to it turns every request into a 403.
-  const pdfUrl = selectedPage && pdfUrlData && isPdfUrlUsable() ? pdfUrlData.url : null;
+  const pdfUrl = selectedPage && pdfUrlData && isPdfUrlUsable() ? pdfSource : null;
 
   return (
     <TooltipProvider>
@@ -451,7 +437,7 @@ export default function JobStatusPage({ params }: PageProps) {
         {/* Split layout: stacked on small screens, sidebar + content from lg up */}
         <div className="flex-1 min-h-0 flex flex-col lg:flex-row">
           {/* Sidebar */}
-          <aside className="lg:w-[30%] lg:max-w-md border-b lg:border-b-0 lg:border-r lg:overflow-y-auto p-4 space-y-4">
+          {isFullAnalysis ? <FullAnalysisJobSidebar status={status} onDelete={handleDeleteClick} onCancel={() => cancelFullMutation.mutate()} cancelling={cancelFullMutation.isPending} /> : <aside className="lg:w-[30%] lg:max-w-md border-b lg:border-b-0 lg:border-r lg:overflow-y-auto p-4 space-y-4">
             {/* Job Header */}
             <div>
               <div className="flex items-center gap-3 mb-2">
@@ -501,7 +487,7 @@ export default function JobStatusPage({ params }: PageProps) {
                 </Badge>
                 {metadata && (
                   <Badge variant="secondary">
-                    {isTranscript ? "Transcription" : "Document"}
+                    {status.kind === "image" || result?.result.image ? "Image" : isTranscript ? "Transcription" : "Document"}
                   </Badge>
                 )}
               </div>
@@ -525,7 +511,7 @@ export default function JobStatusPage({ params }: PageProps) {
                       style={{ width: `${status?.progress || 0}%` }}
                     />
                   </div>
-                  {transcriptionProgress(status) && (
+              {transcriptionProgress(status) && (
                     <p className="text-xs text-muted-foreground mt-2">{transcriptionProgress(status)}</p>
                   )}
                   {queueReasonText(status) && (
@@ -566,6 +552,15 @@ export default function JobStatusPage({ params }: PageProps) {
             )}
 
             {/* Job Details */}
+            {status.configuration && <Card>
+              <CardHeader className="pb-3"><CardTitle className="text-base">Configuração solicitada</CardTitle></CardHeader>
+              <CardContent className="space-y-3">
+                <p className="text-sm">{status.configuration.operation}{status.configuration.provider ? ` · ${status.configuration.provider}` : ""}{status.configuration.model ? ` · ${status.configuration.model}` : ""}</p>
+                <details><summary className="cursor-pointer text-sm">Parâmetros</summary><dl className="mt-3 space-y-2 text-xs">
+                  {Object.entries(status.configuration.options).map(([key, value]) => <div key={key} className="grid grid-cols-[minmax(0,1fr)_minmax(0,2fr)] gap-2"><dt className="break-words text-muted-foreground">{key.replaceAll("_", " ")}</dt><dd className="whitespace-pre-wrap break-words">{value === null ? "null" : typeof value === "object" ? JSON.stringify(value, null, 2) : String(value)}</dd></div>)}
+                </dl></details>
+              </CardContent>
+            </Card>}
             <Card>
               <CardHeader className="pb-3">
                 <CardTitle className="text-base">Details</CardTitle>
@@ -581,6 +576,8 @@ export default function JobStatusPage({ params }: PageProps) {
                     {metadata.language && (
                       <DetailItem icon={Languages} label="Language" value={metadata.language.toUpperCase()} />
                     )}
+                    {metadata.language_probability != null && <DetailItem icon={Languages} label="Language probability" value={`${(metadata.language_probability * 100).toFixed(1)}%`} />}
+                    {metadata.model && <DetailItem icon={FileText} label="Model" value={metadata.model} />}
                     {metadata.pages != null && (
                       <DetailItem icon={Layers} label="Pages" value={String(metadata.pages)} />
                     )}
@@ -604,6 +601,8 @@ export default function JobStatusPage({ params }: PageProps) {
                     value={engineKindLabel(status)!}
                   />
                 )}
+
+                <JobDatalakeDelivery jobId={status.job_id} completed={status.status === "completed" || status.status === "partial"} />
 
                 <div className="flex items-start gap-2">
                   <Calendar className="h-4 w-4 text-muted-foreground mt-0.5" />
@@ -670,6 +669,7 @@ export default function JobStatusPage({ params }: PageProps) {
               </CardContent>
             </Card>
 
+            {status.type === "main" && <JobLocationCard jobId={resolvedParams.id} project={status.project} folder={status.folder} />}
             <JobTagsCard jobId={resolvedParams.id} tags={status.tags ?? []} />
 
             {/* Error Section */}
@@ -769,7 +769,7 @@ export default function JobStatusPage({ params }: PageProps) {
                                   ? "hover:bg-green-500/10 hover:border-green-500/50"
                                   : page.status === "failed"
                                   ? "hover:bg-red-500/10 hover:border-red-500/50"
-                                  : "opacity-60"
+                                  : "hover:bg-blue-500/10 hover:border-blue-500/50"
                               }
                             `}
                           >
@@ -786,9 +786,6 @@ export default function JobStatusPage({ params }: PageProps) {
                             {/* Page Button */}
                             <button
                               onClick={() => handlePageClick(page)}
-                              disabled={
-                                page.status !== "completed" && page.status !== "failed"
-                              }
                               className="flex-1 flex items-center justify-between text-left min-w-0"
                             >
                               <div className="flex items-center gap-2 flex-1 min-w-0">
@@ -859,7 +856,7 @@ export default function JobStatusPage({ params }: PageProps) {
                 </CardContent>
               </Card>
             )}
-          </aside>
+          </aside>}
 
           {/* Content */}
           <main className="flex-1 min-w-0 min-h-[70vh] lg:min-h-0 overflow-hidden flex flex-col">
@@ -927,7 +924,7 @@ export default function JobStatusPage({ params }: PageProps) {
                 <div className="flex-1 flex flex-col overflow-hidden p-6">
                   <div className="mb-4 flex items-center justify-between">
                     <div className="flex items-center gap-3">
-                      <Button variant="ghost" size="sm" onClick={() => setSelectedPage(null)}>
+                      <Button variant="ghost" size="sm" onClick={() => setSelectedPageNumber(null)}>
                         <ArrowLeft className="h-4 w-4 mr-2" />
                         Full document
                       </Button>
@@ -948,7 +945,7 @@ export default function JobStatusPage({ params }: PageProps) {
                   <Tabs value={activeTab} onValueChange={handleTabChange} className="flex-1 flex flex-col overflow-hidden">
                     <TabsList className="grid w-full max-w-md grid-cols-2">
                       <TabsTrigger value="pdf">PDF Preview</TabsTrigger>
-                      <TabsTrigger value="markdown">Markdown</TabsTrigger>
+                      <TabsTrigger value="markdown">{pageResult?.result.exports ? "Conteúdo convertido" : "Markdown"}</TabsTrigger>
                     </TabsList>
 
                     <TabsContent value="pdf" className="flex-1 overflow-hidden mt-4">
@@ -987,11 +984,17 @@ export default function JobStatusPage({ params }: PageProps) {
 
                     <TabsContent value="markdown" className="flex-1 overflow-hidden mt-4">
                       <div className="h-full overflow-y-auto border rounded-lg bg-muted/30 p-4">
-                        {isLoadingPage ? (
+                        {selectedPage.status !== "completed" ? (
+                          <div className="py-12 flex items-center justify-center gap-2 text-muted-foreground">
+                            <Loader2 className="h-5 w-5 animate-spin" />
+                            <p>Page conversion is {selectedPage.status}. Markdown will appear when it finishes.</p>
+                          </div>
+                        ) : isLoadingPage ? (
                           <div className="py-12 flex items-center justify-center">
                             <Loader2 className="h-8 w-8 animate-spin text-primary" />
                           </div>
                         ) : pageResult ? (
+                          pageResult.result.exports ? <DocumentView markdown={pageResult.result.markdown} fileName={`page-${selectedPage.page_number}`} exports={pageResult.result.exports} defaultFormat={pageResult.result.metadata.output_format} assets={pageResult.result.assets} /> : (
                           <div className="space-y-4">
                             <pre className="text-sm whitespace-pre-wrap font-mono">
                               {pageResult.result.markdown}
@@ -1016,6 +1019,7 @@ export default function JobStatusPage({ params }: PageProps) {
                               Download Markdown
                             </Button>
                           </div>
+                          )
                         ) : (
                           <div className="py-12 text-center text-muted-foreground">
                             Failed to load page content
@@ -1031,6 +1035,9 @@ export default function JobStatusPage({ params }: PageProps) {
               <JobResultPanel
                 status={status}
                 result={result}
+                isResultError={isResultError}
+                isFetchingResult={isFetchingResult}
+                retryResult={() => void refetchResult()}
                 isTranscript={isTranscript}
                 hasPages={hasPages}
                 fileName={fileName}
@@ -1096,99 +1103,6 @@ function DetailItem({
         <p className="text-muted-foreground text-xs">{label}</p>
         <p className="font-medium truncate">{value}</p>
       </div>
-    </div>
-  );
-}
-
-/**
- * What the main panel shows when no PDF page is selected: progress while the
- * job runs, the error if it failed, otherwise the result in the view that fits
- * it - a transcript for audio/video, rendered Markdown for documents.
- */
-function JobResultPanel({
-  status,
-  result,
-  isTranscript,
-  hasPages,
-  fileName,
-  token,
-}: {
-  status: JobStatusResponse;
-  result?: JobResultResponse;
-  isTranscript: boolean;
-  hasPages: boolean;
-  fileName: string;
-  token: string | null;
-}) {
-  const { segments: liveSegments, preloaded: livePreloaded } = useLiveTranscript(
-    status.job_id,
-    status.status === "processing"
-  );
-  if (status.status === "failed") {
-    return (
-      <div className="flex-1 flex flex-col items-center justify-center p-8 text-center">
-        <XCircle className="h-16 w-16 text-destructive mb-4" />
-        <h3 className="text-lg font-semibold mb-2">Processing failed</h3>
-        <p className="text-sm text-muted-foreground max-w-md break-words">
-          {status.error || "An unknown error occurred"}
-        </p>
-      </div>
-    );
-  }
-
-  // faster-whisper reports media time and streams its text: show the captions as they come
-  if (status.status === "processing" && (status.media_duration || liveSegments.length > 0)) {
-    return <LiveTranscriptView status={status} segments={liveSegments} preloaded={livePreloaded} />;
-  }
-
-  if (status.status !== "completed") {
-    return (
-      <div className="flex-1 flex flex-col items-center justify-center p-8 text-center">
-        <Loader2 className="h-12 w-12 text-primary animate-spin mb-4" />
-        <h3 className="text-lg font-semibold mb-1">
-          {status.status === "processing" ? "Processing…" : "Waiting in the queue…"}
-        </h3>
-        <p className="text-sm text-muted-foreground">
-          {status.progress}% — the result shows up here as soon as it is ready.
-        </p>
-        {transcriptionProgress(status) && (
-          <p className="text-sm text-muted-foreground mt-1">{transcriptionProgress(status)}</p>
-        )}
-        {queueReasonText(status) && (
-          <p className="text-sm text-muted-foreground mt-1">{queueReasonText(status)}</p>
-        )}
-      </div>
-    );
-  }
-
-  if (!result) {
-    return (
-      <div className="flex-1 flex items-center justify-center">
-        <Loader2 className="h-8 w-8 animate-spin text-primary" />
-      </div>
-    );
-  }
-
-  return (
-    <div className="flex-1 overflow-y-auto p-4 md:p-6 space-y-4">
-      <div>
-        <h2 className="text-xl font-semibold">{isTranscript ? "Transcription" : "Converted document"}</h2>
-        {hasPages && (
-          <p className="text-sm text-muted-foreground">
-            All pages merged. Select a page in the sidebar to see its PDF next to its text.
-          </p>
-        )}
-      </div>
-      {isTranscript ? (
-        <TranscriptView
-          jobId={status.job_id}
-          markdown={result.result.markdown}
-          fileName={fileName}
-          token={token}
-        />
-      ) : (
-        <DocumentView markdown={result.result.markdown} fileName={fileName} />
-      )}
     </div>
   );
 }

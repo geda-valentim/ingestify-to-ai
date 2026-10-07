@@ -175,6 +175,7 @@ class Settings(BaseSettings):
     # Per-task time_limit, deliberately double the request timeout so a request
     # that 504s leaves a task still running to completion.
     vision_task_timeout_seconds: int = 120
+    vision_full_task_timeout_seconds: int = 900
     vision_max_new_tokens: int = 1024
     vision_num_beams: int = 3  # 1 roughly halves CPU latency at some quality cost
     vision_caption_task: str = "<MORE_DETAILED_CAPTION>"
@@ -266,6 +267,7 @@ class Settings(BaseSettings):
     # REQUIRED - intentionally no default. A hardcoded default here would be a
     # published signing key: anyone with the source could forge valid tokens.
     jwt_secret_key: str = Field(..., min_length=JWT_SECRET_MIN_LENGTH)
+    datalake_encryption_key: str = ""  # Optional Fernet key; otherwise derived from JWT key with domain separation.
     jwt_algorithm: str = "HS256"
     jwt_expiration_minutes: int = 60  # 1 hour
 
@@ -283,6 +285,14 @@ class Settings(BaseSettings):
     engine_secrets_public_key: str = ""
     engine_secrets_private_keys: str = ""
     engine_secrets_private_keys_file: str = ""
+    # Spec 0007 is opt-in after scripts/migrate_0007_engine_control.py.
+    engine_control_enabled: bool = False
+    engine_access_enabled: bool = False
+    engine_installation_principal_id: str = ""
+    engine_control_queue: str = "ingestify-engine-control"
+    engine_control_beat: bool = False
+    # Root-owned JSON {host_id: sha256(machine_token)}. Separate from admin JWT.
+    engine_host_identities_file: str = ""
 
     # Routing (spec 0003, slice 3b). Only used once a feature has a route; with no
     # row in feature_routes nothing here is read and no dispatcher is needed.

@@ -2,9 +2,11 @@ from elasticsearch import Elasticsearch, NotFoundError
 from typing import Dict, Any, Optional, List
 from datetime import datetime
 import json
+import logging
 from shared.config import get_settings
 
 settings = get_settings()
+logger = logging.getLogger(__name__)
 
 
 class ElasticsearchClient:
@@ -88,6 +90,34 @@ class ElasticsearchClient:
 
     # ========== Job Results ==========
 
+    def job_results_write_ready(self) -> bool:
+        """Reject admission when a known cluster/index block prevents saving.
+
+        A successful ping only proves reads are reachable. In particular, the
+        disk flood-stage block still allows ping and searches. This is a bounded
+        preflight, not a guarantee against a block appearing during capture.
+        """
+        try:
+            client = self.client.options(request_timeout=2, max_retries=0)
+            indices = client.indices.get_settings(
+                index="job_results", flat_settings=True,
+            )
+            cluster = client.cluster.get_settings(flat_settings=True)
+            blocked = lambda value: value is True or value == "true"
+            for index in indices.values():
+                values = index.get("settings", {})
+                if any(blocked(values.get(f"index.blocks.{flag}"))
+                       for flag in ("write", "read_only", "read_only_allow_delete")):
+                    return False
+            # Transient settings take precedence over persistent settings.
+            values = {**cluster.get("persistent", {}), **cluster.get("transient", {})}
+            return not any(blocked(values.get(f"cluster.blocks.{flag}"))
+                           for flag in ("read_only", "read_only_allow_delete"))
+        except Exception as exc:
+            logger.warning("Job result write readiness unavailable: error_type=%s",
+                           type(exc).__name__)
+            return False
+
     def store_job_result(
         self,
         job_id: str,
@@ -127,7 +157,8 @@ class ElasticsearchClient:
             )
             return True
         except Exception as e:
-            print(f"Error storing job result in ES: {e}")
+            logger.error("Job result indexing failed: job_id=%s status=%s error_type=%s",
+                         job_id, getattr(e, "status_code", None), type(e).__name__)
             return False
 
     def get_job_result(self, job_id: str) -> Optional[Dict[str, Any]]:

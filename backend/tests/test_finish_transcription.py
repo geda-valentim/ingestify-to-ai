@@ -20,7 +20,7 @@ from sqlalchemy.orm import sessionmaker
 from shared.database import Base
 from shared.models import Job, JobStatus, User
 from shared.redis_client import RedisClient
-from shared.transcripts import transcript_object_name
+from shared.transcripts import transcript_object_name, transcript_result_object_name
 from workers import tasks
 from workers.engines import pipeline
 
@@ -52,6 +52,10 @@ class FakeMinio:
 
     def upload_file(self, bucket_name, object_name, file_data, content_type):
         self.objects[(bucket_name, object_name)] = (file_data.decode("utf-8"), content_type)
+        return object_name
+
+    def download_file(self, bucket_name, object_name):
+        return self.objects[(bucket_name, object_name)][0].encode()
 
     def delete_file(self, bucket_name, object_name):
         self.deleted.append((bucket_name, object_name))
@@ -116,9 +120,9 @@ def test_the_job_completes_with_every_output(world):
     )
     assert stored["transcript"]["srt"].startswith("1\n00:00:00,000 --> 00:00:02,500\nOlá, turma.\n")
     assert stored["transcript"]["txt"] == "Olá, turma.\nHoje: termodinâmica."
-    assert json.loads(stored["transcript"]["json"]) == {
-        k: RESULT[k] for k in ("language", "duration", "text", "segments")
-    }
+    transcript = json.loads(stored["transcript"]["json"])
+    assert all(transcript[key] == value for key, value in RESULT.items())
+    assert transcript['configuration'] == {"is_audio": True, "media_kind": "audio", "output_format": "srt", "include_timestamps": True}
 
     metadata = stored["metadata"]
     assert metadata == {
@@ -127,6 +131,7 @@ def test_the_job_completes_with_every_output(world):
         "device": "cuda", "compute_type": "float16", "language_probability": 0.99,
         "processing_seconds": metadata["processing_seconds"], "output_format": "srt",
         "available_formats": ["markdown", "vtt", "srt", "txt", "json"],
+        "configuration": transcript['configuration'],
     }
 
 
@@ -135,6 +140,8 @@ def test_formats_are_kept_in_minio_and_indexed_in_elasticsearch(world):
 
     for fmt in ("vtt", "srt", "txt", "json"):
         assert ("ingestify-audio", transcript_object_name(JOB_ID, fmt)) in world.minio.objects
+    payload = json.loads(world.minio.objects[("ingestify-audio", transcript_result_object_name(JOB_ID))][0])
+    assert payload == world.redis.get_job_result(JOB_ID)
 
     call = world.es.store_job_result.call_args.kwargs
     assert call["job_id"] == JOB_ID and call["user_id"] == "u1" and call["filename"] == "aula.mp3"
@@ -148,6 +155,7 @@ def test_the_job_is_marked_completed_everywhere_and_cleaned_up(world):
     with world.Session() as db:
         job = db.get(Job, JOB_ID)
         assert job.status == JobStatus.COMPLETED
+        assert job.progress == 100
         assert job.char_count == 32 and job.has_elasticsearch_result is True
         assert job.minio_upload_path is not None  # kept without purge_source
 
@@ -176,3 +184,77 @@ def test_without_timestamps_the_markdown_is_the_plain_text(world):
 def test_the_old_helper_names_still_work():
     assert tasks._store_transcript_outputs is pipeline.store_transcript_outputs
     assert tasks._purge_audio_source is pipeline.purge_audio_source
+
+
+def finish(world, **options):
+    pipeline.finish_transcription(JOB_ID, dict(RESULT), options=options, file_path=world.audio,
+                                 processing_seconds=0.5, compute_type="float16",
+                                 redis_client=world.redis, es_client=world.es)
+
+
+@pytest.mark.parametrize("failed_object", ["transcript.srt", "result.json"])
+@pytest.mark.parametrize("failure", ["exception", "false"])
+def test_storage_failure_never_completes_or_purges_source(world, monkeypatch, failed_object, failure):
+    upload = world.minio.upload_file
+    def fail(**kwargs):
+        if kwargs['object_name'].endswith(failed_object):
+            if failure == "exception":
+                raise OSError("storage unavailable")
+            return None
+        return upload(**kwargs)
+    monkeypatch.setattr(world.minio, "upload_file", fail)
+    with pytest.raises((OSError, RuntimeError)):
+        finish(world, purge_source=True)
+    with world.Session() as db:
+        assert db.get(Job, JOB_ID).status != JobStatus.COMPLETED
+        assert db.get(Job, JOB_ID).minio_upload_path is not None
+    assert world.audio.exists()
+    assert not world.minio.deleted
+    assert world.redis.get_job_result(JOB_ID) is None
+    assert not world.es.store_job_result.called
+
+
+def test_minio_unavailable_never_completes(world, monkeypatch):
+    monkeypatch.setattr(pipeline, 'get_minio_client', lambda: (_ for _ in ()).throw(OSError('offline')))
+    with pytest.raises(OSError):
+        finish(world)
+    with world.Session() as db:
+        assert db.get(Job, JOB_ID).status != JobStatus.COMPLETED
+    assert world.audio.exists()
+
+
+@pytest.mark.parametrize('index_failure', ['false', 'exception'])
+def test_index_failure_keeps_exact_result_after_all_cache_entries_expire(world, monkeypatch, index_failure):
+    if index_failure == 'false':
+        world.es.store_job_result.return_value = False
+    else:
+        world.es.store_job_result.side_effect = OSError('index offline')
+    finish(world, include_timestamps=False, output_format='srt')
+    from api import routes
+    monkeypatch.setattr(routes, 'get_redis_client', lambda: world.redis)
+    monkeypatch.setattr(routes, 'get_minio_client', lambda: world.minio)
+    monkeypatch.setattr(routes, 'get_es_client', lambda: (_ for _ in ()).throw(AssertionError('index must not be needed')))
+    import asyncio
+    world.redis.client.flushdb()
+    with world.Session() as db:
+        job = db.get(Job, JOB_ID)
+        assert job.status == JobStatus.COMPLETED
+        assert job.has_elasticsearch_result is False
+        response = asyncio.run(routes.get_job_result(JOB_ID, format_='markdown', owned_job=job, db=db))
+        assert '[00:00]' not in response.result.markdown
+        assert response.result.markdown.endswith(RESULT['text'])
+        assert response.result.metadata.device == 'cuda'
+        default = asyncio.run(routes.get_job_result(JOB_ID, format_=None, owned_job=job, db=db))
+        assert default.media_type.startswith('application/x-subrip')
+
+
+def test_mysql_commit_failure_cannot_publish_cache_completion(world, monkeypatch):
+    from sqlalchemy.orm import Session
+    monkeypatch.setattr(Session, 'commit', lambda self: (_ for _ in ()).throw(OSError('SQL unavailable')))
+    with pytest.raises(OSError):
+        finish(world, purge_source=True)
+    with world.Session() as db:
+        assert db.get(Job, JOB_ID).status != JobStatus.COMPLETED
+    assert (world.redis.get_job_status(JOB_ID) or {}).get('status') != 'completed'
+    assert world.audio.exists()
+    assert not world.minio.deleted

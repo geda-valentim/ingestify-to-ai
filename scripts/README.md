@@ -2,6 +2,34 @@
 
 This directory contains utility scripts for testing, development, and Docker management.
 
+## API documentation
+
+`generate_api_docs.py` updates `frontend/docs/doc2md_openapi.json` and
+`docs/api-reference.md` together from `api.main.app.openapi()`. The public
+PT/EN endpoint reference reads that same schema. Backend dependencies are
+required when importing the app:
+
+```bash
+python scripts/generate_api_docs.py
+python scripts/generate_api_docs.py --check
+```
+
+On this development Docker stack, export the current source schema first:
+
+```bash
+docker exec -w /app ingestify-api python -c \
+  'import json; from api.main import app; print(json.dumps(app.openapi(), indent=2, ensure_ascii=False))' \
+  > /tmp/ingestify-openapi.json
+python scripts/generate_api_docs.py --schema /tmp/ingestify-openapi.json
+python scripts/generate_api_docs.py --schema /tmp/ingestify-openapi.json --check
+```
+
+Use a fresh export after changing routes, models, auth dependencies or contract
+notes. Restart the API after documentation code changes, and rebuild the frontend
+to publish the snapshot and static documentation pages. Generation never executes
+an endpoint or creates external resources. The WebSocket protocol and dynamic
+response caveats are included alongside the HTTP operations.
+
 ## 📁 Structure
 
 ```
@@ -304,3 +332,7 @@ docker compose logs worker -f
 - **[../docs/SPECS.md](../docs/SPECS.md)** - API specifications
 - **[../docs/DOCKER_OPTIMIZATION.md](../docs/DOCKER_OPTIMIZATION.md)** - Docker optimization guide
 - **[../CLAUDE.md](../CLAUDE.md)** - Claude Code development guide
+
+## Full Analysis de imagens
+
+Antes de subir API/workers com o modo full, execute `python scripts/migrate_image_full_analysis.py` com as variáveis de banco da aplicação. A migração é aditiva e repetível; mantém os jobs single. Veja [visão](../docs/features/vision.md#full-analysis-de-imagens) para endpoints e limites.

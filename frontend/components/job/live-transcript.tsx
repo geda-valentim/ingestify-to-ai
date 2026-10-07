@@ -30,8 +30,13 @@ export function useLiveTranscript(
     let since = 0;
     let first = true;
     let cancelled = false;
+    let inFlight = false;
 
     const poll = async () => {
+      // A slow response must not start another read at the same cursor:
+      // both responses would append the same segments.
+      if (cancelled || inFlight) return;
+      inFlight = true;
       try {
         const data = await jobsApi.getPartialTranscript(jobId, since);
         if (cancelled) return;
@@ -52,6 +57,8 @@ export function useLiveTranscript(
         }
       } catch {
         // Live text is a nicety: keep polling, the final result still arrives
+      } finally {
+        inFlight = false;
       }
     };
 

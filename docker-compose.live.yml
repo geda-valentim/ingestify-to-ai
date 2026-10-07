@@ -19,6 +19,16 @@ services:
         TORCH_INDEX_URL: https://download.pytorch.org/whl/cu129
     env_file: .env
     environment:
+      # The live worker defaults to production guards. Development deployments
+      # explicitly opt into LIVE_ENVIRONMENT=development, matching their API.
+      ENVIRONMENT: ${LIVE_ENVIRONMENT:-production}
+      DATABASE_URL: ${DATABASE_URL:-mysql+pymysql://root:root@host.docker.internal:3306/ingestify}
+      REDIS_HOST: ${REDIS_HOST:-redis}
+      REDIS_PORT: ${REDIS_PORT:-6379}
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      MINIO_ENDPOINT: ${MINIO_HOST:-minio}:9000
+      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:?MINIO_ROOT_USER is required}
+      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD is required}
       HF_HOME: /models/huggingface
       DEVICE: cuda
       WHISPER_DEVICE: cuda
@@ -27,13 +37,19 @@ services:
       LIVE_WORKER_ID: live-local
       LIVE_INTERNAL_TOKEN: ${LIVE_INTERNAL_TOKEN:-}
       LIVE_MAX_SESSIONS: ${LIVE_MAX_SESSIONS:-1}
+      ENGINE_CONTROL_ENABLED: ${ENGINE_CONTROL_ENABLED:-false}
       LIVE_VRAM_FOOTPRINT_GB: ${LIVE_VRAM_FOOTPRINT_GB:-3}
       LIVE_VRAM_RESERVE_GB: ${LIVE_VRAM_RESERVE_GB:-3.2}
     command: uvicorn workers.live.server:app --host 0.0.0.0 --port 8091 --workers 1 --ws-max-size 16384 --ws-max-queue 10 --no-access-log
     volumes:
       - hf_cache:/models/huggingface
+      - ./backend/shared:/app/shared:ro
+      - ./backend/workers:/app/workers:ro
     networks: [ingestify-network]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     deploy:
+      replicas: ${LIVE_WORKER_REPLICAS:-1}
       resources:
         reservations:
           devices:

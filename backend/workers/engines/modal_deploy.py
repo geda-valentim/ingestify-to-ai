@@ -73,13 +73,34 @@ def plan(engine: Engine, feature: str) -> Dict[str, object]:
             "spec": spec, "hashed": lock_is_hashed(), "command": " ".join(deploy_command()[1:])}
 
 
-def deploy(slug: str, feature: str = "transcription", *, dry_run: bool = False, allow_unhashed: bool = False,
-           session_factory=None, run: Callable = subprocess.run, out: Callable[[str], None] = print) -> Optional[dict]:
+def deploy(
+    slug: str,
+    feature: str = "transcription",
+    *,
+    dry_run: bool = False,
+    allow_unhashed: bool = False,
+    session_factory=None,
+    run: Callable = subprocess.run,
+    out: Callable[[str], None] = print,
+    control_profile=None,
+    operation_id=None,
+    effect_admission=None,
+) -> Optional[dict]:
     db = _session(session_factory)
+    cli_admission = None
     try:
         engine = db.query(Engine).filter(Engine.slug == slug).first()
         if engine is None:
             raise DeployError(f"No engine {slug!r}")
+        if not operation_id and not dry_run:
+            from shared.engine_control.guards import before_write
+            before_write(db, engine, runtime=True, auth_method="cli")
+        if control_profile:
+            config = dict(engine.config or {})
+            config['features'] = dict(config.get('features') or {}, **{feature: control_profile['binding']})
+            config['control_fingerprint_version'] = 2
+            config['control_memory_mb'] = control_profile.get('memory_mb')
+            engine.config = config
         p = plan(engine, feature)
         spec = p["spec"]
         out(f"Engine {slug}, {feature}: {json.dumps(spec['decorator'])}")
@@ -95,6 +116,23 @@ def deploy(slug: str, feature: str = "transcription", *, dry_run: bool = False, 
                 f"then verify meta() and record the deploy. Nothing was sent.")
             return None
 
+        from shared.access import policy, legacy
+
+        original_version = engine.version
+        if policy.enabled() and not operation_id:
+            cli_admission = legacy.admit_cli_deploy(db, engine, feature)
+        elif policy.enabled() and operation_id:
+            from shared.engine_control.models import EngineOperation
+
+            op = db.get(EngineOperation, operation_id)
+            if not op or op.engine_id != engine.id:
+                raise DeployError("OPERATION_CONTEXT_REQUIRED")
+            if effect_admission is None:
+                raise DeployError("OPERATION_EFFECT_ADMISSION_REQUIRED")
+            policy.operation_authority(db, op, effect=True)
+        # Keep the reviewed engine snapshot but release every SQL lock before SDK/build.
+        db.expunge(engine)
+        db.commit()
         adapter = remote.adapter_factory(engine, remote.open_credentials(engine))
         extra = {DEPLOY_ENV: json.dumps(spec, sort_keys=True), "PYTHONPATH": str(BACKEND_DIR)}
         if allow_unhashed:
@@ -108,6 +146,10 @@ def deploy(slug: str, feature: str = "transcription", *, dry_run: bool = False, 
             raise DeployError(f"modal deploy failed (exit {done.returncode}):\n{output[-3000:]}")
         out(output[-1500:])
 
+        if cli_admission:
+            legacy.admit_cli_step(db, engine, cli_admission, "cli:meta")
+        elif operation_id and effect_admission:
+            effect_admission("deploy:meta")
         meta = adapter.deployed_meta()
         if not isinstance(meta, dict) or meta.get("fingerprint") != spec["fingerprint"] \
                 or meta.get("protocol") != protocol.PROTOCOL_VERSION:
@@ -117,9 +159,21 @@ def deploy(slug: str, feature: str = "transcription", *, dry_run: bool = False, 
         entry = {"fingerprint": spec["fingerprint"], "protocol": protocol.PROTOCOL_VERSION,
                  "binding": p["binding"], "verified_at": verified_at, "app": protocol.APP_NAME,
                  "decorator": spec["decorator"], "hashed": p["hashed"]}
+        if control_profile:
+            entry['control_protocol'] = 1
+        if cli_admission:
+            legacy.admit_cli_step(db, engine, cli_admission, "cli:record")
+        elif operation_id and effect_admission:
+            effect_admission("deploy:record")
         adapter.record_deployment({"fingerprint": spec["fingerprint"], "protocol": protocol.PROTOCOL_VERSION,
                                    "verified_at": verified_at})
-        store.record_deployment(db, engine, feature, entry, actor_user_id=None, auth_method="cli")
+        if not operation_id:
+            if cli_admission:
+                legacy.confirm_cli_deploy(db, engine, cli_admission, original_version)
+            engine = (
+                db.query(Engine).filter_by(id=engine.id).populate_existing().first()
+            )
+            store.record_deployment(db, engine, feature, entry, actor_user_id=None, auth_method="cli")
         out(f"Deployed and verified: {slug} {feature} serves fingerprint {spec['fingerprint'][:16]}...")
         return entry
     finally:

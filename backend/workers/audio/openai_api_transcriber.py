@@ -68,6 +68,9 @@ class OpenAIAPITranscriber(AudioTranscriber):
 
         # Validate input
         self._validate_audio_file(audio_path)
+        if options.get('operation') == 'inspect':
+            from workers.audio.analysis import media_info, analysis_result
+            return analysis_result(operation='inspect', info=media_info(audio_path), model='whisper-1', provider='openai-api')
         self._validate_file_size(audio_path)
 
         logger.info(f"Transcribing audio file via OpenAI API: {audio_path}")
@@ -86,30 +89,42 @@ class OpenAIAPITranscriber(AudioTranscriber):
         try:
             # Open and transcribe audio file
             with open(audio_path, "rb") as audio_file:
-                transcript = self.client.audio.transcriptions.create(
-                    model="whisper-1",
-                    file=audio_file,
-                    language=language,
-                    temperature=temperature,
-                    response_format=response_format,
-                    timestamp_granularities=["segment", "word"] if include_word_timestamps else ["segment"]
-                )
+                arguments = dict(model="whisper-1", file=audio_file,
+                                 temperature=temperature, response_format=response_format)
+                if options.get('initial_prompt') is not None:
+                    arguments['prompt'] = options['initial_prompt']
+                if options.get('task') == 'translate':
+                    transcript = self.client.audio.translations.create(**arguments)
+                else:
+                    if language:
+                        arguments['language'] = language
+                    arguments['timestamp_granularities'] = ["segment", "word"] if include_word_timestamps else ["segment"]
+                    transcript = self.client.audio.transcriptions.create(**arguments)
 
             # Parse response based on format
             if response_format == "verbose_json":
                 full_text = transcript.text.strip()
                 detected_language = getattr(transcript, 'language', 'unknown')
                 duration = getattr(transcript, 'duration', 0.0)
+                if options.get('operation') == 'detect_language':
+                    from workers.audio.analysis import analysis_result
+                    return analysis_result(operation='detect_language', info={'duration': duration},
+                                           language=detected_language, model='whisper-1', provider='openai-api')
 
                 # Format segments
                 formatted_segments = []
                 if hasattr(transcript, 'segments'):
                     for segment in transcript.segments:
+                        if hasattr(segment, 'model_dump'):
+                            segment = segment.model_dump()
                         segment_dict = {
                             'start': segment.get('start', 0.0),
                             'end': segment.get('end', 0.0),
                             'text': segment.get('text', '').strip()
                         }
+                        for key in ('id', 'seek', 'tokens', 'temperature', 'avg_logprob', 'compression_ratio', 'no_speech_prob'):
+                            if key in segment:
+                                segment_dict[key] = segment[key]
 
                         # Add word-level timestamps if available
                         if include_word_timestamps and 'words' in segment:
@@ -123,6 +138,13 @@ class OpenAIAPITranscriber(AudioTranscriber):
                             ]
 
                         formatted_segments.append(segment_dict)
+                if include_word_timestamps:
+                    # whisper-1 returns words alongside segments, rather than nested in them.
+                    words = [word.model_dump() if hasattr(word, 'model_dump') else word
+                             for word in (getattr(transcript, 'words', None) or [])]
+                    for index, segment in enumerate(formatted_segments):
+                        segment['words'] = [word for word in words if segment['start'] <= word['start'] < segment['end']
+                                            or (index == len(formatted_segments) - 1 and word['start'] == segment['end'])]
 
                 # Calculate statistics
                 word_count = len(full_text.split())

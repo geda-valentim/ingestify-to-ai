@@ -66,7 +66,7 @@ export function useLiveCapture() {
     }
   }, [releaseCapture, update]);
 
-  const start = useCallback(async (location: UploadLocation, name: string) => {
+  const start = useCallback(async (location: UploadLocation & { datalake?: import("@/types/datalake").DatalakeDestination }, name: string, configuration: { language: string; options?: import("@/types/live").LiveOptions } = { language: "pt" }) => {
     setError(null); setSegments([]); setPartial(""); setDuration(0); setJobId(null);
     const r: Resources = { seq: 0, samples: 0, eventSeq: 0, state: "starting", partialRevision: 0 };
     resources.current = r;
@@ -88,7 +88,7 @@ export function useLiveCapture() {
       r.context = new AudioContext();
       await r.context.audioWorklet.addModule("/audio/live-pcm-worklet.js");
       if (resources.current !== r || r.state !== "starting") { await releaseCapture(r); return; }
-      const session = await liveApi.create({ ...location, name, language: "pt" });
+      const session = await liveApi.create({ ...location, name, ...configuration });
       r.jobId = session.job_id;
       if (resources.current !== r || r.state !== "starting") {
         await liveApi.cancel(session.job_id).catch(() => {}); await releaseCapture(r); return;

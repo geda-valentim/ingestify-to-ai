@@ -17,6 +17,7 @@ from shared.auth import (
 )
 from shared.config import get_settings
 from shared import rate_limit
+from shared.platform_settings import signup_enabled
 
 settings = get_settings()
 router = APIRouter()
@@ -41,9 +42,13 @@ async def register(user_data: UserCreate, request: Request, db: Session = Depend
 
     ## Errors:
     - 400: Email or username already exists
+    - 403: New account registration is disabled by an administrator
     - 429: Too many registrations from this IP
     """
     rate_limit.hit("register:ip", rate_limit.client_ip(request), settings.register_limit_per_hour, 3600)
+
+    if not signup_enabled(db):
+        raise HTTPException(status_code=403, detail="New account registration is currently disabled.")
 
     # Check if email already exists
     existing_email = db.query(User).filter(User.email == user_data.email).first()
@@ -197,7 +202,9 @@ async def refresh_token(
 
 
 @router.get("/me", response_model=UserResponse)
-async def get_current_user_info(current_user: User = Depends(get_current_active_user)):
+async def get_current_user_info(
+    current_user: User = Depends(get_current_active_user), db: Session = Depends(get_db)
+):
     """
     Get information about the currently authenticated user
 
@@ -216,4 +223,12 @@ async def get_current_user_info(current_user: User = Depends(get_current_active_
     ## Errors:
     - 401: Not authenticated or invalid token/API key
     """
-    return UserResponse.for_user(current_user)
+    from shared.access.policy import navigation
+
+    access = navigation(db, current_user)
+    return UserResponse.for_user(current_user).model_copy(
+        update={
+            "permissions": access["permissions"],
+            "engine_access_enabled": access["enabled"],
+        }
+    )

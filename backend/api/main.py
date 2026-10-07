@@ -15,8 +15,12 @@ from api.admin_routes import router as admin_router
 from api.image_routes import router as image_router
 from api.tag_routes import router as tag_router
 from api.engine_admin_routes import router as engine_admin_router
+from api.engine_control_routes import router as engine_control_router, host_router as engine_host_router
 from api.routing_admin_routes import router as routing_admin_router
 from api.projects_api import router as projects_router
+from api.project_management import router as project_management_router
+from api.platform_settings_routes import router as platform_settings_router
+from api.datalake_routes import router as datalake_router, job_router as datalake_job_router
 
 # Configure logging
 logging.basicConfig(
@@ -39,7 +43,11 @@ security_scheme_apikey = APIKeyHeader(name="X-API-Key")
 app = FastAPI(
     title="Ingestify API",
     description="""
-API assíncrona para conversão de documentos para Markdown usando Docling
+API assíncrona para conversão de documentos, visão/OCR, transcrição de áudio/vídeo,
+captura ao vivo, organização de jobs e entrega para S3, MinIO, Google Cloud Storage e Azure.
+
+No dev, a base pública é `https://dev.ingestify.ai/api`; os caminhos são relativos
+a essa base. Referência por endpoint no frontend: `/docs/api-reference`.
 
 ## Autenticação
 
@@ -82,6 +90,23 @@ Um arquivo repetido só é reaproveitado dentro do mesmo projeto.
 ```bash
 curl -H "X-API-Key: ..." -F "file=@aula.mp3" -F "project=Aulas" -F "folder=Setembro" .../transcribe
 ```
+
+## Datalakes e contexto por conversa
+
+`/upload`, `/convert` e `/transcribe` aceitam destino multipart:
+`datalake_connection_id`, `datalake_bucket`, `datalake_prefix`,
+`datalake_partitioning` (JSON) e `datalake_partition_values` (JSON).
+Importação e live aceitam `datalake: {connection_id, bucket, prefix, partitioning, partition_values}`.
+Ausência de estratégia herda `config.partitioning`; `mode=none` desativa partições.
+Particione por tenant_id/client_id e envie conversation_id/agent_id como contexto.
+Com analytics=jsonl, todos os valores são preservados em partition_values_json,
+inclusive os que não criam diretórios. O consumidor faz a agregação/análise.
+
+## Administração e hosts
+
+Operações que exigem sessão de administrador aceitam apenas JWT e recusam X-API-Key,
+mesmo junto com JWT. Endpoints internos de hosts exigem X-Engine-Host-Token próprio;
+as credenciais de usuário não o substituem. A referência indica a autorização de cada rota.
 """,
     version="1.0.0",
     docs_url="/docs",
@@ -107,6 +132,7 @@ def custom_openapi():
         version=app.version,
         description=app.description,
         routes=app.routes,
+        servers=app.servers,
     )
 
     # Replace default security scheme names with our custom names
@@ -141,7 +167,8 @@ def custom_openapi():
                         new_security.append(security_req)
                 operation["security"] = new_security
 
-    app.openapi_schema = openapi_schema
+    from api.openapi_docs import annotate_openapi
+    app.openapi_schema = annotate_openapi(openapi_schema, app.routes)
     return app.openapi_schema
 
 
@@ -327,6 +354,7 @@ async def shutdown_event():
 
 # Include routers
 app.include_router(auth_router, prefix="/auth", tags=["Authentication"])
+app.include_router(platform_settings_router)
 app.include_router(apikey_router, prefix="/api-keys", tags=["API Keys"])
 app.include_router(admin_router)  # Admin routes (already has /admin prefix)
 app.include_router(image_router)  # Vision routes (already has /images prefix)
@@ -334,8 +362,16 @@ app.include_router(tag_router)  # GET /tags, PUT /jobs/{job_id}/tags
 # Before engine_admin_router: /admin/engines/status must not match /admin/engines/{engine_id}
 app.include_router(routing_admin_router)  # /admin/routing, /admin/engines/status (spec 0003)
 app.include_router(engine_admin_router)  # /admin/engines, /admin/gpus (spec 0003)
+from api.access_routes import router as access_router
+
+app.include_router(access_router)
+app.include_router(engine_control_router)
+app.include_router(engine_host_router)
 app.include_router(projects_router)  # GET /projects, /projects/resolve, /projects/{id}/folders/resolve
+app.include_router(project_management_router)
 app.include_router(live_router)
+app.include_router(datalake_router)
+app.include_router(datalake_job_router)
 app.include_router(router)
 
 

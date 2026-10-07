@@ -379,6 +379,11 @@ def test_split_pdf_task_creates_one_page_row_and_one_task_per_page(wired, monkey
     monkeypatch.setattr(tasks, "PDFSplitter", splitter)
 
     convert = MagicMock(name="convert_page_task")
+    def verify_persisted_before_dispatch(**kwargs):
+        with wired.session_local() as db:
+            assert db.query(Page).filter(Page.job_id == PARENT).count() == 3
+        assert len(wired.redis.get_page_jobs(PARENT)) == 3
+    convert.delay.side_effect = verify_persisted_before_dispatch
     monkeypatch.setattr(tasks, "convert_page_task", convert)
 
     run_task(
@@ -405,6 +410,45 @@ def test_split_pdf_task_creates_one_page_row_and_one_task_per_page(wired, monkey
     assert get_job(wired.session_local).total_pages == 3
     assert wired.redis.get_job_pages_total(PARENT) == 3
     assert len(wired.redis.get_page_jobs(PARENT)) == 3
+
+
+@pytest.mark.parametrize("retries", [0, 2])
+def test_split_database_failure_rolls_back_all_pages_and_dispatches_nothing(wired, monkeypatch, tmp_path, retries):
+    from sqlalchemy import event
+
+    with wired.session_local() as db:
+        db.add(Job(id=PARENT, filename="doc.pdf", status=JobStatus.PROCESSING))
+        db.commit()
+    wired.redis.set_job_status(job_id=PARENT, job_type="main", status="processing", progress=20)
+    splitter = MagicMock()
+    splitter.return_value.split_pdf.return_value = [
+        (n, tmp_path / f"page_{n}.pdf", f"pages/{PARENT}/page_{n}.pdf") for n in (1, 2, 3)
+    ]
+    monkeypatch.setattr(tasks, "PDFSplitter", splitter)
+    convert = MagicMock()
+    monkeypatch.setattr(tasks, "convert_page_task", convert)
+
+    def reject_page_two(mapper, connection, target):
+        if target.page_number == 2:
+            raise RuntimeError("legacy FK rejected page row")
+
+    event.listen(Page, "before_insert", reject_page_two)
+    tasks.split_pdf_task.push_request(retries=retries)
+    try:
+        with pytest.raises(RetryCalled):
+            tasks.split_pdf_task.run(split_job_id="split-1", parent_job_id=PARENT,
+                                     file_path=str(tmp_path / "source.pdf"))
+    finally:
+        tasks.split_pdf_task.pop_request()
+        event.remove(Page, "before_insert", reject_page_two)
+    with wired.session_local() as db:
+        assert db.query(Page).filter_by(job_id=PARENT).count() == 0
+        assert db.get(Job, PARENT).total_pages is None
+        assert db.get(Job, PARENT).status == (JobStatus.FAILED if retries == 2 else JobStatus.PROCESSING)
+    convert.delay.assert_not_called()
+    assert wired.redis.get_page_jobs(PARENT) == []
+    assert wired.redis.get_job_status("split-1")["status"] == "failed"
+    assert wired.redis.get_job_status(PARENT)["status"] == ("failed" if retries == 2 else "processing")
 
 
 # ============================================

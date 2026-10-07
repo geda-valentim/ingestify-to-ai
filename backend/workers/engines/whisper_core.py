@@ -10,6 +10,7 @@ it runs inside a remote container as is.
 
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
+from workers.audio.decoding_options import decoding_kwargs
 
 # on_progress(transcribed_seconds, total_seconds, segment=None); see base_transcriber
 ProgressCallback = Callable[..., None]
@@ -49,20 +50,19 @@ def transcribe(
     point where Python regains control from CTranslate2 - and raises
     TranscriptionCancelled, so a remote call past its deadline stops spending.
     """
-    language = options.get('language')  # None = auto-detect
     include_word_timestamps = options.get('include_word_timestamps', False)
-    temperature = options.get('temperature', 0.0)
-    beam_size = options.get('beam_size', 5)
-
-    segments, info = model.transcribe(
-        str(audio_path),
-        language=language,
-        word_timestamps=include_word_timestamps,
-        temperature=temperature,
-        beam_size=beam_size,
-        vad_filter=True,  # Voice activity detection filter
-        vad_parameters=dict(min_silence_duration_ms=500)
-    )
+    operation = options.get('operation', 'transcribe')
+    if operation == 'inspect':
+        from workers.audio.analysis import media_info, analysis_result
+        return analysis_result(operation=operation, info=media_info(audio_path), model=model_name, provider='faster-whisper')
+    segments, info = model.transcribe(str(audio_path), **decoding_kwargs(options, 'faster-whisper'))
+    if operation == 'detect_language':
+        from workers.audio.analysis import analysis_result
+        result = analysis_result(operation=operation, info={'duration': info.duration}, language=info.language,
+                                 probability=info.language_probability, model=model_name, provider='faster-whisper')
+        if getattr(info, 'all_language_probs', None):
+            result['language_probabilities'] = dict(info.all_language_probs)
+        return result
 
     # Segments are decoded lazily as the generator is consumed; each one's
     # end time (in the original audio, even with VAD) measures progress
@@ -91,6 +91,10 @@ def transcribe(
             'end': segment.end,
             'text': segment.text.strip()
         }
+        for key in ('id', 'seek', 'tokens', 'temperature', 'avg_logprob', 'compression_ratio', 'no_speech_prob'):
+            value = getattr(segment, key, None)
+            if value is not None:
+                segment_dict[key] = value
 
         # Add word-level timestamps if requested
         if include_word_timestamps and hasattr(segment, 'words') and segment.words:
@@ -106,7 +110,7 @@ def transcribe(
 
         formatted_segments.append(segment_dict)
 
-    return {
+    result = {
         'text': full_text,
         'segments': formatted_segments,
         'language': info.language,
@@ -117,3 +121,8 @@ def transcribe(
         'model': model_name,
         'provider': 'faster-whisper'
     }
+    if getattr(info, 'all_language_probs', None):
+        result['language_probabilities'] = dict(info.all_language_probs)
+    if getattr(info, 'duration_after_vad', None) is not None:
+        result['duration_after_vad'] = info.duration_after_vad
+    return result

@@ -34,7 +34,7 @@ from typing import Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, Depends, Form, Query
 from pydantic import BaseModel, Field
-from sqlalchemy import func, or_
+from sqlalchemy import func, inspect, or_
 from sqlalchemy.exc import InterfaceError, OperationalError
 from sqlalchemy.orm import Session
 
@@ -271,8 +271,9 @@ def resolve_upload_location(db: Session, user: User, plan: UploadPlan, path: str
     """
     via = plan.source
     try:
+        from api.project_management import locked_project, locked_folder
         if plan.project is not None:
-            project, project_created = plan.project, False
+            project, project_created = locked_project(db, inspect(plan.project).identity[0], user.id), False
         else:
             name = plan.parsed.project_name if plan.source == "request" else plan.fallback_name
             project, project_created = get_or_create_project(db, user.id, name, origin=via)
@@ -284,11 +285,21 @@ def resolve_upload_location(db: Session, user: User, plan: UploadPlan, path: str
         if project.archived_at is not None:
             raise LocationError(422, "PROJECT_ARCHIVED", PROJECT_ARCHIVED_DETAIL)
 
-        folder, folder_created = plan.folder, False
+        folder, folder_created = (locked_folder(db, inspect(plan.folder).identity[0], user.id) if plan.folder is not None else None), False
         if folder is not None and folder.project_id != project.id:
             raise LocationError(422, "INVALID_LOCATION", FOLDER_NOT_IN_PROJECT_DETAIL)
         if folder is None and plan.parsed.folder_name:
             folder, folder_created = get_or_create_folder(db, project, plan.parsed.folder_name, origin=via)
+        # Get-or-add may commit. Reacquire current destination locks until the
+        # caller commits its job, so maintenance cannot delete/archive beneath
+        # an in-flight upload. A stale ORM plan is not proof of existence.
+        project = locked_project(db, inspect(project).identity[0], user.id)
+        if project.archived_at is not None:
+            raise LocationError(422, 'PROJECT_ARCHIVED', PROJECT_ARCHIVED_DETAIL)
+        if folder is not None:
+            folder = locked_folder(db, inspect(folder).identity[0], user.id)
+            if folder.project_id != project.id:
+                raise LocationError(422, 'INVALID_LOCATION', FOLDER_NOT_IN_PROJECT_DETAIL)
     except InvalidNameError as e:
         raise LocationError(422, "INVALID_LOCATION", str(e))
     except (OperationalError, InterfaceError) as e:
@@ -304,7 +315,8 @@ def resolve_upload_location(db: Session, user: User, plan: UploadPlan, path: str
 # Deduplication, scoped by project
 # ---------------------------------------------------------------------------
 
-def find_duplicate_job(db: Session, user_id: str, checksum: str, location: UploadLocation) -> Tuple[Optional[Job], Optional[str]]:
+def find_duplicate_job(db: Session, user_id: str, checksum: str, location: UploadLocation, *,
+                       configuration_fingerprint: Optional[str] = None) -> Tuple[Optional[Job], Optional[str]]:
     """
     A non-failed MAIN job with the same checksum in the same project, if any.
 
@@ -317,8 +329,12 @@ def find_duplicate_job(db: Session, user_id: str, checksum: str, location: Uploa
         Job.file_checksum == checksum,
         Job.job_type == "MAIN",
         # A failed job must not swallow a resubmission: sending the file again is the retry
-        Job.status != DBJobStatus.FAILED,
+        Job.status.notin_([DBJobStatus.FAILED, DBJobStatus.CANCELLED]),
     )
+    if configuration_fingerprint is not None:
+        from shared.models import JobConfiguration
+        base = base.join(JobConfiguration, JobConfiguration.job_id == Job.id).filter(
+            JobConfiguration.fingerprint == configuration_fingerprint)
     same = base.filter(Job.project_id == location.project_id).first()
     if same is not None:
         return same, None
@@ -362,6 +378,10 @@ class ProjectSummary(BaseModel):
     root_job_count: int = Field(..., description="Jobs of the project that are in no folder")
     failed_count: int
     active_count: int = Field(..., description="Jobs queued or processing")
+    partial_count: int = 0
+    completed_count: int = 0
+    cancelled_count: int = 0
+    total_bytes: int = Field(0, description="Sum of source file sizes, not current disk usage")
     last_job_at: Optional[datetime] = None
     api_keys: List[ProjectRef] = Field(..., description="API keys bound to this project")
     folders: Optional[List[ProjectFolderSummary]] = Field(None, description="Only with ?include=folders")
@@ -394,7 +414,7 @@ _ACTIVE = (DBJobStatus.PENDING, DBJobStatus.PROCESSING)
     response_model_exclude_unset=True,
     summary="Listar projetos com contagens",
 )
-async def list_projects(
+def list_projects(
     include: Optional[str] = Query(None, description="`folders` inclui as pastas de cada projeto"),
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
@@ -410,20 +430,23 @@ async def list_projects(
 
     projects = db.query(Project).filter(Project.user_id == current_user.id).all()
     stats = {p.id: {"job_count": 0, "root_job_count": 0, "failed_count": 0, "active_count": 0,
+                    "completed_count": 0, "partial_count": 0, "cancelled_count": 0, "total_bytes": 0,
                     "last_job_at": None} for p in projects}
     folder_counts: Dict[str, int] = {}
 
     rows = (
-        db.query(Job.project_id, Job.folder_id, Job.status, func.count(Job.id), func.max(Job.created_at))
+        db.query(Job.project_id, Job.folder_id, Job.status, func.count(Job.id), func.max(Job.created_at),
+                 func.coalesce(func.sum(Job.file_size_bytes), 0))
         .filter(Job.user_id == current_user.id, Job.job_type == "MAIN", Job.project_id.isnot(None))
         .group_by(Job.project_id, Job.folder_id, Job.status)
         .all()
     )
-    for project_id, folder_id, status, count, last in rows:
+    for project_id, folder_id, status, count, last, total_bytes in rows:
         st = stats.get(project_id)
         if st is None:
             continue  # a job pointing at a deleted project
         st["job_count"] += count
+        st["total_bytes"] += int(total_bytes)
         if folder_id is None:
             st["root_job_count"] += count
         else:
@@ -432,6 +455,12 @@ async def list_projects(
             st["failed_count"] += count
         elif status in _ACTIVE:
             st["active_count"] += count
+        elif status == DBJobStatus.COMPLETED:
+            st["completed_count"] += count
+        elif status == DBJobStatus.PARTIAL:
+            st["partial_count"] += count
+        elif status == DBJobStatus.CANCELLED:
+            st["cancelled_count"] += count
         if last is not None and (st["last_job_at"] is None or last > st["last_job_at"]):
             st["last_job_at"] = last
 

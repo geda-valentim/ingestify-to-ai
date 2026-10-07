@@ -30,6 +30,28 @@ def placed_on(world, dispatch_id):
     return d.engine_id if d.state in ("assigned", "running") else None
 
 
+@pytest.mark.parametrize('provider,model,task,expected', [
+    ('faster-whisper', 'turbo', 'transcribe', True),
+    ('faster-whisper', 'medium', 'transcribe', False),
+    ('openai-whisper', 'turbo', 'transcribe', False),
+    ('openai-api', 'turbo', 'transcribe', False),
+    ('faster-whisper', 'medium', 'translate', False),
+])
+def test_remote_checkpoint_never_replaces_the_requested_provider_model_or_task(world, monkeypatch, provider, model, task, expected):
+    settings = dispatch.get_settings()
+    monkeypatch.setattr(settings, 'audio_transcriber_provider', provider)
+    monkeypatch.setattr(settings, 'whisper_model', model)
+    world.set_route([LOCAL])
+    world.dispatcher_alive()
+    job_id = world.add_job()
+    payload = dispatch.transcription_payload(job_id, '/audio.wav', {'transcriber_provider': provider, 'task': task}, 'ingestify-audio')
+    dispatch.submit(feature='transcription', job_id=job_id, user_id=ROOT, is_admin=True, payload=payload,
+                    today=None, celery=world.celery, session_factory=world.Session, now=world.now)
+    with world.Session() as db:
+        item = db.query(JobDispatch).filter(JobDispatch.job_id == job_id).one()
+        assert item.remote_allowed is expected
+
+
 # --- placement on the local engine -------------------------------------------------
 
 

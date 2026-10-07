@@ -2,6 +2,7 @@ from celery import Celery
 from celery.schedules import crontab
 from shared.config import get_settings, redis_url_with_password
 from shared.engines.redact import install_log_redaction
+from workers.engine_control.task_base import ManagedTask
 
 # No provider token or JWT in any log line or traceback (spec 0003); the record
 # factory is process-wide, so it covers the forked pool children too
@@ -14,6 +15,7 @@ celery_app = Celery(
     "doc2md",
     broker=redis_url_with_password(settings.celery_broker_url, settings.redis_password),
     backend=redis_url_with_password(settings.celery_result_backend, settings.redis_password),
+    task_cls=ManagedTask,
 )
 
 # Configure Celery
@@ -75,6 +77,11 @@ if settings.monitoring_enabled:
 
 # Auto-discover tasks
 celery_app.autodiscover_tasks(["workers"])
+import workers.datalake_tasks  # noqa: E402,F401
+celery_app.conf.beat_schedule = {
+    **(celery_app.conf.beat_schedule or {}),
+    "datalake-delivery-reconciliation": {"task": "workers.datalake_tasks.reconcile", "schedule": 60.0},
+}
 
 # autodiscover_tasks() only finds modules literally named `tasks`, so the vision
 # tasks must be imported explicitly. Unconditional on purpose: importing them is
@@ -92,6 +99,7 @@ import workers.engines.heartbeat  # noqa: F401,E402
 # occupy, and a 60s request behind those would time out for reasons that have
 # nothing to do with vision.
 celery_app.conf.task_routes = {
+    "workers.engine_control.tasks.*": {"queue": settings.engine_control_queue},
     "workers.vision_tasks.*": {"queue": settings.vision_queue},
     # The dispatcher's own tasks (spec 0003): only published once a feature has a route
     "workers.engines.tasks.*": {"queue": settings.dispatch_queue},
@@ -106,6 +114,16 @@ import workers.engines.tasks  # noqa: F401,E402
 
 # Remote engine tasks (worker-remote); importing them loads no provider SDK
 import workers.engines.remote_tasks  # noqa: F401,E402
+import workers.engine_control.tasks  # noqa: F401,E402
+from workers.engine_control.readiness import install as install_runtime_readiness
+install_runtime_readiness()
+
+if settings.engine_control_enabled and settings.engine_control_beat:
+    celery_app.conf.beat_schedule = {
+        **(celery_app.conf.beat_schedule or {}),
+        'engine-control-outbox': {'task': 'workers.engine_control.tasks.sweep', 'schedule': 5.0,
+                                'options': {'queue': settings.engine_control_queue}},
+    }
 
 # Only worker-dispatch (compose profile `engines`) runs these, with its embedded
 # beat (`celery worker -B`, ENGINES_DISPATCH_BEAT=true): the shared beat must not
@@ -153,3 +171,7 @@ if settings.engines_remote_beat:
 # This is needed because Beat scheduler needs to see these tasks
 if settings.monitoring_enabled:
     import workers.monitoring  # noqa: F401
+
+import workers.image_full_tasks  # noqa: E402,F401
+celery_app.conf.beat_schedule = {**(celery_app.conf.beat_schedule or {}),
+    "image-full-recovery": {"task": "workers.image_full_tasks.reconcile", "schedule": 10.0}}

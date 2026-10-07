@@ -1,5 +1,8 @@
 # Autenticação, API keys e autorização
 
+> Contratos dos endpoints revisados em 2026-10-06. Campos, modelos e autorização:
+> [referência completa da API](../api-reference.md). As datas abaixo também registram revisões da implementação/operação.
+
 > Verificado contra o código em 2026-10-04. Fonte da verdade:
 > [backend/api/auth_routes.py](../../backend/api/auth_routes.py),
 > [backend/api/apikey_routes.py](../../backend/api/apikey_routes.py),
@@ -10,8 +13,9 @@
 
 ## O que faz
 
-Todo endpoint de negócio exige um usuário autenticado. Há dois mecanismos, aceitos em
-qualquer endpoint protegido (dependência `get_current_active_user`):
+As rotas de usuário exigem autenticação. A dependência `get_current_active_user`
+aceita os dois mecanismos abaixo; refresh exige JWT, sessões administrativas de
+engines exigem JWT sem API key, e hosts internos usam uma identidade própria:
 
 1. **JWT** (sessão): `Authorization: Bearer <jwt>`, obtido em `/auth/login`.
 2. **API key** (acesso programático): `X-API-Key: doc2md_sk_…`, criada em `/api-keys/`.
@@ -19,7 +23,7 @@ qualquer endpoint protegido (dependência `get_current_active_user`):
 Se os dois headers vierem, **o JWT é tentado primeiro** e, se inválido, a requisição falha
 com `401` (não cai para a API key).
 
-Endpoints públicos: `GET /`, `GET /health`, `POST /auth/register`, `POST /auth/login`,
+Endpoints públicos: `GET /`, `GET /health`, `GET /auth/registration-settings`, `POST /auth/register`, `POST /auth/login`,
 `/docs`, `/redoc`, `/openapi.json`.
 
 ## Como usar
@@ -28,7 +32,8 @@ Endpoints públicos: `GET /`, `GET /health`, `POST /auth/register`, `POST /auth/
 
 | Método e caminho | Corpo | Resposta |
 |---|---|---|
-| `POST /auth/register` | JSON `{email, username, password}` | `201` + usuário (`id, email, username, is_active, created_at`). `400` se e-mail/username já existe. |
+| `POST /auth/register` | JSON `{email, username, password}` | `201` + usuário (`id, email, username, is_active, created_at`). `400` se e-mail/username já existe; `403` se o cadastro está fechado. |
+| `GET /auth/registration-settings` | Nenhum (público) | `{signup_enabled: boolean}`, sem cache HTTP. |
 | `POST /auth/login` | **form-urlencoded** `username` (username **ou** e-mail), `password` | `{access_token, token_type: "bearer"}` |
 | `POST /auth/refresh` | header `Authorization: Bearer <jwt ainda válido>` | Novo JWT com validade renovada. API key não é aceita. |
 | `GET /auth/me` | JWT ou API key | O usuário autenticado. |
@@ -51,12 +56,37 @@ expiração, a sessão cai.
 Senhas são guardadas com bcrypt. Não há verificação de e-mail, troca/recuperação de senha
 nem logout no servidor (o JWT vale até expirar).
 
+### Habilitar ou desabilitar novos cadastros
+
+Em **Admin → Settings → Allow signups**, um administrador pode abrir ou fechar
+o cadastro. A mudança é salva imediatamente no banco (`platform_settings`) e
+vale para todas as instâncias da API, inclusive após reiniciar. O padrão é
+**habilitado**, preservando instalações existentes e o cadastro do primeiro usuário.
+Somente a disponibilidade do cadastro é exposta na consulta pública.
+
+- `GET /admin/settings`: consulta a configuração; exige administrador.
+- `PATCH /admin/settings` com `{"signup_enabled": false}` fecha o cadastro;
+  `true` reabre. Aceita somente booleanos JSON e recusa campos desconhecidos.
+- Com o cadastro fechado, `POST /auth/register` retorna `403`, inclusive quando
+  chamado diretamente ou por um administrador. Login, sessões e contas existentes
+  continuam funcionando.
+- O login oculta o link de cadastro e `/register` mostra uma mensagem de cadastro
+  fechado. As páginas consultam a política ao abrir, ao recuperar foco e a cada
+  30 segundos; a API sempre verifica a política atual ao receber um cadastro.
+- Se a consulta falhar, o frontend não libera o formulário. Uma falha no banco
+  também não faz a API liberar cadastros.
+
+A tabela nova é criada pelo `init_db()` existente no startup da API, sem alterar
+tabelas de usuários ou jobs. Não é necessário executar a cadeia Alembic em instalações
+que não são geridas por ela. A política só muda quando um administrador a salva.
+
 ### API keys (`/api-keys`)
 
 | Método e caminho | Descrição |
 |---|---|
-| `POST /api-keys/` | JSON `{name, expires_in_days?}`. Devolve `api_key` **uma única vez**. |
-| `GET /api-keys/` | Lista as chaves do usuário (sem o valor): `id, name, last_used_at, expires_at, is_active, created_at`. |
+| `POST /api-keys/` | JSON `{name, expires_in_days?, project?, project_id?}`. Expiração de 1–365 dias, ou `null`; projeto por nome ou ID são exclusivos. Devolve `api_key` **uma única vez**. |
+| `GET /api-keys/` | Lista direta das chaves do usuário (sem o valor): `id, name, last_used_at, expires_at, is_active, created_at, project`. |
+| `PATCH /api-keys/{key_id}` | JSON `{project_id: "<id>"}` altera o projeto vinculado; `{project_id: null}` desvincula. O campo é obrigatório. |
 | `DELETE /api-keys/{key_id}` | Apaga a chave (`204`; `404` se não for do usuário). |
 
 ```bash
@@ -67,6 +97,13 @@ curl -X POST http://localhost:8000/api-keys/ -H "Authorization: Bearer $TOKEN" \
 A chave tem o formato `doc2md_sk_<aleatório>`; só o SHA-256 é guardado
 (`api_keys.key_hash`). Cada uso atualiza `last_used_at`. Chaves expiradas ou
 `is_active=false` são recusadas. A página `/api-keys` do frontend usa estes endpoints.
+
+Uma key vinculada permite criar jobs sem enviar projeto, desde que a chamada
+use somente `X-API-Key`. Projeto explícito prevalece sobre o vínculo; JWT junto
+com a key ignora o vínculo. Keys não concedem acesso a recursos de outro usuário.
+Sessões admin de engines/roteamento exigem JWT e recusam keys, mesmo junto com
+JWT. Os hosts internos usam `X-Engine-Host-Token`, não uma key de usuário.
+O [catálogo completo](../api-reference.md) indica o acesso de cada operação.
 
 ## Rate limiting e bloqueio de login
 
@@ -93,7 +130,12 @@ e e-mail da mesma conta compartilham o contador de falhas. Se o Redis cair, o li
 - **Admin (`/admin/*`):** um usuário é admin se `users.is_admin` é verdadeiro **ou** se o id
   está em `ADMIN_USER_IDS` (UUIDs separados por vírgula). A regra é uma só
   (`shared/admin.py:is_effective_admin`) para as rotas admin e para o campo `is_admin` de
-  `GET /auth/me` e `POST /auth/register`. Quem não é admin recebe `403`. Endpoints em
+  `GET /auth/me` e `POST /auth/register`. Nas rotas administrativas gerais, quem não é
+  admin recebe `403`. Compute pode conceder acesso por grants quando
+  `ENGINE_ACCESS_ENABLED=true`: biblioteca, controle e IAM humano exigem JWT e
+  RBAC/ABAC atual, inclusive para leitura; uma API key não transmite esses papéis.
+  `/auth/me` expõe as permissões para navegação. Veja [perfis e acesso](execution-profiles.md).
+  Endpoints gerais em
   [monitoring-and-admin.md](monitoring-and-admin.md).
 - **Primeiro admin:** pelo shell do servidor ou do container, por e-mail ou id, nunca por
   username (que qualquer um escolhe no cadastro):
@@ -124,6 +166,7 @@ e e-mail da mesma conta compartilham o contador de falhas. Se o Redis cair, o li
 
 - Um usuário desativado (`is_active=false`) recebe `400 Inactive user`, não `401/403`.
 - Revogar uma API key a apaga (não há "desativar"); o campo `is_active` não tem endpoint.
-- Não há escopos/permissões por chave: uma API key tem todo o poder do usuário.
+- Não há escopos configuráveis por chave nas APIs de jobs. Controle, biblioteca e IAM
+  humano exigem sessão JWT; grants Compute não autorizam essas rotas por API key.
 - O header `Authorization` colide com o token de provedor exigido por Google Drive/Dropbox
   (ver [sources.md](sources.md#limites-e-lacunas-conhecidas)).
