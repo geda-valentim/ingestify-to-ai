@@ -438,7 +438,9 @@ def test_alembic_has_a_single_head_after_the_0018_revision():
     config = Config(str(root / "alembic.ini"))
     config.set_main_option("script_location", str(root / "alembic"))
     scripts = ScriptDirectory.from_config(config)
-    assert scripts.get_heads() == ["d4e80018a2b6"]
+    # Spec 0019 (users.root_slot) now follows 0018 as the single head.
+    assert scripts.get_heads() == ["f1c90019d3e4"]
+    assert scripts.get_revision("f1c90019d3e4").down_revision == "d4e80018a2b6"
     assert scripts.get_revision("d4e80018a2b6").down_revision == "03e70014b8c5"
 
 

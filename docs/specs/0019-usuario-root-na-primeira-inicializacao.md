@@ -104,7 +104,8 @@ fica fora do alcance da aplicação e é coberta pelo §4.3 (root continua admin
 - `GET /auth/setup` público (CA6). `UserCreate.setup_token: Optional[str]` (máx. 256).
 - `UserResponse.is_root`.
 - `frontend/app/register`: consulta `/auth/setup`; título e texto de root; campo de
-  token condicional; erros `ROOT_SETUP_TOKEN_*` exibidos em português.
+  token condicional; mensagens em inglês, como o resto das páginas públicas desde o #52.
+  `formatApiError` passa a exibir `detail.message` de erros estruturados.
 
 ### 4.6 Operação
 
@@ -127,7 +128,9 @@ fica fora do alcance da aplicação e é coberta pelo §4.3 (root continua admin
 - **Compatibilidade:** cadastros após o primeiro não mudam. Instalações com usuários e
   sem root seguem como hoje até alguém rodar `make_admin.py --root`.
 - **Segurança:** em produção, sem token não há como reivindicar a instalação pela web;
-  token comparado em tempo constante e sob o rate limit de cadastro existente.
+  token comparado em tempo constante e sob o rate limit de cadastro existente. Risco
+  residual: um deploy exposto só com o `docker-compose.yml` base roda com
+  `ENVIRONMENT=development`, onde o token é opcional — a doc de auth manda configurá-lo.
 - **Operação:** nova env `ROOT_SETUP_TOKEN`; aviso de boot.
 
 ## 7. Plano de testes

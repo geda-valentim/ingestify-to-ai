@@ -2,6 +2,7 @@ import { useAuthStore } from "@/lib/store/auth";
 import { expireSession } from "@/lib/session";
 import type {
   UserCreate,
+  SetupStatus,
   UserLogin,
   UserResponse,
   Token,
@@ -97,6 +98,14 @@ export function getHeaders(includeAuth = false): HeadersInit {
 
 // Auth API
 export const authApi = {
+  async setupStatus(): Promise<SetupStatus> {
+    const response = await apiFetch(`${API_URL}/auth/setup`);
+    if (!response.ok) {
+      throw new Error("Could not read the installation setup state");
+    }
+    return response.json();
+  },
+
   async register(data: UserCreate): Promise<{ message: string }> {
     const response = await apiFetch(`${API_URL}/auth/register`, {
       method: "POST",

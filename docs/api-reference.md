@@ -2,7 +2,7 @@
 
 Gerado do OpenAPI da aplicação por `scripts/generate_api_docs.py`. Não edite este arquivo à mão.
 
-API `1.0.0`: **136 operações HTTP** e **1 WebSocket(s)**.
+API `1.0.0`: **137 operações HTTP** e **1 WebSocket(s)**.
 
 Base pública de desenvolvimento: `https://dev.ingestify.ai/api`. Os caminhos abaixo são relativos à base.
 
@@ -24,6 +24,7 @@ Guias de imagem: [PT](https://dev.ingestify.ai/pt/docs/images) / [EN](https://de
 | Método | Caminho | Autorização | Resumo |
 | --- | --- | --- | --- |
 | POST | `/auth/register` | Público | Register |
+| GET | `/auth/setup` | Público | Installation setup state (public) |
 | POST | `/auth/login` | Público | Login |
 | POST | `/auth/refresh` | JWT | Refresh Token |
 | GET | `/auth/me` | JWT ou API key | Get Current User Info |
@@ -182,8 +183,12 @@ Register a new user
 ## Returns:
 User object with id, email, username, is_active, created_at, is_admin
 
+The first account of an installation without root becomes its root user
+(spec 0019); see GET /auth/setup. `setup_token` is only read for that account.
+
 ## Errors:
 - 400: Email or username already exists
+- 403: ROOT_SETUP_TOKEN_REQUIRED / ROOT_SETUP_TOKEN_INVALID (root account only)
 - 429: Too many registrations from this IP
 
 Corpo obrigatório: sim.
@@ -195,6 +200,7 @@ Content-Type: `application/json`. Esquema: [UserCreate](#model-usercreate).
 | `email` | sim | string |  |  |
 | `username` | sim | string | minLength=3; maxLength=50 |  |
 | `password` | sim | string | minLength=8; maxLength=20 |  |
+| `setup_token` | não | string / null |  | Installation setup token; only read when creating the root user |
 
 Respostas declaradas:
 
@@ -202,6 +208,23 @@ Respostas declaradas:
 | --- | --- | --- | --- |
 | 201 | application/json | [UserResponse](#model-userresponse) | Successful Response |
 | 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
+
+### GET /auth/setup
+
+Installation setup state (public)
+
+Autorização: **Público**. Operation ID: `setup_status_auth_setup_get`.
+
+Whether this installation still needs its root user (spec 0019).
+
+Public on purpose: the registration screen uses it to explain that the first
+account becomes root and whether a setup token is needed. Reveals nothing else.
+
+Respostas declaradas:
+
+| Status | Content-Type | Esquema | Descrição |
+| --- | --- | --- | --- |
+| 200 | application/json | [SetupStatus](#model-setupstatus) | Successful Response |
 
 ### POST /auth/login
 
@@ -13375,6 +13398,41 @@ Esquema JSON completo:
 }
 ```
 
+<a id="model-setupstatus"></a>
+
+### SetupStatus
+
+Whether the installation still needs its root user (spec 0019)
+
+| Campo | Obrigatório | Tipo | Padrões/limites | Descrição |
+| --- | --- | --- | --- | --- |
+| `root_exists` | sim | boolean |  |  |
+| `setup_token_required` | sim | boolean |  |  |
+
+Esquema JSON completo:
+
+```json
+{
+  "properties": {
+    "root_exists": {
+      "type": "boolean",
+      "title": "Root Exists"
+    },
+    "setup_token_required": {
+      "type": "boolean",
+      "title": "Setup Token Required"
+    }
+  },
+  "type": "object",
+  "required": [
+    "root_exists",
+    "setup_token_required"
+  ],
+  "title": "SetupStatus",
+  "description": "Whether the installation still needs its root user (spec 0019)"
+}
+```
+
 <a id="model-spendcap"></a>
 
 ### SpendCap
@@ -13768,6 +13826,7 @@ Schema for user registration
 | `email` | sim | string |  |  |
 | `username` | sim | string | minLength=3; maxLength=50 |  |
 | `password` | sim | string | minLength=8; maxLength=20 |  |
+| `setup_token` | não | string / null |  | Installation setup token; only read when creating the root user |
 
 Esquema JSON completo:
 
@@ -13792,6 +13851,19 @@ Esquema JSON completo:
       "minLength": 8,
       "title": "Password",
       "example": "SecurePass123"
+    },
+    "setup_token": {
+      "anyOf": [
+        {
+          "type": "string",
+          "maxLength": 256
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Setup Token",
+      "description": "Installation setup token; only read when creating the root user"
     }
   },
   "type": "object",
@@ -13819,6 +13891,7 @@ Schema for user response
 | `is_active` | sim | boolean |  |  |
 | `created_at` | sim | string (date-time) |  |  |
 | `is_admin` | não | boolean | default=false |  |
+| `is_root` | não | boolean | default=false |  |
 | `permissions` | não | array de string | default=[] |  |
 | `engine_access_enabled` | não | boolean | default=false |  |
 | `bootstrap` | não | boolean | default=false |  |
@@ -13854,6 +13927,11 @@ Esquema JSON completo:
     "is_admin": {
       "type": "boolean",
       "title": "Is Admin",
+      "default": false
+    },
+    "is_root": {
+      "type": "boolean",
+      "title": "Is Root",
       "default": false
     },
     "permissions": {

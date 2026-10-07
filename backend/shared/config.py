@@ -295,6 +295,11 @@ class Settings(BaseSettings):
     # Comma-separated user IDs (UUIDs) allowed to use /admin endpoints. Empty = no admins.
     # IDs are used instead of emails because registration does not verify email ownership.
     admin_user_ids: str = ""
+    # Spec 0019: one-time token required to create the root user (the first account of an
+    # installation without root). Mandatory when ENVIRONMENT=production; optional
+    # elsewhere (if set, it is required everywhere). Generate with `openssl rand -hex 32`
+    # and remove it once root exists.
+    root_setup_token: str = Field(default="", repr=False)
 
     # IAM decision core (spec 0014 §4.11). off: legacy decides, bindings are inert.
     # shadow: both decide, legacy answers, divergences are logged. enforce: IAM answers.

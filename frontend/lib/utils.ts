@@ -30,6 +30,11 @@ export function formatApiError(error: any, fallbackMessage = "An error occurred"
         .join(", ");
     }
 
+    // Structured errors ({code, message}) carry a readable message
+    if (typeof detail === "object" && typeof detail.message === "string") {
+      return detail.message;
+    }
+
     // If detail is an object, stringify it
     if (typeof detail === "object") {
       return JSON.stringify(detail);

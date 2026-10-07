@@ -1,10 +1,11 @@
 """
 Who is an administrator, and how one is made.
 
-A user is an admin if EITHER the `users.is_admin` column is true OR their id is
-listed in ADMIN_USER_IDS (comma-separated). Both default to nobody. This is the
-single rule for the /admin routes, for `is_admin` in /auth/me, and for anything
-else that needs to know.
+A user is an admin if the `users.is_admin` column is true, OR they are the
+installation's root user (spec 0019, `users.root_slot`), OR their id is listed in
+ADMIN_USER_IDS (comma-separated). This is the single rule for the /admin routes,
+for `is_admin` in /auth/me, for the IAM bootstrap (spec 0014) and for anything else
+that needs to know. Root stays an admin even if its `is_admin` column is cleared.
 """
 
 from typing import Optional, Set
@@ -12,7 +13,7 @@ from typing import Optional, Set
 from sqlalchemy.orm import Session
 
 from shared.config import get_settings
-from shared.models import User
+from shared.models import ROOT_SLOT, User
 
 
 def admin_user_ids(settings=None) -> Set[str]:
@@ -22,10 +23,14 @@ def admin_user_ids(settings=None) -> Set[str]:
 
 
 def is_effective_admin(user, settings=None) -> bool:
-    """True if the user is an admin by the column or by ADMIN_USER_IDS"""
+    """True if the user is an admin by the column, as root, or by ADMIN_USER_IDS"""
     if user is None:
         return False
-    return getattr(user, "is_admin", False) is True or str(user.id) in admin_user_ids(settings)
+    return (
+        getattr(user, "is_admin", False) is True
+        or getattr(user, "root_slot", None) == ROOT_SLOT
+        or str(user.id) in admin_user_ids(settings)
+    )
 
 
 class AdminPromotionError(Exception):

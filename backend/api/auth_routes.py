@@ -5,7 +5,7 @@ from datetime import timedelta
 
 from shared.database import get_db
 from shared.models import User
-from shared.schemas import UserCreate, UserLogin, UserResponse, Token
+from shared.schemas import SetupStatus, UserCreate, UserLogin, UserResponse, Token
 from fastapi.security import HTTPAuthorizationCredentials
 from shared.auth import (
     hash_password,
@@ -15,7 +15,7 @@ from shared.auth import (
     verify_token,
 )
 from shared.config import get_settings
-from shared import rate_limit
+from shared import rate_limit, root
 from api.iam_deps import authenticated, platform_view, request_decider, request_principal
 from shared.iam.decide import Decider
 
@@ -40,8 +40,12 @@ async def register(user_data: UserCreate, request: Request, db: Session = Depend
     ## Returns:
     User object with id, email, username, is_active, created_at, is_admin
 
+    The first account of an installation without root becomes its root user
+    (spec 0019); see GET /auth/setup. `setup_token` is only read for that account.
+
     ## Errors:
     - 400: Email or username already exists
+    - 403: ROOT_SETUP_TOKEN_REQUIRED / ROOT_SETUP_TOKEN_INVALID (root account only)
     - 429: Too many registrations from this IP
     """
     rate_limit.hit("register:ip", rate_limit.client_ip(request), settings.register_limit_per_hour, 3600)
@@ -62,7 +66,7 @@ async def register(user_data: UserCreate, request: Request, db: Session = Depend
             detail="Username already taken"
         )
 
-    # Create new user
+    # Create new user - as the installation's root when there is none yet (spec 0019)
     hashed_pw = hash_password(user_data.password)
     new_user = User(
         email=user_data.email,
@@ -70,12 +74,25 @@ async def register(user_data: UserCreate, request: Request, db: Session = Depend
         hashed_password=hashed_pw,
         is_active=True,
     )
-
-    db.add(new_user)
-    db.commit()
-    db.refresh(new_user)
+    try:
+        new_user = root.create_user(
+            db, new_user, setup_token=user_data.setup_token, ip=rate_limit.client_ip(request)
+        )
+    except root.RootError as exc:
+        raise HTTPException(status_code=exc.status, detail={"code": exc.code, "message": exc.message})
 
     return UserResponse.for_user(new_user)
+
+
+@router.get("/setup", response_model=SetupStatus, summary="Installation setup state (public)")
+def setup_status(db: Session = Depends(get_db)):
+    """
+    Whether this installation still needs its root user (spec 0019).
+
+    Public on purpose: the registration screen uses it to explain that the first
+    account becomes root and whether a setup token is needed. Reveals nothing else.
+    """
+    return SetupStatus(root_exists=root.root_exists(db), setup_token_required=root.setup_token_required())
 
 
 def _lockout_identity(db: Session, login: str) -> str:
