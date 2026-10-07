@@ -25,9 +25,15 @@ Ver [specs/0018](specs/0018-iam-convergencia-do-rbac-abac-de-engines.md) e a
   depreciado que, quando definido (`true`/`false`), vence com aviso no boot; vazio = não
   definido. `ENGINE_ACCESS_ENABLED=false` continua sendo a alavanca de emergência. Os compose
   files passam `IAM_MODE` e `ENGINE_ACCESS_ENABLED` (default vazio) a todos os processos que
-  decidem engines, e cada um registra `engine_access_enabled=` no boot. **Atenção:** ligar
-  `IAM_MODE=enforce` numa instalação que nunca ligou engines passa a ligar o enforcement de
-  engines e a exigir o esquema da 0009.
+  decidem engines, e cada um registra `engine_access_enabled=` no boot. **Atenção:** antes
+  desta release `ENGINE_ACCESS_ENABLED` ausente valia `false`; agora segue `IAM_MODE`. Uma
+  instalação com `IAM_MODE=enforce` e a variável ausente (nunca ligou engines, ou desligou
+  apagando a linha) passa a ligar o enforcement de engines e a exigir o esquema da 0009, e
+  os grants ativos de `access_role_grants` voltam a valer: fixe `ENGINE_ACCESS_ENABLED=false`
+  ou revise/revogue esses grants antes do deploy (runbook §6.1).
+- **Boot:** com `IAM_MODE` diferente de `off` (inclusive `shadow` com engines desligado) ou
+  engines ligado, a API não sobe sem a migração da 0018 (colunas, FKs, índice), e esta exige a
+  migração da 0009 mesmo em instalações só com IAM de plataforma.
 - **API:** `/admin/iam/bindings*` administra as duas famílias, com regras por família
   (corpo ganha `permissions`, `condition_ref`, `delegation`; resposta ganha `family` e
   `parent_id`). `/admin/access/grants*` ficam como aliases **depreciados** com o contrato da

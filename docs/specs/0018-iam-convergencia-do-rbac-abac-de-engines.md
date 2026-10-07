@@ -477,7 +477,9 @@ não vai a produção.
   (`components/admin/access-panels.tsx`); `admin/platform-access/` redireciona;
   item único "Acesso" em `lib/admin-nav.ts` (`iam.bindings.read` ou
   `access.grants.manage`). O cliente deixa de chamar os aliases
-  `/admin/access/grants*`.
+  `/admin/access/grants*`. Evidência de CA11: `frontend/tests/execution-profiles-browser.py`
+  (desktop e mobile, seção Access e navegação delegada) passou em 2026-10-07 contra um
+  frontend isolado, além de `admin-nav.test.cjs` e `tsc --noEmit`.
 - [x] 5. Documentação de features/runbook (deploy em uma etapa, flag, rollback),
   CHANGELOG, status das specs. Seção 6 de `docs/runbooks/execution-profiles-access.md`
   (deploy em uma etapa, migração, flag, consultas de verificação, gate
