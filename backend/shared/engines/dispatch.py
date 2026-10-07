@@ -57,9 +57,11 @@ PROBED_FEATURES = frozenset({"transcription"})
 
 # Allowlisted payload of a transcription item: the arguments of process_conversion
 # for a file already on the shared temp volume. Never an auth token (spec S21).
-TRANSCRIPTION_OPTIONS = frozenset({
+from workers.audio.decoding_options import FASTER_WHISPER_OPTIONS, OPENAI_WHISPER_OPTIONS
+
+TRANSCRIPTION_OPTIONS = FASTER_WHISPER_OPTIONS | OPENAI_WHISPER_OPTIONS | frozenset({
     "language", "audio_language", "include_timestamps", "include_word_timestamps", "output_format",
-    "media_kind", "is_audio", "purge_source", "temperature", "beam_size",
+    "media_kind", "is_audio", "purge_source", "temperature", "beam_size", "transcriber_provider", "operation",
 })
 
 # The options /transcribe uses when the caller says nothing; /upload and /convert
@@ -88,8 +90,8 @@ def transcription_payload(job_id: str, source: str, options: Dict[str, Any], tod
 
 
 # Allowlisted payload of a document page (spec 0003, 4.14 and S21): what convert_page_task
-# needs for one page. The converter reads only the preset; nothing else is carried.
-PAGE_OPTIONS = frozenset({"docling_preset"})
+# needs for one page. The full validated document configuration follows the page.
+PAGE_OPTIONS = frozenset({"docling_preset", "document_options", "docling_core_version"})
 
 
 def page_payload(*, page_job_id: str, parent_job_id: str, page_number: int, options: Optional[Dict[str, Any]],
@@ -173,11 +175,24 @@ def submit(*, feature: str, job_id: str, user_id: Optional[str], is_admin: bool,
     subject = (subject_type, str(subject_id or job_id))
     now = now or datetime.utcnow()
     remote_allowed = bool(allow_remote and (route.remote_allowed_for == "all" or is_admin))
+    if feature == 'transcription':
+        options = (payload.get('kwargs') or {}).get('options') or {}
+        settings = get_settings()
+        # The integrated Modal checkpoint is faster-whisper turbo. A remote
+        # slot must not silently replace a different provider/model or task.
+        provider = options.get('transcriber_provider') or settings.audio_transcriber_provider
+        model = settings.whisper_model
+        remote_allowed = bool(remote_allowed and provider == 'faster-whisper' and model == 'turbo'
+                              and options.get('task', 'transcribe') == 'transcribe')
     down = dispatcher_down(route, dispatcher_seen_at(session_factory), now)
 
     if down and route.dispatcher_fallback == "local_direct" and route.has_local_step():
         usage_id, dispatch_id = _reserve_fallback(route, feature, job_id, user_id, remote_allowed, payload,
                                                   media_bytes, session_factory, now, subject)
+        if usage_id is None:
+            if feature in PROBED_FEATURES:
+                celery.send_task(PROBE_TASK, args=[dispatch_id], queue=get_settings().dispatch_queue)
+            return "queued"
         try:
             publish_local(celery, feature, payload, usage_id)
         except Exception:
@@ -223,7 +238,15 @@ def _reserve_fallback(route, feature, job_id, user_id, remote_allowed, payload, 
                       now, subject) -> Tuple[int, int]:
     def work(db: Session):
         local_id = next(e for s in route.steps for e in s["engine_ids"] if e in route.local_engine_ids)
-        engine = db.get(Engine, local_id)
+        engine = db.query(Engine).filter_by(id=local_id).with_for_update().one()
+        from shared.engine_control.admission import placement_blocked
+        if placement_blocked(db, engine, feature):
+            d = JobDispatch(feature=feature, subject_type=subject[0], subject_id=subject[1], job_id=str(job_id),
+                user_id=user_id, remote_allowed=remote_allowed, state="probing" if feature in PROBED_FEATURES else "waiting",
+                payload=payload, media_bytes=media_bytes, enqueued_at=now, updated_at=now, exclude_engines=[])
+            db.add(d)
+            db.flush()
+            return None, d.id
         binding = bindings(engine.config or {}).get(feature)
         usage = EngineUsage(
             kind="job", engine_id=engine.id, feature=feature, subject_type=subject[0], subject_id=subject[1],
@@ -355,6 +378,10 @@ def place_now(*, feature: str, subject_id: str, job_id: Optional[str], user_id: 
                     continue
                 binding = bindings(engine.config or {})[feature]
                 locked = db.query(Engine).filter(Engine.id == engine.id).with_for_update().one()
+                from shared.engine_control.admission import placement_blocked
+                if placement_blocked(db, locked, feature):
+                    refusals.append(f"{engine.slug}:maintenance")
+                    continue
                 if in_flight(db, locked.id, feature) >= binding.capacity:
                     refusals.append(f"{engine.slug}:full")
                     continue

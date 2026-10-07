@@ -1,6 +1,6 @@
 "use client";
 
-import ReactMarkdown from "react-markdown";
+import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { cn } from "@/lib/utils";
 
@@ -10,7 +10,9 @@ import { cn } from "@/lib/utils";
  * The project has no @tailwindcss/typography, so each element is styled here.
  * Raw HTML in the source is not rendered: converted documents are untrusted.
  */
-export function MarkdownView({ content, className }: { content: string; className?: string }) {
+export function MarkdownView({ content, className, allowedImageUrls = [] }: {
+  content: string; className?: string; allowedImageUrls?: string[];
+}) {
   return (
     <div
       className={cn(
@@ -34,7 +36,12 @@ export function MarkdownView({ content, className }: { content: string; classNam
         className
       )}
     >
-      <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
+      <ReactMarkdown remarkPlugins={[remarkGfm]} urlTransform={(value, key, node) => {
+        if (key === "src" && node.tagName === "img" && (
+          allowedImageUrls.includes(value) || /^data:image\/(?:png|jpeg|gif|webp);base64,[a-zA-Z0-9+/]+=*$/.test(value)
+        )) return value;
+        return defaultUrlTransform(value);
+      }}>{content}</ReactMarkdown>
     </div>
   );
 }

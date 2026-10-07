@@ -4,7 +4,17 @@ import { useEffect } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
-import { Activity, Cpu, MemoryStick, Route, Server } from "lucide-react";
+import {
+  Activity,
+  Cpu,
+  Home,
+  MemoryStick,
+  Route,
+  Server,
+  SlidersHorizontal,
+  Shield,
+  Settings,
+} from "lucide-react";
 import { authApi } from "@/lib/api";
 import { useAuthStore } from "@/lib/store/auth";
 import { loginUrl } from "@/lib/session";
@@ -13,7 +23,15 @@ import { AppHeader } from "@/components/app-header";
 import { ForbiddenCard, LoadingCards } from "@/components/admin/compute-ui";
 
 const TABS = [
+  { href: "/", label: "Home", icon: Home },
+  { href: "/admin/settings", label: "Settings", icon: Settings },
   { href: "/admin/engines", label: "Engines", icon: Server },
+  {
+    href: "/admin/execution-profiles",
+    label: "Perfis de execução",
+    icon: SlidersHorizontal,
+  },
+  { href: "/admin/access", label: "Acesso", icon: Shield },
   { href: "/admin/gpus", label: "GPUs", icon: MemoryStick },
   { href: "/admin/routing", label: "Routing", icon: Route },
   { href: "/admin/status", label: "Status", icon: Activity },
@@ -24,7 +42,11 @@ const TABS = [
  * the dispatcher. The guard here is cosmetic; every /admin endpoint checks
  * `require_admin` itself, and a 403 from any of them renders the same card.
  */
-export default function AdminLayout({ children }: { children: React.ReactNode }) {
+export default function AdminLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
   const router = useRouter();
   const pathname = usePathname();
   const token = useAuthStore((s) => s.token);
@@ -46,15 +68,48 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   });
 
   useEffect(() => {
-    if (me.data && token && me.data.is_admin !== user?.is_admin) setAuth(me.data, token);
+    if (
+      me.data &&
+      token &&
+      (me.data.is_admin !== user?.is_admin ||
+        JSON.stringify(me.data.permissions) !==
+          JSON.stringify(user?.permissions) ||
+        me.data.engine_access_enabled !== user?.engine_access_enabled)
+    )
+      setAuth(me.data, token);
   }, [me.data, token, user?.is_admin, setAuth]);
 
   const isAdmin = me.data?.is_admin ?? user?.is_admin;
 
+  const permissions = me.data?.permissions ?? user?.permissions ?? [];
+  const canEnter = isAdmin || permissions.length > 0;
+  const visibleTabs = TABS.filter((t) => {
+    if (isAdmin) return true;
+    if (t.href === "/") return true;
+    if (t.href === "/admin/engines")
+      return permissions.includes("engines.read");
+    if (t.href === "/admin/execution-profiles")
+      return permissions.includes("execution_profiles.read");
+    if (t.href === "/admin/access")
+      return permissions.includes("access.grants.manage");
+    return false;
+  });
+  const allowedPath =
+    isAdmin ||
+    visibleTabs.some(
+      (t) =>
+        t.href !== "/" &&
+        (pathname === t.href || pathname.startsWith(t.href + "/")),
+    ) ||
+    pathname === "/admin";
   let body: React.ReactNode;
-  if (!hasHydrated || !isAuthenticated || (isAdmin === undefined && me.isLoading)) {
+  if (
+    !hasHydrated ||
+    !isAuthenticated ||
+    (isAdmin === undefined && me.isLoading)
+  ) {
     body = <LoadingCards label="Checking access" />;
-  } else if (!isAdmin) {
+  } else if (!canEnter || !allowedPath) {
     body = <ForbiddenCard />;
   } else {
     body = (
@@ -63,15 +118,18 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
           <div>
             <h1 className="text-3xl font-bold flex items-center gap-2">
               <Cpu className="h-8 w-8" aria-hidden />
-              Compute
+              {pathname === "/admin/settings" ? "Platform settings" : "Compute"}
             </h1>
             <p className="text-muted-foreground mt-1">
-              Where heavy work runs. Read-only: each screen shows the command that changes it.
+              {pathname === "/admin/settings" ? "Manage access to your platform." : "Configure engines, workers and models. Follow operations and observed runtime state."}
             </p>
           </div>
         </div>
-        <nav aria-label="Compute sections" className="flex flex-wrap gap-1 rounded-lg bg-muted p-1 w-fit">
-          {TABS.map(({ href, label, icon: Icon }) => {
+        <nav
+          aria-label="Compute sections"
+          className="flex flex-wrap gap-1 rounded-lg bg-muted p-1 w-fit"
+        >
+          {visibleTabs.map(({ href, label, icon: Icon }) => {
             const active = pathname === href || pathname.startsWith(`${href}/`);
             return (
               <Link
@@ -80,7 +138,9 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
                 aria-current={active ? "page" : undefined}
                 className={cn(
                   "inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                  active ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
+                  active
+                    ? "bg-background text-foreground shadow-sm"
+                    : "text-muted-foreground hover:text-foreground",
                 )}
               >
                 <Icon className="h-4 w-4" aria-hidden />

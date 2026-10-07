@@ -111,21 +111,11 @@ def _text(value, name: str, limit: int, optional: bool = False) -> Optional[str]
 
 def clean_options(options: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     """The Whisper options of a request, allowlisted and bounded"""
-    clean: Dict[str, Any] = {}
-    for name, types in _OPTIONS.items():
-        value = (options or {}).get(name)
-        if value is None:
-            continue
-        _check(isinstance(value, types) and not (name != "include_word_timestamps" and isinstance(value, bool)),
-               f"option {name} has the wrong type")
-        clean[name] = value
-    if "language" in clean:
-        _text(clean["language"], "language", 16)
-    if "temperature" in clean:
-        _number(clean["temperature"], "temperature", 0, 1)
-    if "beam_size" in clean:
-        _number(clean["beam_size"], "beam_size", 1, 10)
-    return clean
+    from workers.audio.decoding_options import clean_remote_options
+    try:
+        return clean_remote_options(options)
+    except ValueError as exc:
+        raise ProtocolError(str(exc)) from None
 
 
 # --- request: worker -> container -------------------------------------------------------
@@ -222,6 +212,16 @@ def _segment(raw: Any, index: int) -> Dict[str, Any]:
     if words is not None:
         _check(isinstance(words, list) and len(words) <= MAX_WORDS_PER_SEGMENT, f"segment {index} words")
         segment["words"] = [_word(w) for w in words]
+    for key in ('id', 'seek'):
+        if raw.get(key) is not None:
+            segment[key] = int(_number(raw[key], key))
+    for key in ('temperature', 'compression_ratio', 'no_speech_prob', 'avg_logprob'):
+        if raw.get(key) is not None:
+            segment[key] = _number(raw[key], key, -1e9 if key == 'avg_logprob' else 0)
+    if raw.get('tokens') is not None:
+        tokens = raw['tokens']
+        _check(isinstance(tokens, list) and len(tokens) <= 10000, 'segment tokens')
+        segment['tokens'] = [int(_number(token, 'token')) for token in tokens]
     return segment
 
 
@@ -249,13 +249,39 @@ def parse_response(raw: Any) -> Tuple[Dict[str, Any], Dict[str, Any]]:
         "text": text,
         "segments": [_segment(s, i) for i, s in enumerate(segments)],
         "language": _text(result.get("language"), "language", 16, optional=True),
-        "language_probability": _number(result.get("language_probability") or 0, "language_probability", 0, 1),
+        "language_probability": None if result.get('language_probability') is None else _number(result['language_probability'], "language_probability", 0, 1),
         "duration": _number(result.get("duration"), "duration"),
         "word_count": int(_number(result.get("word_count"), "word_count")),
         "char_count": int(_number(result.get("char_count"), "char_count")),
         "model": _text(result.get("model"), "model", 64),
         "provider": _text(result.get("provider"), "provider", 64),
     }
+    if result.get('operation') is not None:
+        _check(result['operation'] in {'transcribe', 'detect_language', 'inspect'}, 'result operation')
+        clean_result['operation'] = result['operation']
+    if result.get('language_probabilities') is not None:
+        probabilities = result['language_probabilities']
+        _check(isinstance(probabilities, dict) and len(probabilities) <= 200, 'language_probabilities')
+        clean_result['language_probabilities'] = {_text(language, 'language', 16): _number(value, 'probability', 0, 1)
+                                                  for language, value in probabilities.items()}
+    if result.get('duration_after_vad') is not None:
+        clean_result['duration_after_vad'] = _number(result['duration_after_vad'], 'duration_after_vad')
+    if result.get('media_info') is not None:
+        info = result['media_info']
+        _check(isinstance(info, dict), 'media_info')
+        clean_info = {}
+        for key in ('duration', 'channels', 'sample_rate', 'bitrate', 'size_bytes'):
+            if info.get(key) is not None:
+                clean_info[key] = _number(info[key], key)
+        for key in ('format', 'codec'):
+            if info.get(key) is not None:
+                clean_info[key] = _text(info[key], key, 128)
+        metadata = info.get('metadata')
+        if metadata is not None:
+            _check(isinstance(metadata, dict) and len(metadata) <= 100, 'media metadata')
+            clean_info['metadata'] = {_text(key, 'metadata key', 128): _text(value, 'metadata value', 10000)
+                                      for key, value in metadata.items()}
+        clean_result['media_info'] = clean_info
 
     clean_usage: Dict[str, Any] = {name: _number(usage.get(name), name, 0, 10 ** 11) for name in _USAGE_NUMBERS}
     _check(clean_usage["exec_ended_unix"] >= clean_usage["exec_started_unix"], "exec_ended before exec_started")

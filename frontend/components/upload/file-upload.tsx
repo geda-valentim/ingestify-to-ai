@@ -90,14 +90,14 @@ export function FileUpload({ onFileSelect, selectedFile, onClear }: FileUploadPr
               </p>
             </div>
             <div className="text-xs text-muted-foreground">
-              Supported formats: PDF, DOCX, DOC, HTML, PPTX, XLSX, RTF, ODT
+              Documentos, imagens (PNG, JPEG, WEBP, BMP, GIF, TIFF) e áudio/vídeo
             </div>
           </div>
           <input
             type="file"
             className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
             onChange={handleFileInput}
-            accept=".pdf,.docx,.doc,.html,.pptx,.xlsx,.rtf,.odt"
+            accept=".pdf,.docx,.doc,.html,.pptx,.xlsx,.rtf,.odt,.txt,.md,.png,.jpg,.jpeg,.webp,.bmp,.gif,.tif,.tiff,.mp3,.mp4,.m4v,.wav,.flac,.ogg,.oga,.spx,.m4a,.aac,.wma,.webm,.mkv,.avi,.mov,.opus,.wmv,.flv,.mpeg,.mpg,.ts,.3gp"
           />
         </div>
       ) : (
@@ -118,6 +118,7 @@ export function FileUpload({ onFileSelect, selectedFile, onClear }: FileUploadPr
               variant="ghost"
               size="icon"
               onClick={onClear}
+              aria-label="Remove file"
               className="h-8 w-8"
             >
               <X className="h-4 w-4" />

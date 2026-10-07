@@ -1,0 +1,51 @@
+# Apply last, after base/GPU/local (and live, if enabled) overlays.
+# cloudflared runs as a separate, unprivileged systemd service on the host.
+services:
+  api:
+    command:
+      - uvicorn
+      - api.main:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --root-path
+      - /api
+      - --proxy-headers
+      - --forwarded-allow-ips
+      - ${TUNNEL_PROXY_IP:?Set TUNNEL_PROXY_IP to an unused IP inside ingestify-network}
+      - --ws-max-size
+      - "16384"
+      - --ws-max-queue
+      - "10"
+      - --no-access-log
+  frontend:
+    build:
+      args:
+        NEXT_PUBLIC_API_URL: https://${TUNNEL_HOSTNAME:-dev.ingestify.ai}/api
+  tunnel-proxy:
+    image: caddy:2.11.4-alpine
+    container_name: ingestify-tunnel-proxy
+    environment:
+      TUNNEL_CONNECTOR_IP: ${TUNNEL_CONNECTOR_IP:?Set TUNNEL_CONNECTOR_IP to the ingestify-network gateway}
+    ports:
+      - "127.0.0.1:8180:8080"
+    volumes:
+      - ./deploy/cloudflare/Caddyfile:/etc/caddy/Caddyfile:ro
+    networks:
+      ingestify-network:
+        ipv4_address: ${TUNNEL_PROXY_IP:?Set TUNNEL_PROXY_IP to an unused IP inside ingestify-network}
+    depends_on: [api, frontend]
+    read_only: true
+    tmpfs: [/data, /config]
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    # The official Caddy binary carries this file capability; retain it so
+    # Linux permits execution even though this proxy listens on port 8080.
+    cap_add: [NET_BIND_SERVICE]
+    restart: unless-stopped
+    healthcheck:
+      test: [CMD, wget, -q, --spider, http://127.0.0.1:8080/api/health]
+      interval: 15s
+      timeout: 5s
+      retries: 3

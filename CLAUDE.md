@@ -10,6 +10,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **frontend/** - Next.js 15 + React 19 web application
 - **backend/** - Python FastAPI + Celery worker backend
 
+## Git Worktrees
+
+- Do not create git worktrees by default. Work in `/var/app/ingestify-to-ai` on a new branch.
+- Only create a worktree when the user asks for one, or when another session is already working in this checkout. Never create worktrees as sibling folders in `/var/app/`.
+- Put any worktree under `/data/tmp/ingestify/<short-name>` (for example `git worktree add -b fix/foo /data/tmp/ingestify/fix-foo main`).
+- Once the branch is merged into `main`, remove the worktree (`git worktree remove <path>` then `git worktree prune`). Never use `--force` while it has uncommitted changes.
+
 ## Architecture
 
 ### Backend: layered, not hexagonal

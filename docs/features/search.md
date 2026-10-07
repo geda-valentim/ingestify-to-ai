@@ -1,5 +1,8 @@
 # Busca por conteúdo (Elasticsearch)
 
+> Contratos dos endpoints revisados em 2026-10-06. Campos, modelos e autorização:
+> [referência completa da API](../api-reference.md). As datas abaixo também registram revisões da implementação/operação.
+
 > Verificado contra o código em 2026-10-04. Fonte da verdade:
 > [backend/api/routes.py](../../backend/api/routes.py) (`GET /search`),
 > [backend/shared/elasticsearch_client.py](../../backend/shared/elasticsearch_client.py).

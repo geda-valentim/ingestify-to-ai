@@ -209,6 +209,14 @@ def format_markdown(transcription: Dict[str, Any], include_timestamps: bool = Tr
     Returns:
         Markdown-formatted transcription
     """
+    if transcription.get('operation') == 'inspect':
+        import json
+        return '# Metadados do áudio\n\n```json\n' + json.dumps(transcription.get('media_info', {}), ensure_ascii=False, indent=2) + '\n```'
+    if transcription.get('operation') == 'detect_language':
+        lines = ['# Idioma detectado', '', transcription.get('text', '')]
+        if transcription.get('language_probability') is not None:
+            lines.append(f"\n**Probabilidade:** {transcription['language_probability']:.2%}")
+        return '\n'.join(lines)
     lines = []
 
     # Add metadata header

@@ -18,6 +18,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpoppler-cpp-dev \
     tesseract-ocr \
     libgl1 \
+    libegl1 \
+    libgles2 \
     libglib2.0-0 \
     qpdf \
     && rm -rf /var/lib/apt/lists/*

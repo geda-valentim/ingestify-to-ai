@@ -24,6 +24,7 @@ HTTP client that is not needed to talk to an app living in the same process.
 import asyncio
 import json
 from datetime import datetime, timedelta, timezone
+from unittest.mock import MagicMock
 
 import pytest
 from fastapi import FastAPI
@@ -148,7 +149,9 @@ def _get(app, path, user=None, host=DEFAULT_HOST):
     messages = []
 
     async def receive():
-        return {"type": "http.request", "body": b"", "more_body": False}
+        # StreamingResponse listens for disconnects concurrently; yield control
+        # until its body completes instead of spinning on repeated requests.
+        await asyncio.Event().wait()
 
     async def send(message):
         messages.append(message)
@@ -228,6 +231,7 @@ class TestResponseShape:
         assert body["job_id"] == "job-1"
         assert body["page_number"] == 1
         assert body["url"] == SIGNED_URL
+        assert body["preview_url"] == "http://localhost:8000/jobs/job-1/pages/1/pdf/content"
         assert body["expires_in"] == routes.PAGE_PDF_URL_TTL_SECONDS
 
         expires_at = datetime.fromisoformat(body["expires_at"])
@@ -287,3 +291,35 @@ class TestObjectResolution:
         response = _get(app, "/jobs/job-1/pages/1/pdf", alice)
         assert response.status_code == 404
         assert fake.presign_calls == []
+
+
+class TestAuthenticatedPreview:
+    def test_owner_can_preview_before_conversion_finishes(self, app, db, users, minio):
+        alice, _ = users
+        _job_with_page(db, user_id=alice.id)  # PENDING page
+        source = MagicMock()
+        source.stream.return_value = iter([b"%PDF-1.4\n", b"preview"])
+        minio.open_object = MagicMock(return_value=source)
+        response = _get(app, "/jobs/job-1/pages/1/pdf/content", alice)
+        assert response.status_code == 200
+        assert response.body == b"%PDF-1.4\npreview"
+        assert response.headers["content-type"] == "application/pdf"
+        assert response.headers["cache-control"] == "private, no-store"
+        minio.open_object.assert_called_once_with("ingestify-pages", PAGE_OBJECT)
+        source.close.assert_called_once()
+        source.release_conn.assert_called_once()
+
+    @pytest.mark.parametrize("as_other_user", [False, True])
+    def test_preview_requires_the_owner(self, app, db, users, minio, as_other_user):
+        alice, mallory = users
+        _job_with_page(db, user_id=alice.id)
+        minio.open_object = MagicMock()
+        response = _get(app, "/jobs/job-1/pages/1/pdf/content", mallory if as_other_user else None)
+        assert response.status_code == (404 if as_other_user else 401)
+        minio.open_object.assert_not_called()
+
+    def test_missing_preview_object_returns_404(self, app, db, users, monkeypatch):
+        alice, _ = users
+        _job_with_page(db, user_id=alice.id)
+        monkeypatch.setattr(routes, "get_minio_client", lambda: FakeMinIO(exists=False))
+        assert _get(app, "/jobs/job-1/pages/1/pdf/content", alice).status_code == 404

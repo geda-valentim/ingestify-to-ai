@@ -1,6 +1,9 @@
 # Jobs: ciclo de vida e consulta
 
-> Verificado contra o código em 2026-10-04. Fonte da verdade:
+> Contratos dos endpoints revisados em 2026-10-06. Campos, modelos e autorização:
+> [referência completa da API](../api-reference.md). As datas abaixo também registram revisões da implementação/operação.
+
+> Verificado contra o código em 2026-10-06. Fonte da verdade:
 > [backend/api/routes.py](../../backend/api/routes.py),
 > [backend/api/deps.py](../../backend/api/deps.py),
 > [backend/shared/schemas.py](../../backend/shared/schemas.py).
@@ -25,6 +28,26 @@ MAIN ─┬─ SPLIT   (divide o PDF)
   (`page_results`) sem TTL — é de lá que `/result` lê primeiro.
 
 Detalhes de armazenamento: [storage-and-retention.md](storage-and-retention.md).
+
+### Imagens no `/convert`
+
+O upload aceita PNG, JPEG, WEBP, BMP, GIF e TIFF. Ao selecionar uma imagem,
+o formulário oferece descrição (`<CAPTION>`, `<DETAILED_CAPTION>` ou
+`<MORE_DETAILED_CAPTION>`) ou OCR com regiões (`<OCR_WITH_REGION>` fixo).
+`GET /images/capabilities` informa o limite de tamanho, as tarefas permitidas
+e a tarefa padrão configurada. Projeto, pasta e tags acompanham o upload;
+nome personalizado e destino datalake não são parâmetros dessas rotas.
+
+A página do job exibe a imagem original com a descrição no nível escolhido,
+ou o texto e as regiões detectadas pelo OCR. O worker mantém o status também
+no MySQL e salva o resultado completo em `images/{job_id}/result.json` no
+bucket de resultados, referenciado por `jobs.minio_result_path`. O resultado
+JSON normal de `/jobs/{job_id}/result` inclui `markdown`, `metadata` e `image`,
+com operação, tarefa, modelo, dimensões e imagem em base64. A leitura segue
+disponível após expirar o cache; excluir o job remove esse objeto privado.
+
+Se a espera síncrona retorna 504 com `job_id`, o frontend abre esse mesmo job
+para acompanhar sua conclusão.
 
 ### Status
 
@@ -64,10 +87,15 @@ Todos os endpoints abaixo exigem autenticação. Os que recebem `{job_id}` passa
 | `GET /jobs/{job_id}/pages/{n}/status` | Status da página `n` (1-indexada). |
 | `GET /jobs/{job_id}/pages/{n}/result` | Markdown da página `n`. |
 | `GET /jobs/{job_id}/pages/{n}/pdf` | URL pré-assinada (15 min) do PDF da página `n`. |
+| `GET /jobs/{job_id}/pages/{n}/pdf/content` | PDF binário autenticado, `application/pdf`; não retorna JSON. |
 | `POST /jobs/{job_id}/pages/{n}/retry` | Reprocessa uma página `failed` (máx. 3 vezes). |
 | `PUT /jobs/{job_id}/tags` | Substitui as tags (ver [tags.md](tags.md)). |
 | `DELETE /jobs/{job_id}` | Apaga o job. |
 | `GET /jobs/{job_id}/transcript/partial` | Só para transcrições (fora do escopo deste doc). |
+| `GET /jobs/{job_id}/datalake` | Status da entrega, valores congelados e caminhos reais dos artefatos/dataset. |
+| `POST /jobs/{job_id}/datalake/retry` | Repete a entrega preservada sem repetir inferência. |
+| `PATCH /jobs/{job_id}/location` | Move o MAIN para projeto/pasta próprios; veja [projects.md](projects.md). |
+| `POST /jobs/move` | Move de 1 a 100 jobs atomicamente. |
 
 ### `GET /jobs`
 
@@ -83,6 +111,8 @@ o status e o progresso vêm do Redis.
 | `tag` | — | Repetível; `?tag=a&tag=b` exige as duas (E). |
 | `q` | — | Busca `ILIKE` em `name` e `filename` (não no conteúdo; para isso, [search.md](search.md)). |
 | `kind` | — | `document`, `transcription` (`source_type=audio`) ou `image` (`source_type=image`). |
+| `project_id` | — | Filtra projeto próprio; ID alheio/inexistente retorna 404. |
+| `folder_id` | — | Pasta própria ou `root` para jobs sem pasta; `root` exige `project_id`. |
 
 Resposta: `{total, limit, offset, jobs[], counts}`. `counts` traz `all` e um contador por
 status, com os demais filtros aplicados (antes do filtro de status). Cada item tem
@@ -97,9 +127,12 @@ curl -H "X-API-Key: $INGESTIFY_API_KEY" \
 
 ### `GET /jobs/{job_id}`
 
-Lê o status do **Redis** (se expirou — 24 h — responde `404 "Job não encontrado ou
-expirado"`, mesmo que o job exista no MySQL e o resultado esteja no Elasticsearch).
-Datas e nome vêm do MySQL quando existem.
+`type` descreve a posição na hierarquia (MAIN/PAGE/etc.); `kind`, quando
+disponível, identifica `document`, `transcription` ou `image`. São campos distintos.
+
+Lê o status do **Redis**; se o cache expirou, usa a linha do próprio job no **MySQL**.
+Jobs concluídos retornam progresso de 100% nesse fallback. Datas e nome vêm do MySQL
+quando existem. A linha do pai de um job filho não substitui o status do filho.
 
 Para jobs MAIN de PDF dividido, inclui `total_pages`, `pages_completed`, `pages_failed`,
 `pages[]` (cada um com `page_number, job_id, status, url, error_message, retry_count`) e
@@ -110,13 +143,22 @@ Paginação da lista de páginas: `?page_limit=50&page_offset=0` (sem `page_limi
 
 ### `GET /jobs/{job_id}/result`
 
-1. Status do Redis: `queued`/`processing` → `400`; `failed` → `500` com o erro.
-2. Resultado do **Elasticsearch** (`job_results`); se não houver, do Redis
-   (`job:{id}:result`); se nenhum, `404`.
+1. Status do Redis, com fallback para o próprio job no MySQL: `pending`/`queued`/
+   `processing` ou `cancelled` → `400`; `failed` → `500` com o erro.
+2. Transcrições: cache do Redis ou resultado completo no MinIO (`result.json`),
+   com Markdown original, metadados e formato padrão. A leitura desses resultados
+   e de VTT/SRT/TXT/JSON não exige Elasticsearch. Para jobs antigos que só têm
+   `transcript.json`, o Markdown é reconstruído com idioma, duração e tamanho da
+   origem; metadados ausentes, como device, não são recuperados.
+3. Documentos e transcrições sem resultado no MinIO: Elasticsearch (`job_results`),
+   depois Redis (`job:{id}:result`). Sem resultado, `404`.
 
 Resposta: `{job_id, type, status: "completed", result: {markdown, metadata}, completed_at}`
 e, para jobs PAGE, `page_number` e `parent_job_id`. O parâmetro `?format=` só tem efeito
-em transcrições.
+em transcrições. Use `format=markdown` para solicitar explicitamente o envelope
+JSON; sem formato vale o `output_format` escolhido no envio. VTT/SRT/TXT são
+respostas de texto e `format=json` é o JSON bruto da transcrição, sem o envelope
+`result`. Tipos de conteúdo constam na [referência](../api-reference.md).
 
 ```bash
 curl -H "X-API-Key: $INGESTIFY_API_KEY" http://localhost:8000/jobs/$JOB_ID/result \
@@ -128,15 +170,39 @@ curl -H "X-API-Key: $INGESTIFY_API_KEY" http://localhost:8000/jobs/$JOB_ID/resul
 - `GET /jobs/{id}/pages` — do MySQL (`pages`); se não houver linhas, cai para o Redis.
   `404` se o job não tem páginas (documento não dividido).
 - `GET /jobs/{id}/pages/{n}/status` e `.../result` — dispensam conhecer o `page_job_id`.
-  O resultado vem do Elasticsearch (`page_results`) ou, em fallback, do Redis.
+  O resultado vem do Elasticsearch (`page_results`); se o índice estiver indisponível
+  ou sem o resultado, usa o Markdown persistido em `pages.markdown_content`.
+  Linhas antigas sem texto persistido ainda podem usar o Redis como último recurso.
 - `GET /jobs/{id}/pages/{n}/pdf` — devolve **JSON**, não redirect:
-  `{job_id, page_number, url, expires_in: 900, expires_at}`. A `url` é assinada para o
+  `{job_id, page_number, url, preview_url, expires_in: 900, expires_at}`. A `url` é assinada para o
   host que o navegador usa (`MINIO_PUBLIC_ENDPOINT`, ou o host da requisição) e não aceita
   parâmetros extras na query string (invalidaria a assinatura → `403` no MinIO).
+  `preview_url` aponta para a API e exige `Authorization`; o front usa essa URL
+  para funcionar em HTTPS mesmo quando o MinIO só tem endereço de LAN.
+- `GET /jobs/{id}/pages/{n}/pdf/content` — transmite o PDF da página com autenticação
+  e verificação do dono do job. Disponível também enquanto a conversão está em andamento.
 - `POST /jobs/{id}/pages/{n}/retry` — só para página `failed` e com `retry_count < 3`.
   Gera um novo `page_job_id`; se a cópia local do PDF já foi apagada, restaura o original
   de `ingestify-uploads` antes de reextrair a página. Resposta inclui `new_page_job_id`,
   `retry_count` e `retry_limit: 3`.
+
+O PDF de uma página pode ser aberto enquanto a conversão está em andamento;
+o Markdown fica disponível quando aquela página termina. O split salva todas
+as linhas em `pages` antes de enviar tarefas e falha/reexecuta se a persistência
+for rejeitada. Ao esgotar as tentativas do split, o MAIN é marcado como `failed`,
+sem deixar a interface esperando indefinidamente. `pages.page_job_id` não tem FK para `jobs`: jobs PAGE vivem no
+Redis, e a relação de propriedade permanece em `pages.job_id → jobs.id`.
+Instalações antigas com essa FK devem executar a migração direcionada, sem
+aplicar revisões Alembic não relacionadas:
+
+```bash
+docker compose exec api python scripts/migrate_page_jobs.py
+# Recupera linhas ausentes de um job concluído usando os resultados preservados:
+docker compose exec api python scripts/migrate_page_jobs.py --repair-job <job_id>
+```
+
+A recuperação valida os PDFs e resultados de todas as páginas antes de salvar,
+preserva linhas existentes e pode ser executada novamente sem duplicá-las.
 
 ### `DELETE /jobs/{job_id}`
 
@@ -161,9 +227,9 @@ objetos de áudio/legendas no MinIO; as linhas do MySQL (`jobs` filhos, `pages`,
 
 ## Limites e lacunas conhecidas
 
-- `GET /jobs/{id}` e `GET /jobs/{id}/result` dependem do status no Redis: depois de 24 h
-  respondem `404` mesmo com o Markdown guardado no Elasticsearch. `GET /jobs` continua
-  listando o job (vem do MySQL).
+- Jobs filhos sem linha própria em `jobs` ainda dependem do status do Redis em
+  `GET /jobs/{id}` e `GET /jobs/{id}/result`; use os endpoints por número de página
+  quando o cache do filho expirar.
 - Não há cancelamento de job.
 - `GET /jobs/{id}/pages/{n}/status` devolve `job_id: "page-{n}"` quando a linha da página
   não tem `page_job_id` (esse valor não é um id endereçável).

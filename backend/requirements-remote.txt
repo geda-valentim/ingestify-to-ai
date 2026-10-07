@@ -26,6 +26,7 @@ cryptography>=43,<51
 bcrypt>=4.0.0
 elasticsearch>=8.11.0,<9.0.0
 minio>=7.2.0,<8.0.0
+-r requirements-datalake.txt
 
 # The Modal SDK and CLI, pinned: its surface (Client.from_credentials, client= on
 # Cls/Function/FunctionCall/Dict, Dict.put(skip_if_exists=...), the billing

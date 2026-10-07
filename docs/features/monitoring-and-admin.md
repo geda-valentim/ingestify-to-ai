@@ -1,5 +1,8 @@
 # Monitoramento, health check e rotas de admin
 
+> Contratos dos endpoints revisados em 2026-10-06. Campos, modelos e autorização:
+> [referência completa da API](../api-reference.md). As datas abaixo também registram revisões da implementação/operação.
+
 > Verificado contra o código em 2026-10-04. Fonte da verdade:
 > [backend/api/admin_routes.py](../../backend/api/admin_routes.py),
 > [backend/workers/monitoring.py](../../backend/workers/monitoring.py),
@@ -33,10 +36,14 @@ Para visão, use `GET /images/capabilities` ([vision.md](vision.md)).
 
 Exigem um usuário admin: `users.is_admin = true` (via `python scripts/make_admin.py --email …`;
 ver [auth-and-api-keys.md](auth-and-api-keys.md#autorização-de-recursos)) ou
-id listado em `ADMIN_USER_IDS`. Outros usuários recebem `403`. Não há UI no frontend.
+id listado em `ADMIN_USER_IDS`. Outros usuários recebem `403`. A página
+`/admin/settings` permite controlar novos cadastros; as telas de Compute continuam
+disponíveis nas outras abas da área administrativa.
 
 | Método e caminho | O que faz |
 |---|---|
+| `GET /admin/settings` | Consulta a configuração de cadastro da plataforma. |
+| `PATCH /admin/settings` | Salva `{signup_enabled: boolean}`; efeito imediato sobre novos cadastros. |
 | `GET /admin/stats` | Contagem de jobs/páginas por status, travados, info do Redis e a configuração de monitoramento. |
 | `GET /admin/jobs/stuck?threshold_minutes=&limit=100` | Lista jobs e páginas travados em `PROCESSING`. |
 | `POST /admin/jobs/recover-stuck` | Executa `detect_stuck_jobs` na hora (síncrono). |

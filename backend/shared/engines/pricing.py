@@ -56,7 +56,13 @@ def cpu_for(binding) -> float:
 def memory_gib(config: dict, binding) -> float:
     """4 + E x (0.5 + 0.45 x max_h) GiB, max_h the longest admissible media in hours"""
     max_h = float(config.get("max_media_seconds") or DEFAULT_MAX_MEDIA_SECONDS) / 3600
-    return round(4 + binding.executions_per_worker * (0.5 + 0.45 * max_h), 2)
+    minimum=round(4 + binding.executions_per_worker * (0.5 + 0.45 * max_h), 2)
+    declared=config.get('control_memory_mb') if config.get('control_fingerprint_version')==2 else None
+    if declared is not None:
+        if float(declared)/1024<minimum:
+            raise ValueError(f'Memory must be at least {int(math.ceil(minimum*1024))} MiB for this binding')
+        return float(declared)/1024
+    return minimum
 
 
 def function_timeout(config: dict) -> int:

@@ -31,6 +31,15 @@ import type { AdapterDescriptor, Engine, EnginesStatus, FeatureRoute, GpusRespon
 
 export const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080";
 
+function appendDatalake(form: FormData, destination?: import("@/types/datalake").DatalakeDestination) {
+  if (!destination) return;
+  form.append("datalake_connection_id", destination.connection_id);
+  form.append("datalake_bucket", destination.bucket);
+  form.append("datalake_prefix", destination.prefix);
+  if (destination.partitioning) form.append("datalake_partitioning", JSON.stringify(destination.partitioning));
+  if (destination.partition_values) form.append("datalake_partition_values", JSON.stringify(destination.partition_values));
+}
+
 function getAuthToken(): string | null {
   if (typeof window === "undefined") return null;
   // The store is the source of truth; `auth_token` is where older builds kept it.
@@ -42,7 +51,7 @@ function getAuthToken(): string | null {
  * session is over (expired or revoked), so it is ended everywhere at once
  * instead of leaving each page to spin or show a raw error.
  */
-async function apiFetch(input: string, init?: RequestInit): Promise<Response> {
+export async function apiFetch(input: string, init?: RequestInit): Promise<Response> {
   const response = await fetch(input, init);
   if (response.status === 401 && new Headers(init?.headers).has("Authorization")) {
     expireSession();
@@ -67,7 +76,7 @@ export class ApiError extends Error {
   }
 }
 
-async function throwApiError(response: Response, fallback: string): Promise<never> {
+export async function throwApiError(response: Response, fallback: string): Promise<never> {
   const data = await response.json().catch(() => null);
   const detail = (data as { detail?: unknown } | null)?.detail;
   const message = typeof detail === "string" && detail ? detail : `${fallback}: ${response.statusText}`;
@@ -82,7 +91,7 @@ function appendLocation(formData: FormData, location: UploadLocation) {
   else if (location.folder?.trim()) formData.append("folder", location.folder.trim());
 }
 
-function getHeaders(includeAuth = false): HeadersInit {
+export function getHeaders(includeAuth = false): HeadersInit {
   const headers: HeadersInit = {};
 
   if (includeAuth) {
@@ -96,6 +105,32 @@ function getHeaders(includeAuth = false): HeadersInit {
 }
 
 // Auth API
+export interface RegistrationSettings {
+  signup_enabled: boolean;
+}
+
+export const platformSettingsApi = {
+  async registration(): Promise<RegistrationSettings> {
+    const response = await apiFetch(`${API_URL}/auth/registration-settings`, { cache: "no-store" });
+    if (!response.ok) return throwApiError(response, "Unable to check registration availability");
+    return response.json();
+  },
+  async get(): Promise<RegistrationSettings> {
+    const response = await apiFetch(`${API_URL}/admin/settings`, { headers: getHeaders(true), cache: "no-store" });
+    if (!response.ok) return throwApiError(response, "Unable to load platform settings");
+    return response.json();
+  },
+  async update(data: RegistrationSettings): Promise<RegistrationSettings> {
+    const response = await apiFetch(`${API_URL}/admin/settings`, {
+      method: "PATCH",
+      headers: { ...getHeaders(true), "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    });
+    if (!response.ok) return throwApiError(response, "Unable to save platform settings");
+    return response.json();
+  },
+};
+
 export const authApi = {
   async register(data: UserCreate): Promise<{ message: string }> {
     const response = await apiFetch(`${API_URL}/auth/register`, {
@@ -163,7 +198,38 @@ export const authApi = {
 };
 
 // Jobs API
+export function uploadSourceType(filename: string): "audio" | "file" | "image" {
+  if (/\.(png|jpe?g|webp|bmp|gif|tiff?)$/i.test(filename)) return "image";
+  return /\.(mp3|mp4|m4v|wav|flac|ogg|oga|spx|m4a|aac|wma|webm|mkv|avi|mov|opus|wmv|flv|mpeg|mpg|ts|3gp)$/i.test(filename) ? "audio" : "file";
+}
+
 export const jobsApi = {
+  async cancelFullImage(jobId: string): Promise<void> {
+    const response = await apiFetch(`${API_URL}/images/${jobId}/cancel`, { method: "POST", headers: getHeaders(true) });
+    if (!response.ok) await throwApiError(response, "Não foi possível cancelar a análise");
+  },
+  async getDocumentAsset(path: string): Promise<Blob> {
+    if (!/^\/jobs\/[a-f0-9-]+\/(?:pages\/\d+\/)?assets\/(?:image|page)_[0-9]+_[a-f0-9]+\.png$/.test(path)) throw new Error("Invalid document asset");
+    const response = await apiFetch(`${API_URL}${path}`, { headers: getHeaders(true) });
+    if (!response.ok) await throwApiError(response, "Document image unavailable");
+    return response.blob();
+  },
+  async documentCapabilities(): Promise<import("@/types/api").DocumentCapabilities> {
+    const response = await apiFetch(`${API_URL}/documents/capabilities`, { headers: getHeaders(true) });
+    if (!response.ok) await throwApiError(response, "Document capabilities unavailable");
+    return response.json();
+  },
+  async faceCapabilities(): Promise<import("@/types/faces").FaceCapabilities> {
+    const response = await apiFetch(`${API_URL}/images/faces/capabilities`, { headers: getHeaders(true) });
+    if (!response.ok) await throwApiError(response, "Facial capabilities unavailable");
+    return response.json();
+  },
+
+  async imageCapabilities(): Promise<import("@/types/api").VisionCapabilities> {
+    const response = await apiFetch(`${API_URL}/images/capabilities`, { headers: getHeaders(true) });
+    if (!response.ok) await throwApiError(response, "Could not load image capabilities");
+    return response.json();
+  },
   async convert(request: ConvertRequest): Promise<JobCreatedResponse> {
     const formData = new FormData();
     formData.append("source_type", request.source_type);
@@ -184,15 +250,15 @@ export const jobsApi = {
       formData.append("tags", request.tags.join(","));
     }
 
-    if (request.authToken) {
-      formData.append("auth_token", request.authToken);
-    }
-
+    if (request.docling_preset) formData.append("docling_preset", request.docling_preset);
+    if (request.conversion_options) formData.append("conversion_options", JSON.stringify(request.conversion_options));
+    if (request.audio_options) formData.append("audio_options", JSON.stringify(request.audio_options));
     appendLocation(formData, request);
+    appendDatalake(formData, request.datalake);
 
     const response = await apiFetch(`${API_URL}/convert`, {
       method: "POST",
-      headers: getHeaders(true),
+      headers: { ...getHeaders(true), ...(request.authToken ? { "X-Source-Token": request.authToken } : {}) },
       body: formData,
     });
 
@@ -204,6 +270,43 @@ export const jobsApi = {
   },
 
   async upload(request: UploadRequest): Promise<JobCreatedResponse> {
+    if (uploadSourceType(request.file.name) === "image" && request.image_engine !== "docling") {
+      const body = new FormData();
+      body.append("file", request.file);
+      if (request.tags?.length) body.append("tags", request.tags.join(","));
+      appendLocation(body, request);
+      const operation = request.image_operation ?? "describe";
+      const full = operation === "full";
+      const faces = operation === "faces";
+      const analyze = !faces && (full || operation === "analyze" || !!Object.keys(request.image_generation ?? {}).length);
+      if (faces) {
+        body.append("face_options", JSON.stringify(request.face_options ?? {}));
+        body.append("wait", "false");
+        if (request.datalake) body.append("datalake", JSON.stringify(request.datalake));
+      } else if (full) {
+        body.append("mode", "full");
+        body.append("wait", "false");
+        body.append("full_options", JSON.stringify({ ...request.image_full_options, generation: request.image_generation ?? {} }));
+        if (request.datalake) body.append("datalake", JSON.stringify(request.datalake));
+      } else if (analyze) {
+        body.append("task", request.image_task ?? (operation === "ocr" ? "<OCR_WITH_REGION>" : "<MORE_DETAILED_CAPTION>"));
+        body.append("wait", "false");
+        if (request.image_text_input) body.append("text_input", request.image_text_input);
+        if (request.image_region) body.append("region", JSON.stringify(request.image_region));
+        if (request.image_generation && Object.keys(request.image_generation).length) body.append("generation", JSON.stringify(request.image_generation));
+      } else if (operation === "describe" && request.image_task) body.append("task", request.image_task);
+      const response = await apiFetch(faces ? `${API_URL}/images/faces/upload` : analyze ? `${API_URL}/images/analyze/upload` : operation === "ocr" ? `${API_URL}/images/ocr/upload` : `${API_URL}/images/describe/upload`, {
+        method: "POST", headers: { ...getHeaders(true), ...((full || faces) ? { "Idempotency-Key": request.image_idempotency_key ?? crypto.randomUUID() } : {}) }, body,
+      });
+      const data = await response.json().catch(() => null);
+      // The synchronous endpoint can time out while its owned job continues.
+      // Follow that job instead of asking the user to upload it a second time.
+      if (response.status === 504 && data?.detail?.job_id) {
+        return { job_id: data.detail.job_id, status: "queued", created_at: new Date().toISOString(), message: "Image processing continues" };
+      }
+      if (!response.ok) throw new ApiError(response.status, data, data?.detail?.message ?? "Image upload failed");
+      return { ...data, created_at: new Date().toISOString(), message: "Image processed" };
+    }
     const formData = new FormData();
     formData.append("file", request.file);
 
@@ -215,9 +318,20 @@ export const jobsApi = {
       formData.append("tags", request.tags.join(","));
     }
 
+    if (request.docling_preset) formData.append("docling_preset", request.docling_preset);
+    if (request.conversion_options) formData.append("conversion_options", JSON.stringify(request.conversion_options));
     appendLocation(formData, request);
+    appendDatalake(formData, request.datalake);
 
-    const response = await apiFetch(`${API_URL}/upload`, {
+    const media = uploadSourceType(request.file.name) === "audio";
+    if (media) {
+      if (request.audio_operation) formData.append("operation", request.audio_operation);
+      if (request.audio_decoding && Object.keys(request.audio_decoding).length) formData.append("decoding_options", JSON.stringify(request.audio_decoding));
+      for (const key of ["include_timestamps", "include_word_timestamps", "output_format", "purge_source"] as const) {
+        if (request[key] !== undefined) formData.append(key, String(request[key]));
+      }
+    }
+    const response = await apiFetch(`${API_URL}/${media ? "transcribe" : "upload"}`, {
       method: "POST",
       headers: getHeaders(true),
       body: formData,
@@ -227,6 +341,12 @@ export const jobsApi = {
       await throwApiError(response, "Upload failed");
     }
 
+    return response.json();
+  },
+
+  async audioCapabilities(): Promise<import("@/types/api").AudioCapabilities> {
+    const response = await apiFetch(`${API_URL}/audio/capabilities`, { headers: getHeaders(true) });
+    if (!response.ok) await throwApiError(response, "Audio capabilities unavailable");
     return response.json();
   },
 
@@ -357,21 +477,13 @@ export const jobsApi = {
   // Reinstating it means adding the endpoint first.
 
   async getPageResultByNumber(jobId: string, pageNumber: number): Promise<JobResultResponse> {
-    // First get all pages to find the job_id for this page number
-    const pagesResponse = await this.getPages(jobId);
-    const page = pagesResponse.pages.find((p) => p.page_number === pageNumber);
-
-    if (!page) {
-      throw new Error(`Page ${pageNumber} not found`);
+    const response = await apiFetch(`${API_URL}/jobs/${jobId}/pages/${pageNumber}/result`, {
+      headers: getHeaders(true),
+    });
+    if (!response.ok) {
+      throw new Error(`Failed to fetch page result: ${response.statusText}`);
     }
-
-    // A listed page can have no job yet (see PageJobInfo.job_id).
-    if (!page.job_id) {
-      throw new Error(`Page ${pageNumber} has not been queued for conversion yet`);
-    }
-
-    // Then get the result for that specific page job
-    return this.getResult(page.job_id);
+    return response.json();
   },
 
   async delete(jobId: string): Promise<{ message: string }> {
@@ -470,9 +582,30 @@ export const tagsApi = {
   },
 };
 
-// Projects API (spec 0004, phase 1: read-only; projects and folders are
-// created by get-or-add on upload)
+async function projectWrite<T>(path: string, method: string, body?: unknown): Promise<T> {
+  const response = await apiFetch(`${API_URL}${path}`, {
+    method,
+    headers: { ...getHeaders(true), "Content-Type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  if (!response.ok) await throwApiError(response, "Could not update the project");
+  return response.status === 204 ? undefined as T : response.json();
+}
+
+// Projects, folders and job destinations (spec 0004).
 export const projectsApi = {
+  create: (name: string) => projectWrite<{ id: string; created: boolean }>("/projects", "POST", { name }),
+  update: (id: string, body: { name?: string; description?: string | null; archived?: boolean }) =>
+    projectWrite<void>(`/projects/${encodeURIComponent(id)}`, "PATCH", body),
+  delete: (id: string) => projectWrite<void>(`/projects/${encodeURIComponent(id)}`, "DELETE"),
+  createFolder: (projectId: string, name: string) =>
+    projectWrite<{ id: string; created: boolean }>(`/projects/${encodeURIComponent(projectId)}/folders`, "POST", { name }),
+  renameFolder: (id: string, name: string) => projectWrite<void>(`/folders/${encodeURIComponent(id)}`, "PATCH", { name }),
+  deleteFolder: (id: string) => projectWrite<void>(`/folders/${encodeURIComponent(id)}`, "DELETE"),
+  move: (jobIds: string[], projectId: string, folderId: string | null) =>
+    projectWrite<{ moved: number }>("/jobs/move", "POST", { job_ids: jobIds, project_id: projectId, folder_id: folderId }),
+  moveJob: (jobId: string, projectId: string, folderId: string | null) =>
+    projectWrite<{ moved: number }>(`/jobs/${encodeURIComponent(jobId)}/location`, "PATCH", { project_id: projectId, folder_id: folderId }),
   /** The user's projects with job counts, most recently used first. */
   async list(includeFolders = true): Promise<ProjectsListResponse> {
     const query = includeFolders ? "?include=folders" : "";
@@ -612,12 +745,17 @@ export const computeApi = {
 };
 
 export const liveApi = {
+  async capabilities(): Promise<import("@/types/live").LiveCapabilities> {
+    const response = await apiFetch(`${API_URL}/transcribe/live/sessions/capabilities`, { headers: getHeaders(true) });
+    if (!response.ok) await throwApiError(response, "Não foi possível consultar os controles ao vivo");
+    return response.json();
+  },
   async getStatus(jobId: string): Promise<{ job_id: string; state: string; duration_seconds: number; error_code: string | null }> {
     const response = await apiFetch(`${API_URL}/transcribe/live/sessions/${jobId}`, { headers: getHeaders(true) });
     if (!response.ok) await throwApiError(response, "Não foi possível consultar a sessão");
     return response.json();
   },
-  async create(body: UploadLocation & { name: string; language: "pt" }): Promise<{
+  async create(body: UploadLocation & { name: string; language: string; options?: import("@/types/live").LiveOptions; datalake?: import("@/types/datalake").DatalakeDestination }): Promise<{
     job_id: string; ws_url: string; ticket: string; max_duration_seconds: number;
   }> {
     const response = await apiFetch(`${API_URL}/transcribe/live/sessions`, {

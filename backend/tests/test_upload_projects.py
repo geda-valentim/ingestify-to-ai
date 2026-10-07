@@ -421,12 +421,13 @@ def test_convert_does_not_dedup_a_failed_job(env):
 # The production client, after the migration
 # ---------------------------------------------------------------------------
 
-def test_production_client_request_is_unchanged(env):
+def test_production_client_request_preserves_fields_and_reprocesses_unknown_legacy_configuration(env):
     """
     Today's exact request (file + output_format=json + purge_source=true +
     X-API-Key, no project) after the migration bound the key to Inbox: same
-    status and fields as before (+ project/folder), and the job already
-    processed in Inbox is still found by deduplication.
+    status and fields as before (+ project/folder). A legacy job without a
+    saved request is reprocessed because the decoding/retention settings cannot
+    be proven to match.
     """
     inbox = add_project(env.db, ALICE, "Inbox", key="inbox")
     add_key(env.db, INBOX_KEY_PLAIN, project=inbox, name="cliente-audio")
@@ -449,14 +450,10 @@ def test_production_client_request_is_unchanged(env):
 
     repeated = production_request(audio)
     assert repeated.status_code == 200
-    assert repeated.json() == {
-        "job_id": legacy.id,
-        "status": "queued",
-        "created_at": "2026-09-30T08:00:00",
-        "message": f"Arquivo de áudio já foi processado anteriormente (job existente: {legacy.id})",
-        "project": {"id": inbox.id, "name": "Inbox", "created": False, "source": "api_key"},
-        "folder": None,
-    }
+    assert repeated.json()['job_id'] != legacy.id
+    assert repeated.json()['status'] == 'queued'
+    assert repeated.json()['project'] == {"id": inbox.id, "name": "Inbox", "created": False, "source": "api_key"}
+    assert production_request(audio).json()['job_id'] == repeated.json()['job_id']
 
     new = production_request(b"ID3-a-new-recording")
     assert new.status_code == 200

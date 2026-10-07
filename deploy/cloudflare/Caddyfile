@@ -1,0 +1,28 @@
+{
+	admin off
+	auto_https off
+	servers {
+		trusted_proxies static {$TUNNEL_CONNECTOR_IP}
+		client_ip_headers CF-Connecting-IP X-Forwarded-For
+	}
+}
+
+:8080 {
+	# cloudflared is the only ingress; the host port is bound to loopback.
+	@api path /api /api/*
+	handle @api {
+		uri strip_prefix /api
+		reverse_proxy api:8000 {
+			header_up X-Forwarded-Proto https
+			header_up X-Forwarded-For {client_ip}
+			# Flush partial responses immediately and preserve WebSocket upgrades.
+			flush_interval -1
+		}
+	}
+
+	handle {
+		reverse_proxy frontend:3000 {
+			header_up X-Forwarded-Proto https
+		}
+	}
+}

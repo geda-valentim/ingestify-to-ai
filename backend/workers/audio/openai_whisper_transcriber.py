@@ -12,6 +12,7 @@ from typing import Dict, Any, List
 import logging
 
 from workers.audio.base_transcriber import AudioTranscriber, VIDEO_FORMATS
+from workers.audio.decoding_options import decoding_kwargs
 
 logger = logging.getLogger(__name__)
 
@@ -82,24 +83,25 @@ class OpenAIWhisperTranscriber(AudioTranscriber):
 
         # Validate input
         self._validate_audio_file(audio_path)
+        operation = options.get('operation', 'transcribe')
+        if operation != 'transcribe':
+            from workers.audio.analysis import media_info, analysis_result
+            info = media_info(audio_path)
+            language = self.detect_language(audio_path) if operation == 'detect_language' else None
+            return analysis_result(operation=operation, info=info, language=language,
+                                   model=self.model_size, provider='openai-whisper')
 
         logger.info(f"Transcribing audio file: {audio_path}")
 
         # Extract options
-        language = options.get('language')  # None = auto-detect
         include_word_timestamps = options.get('include_word_timestamps', False)
-        temperature = options.get('temperature', 0.0)
-        beam_size = options.get('beam_size', 5)
 
         try:
             # Transcribe audio
             result = self.model.transcribe(
                 str(audio_path),
-                language=language,
-                word_timestamps=include_word_timestamps,
-                temperature=temperature,
-                beam_size=beam_size,
-                verbose=False
+                verbose=False,
+                **decoding_kwargs(options, 'openai-whisper'),
             )
 
             # Extract full text
@@ -113,6 +115,9 @@ class OpenAIWhisperTranscriber(AudioTranscriber):
                     'end': segment['end'],
                     'text': segment['text'].strip()
                 }
+                for key in ('id', 'seek', 'tokens', 'temperature', 'avg_logprob', 'compression_ratio', 'no_speech_prob'):
+                    if key in segment:
+                        segment_dict[key] = segment[key]
 
                 # Add word-level timestamps if available
                 if include_word_timestamps and 'words' in segment:
@@ -178,7 +183,7 @@ class OpenAIWhisperTranscriber(AudioTranscriber):
             audio = whisper.pad_or_trim(audio)
 
             # Make log-Mel spectrogram
-            mel = whisper.log_mel_spectrogram(audio).to(self.model.device)
+            mel = whisper.log_mel_spectrogram(audio, n_mels=self.model.dims.n_mels).to(self.model.device)
 
             # Detect language
             _, probs = self.model.detect_language(mel)

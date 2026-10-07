@@ -1,0 +1,11 @@
+# Upgrade a known local runtime without reinstalling its model/CUDA stack.
+# Normal fresh builds install these SDKs through requirements-base/remote.
+ARG BASE_IMAGE=ingestify-to-ai-api:latest
+FROM ${BASE_IMAGE}
+USER root
+COPY backend/requirements-datalake.txt /tmp/requirements-datalake.txt
+RUN pip install --no-cache-dir -r /tmp/requirements-datalake.txt \
+    && rm /tmp/requirements-datalake.txt
+COPY backend/shared/ /app/shared/
+COPY backend/workers/ /app/workers/
+COPY backend/api/ /app/api/

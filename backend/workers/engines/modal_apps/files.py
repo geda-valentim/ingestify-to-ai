@@ -20,9 +20,13 @@ LOCK_FILE = MODAL_APPS_DIR / "requirements-whisper-modal.lock"
 
 # Shipped into the image under /root/<path relative to the backend>, in this order
 SOURCE_FILES: List[Path] = [
+    BACKEND_DIR / "shared" / "__init__.py",
+    BACKEND_DIR / "shared" / "audio_decoding.py",
     WORKERS_DIR / "__init__.py",
     WORKERS_DIR / "audio" / "__init__.py",
     WORKERS_DIR / "audio" / "feature_extractor.py",
+    WORKERS_DIR / "audio" / "decoding_options.py",
+    WORKERS_DIR / "audio" / "analysis.py",
     WORKERS_DIR / "engines" / "__init__.py",
     WORKERS_DIR / "engines" / "whisper_core.py",
     MODAL_APPS_DIR / "__init__.py",

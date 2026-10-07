@@ -14,11 +14,15 @@ from shared.auth import get_current_active_user
 from shared.config import get_settings
 from shared.database import get_db, SessionLocal
 from shared.models import Job, JobStatus, LiveSession, User
+from shared.datalake.schemas import Destination
+from shared.datalake import service as datalake_service
 from shared.redis_client import get_redis_client
 from shared.elasticsearch_client import get_es_client
 from shared.tags import set_job_tags
 from shared.live.protocol import AudioClock, LiveError, control, RATE, TERMINAL
 from shared.live.store import LiveStore
+from shared.live.capabilities import LiveCapabilities, LiveOptions, worker_languages
+from shared.job_configuration import save_configuration, job_configuration
 from shared.live.lifecycle import available, transition, terminate, sweep
 from shared.live.persistence import finish_live
 from api.deps import get_owned_job
@@ -45,8 +49,10 @@ class CreateSession(BaseModel):
     folder_id: Optional[str] = None
     name: str = Field('Transcrição ao vivo', min_length=1, max_length=1000)
     tags: list[str] = Field(default_factory=list)
-    language: Literal['pt'] = 'pt'
+    language: str = Field('pt', pattern=r'^[a-z]{2,3}$')
+    options: LiveOptions = Field(default_factory=LiveOptions)
     audio: AudioFormat = Field(default_factory=AudioFormat)
+    datalake: Optional[Destination] = None
 
 
 def get_store():
@@ -66,6 +72,27 @@ def unavailable(code):
     raise HTTPException(503, detail={'code': code}, headers={'Retry-After': '5'})
 
 
+@router.get('/capabilities', response_model=LiveCapabilities)
+def get_live_capabilities(user: User = Depends(get_current_active_user)):
+    settings = get_settings()
+    try:
+        worker = get_store().readiness()
+    except Exception:
+        worker = None
+    return LiveCapabilities(enabled=settings.live_transcription_enabled,
+        ready=bool(settings.live_transcription_enabled and worker and worker.get('ready')),
+        model=worker.get('model', settings.whisper_model) if worker else settings.whisper_model,
+        languages=worker_languages(worker), options_supported=bool(worker and worker.get('options_protocol') == 1),
+        max_duration_seconds=settings.live_max_duration_seconds)
+
+
+def validate_session_options(body, worker):
+    if body.language not in worker_languages(worker):
+        raise HTTPException(422, 'Idioma não suportado pelo worker de transcrição ao vivo')
+    if body.options.model_fields_set and worker.get('options_protocol') != 1:
+        unavailable('LIVE_OPTIONS_UPGRADE_REQUIRED')
+
+
 @router.post('', status_code=201)
 def create_session(body: CreateSession, request: Request, response: Response,
                    user: User = Depends(get_current_active_user), db: Session = Depends(get_db)):
@@ -73,25 +100,47 @@ def create_session(body: CreateSession, request: Request, response: Response,
     fields = LocationFields(body.project, body.project_id, body.folder, body.folder_id)
     plan = prepare_upload_location(db, user, request, fields)
     tags = parse_tags_or_422(body.tags)
+    if body.datalake is not None:
+        from api.datalake_routes import prepare_body_destination
+        prepare_body_destination(db, user, body.datalake)
     if not settings.live_transcription_enabled:
         unavailable('LIVE_DISABLED')
     if len(settings.live_internal_token) < 32 or not available(db):
         unavailable('LIVE_NOT_READY')
+    try:
+        index_ready = get_es_client().job_results_write_ready()
+    except Exception:
+        index_ready = False
+    if not index_ready:
+        unavailable('LIVE_INDEX_UNAVAILABLE')
     store, cache = get_store(), get_redis_client()
     job_id, committed = str(uuid.uuid4()), False
     generation = None
+    admission_tickets = []
     try:
+        from shared.engine_control.admission import acquire
+        admission_tickets = acquire('live-transcription', 'live:' + job_id)
         lease, worker = store.reserve(job_id)
         generation = lease['generation']
+        validate_session_options(body, worker)
         location = resolve_upload_location(db, user, plan, '/transcribe/live/sessions')
         job = Job(id=job_id, user_id=user.id, project_id=location.project_id, folder_id=location.folder_id,
             name=body.name, filename='live.pcm', source_type='audio', job_type='MAIN',
             mime_type='application/octet-stream', status=JobStatus.PENDING)
         db.add(job)
+        try:
+            datalake_service.bind_destination(db, job, body.datalake, source_type='live')
+        except ValueError as exc:
+            from shared.datalake.partitioning import PartitionError
+            if isinstance(exc, PartitionError):
+                raise HTTPException(422, str(exc)) from None
+            raise
         db.flush()
         set_job_tags(job, tags)
         db.add(LiveSession(job_id=job_id, state='created', backend=worker['backend'], model=worker['model'],
             language=body.language, worker_id=lease['worker_id'], generation=generation, audio_samples=0))
+        save_configuration(db, job, operation='live_transcribe', provider='faster-whisper', model=worker['model'],
+            options={'language': body.language, 'options': body.options.model_dump(mode='json')})
         db.commit()
         committed = True
         if not cache.set_job_status(job_id, 'main', 'pending', name=body.name):
@@ -105,6 +154,8 @@ def create_session(body: CreateSession, request: Request, response: Response,
                 'max_duration_seconds': settings.live_max_duration_seconds}
     except Exception as exc:
         db.rollback()
+        from shared.engine_control.admission import release
+        release(admission_tickets)
         if generation is not None:
             if committed:
                 terminate(job_id, 'failed', 'LIVE_ADMISSION_FAILED', store, cache, generation)
@@ -121,7 +172,7 @@ def session_status(job_id: str, user: User = Depends(get_current_active_user),
     live = live_owned(job_id, owned_job, db)
     return {'job_id': job_id, 'state': live.state, 'duration_seconds': live.audio_samples / RATE,
             'backend': live.backend, 'model': live.model, 'language': live.language,
-            'error_code': live.error_code, 'ended_at': live.ended_at}
+            'error_code': live.error_code, 'ended_at': live.ended_at, 'configuration': job_configuration(owned_job)}
 
 
 @router.delete('/{job_id}')
@@ -210,6 +261,8 @@ async def live_stream(ws: WebSocket, job_id: str):
             if not job or not owner or not owner.is_active or job.user_id != binding['user_id'] or not live or live.generation != generation or live.state != 'created':
                 raise LiveError('LIVE_SESSION_GONE', 4404)
             model_name, language = live.model, live.language
+            configuration = job_configuration(job)
+            session_options = configuration["options"].get("options", {}) if configuration else {}
         if not await asyncio.to_thread(store.renew, job_id, generation, True):
             raise LiveError('LIVE_INVALID_TICKET', 4401)
         await asyncio.to_thread(transition, job_id, generation, ['created'], 'streaming')
@@ -221,7 +274,7 @@ async def live_stream(ws: WebSocket, job_id: str):
             additional_headers={'X-Live-Token': settings.live_internal_token},
             max_size=65536, max_queue=10, write_limit=16384, open_timeout=5,
             ping_interval=10, ping_timeout=10) as worker:
-            await worker.send(__import__('json').dumps({'job_id': job_id, 'generation': generation}))
+            await worker.send(__import__('json').dumps({'job_id': job_id, 'generation': generation, 'language': language, 'options': session_options}))
 
             async def client_input():
                 while True:
@@ -287,7 +340,7 @@ async def live_stream(ws: WebSocket, job_id: str):
                         result = {'text': text_result, 'segments': segments, 'language': language,
                             'duration': clock.samples / RATE, 'word_count': len(text_result.split()),
                             'char_count': len(text_result), 'model': model_name,
-                            'provider': 'faster-whisper', 'device': 'cuda'}
+                            'provider': 'faster-whisper', 'device': 'cuda', 'configuration': configuration}
                         persistence = asyncio.create_task(asyncio.to_thread(finish_live, job_id, generation, result,
                             store, cache, get_es_client(), event['inference_seconds'], worker_compute_type))
                         try:

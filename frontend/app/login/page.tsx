@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { useMutation } from "@tanstack/react-query";
 import { authApi } from "@/lib/api";
+import { useRegistrationSettings } from "@/lib/use-registration-settings";
 import { useAuthStore } from "@/lib/store/auth";
 import { consumeExpiredFlag, safeNextPath } from "@/lib/session";
 import { formatApiError } from "@/lib/utils";
@@ -22,6 +23,7 @@ import {
 import { AlertCircle, Clock, Loader2 } from "lucide-react";
 
 export default function LoginPage() {
+  const registration = useRegistrationSettings();
   const router = useRouter();
   const setAuth = useAuthStore((state) => state.setAuth);
   const [username, setUsername] = useState("");
@@ -125,7 +127,7 @@ export default function LoginPage() {
                 "Sign In"
               )}
             </Button>
-            <p className="text-sm text-center text-muted-foreground">
+            {!registration.isError && registration.data?.signup_enabled && <p className="text-sm text-center text-muted-foreground">
               Don&apos;t have an account?{" "}
               <Link
                 href="/register"
@@ -133,7 +135,7 @@ export default function LoginPage() {
               >
                 Sign up
               </Link>
-            </p>
+            </p>}
           </CardFooter>
         </form>
       </Card>

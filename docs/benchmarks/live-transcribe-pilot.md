@@ -70,7 +70,7 @@ de **confirmados**, não ausência de omissões em relação ao áudio.
 Gates ainda pendentes: três replays completos aquecidos e um replay completo após início frio na versão
 final; corpus humano de pelo menos 20 trechos para WER/timestamps; comparação Voxtral
 no mesmo corpus/configuração; concorrência planejada com workloads de produção;
-integração de finalização em MySQL/MinIO/Elasticsearch reais e proxy WSS do ambiente alvo. Nenhum desses
+integração de finalização em MySQL/MinIO/Elasticsearch reais e proxy WSS do ambiente alvo (piloto de desenvolvimento validado abaixo). Nenhum desses
 gates será marcado como aprovado com base no baseline gerado por máquina.
 
 
@@ -87,3 +87,37 @@ live cobre indexação antes do commit, cancel/DELETE/geração/owner e preserva
 arquivo. TypeScript, build Next de produção e seis cenários Chromium passaram. A captura
 até a finalização também passou no standalone equivalente ao Docker, com o worklet
 public copiado. Cinco testes do resampler/worklet cobrem 16/44,1/48 kHz e cauda.
+
+## Piloto publicado em dev.ingestify.ai
+
+Em 2026-10-05, ativamos explicitamente o piloto de desenvolvimento com capacidade
+de uma sessão, turbo/CUDA/float16 e migration 0005 presente. O replay público
+usa HTTPS/WSS pelo Cloudflare e os serviços reais MySQL, Redis, MinIO e
+Elasticsearch deste servidor. Os dados de teste ficam no projeto do operador;
+credenciais, áudio e texto não entram no Git.
+
+Os primeiros replays falharam com `LIVE_BACKPRESSURE`/`LIVE_FRAME_RATE`. Profiling
+mostrou a thread principal da API bloqueada em `health_check → inspect.stats →
+Kombu poll`, enquanto o decoder ficava ocioso. O endpoint de saúde agora roda
+no thread pool do FastAPI; limites de protocolo, fila e backlog foram preservados.
+Um teste de regressão mantém a consulta Celery bloqueada e verifica que outra
+requisição continua sendo atendida. Ele e os 30 testes live passaram.
+
+| Replay público após a correção | Medida |
+|---|---:|
+| Áudio enviado a 1× | 30 s / 150 frames |
+| Primeira legenda desde captura | 0,950 s |
+| Atraso confirmado p95, timestamps do modelo | 1,517 s |
+| Backlog máximo | 0,2 s |
+| Tempo de inferência / RTF | 10,868 s / 0,362 |
+| Finalização | 0,815 s |
+
+A sessão emitiu `session.completed`; o JSON durável corresponde aos 32 segmentos
+finais do WebSocket. Os quatro downloads JSON/TXT/SRT/VTT retornaram HTTP 200.
+O fluxo de microfone no Chromium também concluiu pelo HTTPS público, com fonte
+de áudio local fornecida ao dispositivo de captura do navegador: contexto seguro,
+POST 201, socket WSS, 43 frames binários, dez segmentos finais e um
+`session.completed`, sem erros JavaScript. O navegador executou a UI e o worklet
+reais; nenhuma resposta de API foi simulada.
+Este replay valida o caminho publicado e a persistência do piloto; os gates
+de qualidade humana, repetição de replays longos e concorrência continuam pendentes.

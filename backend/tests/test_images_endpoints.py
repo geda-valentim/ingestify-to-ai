@@ -163,7 +163,9 @@ class FakeMinIO:
 
     def __init__(self, fail=False):
         self.bucket_uploads = "ingestify-uploads"
+        self.bucket_results = "ingestify-results"
         self.uploads = []
+        self.objects = {}
         self._fail = fail
 
     def upload_file(self, bucket_name, object_name, file_data=None, content_type=None, **kw):
@@ -177,7 +179,11 @@ class FakeMinIO:
                 "content_type": content_type,
             }
         )
+        self.objects[object_name] = file_data
         return object_name
+
+    def download_file(self, bucket_name, object_name):
+        return self.objects[object_name]
 
 
 # ---------------------------------------------------------------------------
@@ -391,6 +397,48 @@ def _post_multipart(app, path, fields=None, file_field=None, user=None):
 
 def _png_upload(filename="foto.png"):
     return ("file", filename, PNG_BYTES, "image/png")
+
+
+@pytest.mark.parametrize("failure", ["configuration", "commit"])
+def test_image_persistence_failure_never_dispatches_or_creates_cache_only_job(
+    app, db, users, dispatch, no_redis, monkeypatch, failure,
+):
+    from shared.models import Project, JobConfiguration
+    import shared.job_configuration as configuration
+    project = Project(id="durable-image-project", user_id=users.id, name="Durable images", name_key="durable images")
+    db.add(project)
+    db.commit()
+    def unavailable(*args, **kwargs):
+        raise RuntimeError("Database unavailable")
+    if failure == "configuration":
+        monkeypatch.setattr(configuration, "save_configuration", unavailable)
+    else:
+        monkeypatch.setattr(db, "commit", unavailable)
+    persisted = []
+    monkeypatch.setattr(image_routes, "_persist_image", lambda *args: persisted.append(args))
+    response = _post_json(app, "/images/describe", {
+        "image_base64": PNG_B64, "project_id": project.id,
+    }, user=users)
+    assert response.status_code == 503
+    assert response.detail["error_code"] == "JOB_PERSISTENCE_UNAVAILABLE"
+    assert not dispatch.calls and not persisted
+    assert db.query(Job).count() == 0 and db.query(JobConfiguration).count() == 0
+    assert no_redis.client.keys("job:*") == []
+
+
+def test_image_configuration_is_durable_even_when_cache_is_unavailable(
+    app, db, users, dispatch, monkeypatch,
+):
+    from shared.models import JobConfiguration
+    class UnavailableCache:
+        def set_job_status(self, **kwargs):
+            raise RuntimeError("Redis cache unavailable")
+    monkeypatch.setattr(image_routes, "get_redis_client", lambda: UnavailableCache())
+    response = _post_json(app, "/images/describe", {"image_base64": PNG_B64}, user=users)
+    assert response.status_code == 200
+    assert len(dispatch.calls) == 1
+    saved = db.query(JobConfiguration).one()
+    assert saved.job_id == response.json()["job_id"]
 
 
 # ---------------------------------------------------------------------------
@@ -682,7 +730,7 @@ class TestOcrHappyPath:
 # ---------------------------------------------------------------------------
 
 @pytest.fixture
-def eager_vision(monkeypatch, fake_redis):
+def eager_vision(monkeypatch, fake_redis, db):
     """
     Run the REAL Celery task in-process, backed by the stub provider.
 
@@ -704,6 +752,8 @@ def eager_vision(monkeypatch, fake_redis):
     from shared.config import get_settings
     from workers.celery_app import celery_app
     from workers.vision.factory import reset_image_describer
+    from workers import vision_tasks
+    monkeypatch.setattr(vision_tasks, "SessionLocal", sessionmaker(bind=db.get_bind()))
 
     # The task imports get_redis_client from the module at call time, so this
     # is the seam that keeps the status/result writes off a live server.
@@ -792,6 +842,42 @@ class TestRouteAndTaskAgree:
         stored = eager_vision.get_job_result(job_id)
         assert stored["description"] == "A stub description of a 1x1 image."
         assert stored["job_id"] == job_id
+        assert stored["markdown"] == stored["description"]
+        assert stored["image"]["operation"] == "describe"
+        assert stored["image"]["image_base64"] == PNG_B64
+        db.expire_all()
+        job = db.get(Job, job_id)
+        assert job.status.value == "completed"
+        assert job.progress == 100
+        assert job.minio_result_path == f"images/{job_id}/result.json"
+
+    @pytest.mark.parametrize("operation,task", [("describe", "<CAPTION>"), ("ocr", "<OCR_WITH_REGION>")])
+    def test_job_result_survives_cache_expiry(self, app, db, users, eager_vision, minio, monkeypatch, operation, task):
+        from api import routes
+        app.include_router(routes.router)
+        monkeypatch.setattr(routes, "get_redis_client", lambda: eager_vision)
+        monkeypatch.setattr(routes, "get_minio_client", lambda: minio)
+        monkeypatch.setattr("shared.live.lifecycle.available", lambda session: False)
+        def no_search():
+            raise AssertionError("Image results must preserve their structured payload without search")
+        monkeypatch.setattr(routes, "get_es_client", no_search)
+        body = {"image_base64": PNG_B64}
+        if operation == "describe":
+            body["task"] = task
+        uploaded = _post_json(app, f"/images/{operation}", body, user=users)
+        assert uploaded.status_code == 200
+        job_id = uploaded.json()["job_id"]
+        for expired in (False, True):
+            if expired:
+                eager_vision.client.delete(f"job:{job_id}:result", f"job:{job_id}:status")
+            response = _request(app, "GET", f"/jobs/{job_id}/result", user=users)
+            assert response.status_code == 200, response.json()
+            result = response.json()["result"]
+            assert result["image"]["image_base64"] == PNG_B64
+            assert result["image"]["operation"] == operation
+            assert result["image"]["task"] == task
+            assert result["metadata"]["size_bytes"] == len(PNG_BYTES)
+            assert bool(result["image"]["lines"]) == (operation == "ocr")
 
     def test_a_describer_failure_travels_back_as_its_own_status(
         self, app, db, users, eager_vision, monkeypatch
@@ -1635,3 +1721,92 @@ class TestTheHeartbeatAndTheRouteAgree:
         # One synchronous publish at start (so a request arriving immediately
         # after boot does not read an empty key), then the loop.
         assert len(published) >= 3
+
+
+class TestGeneralVisionAnalysis:
+    from shared.vision_capabilities import VISION_TASKS
+
+    @pytest.mark.parametrize("task", list(VISION_TASKS))
+    @pytest.mark.parametrize("multipart", [False, True])
+    def test_every_advertised_task_reaches_the_worker(self, app, db, users, eager_vision, task, multipart):
+        from shared.vision_capabilities import VISION_TASKS
+        from shared.schemas import ConversionResult
+        options = {"task": task, "wait": True, "generation": {"max_new_tokens": 128, "num_beams": 1}}
+        input_kind = VISION_TASKS[task][2]
+        if input_kind == "text":
+            options["text_input"] = "a red rectangle"
+        elif input_kind == "region":
+            options["region"] = [0.1, 0.2, 0.8, 0.9]
+        if multipart:
+            fields = {k: json.dumps(v) if isinstance(v, (dict, list)) else str(v).lower() if isinstance(v, bool) else v for k, v in options.items()}
+            response = _post_multipart(app, "/images/analyze/upload", fields=fields, file_field=_png_upload(), user=users)
+        else:
+            response = _post_json(app, "/images/analyze", {"image_base64": PNG_B64, **options}, user=users)
+        assert response.status_code == 200, response.json()
+        result = response.json()
+        assert result["task"] == task
+        assert result["image_base64"] == PNG_B64
+        assert result["request"]["generation"]["max_new_tokens"] == 128
+        stored = eager_vision.get_job_result(result["job_id"])
+        validated = ConversionResult(**stored)
+        assert validated.image.operation == "analyze"
+        assert validated.image.task == task
+        assert validated.image.request.task == task
+        assert (validated.image.request.region is not None) == (input_kind == "region")
+        assert (bool(result["regions"])) == (VISION_TASKS[task][1] != "text")
+        assert (bool(validated.image.lines)) == (VISION_TASKS[task][1] == "ocr")
+        if VISION_TASKS[task][1] in ("polygons", "mixed"):
+            assert any(region["polygons"] for region in result["regions"])
+
+    @pytest.mark.parametrize("multipart", [False, True])
+    def test_default_request_returns_202_without_waiting(self, app, db, users, dispatch, monkeypatch, multipart):
+        async def no_wait(*args):
+            raise AssertionError("Asynchronous image requests must not wait for inference")
+        monkeypatch.setattr(image_routes, "_wait_for_result", no_wait)
+        if multipart:
+            response = _post_multipart(app, "/images/analyze/upload", {"task": "<OD>"}, file_field=_png_upload(), user=users)
+        else:
+            response = _post_json(app, "/images/analyze", {"image_base64": PNG_B64, "task": "<OD>"}, user=users)
+        assert response.status_code == 202, response.json()
+        assert response.json()["status"] == "queued"
+        assert db.get(Job, response.json()["job_id"]).user_id == users.id
+        assert dispatch.calls[0]["kind"] == "analyze"
+        assert dispatch.calls[0]["options"]["task"] == "<OD>"
+
+    @pytest.mark.parametrize("invalid", [
+        {"task": "<UNKNOWN>"},
+        {"task": "<CAPTION_TO_PHRASE_GROUNDING>"},
+        {"task": "<REFERRING_EXPRESSION_SEGMENTATION>", "text_input": " "},
+        {"task": "<OD>", "text_input": "irrelevant"},
+        {"task": "<REGION_TO_CATEGORY>"},
+        {"task": "<REGION_TO_OCR>", "region": [0, 0, 0, 1]},
+        {"task": "<REGION_TO_DESCRIPTION>", "region": [-0.1, 0, 1, 1]},
+        {"task": "<REGION_TO_SEGMENTATION>", "region": [0, 0, 1.1, 1]},
+        {"task": "<REGION_TO_SEGMENTATION>", "region": [0, 0, 0.5]},
+        {"task": "<OCR>", "region": [0, 0, 1, 1]},
+        {"generation": {"max_new_tokens": 0}},
+        {"generation": {"max_new_tokens": 4097}},
+        {"generation": {"num_beams": 9}},
+        {"generation": {"temperature": 0}},
+        {"generation": {"unknown_option": True}},
+    ])
+    @pytest.mark.parametrize("multipart", [False, True])
+    def test_invalid_options_create_no_job(self, app, db, users, dispatch, invalid, multipart):
+        if multipart:
+            fields = {k: json.dumps(v) if isinstance(v, (dict, list)) else v for k, v in invalid.items()}
+            response = _post_multipart(app, "/images/analyze/upload", fields=fields, file_field=_png_upload(), user=users)
+        else:
+            response = _post_json(app, "/images/analyze", {"image_base64": PNG_B64, **invalid}, user=users)
+        assert response.status_code == 422, response.json()
+        assert db.query(Job).count() == 0
+        assert not dispatch.calls
+
+    @pytest.mark.parametrize("path", ["/images/analyze", "/images/analyze/upload"])
+    def test_anonymous_analysis_is_rejected(self, app, db, dispatch, path):
+        if path.endswith("/upload"):
+            response = _post_multipart(app, path, file_field=_png_upload())
+        else:
+            response = _post_json(app, path, {"image_base64": PNG_B64})
+        assert response.status_code == 401
+        assert db.query(Job).count() == 0
+        assert not dispatch.calls

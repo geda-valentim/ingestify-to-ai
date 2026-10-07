@@ -128,6 +128,7 @@ def test_list_projects_with_counts_and_folders(client, world):
     assert a == {
         "id": world["a"].id, "name": "Cliente A", "description": None, "archived": False,
         "job_count": 4, "root_job_count": 1, "failed_count": 1, "active_count": 1,
+        "completed_count": 2, "partial_count": 0, "cancelled_count": 0, "total_bytes": 0,
         "last_job_at": "2026-01-05T00:00:00",
         "api_keys": [{"id": a["api_keys"][0]["id"], "name": "cliente-audio"}],
         "folders": [
@@ -309,3 +310,12 @@ def test_patch_someone_elses_key_is_404(client, db, world):
     db.add(theirs)
     db.commit()
     assert client.patch(f"/api-keys/{theirs.id}", json={"project_id": world["a"].id}).status_code == 404
+
+
+def test_partial_images_have_their_own_project_count(client, db):
+    p = project(db, 'Full images')
+    job(db, 'full-partial', proj=p, status=JobStatus.PARTIAL)
+    job(db, 'full-complete', proj=p, status=JobStatus.COMPLETED)
+    item = client.get('/projects').json()['projects'][0]
+    assert item['partial_count'] == 1 and item['completed_count'] == 1
+    assert item['job_count'] == 2 and item['active_count'] == 0

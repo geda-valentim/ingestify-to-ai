@@ -13,6 +13,7 @@ reports device "cpu".
 """
 
 import logging
+import json
 import socket
 import subprocess
 import threading
@@ -58,6 +59,9 @@ def heartbeat_fields(features: List[str]) -> Dict[str, str]:
     fields = {"device": "cuda" if gpu else "cpu", "updated_at": f"{time.time():.0f}"}
     if gpu:
         fields.update(gpu)
+    if 'document_conversion' in features:
+        from shared.document_readiness import worker_readiness
+        fields['document_readiness'] = json.dumps(worker_readiness(), separators=(',', ':'))
     return fields
 
 

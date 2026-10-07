@@ -29,6 +29,8 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from api.admin_routes import require_admin
+from api.access_deps import access_session, scoped_engine, scoped_features
+from shared.access import policy
 from shared.config import get_settings
 from shared.database import get_db
 from shared.engines.capacity import (
@@ -88,12 +90,14 @@ def _capacity_error(e: CapacityError) -> HTTPException:
 
 
 @router.get("/engine-adapters", summary="Engine adapters, their GPUs and limits")
-async def list_engine_adapters(admin_user=Depends(require_admin)) -> List[Dict[str, Any]]:
+async def list_engine_adapters(
+    admin_user=Depends(access_session), db: Session = Depends(get_db)
+) -> List[Dict[str, Any]]:
     features = {
         name: {"title": f.title, "vram_per_execution_gb": default_vram_gb(name, settings.vision_model_id)}
         for name, f in FEATURES.items()
     }
-    return [
+    views = [
         {
             "type": "local",
             "features": sorted(ADAPTER_FEATURES["local"]),
@@ -118,19 +122,43 @@ async def list_engine_adapters(admin_user=Depends(require_admin)) -> List[Dict[s
             "vram_reserve_gb": DEFAULT_VRAM_RESERVE_GB,
         },
     ]
+    from shared.engine_control.registry import descriptors
+    known={view['type'] for view in views}
+    for descriptor in descriptors():
+        if descriptor['type'] in known:
+            continue
+        supported=set(descriptor['features'])&set(FEATURES)
+        views.append(dict(type=descriptor['type'],features=sorted(supported),
+            feature_info={key:value for key,value in features.items() if key in supported},
+            gpu_options=descriptor.get('gpu_options','Resources selected by the adapter'),
+            max_executions_per_worker=descriptor.get('max_executions_per_worker',1),
+            vram_reserve_gb=descriptor.get('vram_reserve_gb',0)))
+    if not policy.enabled():
+        return views
+    return policy.visible_catalog(db, admin_user.id, views, "adapter")
 
 
 @router.get("/engines", summary="List engines")
-async def list_engines(admin_user=Depends(require_admin), db: Session = Depends(get_db)) -> List[Dict[str, Any]]:
-    live = _alive_by_feature()
-    engines = db.query(Engine).order_by(Engine.is_system.desc(), Engine.slug).all()
-    return [engine_view(db, e, alive_by_feature=live, vision_model_id=settings.vision_model_id,
-                        fingerprint_of=fingerprint_of) for e in engines]
+async def list_engines(
+    admin_user=Depends(access_session), db: Session = Depends(get_db)
+) -> List[Dict[str, Any]]:
+    engines = (
+        policy.scoped_query(db, admin_user.id, db.query(Engine), "engine")
+        .order_by(Engine.is_system.desc(), Engine.slug)
+        .all()
+    )
+    return [
+        _scoped_view(db, e, admin_user.id)
+        for e in engines
+        if policy.allowed(db, admin_user.id, "engines.read", engine=e)
+    ]
 
 
 @router.get("/engines/{engine_id}", summary="One engine")
-async def get_engine(engine_id: str, admin_user=Depends(require_admin), db: Session = Depends(get_db)) -> Dict[str, Any]:
-    return _view(db, _engine_or_404(db, engine_id))
+async def get_engine(
+    engine_id: str, admin_user=Depends(access_session), db: Session = Depends(get_db)
+) -> Dict[str, Any]:
+    return _scoped_view(db, scoped_engine(db, engine_id, admin_user.id), admin_user.id)
 
 
 @router.get("/gpus", summary="Physical GPUs: declared vs detected, VRAM budgeted and used")
@@ -296,12 +324,18 @@ def _remote_worker_alive() -> bool:
         return False
 
 
-def _send_test(engine_id: str, timeout: float = 30.0) -> Dict[str, Any]:
+def _send_test(
+    engine_id: str, timeout: float = 30.0, authorization=None
+) -> Dict[str, Any]:
     """Ask worker-remote (the only holder of the private keys) to test an engine, and wait for it"""
     from workers.celery_app import celery_app
 
-    result = celery_app.send_task("workers.engines.remote_tasks.test_engine", args=[engine_id],
-                                  queue=settings.remote_ctl_queue, expires=timeout)
+    result = celery_app.send_task(
+        "workers.engines.remote_tasks.test_engine",
+        args=[engine_id, authorization],
+        queue=settings.remote_ctl_queue,
+        expires=timeout,
+    )
     try:
         return result.get(timeout=timeout, propagate=True)
     finally:
@@ -323,7 +357,10 @@ async def test_engine(engine_id: str, request: Request, admin_user=Depends(requi
                 engine=engine, before=None, after=None)
     db.commit()
     try:
-        report = await run_in_threadpool(_send_test, engine.id)
+        from shared.access.legacy import accept
+
+        authorization = accept(db, admin_user.id, "test", [engine])
+        report = await run_in_threadpool(_send_test, engine.id, 30.0, authorization)
     except Exception as e:
         logger.warning(f"[ADMIN] Test of engine {engine.slug} did not answer: {type(e).__name__}")
         raise HTTPException(status_code=504, detail="worker-remote did not answer within 30 s")
@@ -385,9 +422,14 @@ async def put_engine_budget(engine_id: str, body: BudgetUpdate, request: Request
 
 
 @router.put("/engines/{engine_id}/credentials", summary="Replace an engine's credentials (sealed, write-only)")
-async def put_engine_credentials(engine_id: str, body: CredentialsUpdate, request: Request,
-                                 admin_user=Depends(require_admin_session), db: Session = Depends(get_db)) -> Dict[str, Any]:
-    engine = _engine_or_404(db, engine_id)
+async def put_engine_credentials(
+    engine_id: str,
+    body: CredentialsUpdate,
+    request: Request,
+    admin_user=Depends(access_session),
+    db: Session = Depends(get_db),
+) -> Dict[str, Any]:
+    engine = scoped_engine(db, engine_id, admin_user.id)
     if not settings.engine_secrets_public_key:
         raise HTTPException(status_code=409, detail="ENGINE_SECRETS_PUBLIC_KEY is not set: credentials cannot be stored")
     _require_password(admin_user, body.current_password)
@@ -400,22 +442,28 @@ async def put_engine_credentials(engine_id: str, body: CredentialsUpdate, reques
     except store.EngineStateError as e:
         raise _state_error(e)
     logger.warning(f"[ADMIN] {admin_user.id} replaced the credentials of engine {engine.slug}")
-    return _view(db, engine)
+    return _scoped_view(db, engine, admin_user.id)
 
 
 @router.delete("/engines/{engine_id}/credentials", summary="Forget an engine's credentials")
-async def delete_engine_credentials(engine_id: str, body: CredentialsDelete, request: Request,
-                                    admin_user=Depends(require_admin_session),
-                                    db: Session = Depends(get_db)) -> Dict[str, Any]:
-    engine = _engine_or_404(db, engine_id)
+async def delete_engine_credentials(
+    engine_id: str,
+    body: CredentialsDelete,
+    request: Request,
+    admin_user=Depends(access_session),
+    db: Session = Depends(get_db),
+) -> Dict[str, Any]:
+    engine = scoped_engine(db, engine_id, admin_user.id)
     _require_password(admin_user, body.current_password)
     try:
         store.clear_credentials(db, engine, version=body.version, actor_user_id=str(admin_user.id),
                                 auth_method="jwt", ip=_ip(request))
     except VersionConflict as e:
         raise HTTPException(status_code=409, detail=str(e))
+    except store.EngineStateError as e:
+        raise _state_error(e)
     logger.warning(f"[ADMIN] {admin_user.id} removed the credentials of engine {engine.slug}")
-    return _view(db, engine)
+    return _scoped_view(db, engine, admin_user.id)
 
 
 # --- benchmarks, learned speed, spend and every account at once (slices 4b/4c) ----------------
@@ -472,7 +520,15 @@ async def reconcile_engine(engine_id: str, request: Request, admin_user=Depends(
                 engine=engine, before=None, after=None)
     db.commit()
     try:
-        out = await run_in_threadpool(_send_control, "workers.engines.remote_tasks.reconcile_one", [engine.id], 90.0)
+        from shared.access.legacy import accept
+
+        authorization = accept(db, admin_user.id, "reconcile", [engine])
+        out = await run_in_threadpool(
+            _send_control,
+            "workers.engines.remote_tasks.reconcile_one",
+            [engine.id, authorization],
+            90.0,
+        )
     except Exception as e:
         logger.warning(f"[ADMIN] Reconcile of engine {engine.slug} did not answer: {type(e).__name__}")
         raise HTTPException(status_code=504, detail="worker-remote did not answer within 90 s")
@@ -494,8 +550,80 @@ async def test_all_engines(request: Request, admin_user=Depends(require_admin_se
     db.commit()
     timeout = min(30.0 * len(remote), 170.0)
     try:
-        out = await run_in_threadpool(_send_control, "workers.engines.remote_tasks.test_all_engines", [], timeout)
+        from shared.access.legacy import accept
+
+        authorization = accept(db, admin_user.id, "test", remote)
+        out = await run_in_threadpool(
+            _send_control,
+            "workers.engines.remote_tasks.test_all_engines",
+            [[e.id for e in remote], authorization],
+            timeout,
+        )
     except Exception as e:
         logger.warning(f"[ADMIN] Test of all engines did not answer: {type(e).__name__}")
         raise HTTPException(status_code=504, detail=f"worker-remote did not answer within {timeout:.0f} s")
     return {"results": out}
+
+
+def _scoped_view(db, e, actor):
+    v = _view(db, e)
+    from shared.admin import is_effective_admin
+    from shared.models import User
+
+    if is_effective_admin(db.get(User, actor)):
+        return v
+    fs = scoped_features(db, e, actor, v["features"])
+    from shared.engine_control import service as control
+    from shared.engine_control.models import RuntimeProfile
+
+    safe = {}
+    for k, f in v["features"].items():
+        if k not in fs:
+            continue
+        applied = (
+            db.query(RuntimeProfile)
+            .filter_by(engine_id=e.id, feature=k)
+            .filter(RuntimeProfile.applied_at.isnot(None))
+            .order_by(RuntimeProfile.applied_at.desc())
+            .first()
+        )
+        runtime = applied.profile if applied else {"binding": f.get("binding", {})}
+        profile = (
+            control.source_profile(db, applied.source_profile_revision_id)
+            if applied
+            else None
+        )
+        if policy.allowed(
+            db,
+            actor,
+            "engines.read",
+            engine=e,
+            feature=k,
+            runtime=runtime,
+            profile=profile,
+        ):
+            safe[k] = f
+    v["features"] = safe
+    v["credentials"] = {}
+    v["credentials_updated_at"] = None
+    v["gpu_budget"] = []
+    v["config_error"] = None
+    # Only expose physical GPU identities allowed by a current read grant.
+    from shared.access.models import PolicyRevision
+
+    cs = [
+        db.get(PolicyRevision, g.policy_revision_id).constraints
+        for g in policy.grants(db, actor)
+        if "engines.read" in g.permissions
+        and policy._engine_matches(
+            db, e, db.get(PolicyRevision, g.policy_revision_id).constraints
+        )
+    ]
+    v["config"] = {
+        "gpus": [
+            g
+            for g in (e.config or {}).get("gpus", [])
+            if any(policy._in(g.get("uuid"), c["gpu_uuids"]) for c in cs)
+        ]
+    }
+    return v

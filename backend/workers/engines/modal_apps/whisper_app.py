@@ -81,6 +81,24 @@ class WhisperRunner:
         self.live = modal.Queue.from_name(protocol.LIVE_QUEUE, create_if_missing=True)
 
     @modal.method()
+    def control_probe(self) -> dict:
+        """Approved inference fixture; readiness is per actual model container."""
+        import tempfile
+        import wave
+        from pathlib import Path
+        from workers.engines.whisper_core import transcribe
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'readiness.wav'
+            with wave.open(str(path), 'wb') as f:
+                f.setnchannels(1); f.setsampwidth(2); f.setframerate(16000)
+                f.writeframes(b'\0\0' * 16000)
+            transcribe(self.model, path, {'language':'pt'}, model_name=protocol.MODEL_REPO)
+        # Parallel probes hold the instance briefly so one container cannot answer all N.
+        time.sleep(2)
+        return {'ready':True,'container_id':self.container_id,'fingerprint':FINGERPRINT,
+                'model_revision':protocol.MODEL_REVISION}
+
+    @modal.method()
     def transcribe(self, request: dict) -> dict:
         cold = self.cold_start_seconds if self.first_input else 0.0
         self.first_input = False

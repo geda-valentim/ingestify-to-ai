@@ -1,12 +1,22 @@
 # Conversão de documentos (Docling)
 
-> Verificado contra o código em 2026-10-05 (branch `main`).
+> Contratos dos endpoints revisados em 2026-10-06. Campos, modelos e autorização:
+> [referência completa da API](../api-reference.md). As datas abaixo também registram revisões da implementação/operação.
+
+> Contrato expandido e verificado contra o código em 2026-10-06.
 > Fonte da verdade: [backend/api/routes.py](../../backend/api/routes.py),
 > [backend/workers/tasks.py](../../backend/workers/tasks.py),
 > [backend/workers/converter.py](../../backend/workers/converter.py),
 > [backend/shared/pdf_splitter.py](../../backend/shared/pdf_splitter.py).
 
 ## O que faz
+
+Imagens de documento também podem usar Docling: JPEG, PNG, TIFF, BMP e WEBP,
+conforme `GET /documents/capabilities.image_extensions`. No `/convert`, escolha
+**Docling** em “Modelo para a imagem” para usar OCR, layout, tabelas,
+enriquecimentos e os formatos de exportação. O formulário inicia esse fluxo com
+o preset `quality`; as opções explícitas substituem o preset. Para descrição,
+detecção, segmentação ou OCR visual, escolha Florence-2. GIF utiliza Florence-2.
 
 Converte um documento (PDF, DOCX, HTML, PPTX, XLSX, …) em Markdown com o
 [Docling](https://github.com/docling-project/docling). A chamada devolve na hora um
@@ -33,7 +43,12 @@ Os dois endpoints exigem autenticação (`Authorization: Bearer <jwt>` **ou**
 | `folder` / `folder_id` | não | nenhuma | Nome (criado se não existir) ou ID de pasta do projeto; não envie ambos. Pastas têm um nível e o nome não aceita `/`. |
 | `name` | não | nome do arquivo | Nome amigável do job. |
 | `tags` | não | — | Tags separadas por vírgula (ver [tags.md](tags.md)). |
-| `docling_preset` | não | `fast` | `fast`, `balanced` ou `quality` (tabela abaixo). Qualquer outro valor cai nos defaults do `config.py`. |
+| `docling_preset` | não | `fast` | `fast`, `balanced` ou `quality`. Outro valor retorna `422`; opções explícitas substituem controles do preset. |
+| `conversion_options` | não | `{}` | JSON DocumentOptions: pipeline, formatos, exportações e limites. |
+| `datalake_connection_id` / `datalake_bucket` | juntos, se houver destino | — | Conexão própria e bucket permitido para entregar o resultado. |
+| `datalake_prefix` | não | vazio | Pasta do destino; não inclui o job ID. |
+| `datalake_partitioning` | não | herda conexão | JSON de estratégia; `mode=none` desativa partições. |
+| `datalake_partition_values` | não | mescla padrões | JSON de valores personalizados, incluindo contexto por conversa. |
 
 ```bash
 curl -X POST http://localhost:8000/upload \
@@ -61,22 +76,58 @@ curl -X POST http://localhost:8000/convert \
   -F "project=Documentos"
 ```
 
-Diferenças em relação ao `/upload` (comportamento atual, não necessariamente desejado):
+Os dois endpoints aceitam `docling_preset` e `conversion_options`. O mesmo contrato
+vale para importação de bucket via `POST /datalakes/import` (campos JSON).
 
-- `/convert` **não aceita `docling_preset`**: envia `options={}` ao worker, então vale a
-  configuração `DOCLING_*` do ambiente.
-- Os dois endpoints excluem jobs `FAILED` da deduplicação; reenviar o arquivo de um job
-  falho cria outro job (a regra compartilhada está em `api/projects_api.py`).
+### Controles e exportações nativas
+
+`GET /documents/capabilities` exige autenticação e retorna os 30 campos de
+`PdfPipelineOptions`, sete providers OCR e controles concretos VLM/classificação
+da versão instalada. O catálogo informa workers ativos, versões, dependências
+OCR e dos engines de enriquecimento, permissão de downloads automáticos e pesos padrão encontrados no cache.
+Dependência instalada não garante pesos baixados.
+
+| Campo de `conversion_options` | Uso |
+|---|---|
+| `pipeline` | OCR, tabelas/layout, texto do backend, imagens, classificação/descrição de figuras, fórmulas/código/gráficos, batches, fila e timeout. |
+| `formats` | Lista sem repetições: `markdown`, `json`, `html`, `txt`, `doclang`, `doctags`, `document_tokens`, `element_tree`, `vtt`. Padrão `["markdown"]`. |
+| `output_format` | Formato padrão de `/result`; deve estar em `formats`. |
+| `export_options` | Objeto por formato: imagens/tabelas, labels, páginas, conteúdo, anotações, precisão JSON e todos os parâmetros nativos publicados na referência. |
+| `page_range` | `[primeira, última]`, inclusivo, começando em 1; conserva os números originais no split. |
+| `max_num_pages` / `max_file_size` | Limites adicionais de páginas e bytes; verificados no original antes do fan-out. |
+| `raises_on_error` | Padrão `true`, encaminhado ao converter nativo. |
+
+```bash
+curl -X POST http://localhost:8000/upload \
+  -H "X-API-Key: $INGESTIFY_API_KEY" \
+  -F "file=@relatorio.pdf" -F "project=Documentos" \
+  -F 'conversion_options={"pipeline":{"force_backend_text":true},"formats":["markdown","html","json"],"output_format":"html","page_range":[2,4],"export_options":{"markdown":{"compact_tables":true},"html":{"split_page_view":true}}}'
+```
+
+Os controles PDF valem para PDF/imagens de documento; pipelines simples recebem
+os enriquecimentos compartilhados. Caminhos, executável Tesseract, acelerador,
+plugins/serviços remotos e execução de código remoto seguem a política do
+servidor. Campos geridos aparecem como `readOnly`; serviços remotos indisponíveis
+aparecem desabilitados no formulário. Engines como MLX/vLLM são desabilitados
+quando suas dependências estão ausentes nos workers; quantização exige
+bitsandbytes. Opções desconhecidas, inválidas, OCR ausente ou enriquecimento
+habilitado sem as dependências necessárias retornam `422` antes de gravar/enfileirar.
+Configurar um engine de um enriquecimento desativado não carrega esse modelo.
+`document_timeout` não pode ultrapassar o soft limit do worker. Um snapshot
+incompatível retorna `503`; regenere com `python -m shared.docling_catalog_generator`.
 
 ### Deduplicação por checksum
 
 Nos dois endpoints, quando há arquivo, a API calcula o SHA-256 enquanto grava o upload em
-disco. Se o mesmo usuário já tem um job `MAIN` não falho com o mesmo checksum **no mesmo
-projeto**, a resposta devolve o
+disco. Se o mesmo usuário já tem um job `MAIN` reutilizável com checksum, provider,
+versão e configuração resolvida iguais **no mesmo projeto**, a resposta devolve o
 `job_id` existente (com `message` "Arquivo já foi processado anteriormente…") e as tags
 enviadas são **adicionadas** ao job existente. A pasta original é preservada e trocar
-`docling_preset` no reenvio não reprocessa. Enviar para outro projeto cria uma conversão
-independente. Não há opção para forçar reprocessamento de um job não falho no mesmo projeto.
+`docling_preset`, pipeline ou exportações cria outro job quando a configuração muda.
+Jobs legados sem configuração gravada são reprocessados. Enviar para outro projeto cria uma conversão
+independente. Um destino datalake explícito cria novo job mesmo com checksum igual,
+para aplicar o destino e o contexto da solicitação. Sem destino explícito, o
+reaproveitamento continua valendo. Veja [datalakes.md](datalakes.md).
 
 O projeto vem do request ou, quando não há campo de projeto, da API key vinculada.
 Com JWT e API key juntos, vale o JWT e a vinculação da key não é usada. IDs de projetos
@@ -92,7 +143,7 @@ Definidos em `get_converter()` ([converter.py](../../backend/workers/converter.p
 | `fast` (padrão do `/upload`) | não | não | sim | PDFs digitais, só texto |
 | `balanced` | não | sim | sim | PDFs com figuras |
 | `quality` | sim | sim | sim | Documentos escaneados (bem mais lento) |
-| *(nenhum / inválido)* | `DOCLING_ENABLE_OCR` | `DOCLING_ENABLE_IMAGES` | `DOCLING_ENABLE_TABLE_STRUCTURE` | `/convert` e chamadas sem preset |
+| *(chamada interna sem preset)* | `DOCLING_ENABLE_OCR` | `DOCLING_ENABLE_IMAGES` | `DOCLING_ENABLE_TABLE_STRUCTURE` | Chamadas legadas ao worker; preset inválido na API retorna `422` |
 
 O preset é repassado do job MAIN para o split e para cada página.
 
@@ -116,17 +167,30 @@ curl "http://localhost:8000/jobs/$JOB_ID/pages/1/result" -H "X-API-Key: $INGESTI
 curl "http://localhost:8000/jobs/$JOB_ID/result" -H "X-API-Key: $INGESTIFY_API_KEY"
 ```
 
-`/result` responde JSON com `result.markdown` e `result.metadata`; não é download de
-texto Markdown puro. Documentos não geram VTT/SRT. Para PDF dividido, é possível ler
+`/result?format=markdown` retorna envelope JSON com Markdown, metadados, exportações
+e manifesto privado de imagens. Outros formatos solicitados retornam arquivos
+brutos; sem `format`, vale `output_format`. O VTT nativo pode ser vazio em documentos
+sem conteúdo temporal; SRT pertence ao fluxo de transcrição. Para PDF dividido, é possível ler
 cada página concluída antes do merge. Os números de página começam em 1. Antes do split,
 `/pages` pode retornar `404`; durante a criação, a lista pode estar incompleta e o
 `job_id` de uma página pode ser `null` — consulte de novo, sem inventar IDs.
 
 `GET /jobs/{id}/pages/{n}/pdf` retorna `{url, expires_in: 900, expires_at, ...}`.
-Abra a URL assinada diretamente, sem credenciais do Ingestify e sem alterar a query;
-ela expira em 15 minutos. PDF de uma página não é dividido e não tem esses jobs filhos.
+A URL assinada expira em 15 minutos. O navegador usa a rota autenticada
+`/jobs/{id}/pages/{n}/pdf/content` para carregar os bytes por HTTPS.
+PDF de uma página não é dividido e não tem esses jobs filhos.
 `POST /jobs/{id}/pages/{n}/retry` reprocessa uma página `failed` (até 3 tentativas
-manuais) e devolve o novo `page_job_id`; uma página falha impede o merge final.
+manuais), preserva a configuração original e devolve o novo `page_job_id`;
+uma página falha impede o merge final.
+
+Novos jobs gravam `job_configurations` antes do despacho. Resultados completos,
+exportações e imagens ficam em MinIO privado, inclusive por página. O merge usa
+os documentos estruturados preservados das páginas e aplica as exportações ao
+documento concatenado. Os caches podem expirar sem eliminar esses resultados.
+`image_mode=referenced` usa `/jobs/{id}/assets/{name}` ou
+`/jobs/{id}/pages/{n}/assets/{name}`, com autenticação. O front carrega imagens
+com o token e exibe HTML em iframe sandbox. O datalake recebe todas as exportações
+solicitadas e imagens com referências relativas; retries de entrega não fazem inferência.
 
 ## O que acontece por dentro
 
@@ -167,9 +231,8 @@ process_conversion (worker)
 - Ao concluir, os arquivos locais do job são apagados (`_remove_job_files`); o original
   continua no MinIO. Sobras de jobs que falharam são varridas pela task diária
   `cleanup_stale_files` (ver [storage-and-retention.md](storage-and-retention.md)).
-- Se o pacote `docling` não puder ser importado, o conversor devolve um Markdown
-  **MOCK** ("This is a **MOCK conversion**…") em vez de falhar. Útil em testes, perigoso
-  em produção: confira o log `Failed to import Docling` se o resultado parecer falso.
+- Se o pacote `docling` não puder ser importado, o conversor retorna erro e o job
+  falha. Resultados fictícios não são publicados.
 
 ### GPU
 
@@ -207,7 +270,7 @@ Variáveis lidas por [backend/shared/config.py](../../backend/shared/config.py):
   **não** enfileira a conversão (há um `TODO` em
   [monitoring.py](../../backend/workers/monitoring.py)). A página fica parada até um retry
   manual.
-- Metadados do resultado: `pages` vem `null` para documentos não divididos; `title` é o
+- Metadados do resultado: `pages` vem do documento nativo (pode ser `null` em formatos sem páginas); `title` é o
   nome do arquivo; `author` é sempre `null`; no merge, `size_bytes` é `0`.
 - O parâmetro `callback_url` (webhook) existe em `process_conversion`, mas nenhum endpoint
   o expõe.

@@ -14,7 +14,7 @@ BACKEND = Path(__file__).resolve().parent.parent
 SCRIPT = r"""
 import importlib.abc, sys
 BLOCKED = ("docling", "torch", "torchvision", "transformers", "faster_whisper", "ctranslate2", "av",
-           "playwright", "modal", "PyPDF2", "pypdf")
+           "playwright", "modal", "PyPDF2", "pypdf", "jsonschema")
 
 class Block(importlib.abc.MetaPathFinder):
     def find_spec(self, name, path=None, target=None):
@@ -24,6 +24,7 @@ class Block(importlib.abc.MetaPathFinder):
 
 sys.meta_path.insert(0, Block())
 import workers.celery_app
+workers.celery_app.celery_app.loader.import_default_modules()
 import workers.engines.remote_tasks
 import workers.engines.remote
 import workers.engines.modal_deploy

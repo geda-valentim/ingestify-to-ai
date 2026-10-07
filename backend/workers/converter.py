@@ -1,4 +1,5 @@
 import os
+import json
 from functools import lru_cache
 from pathlib import Path
 from typing import Dict, Any
@@ -10,7 +11,7 @@ logger = logging.getLogger(__name__)
 class DoclingConverter:
     """Wrapper for Docling document converter"""
 
-    def __init__(self, enable_ocr: bool = False, enable_table_structure: bool = True, enable_images: bool = False):
+    def __init__(self, enable_ocr: bool = False, enable_table_structure: bool = True, enable_images: bool = False, pipeline_options: Dict[str, Any] = None):
         """
         Initialize Docling converter with optimizations
 
@@ -21,7 +22,9 @@ class DoclingConverter:
         """
         try:
             from docling.document_converter import DocumentConverter, PdfFormatOption, InputFormat
-            from docling.datamodel.pipeline_options import PdfPipelineOptions
+            from docling.datamodel.pipeline_options import PdfPipelineOptions, ConvertPipelineOptions
+            from docling.document_converter import _get_default_option, ImageFormatOption
+            from importlib.metadata import version
 
             # Try to import optimized backend (if available)
             backend = None
@@ -41,7 +44,28 @@ class DoclingConverter:
                     pass
 
             # Configure pipeline options for performance
-            pipeline_options = PdfPipelineOptions()
+            from shared.document_capabilities import native_catalog
+            if any(version(package) != native_catalog()[key] for package, key in
+                   [('docling', 'docling_version'), ('docling-core', 'docling_core_version')]):
+                raise RuntimeError('Docling capability catalog is stale; regenerate it with the worker version')
+            configuration = dict(pipeline_options or {})
+            from shared.document_capabilities import native_catalog
+            import docling.datamodel.pipeline_options as native_options
+            for field, classes in native_catalog()['pipeline_option_classes'].items():
+                if field not in configuration:
+                    continue
+                values = dict(configuration[field])
+                kind = values.pop('kind', 'default') if classes.keys() != {'default'} else 'default'
+                cls = getattr(native_options, classes[kind])
+                if isinstance(values.get('engine_options'), dict):
+                    import importlib
+                    engine_values = values['engine_options']
+                    family = 'BaseImageClassificationEngineOptions' if field == 'picture_classification_options' else 'BaseVlmEngineOptions'
+                    engine = native_catalog().get('engine_option_classes', {}).get(family, {}).get(engine_values.get('engine_type'))
+                    if engine:
+                        values['engine_options'] = getattr(importlib.import_module(engine['module']), engine['class']).model_validate(engine_values)
+                configuration[field] = cls.model_validate(values)
+            pipeline_options = PdfPipelineOptions(**configuration)
             pipeline_options.do_ocr = enable_ocr  # Disable OCR for speed (digital PDFs only)
             pipeline_options.do_table_structure = enable_table_structure  # Disable if no tables
             pipeline_options.generate_picture_images = enable_images  # Disable image extraction for speed
@@ -55,25 +79,19 @@ class DoclingConverter:
             # DOCLING_DEVICE is ignored from now on in favour of DEVICE.
             self._apply_accelerator_options(pipeline_options)
 
-            # Use optimized PDF backend if available
-            if backend:
-                self.converter = DocumentConverter(
-                    format_options={
-                        InputFormat.PDF: PdfFormatOption(
-                            pipeline_options=pipeline_options,
-                            backend=backend
-                        )
-                    }
-                )
-            else:
-                # Fallback: use default backend with pipeline options
-                self.converter = DocumentConverter(
-                    format_options={
-                        InputFormat.PDF: PdfFormatOption(
-                            pipeline_options=pipeline_options
-                        )
-                    }
-                )
+            pdf_format = PdfFormatOption(pipeline_options=pipeline_options, **({'backend': backend} if backend else {}))
+            format_options = {InputFormat.PDF: pdf_format, InputFormat.IMAGE: ImageFormatOption(pipeline_options=pipeline_options)}
+            # Simple pipelines support the shared enrichment controls too.
+            # PDF OCR/layout/table controls remain specific to PDF/image input.
+            shared_options = ConvertPipelineOptions(**{key: getattr(pipeline_options, key) for key in ConvertPipelineOptions.model_fields})
+            for input_format in InputFormat:
+                if input_format in format_options or input_format == InputFormat.AUDIO:
+                    continue
+                option = _get_default_option(input_format)
+                if option.pipeline_cls.__name__ == 'SimplePipeline':
+                    option.pipeline_options = shared_options
+                    format_options[input_format] = option
+            self.converter = DocumentConverter(format_options=format_options)
 
             logger.info(f"Docling converter initialized (OCR={enable_ocr}, Tables={enable_table_structure}, Images={enable_images}, Backend={backend_name})")
         except ImportError as e:
@@ -176,57 +194,32 @@ class DoclingConverter:
 
         try:
             if self.converter is None:
-                # Fallback: return mock conversion for testing
-                logger.warning("Docling not available, using MOCK conversion")
-                import hashlib
-                file_hash = hashlib.md5(str(file_path).encode()).hexdigest()[:8]
-
-                markdown_content = f"""# Converted Document: {file_path.name}
-
-This is a **MOCK conversion** for testing purposes (Docling not available).
-
-## Document Information
-
-- **File**: {file_path.name}
-- **Format**: {doc_format.upper()}
-- **Size**: {file_size / 1024:.2f} KB
-- **Hash**: `{file_hash}`
-
-## Content
-
-Lorem ipsum dolor sit amet, consectetur adipiscing elit. This is placeholder
-text representing the extracted content from the document.
-
-### Section 1
-
-Sample content that would be extracted from the real document.
-
-### Section 2
-
-More sample content demonstrating the conversion output.
-
-**Note**: This is a mock conversion. In production, real content will be
-extracted using Docling.
-"""
-            else:
-                # Use Docling for conversion
-                result = self.converter.convert(str(file_path))
-                markdown_content = result.document.export_to_markdown()
-
-                logger.info(f"Conversion successful: {len(markdown_content)} characters")
+                raise RuntimeError("Docling não está instalado no worker")
+            configuration = options.get('document_options') or {}
+            conversion_arguments = {key: configuration[key] for key in
+                ('page_range', 'max_num_pages', 'max_file_size', 'raises_on_error') if configuration.get(key) is not None}
+            result = self.converter.convert(str(file_path), **conversion_arguments)
+            from workers.document_outputs import export_document
+            from shared.document_capabilities import native_catalog
+            outputs = export_document(result.document, options, file_path.parent / 'document_assets')
+            markdown_content = outputs['markdown']
+            logger.info("Conversion successful: %s characters", len(markdown_content))
 
             # Extract metadata
             metadata = {
-                "pages": None,  # Docling may provide this
+                "pages": len(result.document.pages) or None,
                 "words": self.count_words(markdown_content),
                 "format": doc_format,
                 "size_bytes": file_size,
                 "title": file_path.stem,
                 "author": None,
+                "provider": "docling", "model": native_catalog()['docling_version'],
+                "output_format": configuration.get('output_format', 'markdown'),
+                "available_formats": list(outputs['exports']), "configuration": options.get('document_options'),
             }
 
             return {
-                "markdown": markdown_content,
+                **outputs,
                 "metadata": metadata,
             }
 
@@ -239,7 +232,7 @@ extracted using Docling.
 _converter: DoclingConverter = None
 
 
-def get_converter(preset: str = None) -> DoclingConverter:
+def get_converter(preset: str = None, pipeline_options: Dict[str, Any] = None) -> DoclingConverter:
     """
     Get or create converter instance with settings from config or preset
 
@@ -272,6 +265,12 @@ def get_converter(preset: str = None) -> DoclingConverter:
         enable_images = settings.docling_enable_images
         enable_table_structure = settings.docling_enable_table_structure
 
+    if pipeline_options is not None:
+        enable_ocr = pipeline_options.get('do_ocr', enable_ocr)
+        enable_table_structure = pipeline_options.get('do_table_structure', enable_table_structure)
+        enable_images = pipeline_options.get('generate_picture_images', enable_images)
+        return _cached_converter(enable_ocr, enable_table_structure, enable_images,
+                                 json.dumps(pipeline_options, sort_keys=True, separators=(',', ':')))
     return _cached_converter(enable_ocr, enable_table_structure, enable_images)
 
 
@@ -280,8 +279,10 @@ def get_converter(preset: str = None) -> DoclingConverter:
 # reloaded the weights for every page. Two slots cover a preset plus the default
 # without letting every combination pile up in VRAM.
 @lru_cache(maxsize=2)
-def _cached_converter(enable_ocr: bool, enable_table_structure: bool, enable_images: bool) -> DoclingConverter:
+def _cached_converter(enable_ocr: bool, enable_table_structure: bool, enable_images: bool, pipeline_key: str = "") -> DoclingConverter:
+    extra = {"pipeline_options": json.loads(pipeline_key)} if pipeline_key else {}
     return DoclingConverter(
+        **extra,
         enable_ocr=enable_ocr,
         enable_table_structure=enable_table_structure,
         enable_images=enable_images,

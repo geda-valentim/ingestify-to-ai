@@ -1,5 +1,8 @@
 # Tags de jobs
 
+> Contratos dos endpoints revisados em 2026-10-06. Campos, modelos e autorização:
+> [referência completa da API](../api-reference.md). As datas abaixo também registram revisões da implementação/operação.
+
 > Verificado contra o código em 2026-10-04. Fonte da verdade:
 > [backend/api/tag_routes.py](../../backend/api/tag_routes.py),
 > [backend/shared/tags.py](../../backend/shared/tags.py),
@@ -20,6 +23,7 @@ Todos os endpoints que criam job aceitam tags:
 - `POST /upload`, `POST /convert`, `POST /transcribe`, `POST /images/describe/upload`,
   `POST /images/ocr/upload`: campo de formulário `tags` com valores separados por vírgula.
 - `POST /images/describe`, `POST /images/ocr` (JSON): campo `tags` como lista.
+- `POST /transcribe/live/sessions` e `POST /datalakes/import` (JSON): `tags` como lista.
 
 Se o upload for duplicado (mesmo checksum, ver [conversion.md](conversion.md#deduplicação-por-checksum)),
 as tags enviadas são **somadas** às do job existente.
@@ -34,7 +38,7 @@ as tags enviadas são **somadas** às do job existente.
 
 ```bash
 curl -X POST http://localhost:8000/upload -H "X-API-Key: $INGESTIFY_API_KEY" \
-  -F "file=@nota.pdf" -F "tags=Cliente-X, #financeiro"
+  -F "file=@nota.pdf" -F "project=Financeiro" -F "tags=Cliente-X, #financeiro"
 
 curl -X PUT http://localhost:8000/jobs/$JOB_ID/tags -H "X-API-Key: $INGESTIFY_API_KEY" \
   -H "Content-Type: application/json" -d '{"tags":["cliente-x","2026"]}'

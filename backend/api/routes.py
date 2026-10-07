@@ -1,14 +1,16 @@
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Header, Body, Depends, Request, Query
-from fastapi.responses import Response, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from starlette.concurrency import run_in_threadpool
-from typing import Optional, List, Tuple
+from typing import Optional, List, Tuple, Literal
 from pathlib import Path
 import hashlib
+import json
 import os
 import shutil
 from uuid import uuid4
 from datetime import datetime, timedelta, timezone
 import logging
+from urllib.parse import urlsplit
 
 from shared.schemas import (
     ConvertRequest,
@@ -24,14 +26,18 @@ from shared.schemas import (
     JobStatus,
     ChildJobs,
     PartialTranscriptResponse,
+    ConversionResult,
 )
 from shared.redis_client import get_redis_client
 from shared.elasticsearch_client import get_es_client
 from shared.minio_client import get_minio_client
-from shared.transcripts import TRANSCRIPT_CONTENT_TYPES, TRANSCRIPT_FORMATS, transcript_object_name
+from shared.transcripts import TRANSCRIPT_CONTENT_TYPES, TRANSCRIPT_FORMATS, transcript_object_name, transcript_result_object_name
 from shared.database import SessionLocal, get_db
-from shared.models import Folder, Job, JobTag, Page, Project, JobStatus as DBJobStatus, User
+from shared.models import Folder, Job, JobTag, JobConfiguration, Page, Project, JobStatus as DBJobStatus, User
 from shared.config import get_settings
+from shared.audio_capabilities import AudioDecodingOptions, AudioConversionOptions, AudioCapabilitiesResponse, audio_capabilities, validate_audio_options, validate_audio_operation
+from shared.job_configuration import configuration_fingerprint, save_configuration, job_configuration
+from shared.document_capabilities import DocumentOptions, DocumentCapabilities, document_capabilities, document_options, native_catalog, annotate_enrichment_availability, missing_enrichment_dependencies
 from shared.utils import calculate_file_checksum
 from shared.auth import get_current_active_user
 from api.deps import get_owned_job, get_owned_page_or_none, owned_folder_or_404, owned_project_or_404
@@ -41,6 +47,8 @@ from shared.admin import is_effective_admin
 from shared.engines import dispatch as engine_dispatch
 from shared.engines.media import is_audio_filename
 from api.tag_routes import TAGS_FORM_DESCRIPTION, add_tags_to_existing_job, parse_tags_or_422
+from api.datalake_routes import destination_form, bind_request_destination, discard_uncommitted_destination
+from shared.datalake.schemas import Destination
 from api.projects_api import (
     LocationFields,
     existing_job_location,
@@ -50,7 +58,7 @@ from api.projects_api import (
     upload_location_form,
 )
 from sqlalchemy import func, or_
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["Conversion"])
@@ -74,6 +82,79 @@ def _request_path(request) -> str:
     return getattr(url, "path", "") or ""
 
 
+@router.get("/documents/capabilities", response_model=DocumentCapabilities, summary="Controles e exportações do Docling")
+def get_document_capabilities(current_user: User = Depends(get_current_active_user)):
+    response = document_capabilities()
+    try:
+        from shared.engines.liveness import alive
+        workers = alive('document_conversion', get_redis_client().client)
+        response.workers_running = bool(workers)
+        response.worker_prerequisites = [json.loads(worker['document_readiness']) for worker in workers if worker.get('document_readiness')]
+        if response.worker_prerequisites:
+            annotate_enrichment_availability(response.pipeline_schema, response.worker_prerequisites)
+            for kind, class_name in native_catalog()['pipeline_option_classes']['ocr_options'].items():
+                if not any(item.get('ocr_dependencies', {}).get(kind) for item in response.worker_prerequisites):
+                    response.pipeline_schema['$defs'][class_name]['x-unavailable-reason'] = 'Dependência OCR ausente nos workers ativos'
+    except Exception:
+        pass
+    return response
+
+
+def _document_request_options(raw, preset):
+    # FastAPI Form defaults also appear in internal/direct calls.
+    raw = raw if isinstance(raw, (str, dict, DocumentOptions)) else None
+    preset = preset if isinstance(preset, str) else 'fast'
+    try:
+        options = document_options(raw, preset)
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(422, detail=str(exc)) from None
+    timeout = options['document_options']['pipeline'].get('document_timeout')
+    if timeout is not None and timeout > settings.conversion_timeout_seconds - 30:
+        raise HTTPException(422, 'document_timeout excede o limite do worker')
+    pipeline = options['document_options']['pipeline']
+    try:
+        from shared.engines.liveness import alive
+        prerequisites = [json.loads(worker['document_readiness']) for worker in alive('document_conversion', get_redis_client().client) if worker.get('document_readiness')]
+    except Exception:
+        prerequisites = []
+    if prerequisites and not any(item.get('catalog_matches') for item in prerequisites):
+        raise HTTPException(503, 'O catálogo Docling precisa ser atualizado para a versão dos workers')
+    if pipeline.get('do_ocr') and prerequisites:
+        kind = pipeline.get('ocr_options', {}).get('kind', 'auto')
+        if not any(item.get('ocr_dependencies', {}).get(kind) for item in prerequisites):
+            raise HTTPException(422, f'OCR {kind} não está instalado nos workers ativos')
+    missing = missing_enrichment_dependencies(pipeline, prerequisites)
+    if missing:
+        raise HTTPException(422, f'Nenhum worker ativo tem as dependências de enriquecimento solicitadas: {", ".join(missing)}')
+    if _explicit_document_options(raw, preset):
+        options['processing_mode'] = 'document'
+    return options
+
+
+def _validate_document_image(file):
+    extension = Path(file.filename or '').suffix.lstrip('.').lower()
+    if (file.content_type or '').startswith('image/') or extension in {'gif', 'svg', 'heic', 'avif'}:
+        if extension not in native_catalog()['image_extensions']:
+            raise HTTPException(422, 'Formato de imagem não suportado pelo Docling; consulte /documents/capabilities.image_extensions')
+
+
+def _explicit_document_options(raw, preset):
+    return isinstance(raw, (str, dict, DocumentOptions)) or (isinstance(preset, str) and preset != 'fast')
+
+
+def _is_media_source(source_type, source, file=None):
+    if source_type == 'file' and file is not None:
+        name = file.filename or ''
+        mime = file.content_type or ''
+        if mime in AUDIO_MIME_TYPES or mime in VIDEO_MIME_TYPES:
+            return True
+    elif source_type in {'url', 'dropbox'}:
+        name = urlsplit(source or '').path
+    else:
+        return False
+    return Path(name).suffix.lower() in AUDIO_EXTENSIONS + VIDEO_EXTENSIONS
+
+
 @router.post("/upload", response_model=JobCreatedResponse, summary="Upload e converter arquivo")
 async def upload_and_convert(
     file: UploadFile = File(..., description="Arquivo para conversão (PDF, DOCX, HTML, etc.)"),
@@ -83,8 +164,11 @@ async def upload_and_convert(
         "fast",
         description="Quality/speed preset for PDF conversion: 'fast' (~35s/MB, text-only), 'balanced' (~70-105s/MB, with images), 'quality' (~350s/MB, with OCR)"
     ),
+    conversion_options: Optional[str] = Form(None, description="JSON DocumentOptions: pipeline, formats, export_options e limites de conversão.",
+        json_schema_extra={'x-options-schema': DocumentOptions.model_json_schema()}),
     request: Request = None,
     location: LocationFields = Depends(upload_location_form),
+    destination: Optional[Destination] = Depends(destination_form),
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
 ):
@@ -127,6 +211,17 @@ async def upload_and_convert(
       -F "docling_preset=quality"
     ```
     """
+    if _is_media_source('file', None, file):
+        if _explicit_document_options(conversion_options, docling_preset):
+            raise HTTPException(422, 'Áudio/vídeo não aceita opções Docling; use /transcribe ou audio_options no /convert')
+        return await transcribe_audio(file=file, name=name, tags=tags, language=None,
+            request=request, location=location, destination=destination, current_user=current_user, db=db,
+            operation='transcribe', decoding_options=None, include_timestamps=True,
+            include_word_timestamps=False, output_format='markdown', purge_source=False)
+    _validate_document_image(file)
+    configured_options = _document_request_options(conversion_options, docling_preset)
+    docling_model = native_catalog()['docling_version']
+    fingerprint = configuration_fingerprint('document', configured_options, 'docling', docling_model)
     tag_list = parse_tags_or_422(tags)
     # Where the job goes, decided before anything is written (422/404 here leave no file behind)
     plan = prepare_upload_location(db, current_user, request, location)
@@ -146,9 +241,9 @@ async def upload_and_convert(
         upload_location = resolve_upload_location(db, current_user, plan, _request_path(request))
 
         # Check if file already processed by this user in this project
-        existing_job, reprocess_note = find_duplicate_job(db, current_user.id, file_checksum, upload_location)
+        existing_job, reprocess_note = find_duplicate_job(db, current_user.id, file_checksum, upload_location, configuration_fingerprint=fingerprint)
 
-        if existing_job:
+        if existing_job and not isinstance(destination, Destination):
             logger.info(f"Duplicate file detected! Returning existing job: {existing_job.id}")
             add_tags_to_existing_job(db, existing_job, tag_list)
             return JobCreatedResponse(
@@ -200,13 +295,21 @@ async def upload_and_convert(
                 folder_id=upload_location.folder_id,
             )
             db.add(db_job)
+            save_configuration(db, db_job, operation='document', options=configured_options, provider='docling', model=docling_model)
+            bind_request_destination(db, db_job, destination, source_type=getattr(getattr(request, "state", None), "datalake_source_type", None))
             set_job_tags(db_job, tag_list)
             db.commit()
             logger.info(f"Job {job_id} created in MySQL with name: {job_name} and checksum: {file_checksum}")
         except Exception as e:
             logger.error(f"Error creating job in MySQL: {e}", exc_info=True)
             db.rollback()
-            # Continue - MySQL is for persistence, Redis is primary
+            if isinstance(destination, Destination):
+                discard_uncommitted_destination(redis_client, str(job_id), current_user.id)
+                if isinstance(e, HTTPException):
+                    raise
+                raise HTTPException(503, "Não foi possível salvar o destino do job. Tente novamente.") from None
+            discard_uncommitted_destination(redis_client, str(job_id), current_user.id)
+            raise HTTPException(503, "Não foi possível salvar a configuração do job. Tente novamente.") from None
 
         logger.info(f"MAIN JOB created: {job_id} | user: {current_user.username} | source_type: file")
 
@@ -247,7 +350,7 @@ async def upload_and_convert(
                     job_id=str(job_id),
                     source_type="file",
                     source=str(temp_file_path),
-                    options={"docling_preset": docling_preset},
+                    options=configured_options,
                 )
 
             _enqueue_maybe_routed(filename, job_id, temp_file_path, current_user, file_size_bytes, enqueue)
@@ -398,6 +501,35 @@ async def _stream_upload_to_file(file: UploadFile, destination: Path, max_size_m
     return size, hasher.hexdigest()
 
 
+@router.get('/audio/capabilities', response_model=AudioCapabilitiesResponse, summary='Capacidades e parâmetros do modelo de áudio configurado')
+def get_audio_capabilities(current_user: User = Depends(get_current_active_user)):
+    response = audio_capabilities(settings)
+    try:
+        from shared.engines.liveness import alive, remote_worker
+        from shared.engines.routing import get_route
+        redis = get_redis_client().client
+        running = bool(alive('transcription', redis))
+        route = get_route('transcription', SessionLocal)
+        if route and route.active and (route.remote_allowed_for == 'all' or is_effective_admin(current_user)):
+            running = running or (response.provider == 'faster-whisper' and response.model == 'turbo' and bool(remote_worker(redis)))
+        response.workers_running = running
+        if not running:
+            response.execution_reason = 'Workers de transcrição pausados ou sem heartbeat; uploads ficam na fila até retomar a execução.'
+    except Exception:
+        response.execution_reason = 'Não foi possível confirmar o heartbeat dos workers.'
+    return response
+
+
+def _audio_request_options(raw):
+    if not settings.enable_audio_transcription:
+        raise HTTPException(503, 'Audio transcription is currently disabled')
+    try:
+        parsed = AudioConversionOptions.model_validate(json.loads(raw) if isinstance(raw, str) else raw)
+        return parsed.resolve(settings)
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(422, detail=str(exc)) from None
+
+
 @router.post("/transcribe", response_model=JobCreatedResponse, summary="Transcrever áudio ou vídeo (STT, legendas VTT/SRT)")
 async def transcribe_audio(
     file: UploadFile = File(..., description="Arquivo de áudio (MP3, WAV, M4A, FLAC, OGG...) ou vídeo (MP4, MKV, MOV, WEBM, AVI...)"),
@@ -406,6 +538,9 @@ async def transcribe_audio(
     language: Optional[str] = Form(None, description="Código do idioma (ex: 'en', 'pt'). Auto-detectar se não fornecido"),
     include_timestamps: bool = Form(True, description="Incluir marcadores de tempo na transcrição"),
     include_word_timestamps: bool = Form(False, description="Incluir timestamps em nível de palavra (mais detalhado)"),
+    operation: Literal['transcribe', 'detect_language', 'inspect'] = Form('transcribe', description='Transcrever/traduzir, detectar idioma ou inspecionar metadados do arquivo.'),
+    decoding_options: Optional[str] = Form(None, description='JSON AudioDecodingOptions. Controles aceitos e limites: GET /audio/capabilities.',
+                                          json_schema_extra={'x-options-schema': AudioDecodingOptions.model_json_schema()}),
     output_format: str = Form(
         "markdown",
         description="Formato padrão do resultado em /jobs/{job_id}/result: markdown, vtt, srt, txt ou json",
@@ -416,6 +551,7 @@ async def transcribe_audio(
     ),
     request: Request = None,
     location: LocationFields = Depends(upload_location_form),
+    destination: Optional[Destination] = Depends(destination_form),
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
 ):
@@ -452,10 +588,20 @@ async def transcribe_audio(
     projeto dispensa o campo. Sem projeto: 422.
 
     ## Arquivo repetido
-    Reenviar um arquivo idêntico (mesmo SHA-256) que já tem job **não falho** no mesmo
-    projeto devolve esse job em vez de criar outro: as tags novas são somadas às dele e o
-    `output_format` enviado passa a ser o padrão do resultado. Se o job anterior
-    falhou, o reenvio cria um job novo; é assim que se tenta de novo.
+    Reenviar arquivo idêntico (mesmo SHA-256) no mesmo projeto reaproveita somente
+    um job com a mesma configuração salva: provider/modelo, operação, decodificação,
+    timestamps, formato e retenção. Tags novas são somadas. Configuração diferente,
+    job falho ou legado sem configuração comprovável cria outro job.
+
+    ## Controles do modelo
+    `decoding_options` é um objeto JSON serializado conforme AudioDecodingOptions.
+    Consulte GET /audio/capabilities para parâmetros aceitos pelo provider atual,
+    tarefas, padrões e limites. Parâmetros de outro provider retornam 422 antes
+    de criar o job. Turbo não suporta tradução; modelos aptos traduzem para inglês.
+    `operation=detect_language` identifica idioma sem produzir transcrição;
+    `operation=inspect` retorna metadados da faixa de áudio sem inferência.
+    A configuração fica em GET /jobs/{job_id}.configuration; o JSON do resultado
+    preserva as métricas e probabilidades disponibilizadas pelo provider.
 
     ## Formatos suportados
     - Áudio: MP3, WAV, M4A, FLAC, OGG, OPUS, WEBM, WMA, AAC
@@ -514,6 +660,21 @@ async def transcribe_audio(
         )
 
     tag_list = parse_tags_or_422(tags)
+    try:
+        decoding = json.loads(decoding_options) if isinstance(decoding_options, str) else {}
+        if not isinstance(decoding, dict):
+            raise ValueError('decoding_options deve ser um objeto JSON')
+        if language is not None:
+            if 'language' in decoding and decoding['language'] != language:
+                raise ValueError('language diverge de decoding_options.language')
+            decoding['language'] = language
+        provider = settings.audio_transcriber_provider
+        model = 'whisper-1' if provider == 'openai-api' else settings.whisper_model
+        decoding = validate_audio_options(decoding, provider=provider, model=model,
+                                          include_word_timestamps=include_word_timestamps)
+        validate_audio_operation(decoding, operation)
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(422, detail=str(exc)) from None
     redis_client = get_redis_client()
 
     filename = sanitize_upload_filename(file.filename)
@@ -544,6 +705,12 @@ async def transcribe_audio(
 
     media_kind = "video" if is_video else "audio"
     max_size_mb = settings.max_video_file_size_mb if is_video else settings.max_audio_file_size_mb
+    if provider == 'openai-api':
+        max_size_mb = min(max_size_mb, 25)
+    configured_options = {**decoding, 'operation': operation, 'include_timestamps': include_timestamps,
+                          'include_word_timestamps': include_word_timestamps,
+                          'output_format': output_format, 'purge_source': purge_source}
+    fingerprint = configuration_fingerprint('transcription', configured_options, provider, model)
 
     # Where the job goes, decided before anything is written (422/404 here leave no file behind)
     plan = prepare_upload_location(db, current_user, request, location)
@@ -561,9 +728,10 @@ async def transcribe_audio(
         upload_location = resolve_upload_location(db, current_user, plan, _request_path(request))
 
         # Check if file already processed by this user in this project
-        existing_job, reprocess_note = find_duplicate_job(db, current_user.id, file_checksum, upload_location)
+        existing_job, reprocess_note = find_duplicate_job(db, current_user.id, file_checksum, upload_location,
+                                                         configuration_fingerprint=fingerprint)
 
-        if existing_job:
+        if existing_job and not isinstance(destination, Destination):
             logger.info(f"Duplicate audio file detected! Returning existing job: {existing_job.id}")
             add_tags_to_existing_job(db, existing_job, tag_list)
             # The latest request decides the default result format of the reused job
@@ -615,12 +783,22 @@ async def transcribe_audio(
                 folder_id=upload_location.folder_id,
             )
             db.add(db_job)
+            save_configuration(db, db_job, operation='transcription', options=configured_options, provider=provider, model=model)
+            bind_request_destination(db, db_job, destination, source_type=getattr(getattr(request, "state", None), "datalake_source_type", None))
             set_job_tags(db_job, tag_list)
             db.commit()
             logger.info(f"Audio transcription job {job_id} created in MySQL with name: {job_name} and checksum: {file_checksum}")
         except Exception as e:
             logger.error(f"Error creating audio job in MySQL: {e}", exc_info=True)
             db.rollback()
+            if isinstance(destination, Destination):
+                discard_uncommitted_destination(redis_client, str(job_id), current_user.id)
+                if isinstance(e, HTTPException):
+                    raise
+                raise HTTPException(503, "Não foi possível salvar o destino do job. Tente novamente.") from None
+            # A configuration is part of the accepted request, not best-effort metadata.
+            # Never publish a task whose job and effective options were rolled back.
+            raise HTTPException(503, "Não foi possível salvar o job e sua configuração. Tente novamente.") from None
 
         logger.info(f"AUDIO TRANSCRIPTION JOB created: {job_id} | user: {current_user.username}")
 
@@ -660,7 +838,10 @@ async def transcribe_audio(
 
             # Build audio transcription options
             options = {
-                "language": language,
+                **decoding,
+                'operation': operation,
+                'transcriber_provider': provider,
+                "language": decoding.get('language'),
                 "include_timestamps": include_timestamps,
                 "include_word_timestamps": include_word_timestamps,
                 "output_format": output_format,
@@ -763,6 +944,11 @@ async def convert_document(
         description="Nome de identificação opcional (padrão: nome do arquivo ou URL)"
     ),
     tags: Optional[str] = Form(None, description=TAGS_FORM_DESCRIPTION),
+    docling_preset: Optional[str] = Form('fast', description="Preset Docling: fast, balanced ou quality."),
+    conversion_options: Optional[str] = Form(None, description="JSON DocumentOptions: pipeline, formats, export_options e limites de conversão.",
+        json_schema_extra={'x-options-schema': DocumentOptions.model_json_schema()}),
+    audio_options: Optional[str] = Form(None, description="JSON AudioConversionOptions para processar áudio/vídeo de qualquer fonte. Incompatível com conversion_options.",
+        json_schema_extra={'x-options-schema': AudioConversionOptions.model_json_schema()}),
     authorization: Optional[str] = Header(
         None,
         description="Autenticação do Ingestify ('Bearer {jwt}'). Nunca é repassada a provedores externos."
@@ -775,6 +961,7 @@ async def convert_document(
     ),
     request: Request = None,
     location: LocationFields = Depends(upload_location_form),
+    destination: Optional[Destination] = Depends(destination_form),
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
 ):
@@ -844,6 +1031,32 @@ async def convert_document(
     if source_type != "file" and not source:
         raise HTTPException(status_code=400, detail=f"source é obrigatório para source_type={source_type}")
 
+    audio_options = audio_options if isinstance(audio_options, (str, dict, AudioConversionOptions)) else None
+    if audio_options is None and _is_media_source(source_type, source, file):
+        if _explicit_document_options(conversion_options, docling_preset):
+            raise HTTPException(422, 'Áudio/vídeo não aceita opções Docling; envie audio_options para selecionar Whisper')
+        audio_options = {}
+    audio_request = _audio_request_options(audio_options) if audio_options is not None else None
+    if audio_request and isinstance(conversion_options, (str, dict, DocumentOptions)):
+        raise HTTPException(422, 'audio_options e conversion_options não podem ser usados juntos')
+    if audio_request and source_type == 'file':
+        options = AudioConversionOptions.model_validate(json.loads(audio_options) if isinstance(audio_options, str) else audio_options)
+        return await transcribe_audio(file=file, name=name, tags=tags, language=None,
+            operation=options.operation, decoding_options=json.dumps(options.decoding.model_dump(exclude_unset=True)),
+            include_timestamps=options.include_timestamps, include_word_timestamps=options.include_word_timestamps,
+            output_format=options.output_format, purge_source=options.purge_source,
+            request=request, location=location, destination=destination, current_user=current_user, db=db)
+    if audio_request:
+        provider, configured_model, configured_options = audio_request
+        configuration_operation = 'transcription'
+        task_options = {**configured_options, 'is_audio': True, 'transcriber_provider': provider}
+    else:
+        if source_type == 'file':
+            _validate_document_image(file)
+        configured_options = _document_request_options(conversion_options, docling_preset)
+        provider, configured_model, configuration_operation = 'docling', native_catalog()['docling_version'], 'document'
+        task_options = configured_options
+    fingerprint = configuration_fingerprint(configuration_operation, configured_options, provider, configured_model)
     tag_list = parse_tags_or_422(tags)
 
     # The provider's own token, in its own header (S-01: the Ingestify JWT in
@@ -880,9 +1093,9 @@ async def convert_document(
         if file_checksum:
             # Check if file already processed by this user in this project
             # (a failed job does not count: sending the file again is the retry)
-            existing_job, reprocess_note = find_duplicate_job(db, current_user.id, file_checksum, upload_location)
+            existing_job, reprocess_note = find_duplicate_job(db, current_user.id, file_checksum, upload_location, configuration_fingerprint=fingerprint)
 
-            if existing_job:
+            if existing_job and not isinstance(destination, Destination):
                 logger.info(f"Duplicate file detected! Returning existing job: {existing_job.id}")
                 add_tags_to_existing_job(db, existing_job, tag_list)
                 return JobCreatedResponse(
@@ -943,6 +1156,8 @@ async def convert_document(
                 folder_id=upload_location.folder_id,
             )
             db.add(db_job)
+            save_configuration(db, db_job, operation=configuration_operation, options=configured_options, provider=provider, model=configured_model)
+            bind_request_destination(db, db_job, destination, source_type=getattr(getattr(request, "state", None), "datalake_source_type", None))
             set_job_tags(db_job, tag_list)
             db.commit()
             checksum_info = f" and checksum: {file_checksum}" if file_checksum else ""
@@ -950,7 +1165,13 @@ async def convert_document(
         except Exception as e:
             logger.error(f"Error creating job in MySQL: {e}", exc_info=True)
             db.rollback()
-            # Continue - MySQL is for persistence, Redis is primary
+            if isinstance(destination, Destination):
+                discard_uncommitted_destination(redis_client, str(job_id), current_user.id)
+                if isinstance(e, HTTPException):
+                    raise
+                raise HTTPException(503, "Não foi possível salvar o destino do job. Tente novamente.") from None
+            discard_uncommitted_destination(redis_client, str(job_id), current_user.id)
+            raise HTTPException(503, "Não foi possível salvar a configuração do job. Tente novamente.") from None
 
         logger.info(f"MAIN JOB created: {job_id} | user: {current_user.username} | source_type: {source_type}")
 
@@ -965,7 +1186,7 @@ async def convert_document(
                 "job_id": str(job_id),
                 "source_type": source_type,
                 "source": source,
-                "options": {},  # Default options for now
+                "options": task_options,
             }
 
             # The provider's token never travels in the task (broker, result backend,
@@ -1006,7 +1227,10 @@ async def convert_document(
 
             # Enqueue task
             def enqueue():
-                process_conversion.delay(**task_kwargs)
+                if audio_request:
+                    process_conversion.apply_async(kwargs=task_kwargs, queue=settings.transcription_queue)
+                else:
+                    process_conversion.delay(**task_kwargs)
 
             if staging_path:
                 _enqueue_maybe_routed(filename, job_id, task_kwargs["source"], current_user, file_size_bytes,
@@ -1074,6 +1298,26 @@ def _job_location_refs(db: Session, job: Optional[Job]) -> dict:
     }
 
 
+def _job_status_with_db_fallback(redis_client, job_id: str, owned_job: Optional[Job]):
+    """Redis holds live progress; an expired cache must not hide a durable job.
+
+    A child may be authorized by its parent's row, which is never its status.
+    """
+    full = owned_job is not None and owned_job.source_type == 'image' and owned_job.configuration_row and owned_job.configuration_row.options.get('mode') in ('full', 'faces')
+    status = None if full else redis_client.get_job_status(job_id)
+    if owned_job is None or owned_job.id != job_id:
+        return status
+    if status and owned_job.status not in (DBJobStatus.COMPLETED, DBJobStatus.PARTIAL, DBJobStatus.FAILED, DBJobStatus.CANCELLED):
+        return status
+    return {
+        **(status or {}),
+        "type": (owned_job.job_type or "main").lower(),
+        "status": owned_job.status.value,
+        "progress": 100 if owned_job.status == DBJobStatus.COMPLETED else (owned_job.progress or 0),
+        "error": owned_job.error_message,
+    }
+
+
 @router.get("/jobs/{job_id}", response_model=JobStatusResponse)
 async def get_job_status(
     job_id: str,
@@ -1101,7 +1345,10 @@ async def get_job_status(
     # Ownership já validada em get_owned_job (MySQL como fonte da verdade)
 
     # Get job status from Redis (real-time data)
-    status_data = redis_client.get_job_status(job_id)
+    status_data = _job_status_with_db_fallback(redis_client, job_id, owned_job)
+
+    if owned_job and owned_job.configuration_row and owned_job.configuration_row.options.get('mode') in ('full', 'faces') and status_data and status_data['status'] == 'pending':
+        status_data['status'] = 'queued'
 
     if owned_job is not None and owned_job.id == job_id:
         from shared.live.lifecycle import available
@@ -1137,11 +1384,15 @@ async def get_job_status(
     # Get job type (convert to lowercase for schema validation)
     job_type = status_data.get("type", "main").lower()
 
+    from shared.image_analysis import progress as image_progress
     # Build response based on job type
     response_data = {
         "job_id": job_id,
         "type": job_type,
         "status": status_data.get("status", "unknown"),
+        "kind": job_kind(owned_job.source_type, owned_job.configuration_row.operation if owned_job.configuration_row else None) if owned_job is not None else None,
+        "configuration": job_configuration(owned_job),
+        "image_analysis": image_progress(db, job_id) if owned_job and owned_job.source_type == "image" else None,
         "progress": status_data.get("progress", 0),
         "created_at": created_at,
         "started_at": started_at,
@@ -1192,7 +1443,7 @@ async def get_job_status(
             total_pages = db_job.total_pages
             pages_completed = db_job.pages_completed or 0
             pages_failed = db_job.pages_failed or 0
-        else:
+        elif not response_data.get("image_analysis"):
             # Fallback to Redis
             total_pages = redis_client.get_job_pages_total(job_id)
             if total_pages:
@@ -1370,6 +1621,20 @@ async def delete_job(
 
     logger.info(f"Deleting job {job_id} for user {current_user.username}")
 
+    if owned_job and owned_job.source_type == 'image':
+        from shared.models import ImageAnalysisRun, ImageAnalysisSubmission
+        db.query(Job).filter_by(id=job_id).populate_existing().with_for_update().first()
+        full_run = db.query(ImageAnalysisRun).filter_by(job_id=job_id).with_for_update().first()
+        if full_run:
+            full_run.fence += 1
+            full_run.cancel_requested = True
+            full_run.status = 'cancelled'
+            full_run.holder = None
+            for submission in db.query(ImageAnalysisSubmission).filter_by(job_id=job_id):
+                submission.deleted_at = datetime.utcnow()
+                submission.purge_after = datetime.utcnow() + timedelta(seconds=960)
+            db.commit()
+
     # 1. Delete from Elasticsearch (if available)
     if es_client:
         try:
@@ -1387,7 +1652,7 @@ async def delete_job(
         logger.info(f"Elasticsearch not available, skipping content deletion for job {job_id}")
 
     # Transcriptions: the uploaded media and the stored transcript formats
-    if db_job and db_job.source_type == "audio":
+    if _is_transcription_job(job_id, db_job):
         try:
             minio_client = get_minio_client()
             if db_job.minio_upload_path:
@@ -1397,6 +1662,23 @@ async def delete_job(
             logger.warning(f"Failed to delete audio objects of job {job_id} from MinIO: {e}")
         # Local copy left behind by a failed job (a completed one has none)
         shutil.rmtree(Path(settings.temp_storage_path) / "audio" / job_id, ignore_errors=True)
+
+    if db_job and db_job.source_type == "image":
+        try:
+            storage = get_minio_client()
+            storage.delete_folder(storage.bucket_results, f"images/{job_id}/")
+        except Exception as exc:
+            logger.warning("Failed to delete image result of job %s: %s", job_id, type(exc).__name__)
+        shutil.rmtree(Path(settings.temp_storage_path) / "images" / job_id, ignore_errors=True)
+
+    # Private delivery snapshots follow the job's retention. External objects
+    # belong to the user's bucket and are deliberately retained there.
+    if db_job:
+        try:
+            minio_client = get_minio_client()
+            minio_client.delete_folder(minio_client.bucket_results, f"datalake/{job_id}/")
+        except Exception:
+            logger.warning("Failed to delete internal datalake snapshot: job_id=%s", job_id)
 
     # 2. Delete from MySQL
     try:
@@ -1486,15 +1768,34 @@ async def get_job_result(
     """
     if format_ is not None:
         format_ = format_.lower()
-        if format_ not in ["markdown"] + TRANSCRIPT_FORMATS:
+        if format_ not in set(["markdown"] + TRANSCRIPT_FORMATS) | set(native_catalog()["exports"]):
             raise HTTPException(
                 status_code=422,
                 detail=f"format inválido: {format_}. Use: markdown, {', '.join(TRANSCRIPT_FORMATS)}"
             )
 
-    redis_client = get_redis_client()
-    es_client = get_es_client()
+    if owned_job and owned_job.source_type == 'image' and owned_job.configuration_row and owned_job.configuration_row.options.get('mode') in ('full', 'faces'):
+        from shared.image_full import TERMINAL
+        if owned_job.status.value not in TERMINAL:
+            return JSONResponse(status_code=202, content={'job_id': job_id, 'status': owned_job.status.value,
+                'poll_url': f'/jobs/{job_id}', 'result_url': f'/jobs/{job_id}/result'})
+        if not owned_job.minio_result_path:
+            raise HTTPException(503, 'Relatório aguardando recuperação durável')
+        storage = get_minio_client()
+        try:
+            from starlette.concurrency import run_in_threadpool
+            raw = await run_in_threadpool(storage.download_file, storage.bucket_results, owned_job.minio_result_path)
+            payload = json.loads(raw)
+        except Exception as exc:
+            raise HTTPException(503, 'Relatório temporariamente indisponível; tente consultar o mesmo job novamente') from exc
+        if format_ == 'json':
+            return JSONResponse(payload, headers={'Cache-Control': 'private, no-store'})
+        if format_ not in (None, 'markdown'):
+            raise HTTPException(422, 'Full Analysis suporta markdown e json')
+        return {'job_id': job_id, 'type': 'main', 'status': owned_job.status.value,
+                'result': payload, 'completed_at': owned_job.completed_at}
 
+    redis_client = get_redis_client()
     # Ownership já validada em get_owned_job (MySQL como fonte da verdade)
 
     # Live results require the exact durable row, including after cache expiry.
@@ -1512,15 +1813,18 @@ async def get_job_result(
                 live_generation = live.generation
 
     # Check job status first
-    status_data = redis_client.get_job_status(job_id)
+    status_data = _job_status_with_db_fallback(redis_client, job_id, owned_job)
     if live_generation is not None:
         status_data = {"type": "main", "status": "completed"}
 
     if not status_data:
         raise HTTPException(status_code=404, detail="Job não encontrado ou expirado")
 
-    if status_data["status"] == "processing" or status_data["status"] == "queued":
+    if status_data["status"] in ("pending", "processing", "queued"):
         raise HTTPException(status_code=400, detail="Job ainda está em processamento")
+
+    if status_data["status"] == "cancelled":
+        raise HTTPException(status_code=400, detail="Job cancelado")
 
     if status_data["status"] == "failed":
         raise HTTPException(
@@ -1531,36 +1835,61 @@ async def get_job_result(
     # Transcription formats (explicit ?format= or the default chosen at upload) are
     # served straight from Redis/MinIO, even if Elasticsearch has no result
     requested_format = format_ or redis_client.get_job_output_format(job_id)
-    if requested_format and requested_format != "markdown":
+    configured_document = owned_job is not None and owned_job.configuration_row is not None and owned_job.configuration_row.operation == 'document'
+    if requested_format and requested_format != "markdown" and not configured_document:
+        if requested_format not in TRANSCRIPT_FORMATS:
+            raise HTTPException(422, 'Formato indisponível para este job')
         return _transcript_response(job_id, requested_format, redis_client, live_generation)
 
     # Get job type
     job_type = status_data.get("type", "main")
 
-    # Try to get result from Elasticsearch first
+    # Transcripts have an authoritative durable result. Redis is a fast path;
+    # neither cache expiry nor an unavailable search index prevents a read.
     result_data = None
-    es_result = es_client.get_job_result(job_id)
-
-    if es_result:
-        logger.info(f"Retrieved job {job_id} result from Elasticsearch")
-        result_data = {
-            "markdown": es_result.get("markdown_content", ""),
-            "metadata": es_result.get("metadata", {})
-        }
-    else:
-        # Fallback to Redis for backwards compatibility
-        logger.info(f"Result not in Elasticsearch, trying Redis for job {job_id}")
-        redis_result = redis_client.get_job_result(job_id)
-        if redis_result:
-            result_data = redis_result
+    if configured_document and live_generation is None:
+        result_data = redis_client.get_job_result(job_id) or _stored_document_result(job_id)
+    if owned_job is not None and owned_job.id == job_id and owned_job.source_type == "image":
+        result_data = redis_client.get_job_result(job_id)
+        if result_data is None and owned_job.minio_result_path:
+            try:
+                storage = get_minio_client()
+                result_data = json.loads(storage.download_file(storage.bucket_results, owned_job.minio_result_path))
+            except Exception as exc:
+                logger.warning("Image result unavailable for job %s: %s", job_id, type(exc).__name__)
+        if result_data is not None:
+            from shared.vision_results import vision_result
+            result_data = vision_result(result_data)
+    if _is_transcription_job(job_id, owned_job) or live_generation is not None:
+        result_data = redis_client.get_job_result(job_id) or _stored_transcript_result(job_id, owned_job, live_generation)
+    if result_data is None:
+        try:
+            es_result = get_es_client().get_job_result(job_id)
+        except Exception as exc:
+            logger.warning("Result index unavailable for job %s: %s", job_id, type(exc).__name__)
+            es_result = None
+        if es_result:
+            result_data = {
+                "markdown": es_result.get("markdown_content", ""),
+                "metadata": es_result.get("metadata", {})
+            }
         else:
-            raise HTTPException(status_code=404, detail="Resultado não encontrado ou expirado")
+            result_data = redis_client.get_job_result(job_id)
+    if result_data is None:
+        raise HTTPException(status_code=404, detail="Resultado não encontrado ou expirado")
 
     # Older transcription jobs only have their default format in the result metadata
     if not requested_format:
         default_format = (result_data.get("metadata") or {}).get("output_format") or "markdown"
+        if default_format != "markdown" and 'exports' in result_data:
+            return _document_file_response(result_data, default_format)
         if default_format != "markdown":
             return _transcript_response(job_id, default_format, redis_client, live_generation)
+
+    if requested_format and requested_format != 'markdown' and 'exports' in result_data:
+        return _document_file_response(result_data, requested_format)
+    if requested_format and requested_format != 'markdown':
+        raise HTTPException(422, 'Este formato não está disponível para o documento')
 
     # Get completed_at timestamp
     completed_at = None
@@ -1588,6 +1917,116 @@ async def get_job_result(
         response_data["parent_job_id"] = status_data.get("parent_job_id")
 
     return JobResultResponse(**response_data)
+
+
+def _stored_document_result(job_id, page_number=None):
+    from shared.document_results import result_object
+    try:
+        storage = get_minio_client()
+        return json.loads(storage.download_file(storage.bucket_results, result_object(job_id, page_number)))
+    except Exception:
+        return None
+
+
+def _document_file_response(result, fmt):
+    from shared.document_results import CONTENT_TYPES
+    if fmt not in result.get('exports', {}):
+        raise HTTPException(422, f'Formato {fmt} não foi solicitado nesta conversão')
+    headers = {'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff'}
+    if fmt == 'html':
+        headers['Content-Security-Policy'] = "sandbox; default-src 'none'; img-src data: blob:; style-src 'unsafe-inline'"
+    return Response(result['exports'][fmt], media_type=CONTENT_TYPES[fmt], headers=headers)
+
+
+def _document_asset_response(job_id, name, page_number=None):
+    import re
+    if not re.fullmatch(r'(?:image|page)_[0-9]+_[a-f0-9]+\.png', name):
+        raise HTTPException(404, 'Imagem não encontrada')
+    result = _stored_document_result(job_id, page_number)
+    asset = next((item for item in (result or {}).get('assets', []) if item.get('name') == name), None)
+    if asset is None:
+        raise HTTPException(404, 'Imagem não encontrada')
+    try:
+        storage = get_minio_client()
+        content = storage.download_file(storage.bucket_results, asset['object_name'])
+    except Exception:
+        raise HTTPException(404, 'Imagem indisponível') from None
+    return Response(content, media_type='image/png', headers={'Cache-Control': 'private, no-store'})
+
+
+@router.get('/jobs/{job_id}/assets/{name}', summary='Imagem privada do documento')
+def document_asset(job_id: str, name: str, owned_job: Job = Depends(get_owned_job)):
+    if owned_job.status != DBJobStatus.COMPLETED:
+        raise HTTPException(400, 'Resultado do documento ainda não concluído')
+    return _document_asset_response(job_id, name)
+
+
+@router.get('/jobs/{job_id}/pages/{page_number}/assets/{name}', summary='Imagem privada de uma página')
+def page_document_asset(job_id: str, page_number: int, name: str, db_page: Optional[Page] = Depends(get_owned_page_or_none)):
+    if db_page is None:
+        raise HTTPException(404, 'Página não encontrada')
+    if db_page.status != DBJobStatus.COMPLETED:
+        raise HTTPException(400, 'Resultado da página ainda não concluído')
+    return _document_asset_response(job_id, name, page_number)
+
+
+def _is_transcription_job(job_id: str, owned_job: Optional[Job]) -> bool:
+    return owned_job is not None and owned_job.id == job_id and (
+        owned_job.source_type == "audio"
+        or (owned_job.configuration_row is not None and owned_job.configuration_row.operation in {'transcription', 'live_transcribe'})
+        or (owned_job.mime_type or "").startswith(("audio/", "video/"))
+        or is_audio_filename(owned_job.filename or "")
+    )
+
+
+def _stored_transcript_result(job_id: str, owned_job: Optional[Job], generation=None):
+    """Read the full durable result, or reconstruct transcripts from older workers."""
+    if owned_job is None or owned_job.id != job_id:
+        return None
+    if generation is None and not _is_transcription_job(job_id, owned_job):
+        return None
+    try:
+        minio_client = get_minio_client()
+    except Exception as exc:
+        logger.warning("Transcript storage unavailable for job %s: %s", job_id, type(exc).__name__)
+        return None
+    try:
+        data = minio_client.download_file(
+            bucket_name=minio_client.bucket_audio,
+            object_name=transcript_result_object_name(job_id, generation),
+        )
+        if data is not None:
+            payload = json.loads(data)
+            ConversionResult(**payload)
+            return payload
+    except Exception as exc:
+        logger.info("Full transcript result unavailable for job %s: %s", job_id, type(exc).__name__)
+    try:
+        data = minio_client.download_file(
+            bucket_name=minio_client.bucket_audio,
+            object_name=transcript_object_name(job_id, "json", generation),
+        )
+        if data is None:
+            return None
+        transcript = json.loads(data)
+        from workers.audio.base_transcriber import format_markdown
+
+        text = transcript.get("text") or ""
+        transcript["word_count"] = len(text.split())
+        return {
+            "markdown": format_markdown(transcript),
+            "metadata": {
+                "format": Path(owned_job.filename or "").suffix.lstrip(".").lower() or "audio",
+                "size_bytes": owned_job.file_size_bytes or 0,
+                "words": transcript["word_count"],
+                "language": transcript.get("language"),
+                "duration": transcript.get("duration"),
+                "available_formats": ["markdown"] + TRANSCRIPT_FORMATS,
+            },
+        }
+    except Exception as exc:
+        logger.warning("Stored transcript recovery failed for job %s: %s", job_id, type(exc).__name__)
+        return None
 
 
 def _transcript_response(job_id: str, fmt: str, redis_client, generation=None) -> Response:
@@ -1640,7 +2079,7 @@ async def get_partial_transcript(
     """
     redis_client = get_redis_client()
 
-    status_data = redis_client.get_job_status(job_id)
+    status_data = _job_status_with_db_fallback(redis_client, job_id, owned_job)
     if not status_data:
         raise HTTPException(status_code=404, detail="Job não encontrado ou expirado")
 
@@ -1868,6 +2307,7 @@ async def get_page_status_by_number(
 async def get_page_result_by_number(
     job_id: str,
     page_number: int,
+    format_: Optional[str] = Query(None, alias='format', description='Formato Docling solicitado no upload; markdown retorna envelope JSON.'),
     current_user: User = Depends(get_current_active_user),
     db_page: Optional[Page] = Depends(get_owned_page_or_none),
     db: Session = Depends(get_db),
@@ -1896,26 +2336,38 @@ async def get_page_result_by_number(
     - Apenas o dono do job (verificado no MySQL) pode acessar o resultado.
       Jobs de outros usuários retornam 404.
     """
-    redis_client = get_redis_client()
-    es_client = get_es_client()
-
     # Ownership já validada em get_owned_page_or_none -> get_owned_job
     # (MySQL como fonte da verdade). db_page vem da mesma dependência.
+    if db_page is not None:
+        if db_page.status == DBJobStatus.FAILED:
+            raise HTTPException(500, detail=f"Conversão da página {page_number} falhou: {db_page.error_message or 'Erro desconhecido'}")
+        if db_page.status == DBJobStatus.CANCELLED:
+            raise HTTPException(400, detail=f"Página {page_number} cancelada")
+        if db_page.status in (DBJobStatus.PENDING, DBJobStatus.PROCESSING):
+            raise HTTPException(400, detail=f"Página {page_number} ainda está em processamento")
+
+    durable = _stored_document_result(job_id, page_number) if db_page is not None and db_page.job.configuration_row is not None and db_page.job.configuration_row.operation == 'document' else None
+    if durable is not None:
+        fmt = format_ if isinstance(format_, str) else 'markdown'
+        if fmt != 'markdown':
+            return _document_file_response(durable, fmt)
+        return {'job_id': db_page.page_job_id if db_page else job_id, 'parent_job_id': job_id, 'type': 'page',
+                'page_number': page_number, 'status': 'completed', 'result': durable,
+                'completed_at': db_page.completed_at if db_page else datetime.utcnow()}
+    if isinstance(format_, str) and format_ != 'markdown':
+        raise HTTPException(422, 'Formato indisponível para esta página')
 
     # Try to get page from Elasticsearch first
-    es_page_result = es_client.get_page_result(job_id, page_number)
+    try:
+        es_page_result = get_es_client().get_page_result(job_id, page_number)
+    except Exception as exc:
+        logger.warning("Page index unavailable for job %s, page %s: %s", job_id, page_number, type(exc).__name__)
+        es_page_result = None
 
     if es_page_result:
         logger.info(f"Retrieved page {page_number} from Elasticsearch for job {job_id}")
 
-        # Check status
         if db_page:
-            if db_page.status == DBJobStatus.FAILED:
-                raise HTTPException(
-                    status_code=500,
-                    detail=f"Conversão da página {page_number} falhou: {db_page.error_message or 'Erro desconhecido'}"
-                )
-
             return {
                 "job_id": db_page.page_job_id or f"page-{page_number}",
                 "parent_job_id": job_id,
@@ -1943,9 +2395,26 @@ async def get_page_result_by_number(
                 "completed_at": es_page_result.get("created_at") or datetime.utcnow(),
             }
 
-    # Fallback to Redis
+    # Page text is durable in MySQL. Redis expires after 24 hours and the
+    # search index can be unavailable; neither should hide a completed page.
+    if db_page is not None and db_page.status == DBJobStatus.COMPLETED and db_page.markdown_content is not None:
+        return {
+            "job_id": db_page.page_job_id or job_id,
+            "parent_job_id": job_id,
+            "type": "page",
+            "page_number": page_number,
+            "status": "completed",
+            "result": {
+                "markdown": db_page.markdown_content,
+                "metadata": {"format": "pdf", "pages": 1, "size_bytes": 0},
+            },
+            "completed_at": db_page.completed_at or datetime.utcnow(),
+        }
+
+    # Fallback to Redis for legacy rows without persisted text.
     logger.info(f"Page {page_number} not in Elasticsearch, trying Redis for job {job_id}")
-    page_job_id = redis_client.get_page_job_id_by_number(job_id, page_number)
+    redis_client = get_redis_client()
+    page_job_id = (db_page.page_job_id if db_page is not None else None) or redis_client.get_page_job_id_by_number(job_id, page_number)
 
     if not page_job_id:
         raise HTTPException(
@@ -2007,11 +2476,16 @@ _DB_TO_API_STATUS = {
     DBJobStatus.COMPLETED: "completed",
     DBJobStatus.FAILED: "failed",
     DBJobStatus.CANCELLED: "cancelled",
+    DBJobStatus.PARTIAL: "partial",
 }
 _API_TO_DB_STATUS = {api: db for db, api in _DB_TO_API_STATUS.items()}
 
 
-def job_kind(source_type: Optional[str]) -> str:
+def job_kind(source_type: Optional[str], operation: Optional[str] = None) -> str:
+    if operation in {'transcription', 'live_transcribe'}:
+        return 'transcription'
+    if operation == 'image':
+        return 'image'
     for kind, st in _KIND_SOURCE_TYPES.items():
         if source_type == st:
             return kind
@@ -2090,10 +2564,16 @@ async def list_jobs(
     if q and q.strip():
         like = f"%{q.strip()}%"
         query = query.filter(or_(Job.name.ilike(like), Job.filename.ilike(like)))
+    transcription = or_(func.coalesce(Job.source_type, '') == 'audio',
+        Job.configuration_row.has(JobConfiguration.operation.in_(['transcription', 'live_transcribe'])))
+    image = or_(func.coalesce(Job.source_type, '') == 'image',
+        Job.configuration_row.has(JobConfiguration.operation == 'image'))
     if kind == "document":
-        query = query.filter(or_(Job.source_type.is_(None), Job.source_type.notin_(list(_KIND_SOURCE_TYPES.values()))))
-    elif kind is not None:
-        query = query.filter(Job.source_type == _KIND_SOURCE_TYPES[kind])
+        query = query.filter(~transcription, ~image)
+    elif kind == 'transcription':
+        query = query.filter(transcription)
+    elif kind == 'image':
+        query = query.filter(image)
 
     counts = {"all": 0, **{api: 0 for api in _API_TO_DB_STATUS}}
     for db_status, n in query.with_entities(Job.status, func.count(Job.id)).group_by(Job.status).all():
@@ -2106,7 +2586,7 @@ async def list_jobs(
     total = query.count()
     # One LEFT JOIN per location table for the page (no N+1)
     rows = (
-        query.outerjoin(Project, Project.id == Job.project_id)
+        query.options(selectinload(Job.configuration_row)).outerjoin(Project, Project.id == Job.project_id)
         .outerjoin(Folder, Folder.id == Job.folder_id)
         .add_columns(Project.name, Folder.name)
         .order_by(Job.created_at.desc())
@@ -2134,7 +2614,7 @@ async def list_jobs(
             "progress": (live or {}).get("progress", 100 if db_status == "completed" else (job.progress or 0)),
             "name": job.name or job.filename,
             "filename": job.filename,
-            "kind": job_kind(job.source_type),
+            "kind": job_kind(job.source_type, job.configuration_row.operation if job.configuration_row else None),
             "source_type": job.source_type,
             "mime_type": job.mime_type,
             "file_size_bytes": job.file_size_bytes,
@@ -2385,19 +2865,22 @@ async def retry_failed_page(
 
         # Enqueue retry task: through the document_conversion route when there is one
         # (spec 0003, 4.14); without a route, exactly as before
+        parent_configuration = job_configuration(db.query(Job).filter(Job.id == job_id).first())
+        retry_options = parent_configuration['options'] if parent_configuration else {}
         def enqueue():
             process_page.delay(
                 job_id=new_page_job_id,
                 parent_job_id=job_id,
                 pdf_path=pdf_path,
                 page_number=page_number,
+                options=retry_options,
             )
 
         engine_dispatch.submit(
             feature="document_conversion", job_id=job_id, subject_type="page", subject_id=new_page_job_id,
             user_id=current_user.id, is_admin=is_effective_admin(current_user),
             payload=engine_dispatch.page_payload(
-                page_job_id=new_page_job_id, parent_job_id=job_id, page_number=page_number, options={},
+                page_job_id=new_page_job_id, parent_job_id=job_id, page_number=page_number, options=retry_options,
                 source_pdf_path=pdf_path, today_queue=settings.celery_task_default_queue),
             today=enqueue, celery=_engine_celery(), session_factory=SessionLocal,
         )
@@ -2460,6 +2943,8 @@ async def get_page_pdf(
 
     - `url`: URL assinada, para ser buscada **diretamente** pelo navegador. Não
       aceita header `Authorization` (e não precisa dele).
+    - `preview_url`: prévia servida pela própria API, exige `Authorization`.
+      Funciona em HTTPS mesmo quando o MinIO só tem endereço de rede local.
     - `expires_in`: validade em segundos a partir de agora.
     - `expires_at`: instante de expiração em UTC (ISO-8601). O cliente deve
       pedir uma URL nova depois disso em vez de reutilizar a antiga.
@@ -2523,14 +3008,55 @@ async def get_page_pdf(
         "job_id": job_id,
         "page_number": page_number,
         "url": presigned_url,
+        # Same API origin and scheme, including root_path behind the tunnel.
+        # Requires the caller's Authorization header; no MinIO LAN URL in the viewer.
+        "preview_url": str(request.url_for("get_page_pdf_content", job_id=job_id, page_number=page_number)),
         "expires_in": PAGE_PDF_URL_TTL_SECONDS,
         "expires_at": expires_at.isoformat(),
     }
 
 
+@router.get("/jobs/{job_id}/pages/{page_number}/pdf/content", summary="Prévia autenticada do PDF de uma página")
+def get_page_pdf_content(
+    job_id: str,
+    page_number: int,
+    current_user: User = Depends(get_current_active_user),
+    db_page: Optional[Page] = Depends(get_owned_page_or_none),
+):
+    """Stream a split PDF through the API, including during conversion.
+
+    The browser sends Authorization to the API. Storage stays on the internal
+    network, so HTTPS previews work without a public MinIO endpoint or CORS.
+    """
+    if db_page is None:
+        raise HTTPException(status_code=404, detail=f"Página {page_number} não encontrada")
+    minio = get_minio_client()
+    object_path = db_page.minio_page_path or f"pages/{job_id}/page_{page_number:04d}.pdf"
+    if not minio.file_exists(minio.bucket_pages, object_path):
+        raise HTTPException(status_code=404, detail=f"Arquivo PDF da página {page_number} não encontrado")
+    try:
+        source = minio.open_object(minio.bucket_pages, object_path)
+    except Exception:
+        logger.exception("Could not open page PDF for job %s, page %s", job_id, page_number)
+        raise HTTPException(status_code=503, detail="Armazenamento de arquivos indisponível")
+
+    def chunks():
+        try:
+            yield from source.stream(64 * 1024)
+        finally:
+            source.close()
+            source.release_conn()
+
+    return StreamingResponse(chunks(), media_type="application/pdf", headers={
+        "Cache-Control": "private, no-store",
+        "Content-Disposition": f'inline; filename="page-{page_number}.pdf"',
+        "X-Content-Type-Options": "nosniff",
+    })
+
+
 @router.get("/health", response_model=HealthCheckResponse)
-async def health_check():
-    """Health check endpoint"""
+def health_check():
+    """Run blocking Redis/Elasticsearch/Celery probes in FastAPI's thread pool."""
     redis_client = get_redis_client()
     es_client = get_es_client()
 
