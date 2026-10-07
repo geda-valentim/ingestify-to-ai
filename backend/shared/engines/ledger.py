@@ -149,6 +149,13 @@ def subject_state(db: Session, subject_type: Optional[str], subject_id: Optional
     parent job is. A vision request is always open (it has no backlog to return to).
     """
     if subject_type == "vision_request":
+        from shared.models import ImageAnalysisRun
+        run = db.get(ImageAnalysisRun, job_id) if job_id else None
+        job = db.get(Job, job_id) if run else None
+        if job and job.minio_result_path and run.status == 'completed':
+            return 'completed', job.completed_at
+        if job and job.minio_result_path and run.status in ('partial', 'failed', 'cancelled'):
+            return 'closed', job.completed_at
         return "open", None
     job = db.get(Job, job_id) if job_id else None
     if job is None or job.status in (JobStatus.CANCELLED, JobStatus.FAILED):
@@ -431,11 +438,21 @@ def mark_lost(usage_id: int, *, stale_before: datetime, session_factory=None,
         state, completed_at = subject_state(db, usage.subject_type, usage.subject_id, usage.job_id,
                                             page_number_of(dispatch_of(db, usage)))
         completed = state == "completed"
-        values = dict(status="settled", outcome="succeeded" if completed else "lost", counts_toward_attempts=not completed,
+        from shared.models import ImageAnalysisRun
+        full = db.get(ImageAnalysisRun, usage.job_id) if usage.subject_type == 'vision_request' and usage.job_id else None
+        durable_full = full and full.status in ('completed', 'partial', 'failed', 'cancelled') and completed_at
+        outcome = ('succeeded' if full.status == 'completed' else 'cancelled' if full.status == 'cancelled' else 'failed') if durable_full else ('succeeded' if completed else 'lost')
+        values = dict(status="settled", outcome=outcome, counts_toward_attempts=outcome not in ('succeeded', 'cancelled'),
                       finished_at=now, actual_usd=0, cost_basis="measured",
                       error_code=None if completed else "LOST")
-        if completed:
+        if completed or durable_full:
             values["output_persisted_at"] = completed_at or now
+        if full:
+            # Hardkill has no observed stop time. Keep duration unknown; for a
+            # priced lane retain its reservation instead of claiming a free run.
+            values.update(error_code='MEASUREMENT_MISSING', units={'measurement': 'unavailable'},
+                          actual_usd=usage.reserved_usd if usage.rate_usd_per_s else 0,
+                          cost_basis='reserved' if usage.rate_usd_per_s else 'measured')
         n = db.execute(update(EngineUsage).where(*conditions).values(**values)
                        .execution_options(synchronize_session=False)).rowcount
         if n == 0:

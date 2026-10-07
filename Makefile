@@ -1,4 +1,4 @@
-.PHONY: help ensure-jwt-secret start stop restart logs status clean infra-start infra-stop infra-status ps build rebuild dev prod scale test check-services check-redis check-mysql check-elasticsearch check-minio smart-start validate gpu gpu-build gpu-check vision-download logs-vision shell-vision
+.PHONY: help ensure-jwt-secret start stop restart logs status clean infra-start infra-stop infra-status ps build rebuild dev prod scale test check-services check-redis check-mysql check-elasticsearch check-minio smart-start validate gpu gpu-build gpu-check vision-download faces-download logs-vision shell-vision
 
 # Default target
 .DEFAULT_GOAL := help
@@ -250,6 +250,11 @@ vision-download: ## Pre-download the Florence-2 weights into the shared cache
 		cd backend && python -m workers.vision.download; \
 	fi
 	@echo "$(GREEN)✅ Weights cached$(NC)"
+
+faces-download: ## Download and checksum-verify the pinned facial models
+	docker compose run --rm --no-deps --user 0:0 --entrypoint python \
+		-v "$(CURDIR)/scripts/download_face_models.py:/app/download_face_models.py:ro" \
+		-v ingestify-face-cache:/models/faces:rw worker-vision /app/download_face_models.py --destination /models/faces
 
 # ======================================
 # INFRASTRUCTURE COMMANDS

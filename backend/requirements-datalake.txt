@@ -1,0 +1,3 @@
+# User-configured cloud storage adapters; no models or ambient credentials.
+google-cloud-storage>=3.0,<4
+azure-storage-blob>=12.25,<13

@@ -12,6 +12,7 @@ export const STATUS_TABS: { value: JobStatus | "all"; label: string }[] = [
   { value: "processing", label: "Processing" },
   { value: "queued", label: "Queued" },
   { value: "completed", label: "Completed" },
+  { value: "partial", label: "Partial" },
   { value: "failed", label: "Failed" },
   { value: "cancelled", label: "Cancelled" },
 ];

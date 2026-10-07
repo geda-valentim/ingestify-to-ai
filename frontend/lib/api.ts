@@ -67,7 +67,7 @@ export class ApiError extends Error {
   }
 }
 
-async function throwApiError(response: Response, fallback: string): Promise<never> {
+export async function throwApiError(response: Response, fallback: string): Promise<never> {
   const data = await response.json().catch(() => null);
   const detail = (data as { detail?: unknown } | null)?.detail;
   const message = typeof detail === "string" && detail ? detail : `${fallback}: ${response.statusText}`;
@@ -163,7 +163,29 @@ export const authApi = {
 };
 
 // Jobs API
+export function uploadSourceType(filename: string): "audio" | "file" | "image" {
+  if (/\.(png|jpe?g|webp|bmp|gif|tiff?)$/i.test(filename)) return "image";
+  return /\.(mp3|mp4|m4v|wav|flac|ogg|oga|spx|m4a|aac|wma|webm|mkv|avi|mov|opus|wmv|flv|mpeg|mpg|ts|3gp)$/i.test(filename) ? "audio" : "file";
+}
+
 export const jobsApi = {
+  async faceCapabilities(): Promise<import("@/types/faces").FaceCapabilities> {
+    const response = await apiFetch(`${API_URL}/images/faces/capabilities`, { headers: getHeaders(true) });
+    if (!response.ok) await throwApiError(response, "Facial capabilities unavailable");
+    return response.json();
+  },
+
+  async imageCapabilities(): Promise<import("@/types/api").VisionCapabilities> {
+    const response = await apiFetch(`${API_URL}/images/capabilities`, { headers: getHeaders(true) });
+    if (!response.ok) await throwApiError(response, "Could not load image capabilities");
+    return response.json();
+  },
+
+  async cancelFullImage(jobId: string): Promise<void> {
+    const response = await apiFetch(`${API_URL}/images/${jobId}/cancel`, { method: "POST", headers: getHeaders(true) });
+    if (!response.ok) await throwApiError(response, "Não foi possível cancelar a análise");
+  },
+
   async convert(request: ConvertRequest): Promise<JobCreatedResponse> {
     const formData = new FormData();
     formData.append("source_type", request.source_type);
@@ -204,6 +226,44 @@ export const jobsApi = {
   },
 
   async upload(request: UploadRequest): Promise<JobCreatedResponse> {
+    if (uploadSourceType(request.file.name) === "image") {
+      const body = new FormData();
+      body.append("file", request.file);
+      if (request.tags?.length) body.append("tags", request.tags.join(","));
+      appendLocation(body, request);
+      const operation = request.image_operation ?? "describe";
+      const full = operation === "full";
+      const faces = operation === "faces";
+      const analyze = !faces && (full || operation === "analyze" || !!Object.keys(request.image_generation ?? {}).length);
+      if (faces) {
+        body.append("face_options", JSON.stringify(request.face_options ?? {}));
+        body.append("wait", "false");
+        if (request.datalake) body.append("datalake", JSON.stringify(request.datalake));
+      } else if (full) {
+        body.append("mode", "full");
+        body.append("wait", "false");
+        body.append("full_options", JSON.stringify({ ...request.image_full_options, generation: request.image_generation ?? {} }));
+        if (request.datalake) body.append("datalake", JSON.stringify(request.datalake));
+      } else if (analyze) {
+        body.append("task", request.image_task ?? (operation === "ocr" ? "<OCR_WITH_REGION>" : "<MORE_DETAILED_CAPTION>"));
+        body.append("wait", "false");
+        if (request.image_text_input) body.append("text_input", request.image_text_input);
+        if (request.image_region) body.append("region", JSON.stringify(request.image_region));
+        if (request.image_generation && Object.keys(request.image_generation).length) body.append("generation", JSON.stringify(request.image_generation));
+      } else if (operation === "describe" && request.image_task) body.append("task", request.image_task);
+      const response = await apiFetch(faces ? `${API_URL}/images/faces/upload` : analyze ? `${API_URL}/images/analyze/upload` : operation === "ocr" ? `${API_URL}/images/ocr/upload` : `${API_URL}/images/describe/upload`, {
+        method: "POST", headers: { ...getHeaders(true), ...((full || faces) ? { "Idempotency-Key": request.image_idempotency_key ?? crypto.randomUUID() } : {}) }, body,
+      });
+      const data = await response.json().catch(() => null);
+      // The synchronous endpoint can time out while its owned job continues.
+      // Follow that job instead of asking the user to upload it a second time.
+      if (response.status === 504 && data?.detail?.job_id) {
+        return { job_id: data.detail.job_id, status: "queued", created_at: new Date().toISOString(), message: "Image processing continues" };
+      }
+      if (!response.ok) throw new ApiError(response.status, data, data?.detail?.message ?? "Image upload failed");
+      return { ...data, created_at: new Date().toISOString(), message: "Image processed" };
+    }
+
     const formData = new FormData();
     formData.append("file", request.file);
 

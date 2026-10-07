@@ -81,4 +81,7 @@ Rascunho ──▶ Em revisão ──▶ Aprovada ──▶ Implementada
 | 0007 | [Operar engines e modelos pelo painel admin](0007-operacao-de-engines-pelo-admin.md) | Em implementação | 2026-10-06 |
 | 0009 | [Perfis de execução com RBAC e ABAC](0009-perfis-de-execucao-e-controle-de-acesso.md) | Implementada; habilitada no dev, canário físico pendente | 2026-10-06 |
 
+| 0011 | [Full Analysis de imagens](0011-full-analysis.md) | Implementada | 2026-10-06 |
+| 0012 | [Detecção facial e expressões](0012-deteccao-facial-e-expressoes.md) | Implementada; ativação opt-in | 2026-10-06 |
+
 <!-- Adicione uma linha aqui ao criar cada spec. -->

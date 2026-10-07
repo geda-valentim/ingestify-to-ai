@@ -90,14 +90,14 @@ export function FileUpload({ onFileSelect, selectedFile, onClear }: FileUploadPr
               </p>
             </div>
             <div className="text-xs text-muted-foreground">
-              Supported formats: PDF, DOCX, DOC, HTML, PPTX, XLSX, RTF, ODT
+              Supported formats: PDF, DOCX, DOC, HTML, PPTX, XLSX, RTF, ODT, PNG, JPEG, WEBP, BMP, GIF, TIFF
             </div>
           </div>
           <input
             type="file"
             className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
             onChange={handleFileInput}
-            accept=".pdf,.docx,.doc,.html,.pptx,.xlsx,.rtf,.odt"
+            accept=".pdf,.docx,.doc,.html,.pptx,.xlsx,.rtf,.odt,.png,.jpg,.jpeg,.webp,.bmp,.gif,.tif,.tiff"
           />
         </div>
       ) : (
