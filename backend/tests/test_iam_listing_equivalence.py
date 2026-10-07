@@ -185,6 +185,30 @@ def legacy_project_counts(db, uid):
     return dict(rows)
 
 
+def legacy_project_stats(db, uid):
+    """root/failed/active counts and last_job_at per project, from the legacy owner filter."""
+    stats = {}
+    q = db.query(Job).filter(Job.user_id == uid, Job.job_type == "MAIN", Job.project_id.isnot(None))
+    for j in q:
+        st = stats.setdefault(j.project_id, {"root_job_count": 0, "failed_count": 0, "active_count": 0,
+                                             "last_job_at": None})
+        st["root_job_count"] += j.folder_id is None
+        st["failed_count"] += j.status == JobStatus.FAILED
+        st["active_count"] += j.status in (JobStatus.PENDING, JobStatus.PROCESSING)
+        if st["last_job_at"] is None or j.created_at > st["last_job_at"]:
+            st["last_job_at"] = j.created_at
+    return {pid: {**st, "last_job_at": st["last_job_at"].isoformat()} for pid, st in stats.items()}
+
+
+def legacy_folder_counts(db, uid):
+    rows = (
+        db.query(Job.folder_id, func.count(Job.id))
+        .filter(Job.user_id == uid, Job.job_type == "MAIN", Job.project_id.isnot(None), Job.folder_id.isnot(None))
+        .group_by(Job.folder_id).all()
+    )
+    return dict(rows)
+
+
 def legacy_project_keys(db, uid):
     return {k for (k,) in db.query(APIKey.id).filter(APIKey.user_id == uid, APIKey.project_id.isnot(None))}
 
@@ -241,6 +265,12 @@ def test_projects_listing_and_counts_return_the_legacy_ids(client, db, mode, uid
     assert {p["id"]: p["job_count"] for p in projects if p["job_count"]} == legacy_project_counts(db, uid)
     assert {k["id"] for p in projects for k in p["api_keys"]} == legacy_project_keys(db, uid)
     assert {f["id"] for p in projects for f in p["folders"]} == legacy_folders(db, uid)
+    # The other counts read through `scope.of(Job)` too.
+    fields = ("root_job_count", "failed_count", "active_count", "last_job_at")
+    got = {p["id"]: {f: p[f] for f in fields} for p in projects if p["job_count"]}
+    assert got == legacy_project_stats(db, uid)
+    assert {f["id"]: f["job_count"] for p in projects for f in p["folders"] if f["job_count"]} \
+        == legacy_folder_counts(db, uid)
 
 
 @pytest.mark.parametrize("uid", USERS)
