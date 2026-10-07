@@ -2,6 +2,19 @@
 
 > **Registro histórico (2025-10).** Não é mantido; para mudanças posteriores use `git log`. Observação: `workers/tasks_old.py`, citado abaixo, não existe (há um `workers/tasks.py.backup`). Exceção: mudanças de comportamento intencionais que uma spec manda registrar aqui entram na seção abaixo.
 
+## 2026-10: Spec 0020 — perfis de execução padrão na instalação
+
+- O root cria e publica um perfil `Padrão — <modelo>` por modelo aprovado do catálogo e
+  um perfil `<engine> — <feature>` por binding configurado, e vincula este último quando a
+  engine/feature ainda não tem perfil desejado. Roda na criação do root, em todo boot da
+  API com root, quando um host agent se registra ou volta, e por
+  `scripts/seed_execution_profiles.py` / `python -m shared.access.seed` (`--dry-run`).
+- **Mudança de comportamento:** engines vinculadas pela semeadura passam a "gerenciadas"
+  (escritores legados de capacidade exigem operação), e engines sem atributos recebem o
+  ambiente da instalação. Nada é aplicado, implantado ou reservado.
+- Sem `IAM_MODE=enforce` a semeadura não faz nada (`ACCESS_NOT_ENABLED`). Ver
+  [execution-profiles](features/execution-profiles.md#perfis-padrão-da-instalação-spec-0020).
+
 ## 2026-10: Spec 0019 — usuário root na primeira inicialização
 
 Ver [specs/0019](specs/0019-usuario-root-na-primeira-inicializacao.md).

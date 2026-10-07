@@ -6,12 +6,12 @@ import hmac
 import json
 from datetime import datetime
 from pathlib import Path
-from fastapi import APIRouter, Depends, HTTPException, Request, Header
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Header
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import StreamingResponse
 from fastapi.concurrency import run_in_threadpool
 from pydantic import Field
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, sessionmaker
 from shared.config import get_settings
 from shared.database import get_db, SessionLocal
 from shared.engine_control import service, registry, catalog
@@ -452,7 +452,11 @@ class HostHeartbeat(Closed):
 
 @host_router.post("/{host_id}/heartbeat")
 def host_heartbeat(
-    host_id: str, body: HostHeartbeat, request: Request, db: Session = Depends(get_db)
+    host_id: str,
+    body: HostHeartbeat,
+    request: Request,
+    background: BackgroundTasks,
+    db: Session = Depends(get_db),
 ):
     host_identity(host_id, request)
     if set(body.inventory) - {
@@ -464,11 +468,27 @@ def host_heartbeat(
         "readiness",
     }:
         raise HTTPException(422, detail={"code": "INVALID_INVENTORY"})
-    h = db.get(ControlHost, host_id) or ControlHost(id=host_id)
+    h = db.get(ControlHost, host_id)
+    now = datetime.utcnow()
+    from shared.access import seed
+
+    ready = seed.host_became_ready(
+        h.seen_at if h else None,
+        (h.inventory or {}).get("manifest_hash") if h else None,
+        body.inventory,
+        now,
+    )
+    h = h or ControlHost(id=host_id)
     h.inventory = body.inventory
-    h.seen_at = datetime.utcnow()
+    h.seen_at = now
     db.add(h)
     db.commit()
+    if ready:
+        # Spec 0020: a host that registers (or comes back) after the root existed gets
+        # its local default profiles created and bound, without waiting for a restart.
+        background.add_task(
+            seed.seed_if_root, sessionmaker(bind=db.get_bind()), f"host {host_id} ready"
+        )
     return {"ok": True}
 
 

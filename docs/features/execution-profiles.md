@@ -23,6 +23,54 @@ Um **perfil de execução** contém os parâmetros de runtime. Um **modelo aprov
 é uma entrada do catálogo instalado. Um **papel de acesso** contém permissões;
 sua política ABAC delimita recursos e limites. São entidades distintas.
 
+## Perfis padrão da instalação (spec 0020)
+
+Uma instalação não começa com a biblioteca vazia. O root cria, publica e — quando a
+engine permite — vincula perfis de execução padrão, sem nenhum efeito físico (nenhum
+plano, operação, outbox ou reserva; aplicar continua sendo uma operação explícita).
+
+| Perfil | Quando | Conteúdo |
+|---|---|---|
+| `Padrão — <modelo>` | Para cada modelo `approved` do catálogo e cada adapter dele | Local: 1 worker sem GPU, `host_id` do host agent visto por último. Modal: `gpu_type` L4, 1 worker, `memory_mb` nulo, sem `cpu`, `min_ready_replicas` 0. Ponto de partida: revise GPU e réplicas antes de vincular |
+| `<engine> — <feature>` | Para cada engine × feature com binding configurado (ou perfil desejado legado) | Reproduz a configuração atual: binding da engine, modelo aprovado do adapter/feature, `desired = max = workers`, `min_ready` 0, cooldown 60 s, `on_start`, `memory_mb` nulo, `host_id` do host local. Um perfil desejado legado é importado por whitelist (como o import da tela), com `warm_until` nulo |
+
+O perfil de engine é **vinculado** quando a engine ainda não tem perfil desejado na
+feature. Uma engine sem atributos recebe o ambiente da instalação (`ENVIRONMENT`) antes
+do vínculo. Vincular passa a engine para "gerenciada": escritores legados de capacidade
+passam a exigir operação. Falhas de vínculo não interrompem a semeadura e são
+repetidas na próxima execução, porque a engine continua sem perfil desejado.
+
+**Quando roda:** na criação do root (cadastro da instalação vazia e
+`make_admin.py --root`), em todo boot da API com root existente, quando um host agent
+se registra, volta após ficar sem heartbeat (> 30 s) ou muda de manifest, e
+manualmente com `scripts/seed_execution_profiles.py [--dry-run] [--json]` (ou
+`python -m shared.access.seed`). Sem root nada acontece; nenhum gatilho derruba o boot,
+o cadastro ou o heartbeat.
+
+**Idempotência:** a chave (`catalog:<modelo>:<adapter>` ou `engine:<id>:<feature>`) fica
+no `AdminAudit` `execution_profile.created`, gravado na mesma transação do perfil. Renomear
+não duplica; um perfil semeado **arquivado** não é recriado. Mudanças posteriores de
+catálogo ou de binding não atualizam perfis existentes (crie uma revisão). Cada passo
+toma o lock do epoch de autorização, então vários workers da API bootando juntos não
+duplicam nada.
+
+**Auditoria:** perfil criado, publicado, engine classificada e vínculo (`engine.profile_created`)
+levam `{"origin": "seed", "seed_key": ...}` no `after`.
+
+**Com acesso a engines desligado** (`IAM_MODE` diferente de `enforce` e sem o alias
+`ENGINE_ACCESS_ENABLED`) a biblioteca está fechada: a semeadura registra
+`ACCESS_NOT_ENABLED` e roda no próximo boot com o acesso ligado.
+
+**Instalação nova sem host agent:** perfis locais exigem um `host_id` concreto; até um
+host se registrar, `Padrão — …` locais e perfis da engine `local` ficam pendentes com
+`NO_REGISTERED_HOST`. O primeiro heartbeat do host dispara a semeadura, que cria e vincula.
+
+O relatório (`SeedReport`) lista `created`, `published`, `bound` e `skipped`; cada item
+pulado traz `key`, `stage` (`seed`, `create` ou `bind`), o código estável (`reason`) e
+uma explicação em português (`message`), por exemplo `HOST_AGENT_NOT_READY`,
+`TEST_CONNECTION_FIRST` (Modal sem "Testar conexão"), `MODEL_NOT_APPROVED`,
+`RUNTIME_PROFILE_EXISTS`.
+
 ## Criar, publicar, vincular e operar
 
 1. Abra a biblioteca e crie um perfil nomeado. Escolha provider, feature, ambiente,

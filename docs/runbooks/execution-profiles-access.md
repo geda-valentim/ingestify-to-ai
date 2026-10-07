@@ -96,6 +96,18 @@ Atributos de engine, Recursos e Principais de instalação.
 1. Na aba Atributos de engine, classifique o ambiente das engines que receberão grants.
 2. Crie um perfil na biblioteca, publique a revisão e faça o primeiro vínculo de
    bootstrap. Isso registra os recursos canônicos sem executar nem reservar custo.
+   Desde a spec 0020 o root já recebe perfis padrão publicados e vinculados (ver
+   [Perfis padrão da instalação](../features/execution-profiles.md#perfis-padrão-da-instalação-spec-0020)).
+   Para conferir ou repetir:
+
+   ```bash
+   docker compose exec api python -m shared.access.seed --dry-run   # só mostra o plano
+   docker compose exec api python -m shared.access.seed             # cria/publica/vincula
+   ```
+
+   Itens pulados trazem código e motivo; `HOST_AGENT_NOT_READY` e
+   `TEST_CONNECTION_FIRST` se resolvem com o host agent no ar / "Testar conexão" e
+   uma nova execução (o boot e o heartbeat do host também repetem).
 3. Em consumidores, declare todas as engines/features afetadas por cada serviço
    e GPU, incluindo o worker genérico. Marque qualificado somente após conferir
    o inventário e os usos reais. Até isso acontecer, atuação delegada falha fechada.
