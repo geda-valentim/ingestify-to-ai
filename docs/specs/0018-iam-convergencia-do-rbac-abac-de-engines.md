@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Em implementação; fatias 1–5 no branch, pendentes CA5 e CA18 em MySQL |
+| **Status** | Em implementação; fatias 1–5 no branch, CA1–CA18 cumpridos |
 | **Autor** | Geda Valentim / Claude |
 | **Criada em** | 2026-10-07 |
 | **Atualizada em** | 2026-10-07 |
@@ -97,15 +97,27 @@ sua semântica de decisão. As famílias nunca se enxergam (§4.3).
   o grant, de modo que não há decisão legada a igualar. Só o lado novo é testado, como
   defesa em profundidade: o binding malformado não contribui nada (→ nega).
   *Gate antes do deploy: seção 6.4 do runbook de acesso.*
-- [ ] CA5. Escrever binding de papel `engines` trava o epoch da 0009 (`FOR UPDATE`)
+- [x] CA5. Escrever binding de papel `engines` trava o epoch da 0009 (`FOR UPDATE`)
   antes de ler ou alterar qualquer binding ou usuário e o incrementa na mesma
   transação; bindings de papel `platform` não tocam o epoch (0013 §4 regra 2).
   Ordem global de locks (§4.3) respeitada; teste de concorrência em MySQL: admissão de
   efeito de um filho × concessão 0014 ao dono do pai, sem deadlock.
-  *Parcial (2026-10-07):* lock e incremento do epoch por família provados em SQLite
-  (`tests/test_iam_bindings_api.py`, `tests/test_iam_engine_bindings_writes.py`) e o
-  índice da leitura com lock fixado no SQL do MySQL; falta o teste de concorrência em
-  InnoDB (§8 fatia 2).
+  *Evidência (2026-10-07):* lock e incremento do epoch por família em SQLite
+  (`tests/test_iam_bindings_api.py`, `tests/test_iam_engine_bindings_writes.py`); as
+  quatro intercalações do §7 em InnoDB (MySQL 8.4, banco descartável
+  `engine_control_test_*`, opt-in por `ENGINE_CONTROL_TEST_DATABASE_URL`) em
+  `tests/test_iam_engine_bindings_mysql.py` e nos gates da 0009 de
+  `tests/test_execution_profiles_migration.py`. O teste achou dois defeitos, corrigidos:
+  (1) a admissão travava a faixa de bindings do ator com next-key locks cujo gap alcança
+  as linhas do sujeito anterior e então esperava pela linha `users` do dono do pai; com
+  uma concessão 0014 a esse dono (que segura a linha e insere no gap) dava deadlock
+  (InnoDB 1213). `engine_bindings.grants(lock=True)` passa a descobrir os ids numa
+  leitura simples e travar cada linha pela chave primária (lock de registro, sem gap;
+  nenhum binding `engines` aparece no meio porque toda escrita `engines` trava o epoch
+  que o chamador já segura). (2) `grant_engine`/`revoke_engine` liam a autoridade e o
+  `_delegator` sem lock, e uma transação com snapshot anterior ao epoch criava filho de
+  um pai já revogado; agora usam leituras com lock (`authorize(lock=True)`,
+  `_delegator(lock=True)`).
 - [x] CA6. `POST /admin/iam/bindings` concede papéis das duas famílias, com regras
   **por família** que nunca se cruzam:
   - `platform`: as da 0014, inalteradas — `iam.bindings.manage`, autoconcessão
@@ -199,12 +211,13 @@ sua semântica de decisão. As famílias nunca se enxergam (§4.3).
   incrementa `version` e o epoch; já revogado → 409 `ALREADY_REVOKED`; versão
   divergente → 409 `VERSION_CONFLICT`. Revogar binding `platform` mantém a regra da
   0014.
-- [ ] CA18. `alembic heads` retorna um único head; `upgrade → downgrade → upgrade` é
+- [x] CA18. `alembic heads` retorna um único head; `upgrade → downgrade → upgrade` é
   idempotente em MySQL e SQLite, partindo tanto de um banco novo (onde a revisão da
   0014 já cria as colunas novas) quanto de um banco existente na 0014.
-  *Parcial (2026-10-07):* head único e o round trip a partir dos dois pontos de partida
-  provados em SQLite (`tests/test_iam_engine_bindings_migration.py`); falta o round trip
-  em MySQL.
+  *Evidência (2026-10-07):* head único e o round trip a partir dos dois pontos de partida
+  em SQLite e em InnoDB (MySQL 8.4, banco descartável `engine_control_test_*`, opt-in
+  por `ENGINE_CONTROL_TEST_DATABASE_URL`): `test_upgrade_downgrade_upgrade_round_trip`
+  em `tests/test_iam_engine_bindings_migration.py`, parametrizado por banco.
 
 ## 4. Solução proposta
 
@@ -316,8 +329,10 @@ da API (`init_db`, único chamador hoje) enquanto `access_role_grants` existir.
   `platform` (`role` já validado como papel `platform`) força no MySQL o índice
   `ix_iam_bindings_subject_role` (`FORCE INDEX`), para a leitura com lock não varrer
   `ix_iam_bindings_subject` e travar bindings `engines` do mesmo sujeito; o boot
-  exige o índice. Ordem não verificada em InnoDB até existir o teste de concorrência
-  de CA5.
+  exige o índice. As leituras com lock da família `engines` (`grants(lock=True)`,
+  `active_grant`, alvo da revogação) travam bindings só pela chave primária, sem gap,
+  para que uma admissão que espera pela linha `users` do dono do pai nunca segure o gap
+  onde uma concessão 0014 a esse dono insere. Verificado em InnoDB (CA5).
 - O `_delegator` mantém o envelope restrito a `policy.PERMISSIONS`
   (`DELEGATION_INVALID`) e considera só bindings `engines`.
 
@@ -455,8 +470,8 @@ não vai a produção.
   `create_grant`/`revoke`/`list_grants` (códigos e auditoria da 0009 até a fatia 3);
   espelho em `shared/iam/engine_mirror.py`; `migration.reconcile_on_boot` em
   `init_db` e no `worker_init` de todo worker Celery (com engines ligado; falha
-  impede o boot). Testes em `tests/test_iam_engine_bindings_writes.py`. O teste de
-  concorrência em MySQL de CA5 fica para quando houver banco InnoDB descartável no CI.
+  impede o boot). Testes em `tests/test_iam_engine_bindings_writes.py`; concorrência
+  em InnoDB (CA5) em `tests/test_iam_engine_bindings_mysql.py`, opt-in.
 - [x] 3. API unificada por família, aliases depreciados, auditoria e docs de API (CA6,
   CA8, CA12, CA16, CA17). `/admin/iam/bindings*` declaram `binding_admin(write=...)`
   (kind `iam_or_engine_access`) e chamam `shared/iam/bindings.grant_binding` /
@@ -488,8 +503,7 @@ não vai a produção.
   `auth-and-api-keys.md` e `monitoring-and-admin.md`; guias web de Compute
   (`frontend/app/docs/`) e o aviso da biblioteca citam `IAM_MODE` e
   `/admin/iam/bindings`; `docs/CHANGELOG.md`. `CLAUDE.md` não muda: a 0018 não cria
-  chave Redis e não altera JWT/API key. Pendentes para fechar a spec: CA5 e CA18 em
-  MySQL.
+  chave Redis e não altera JWT/API key.
 
 ## 9. Questões em aberto
 

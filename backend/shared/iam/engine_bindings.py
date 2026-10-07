@@ -7,7 +7,8 @@ rest of 0009 consumes from a `RoleGrant` (`.id`, `.user_id`, `.role`,
 `.expires_at`, `.revoked_at`, `.version`, `.created_at`), and `grants` /
 `active_grant` keep the 0009 semantics: every active grant of the actor counts,
 the parent chain is walked with the owner-active check and a cycle guard, and
-`lock=True` takes the same row locks.
+`lock=True` locks the same rows (record locks by primary key, never a gap: see
+`_locked_rows`).
 
 It only ever sees the `engines` family: `subject_type='user'` and a role of
 `catalog.ENGINE_ROLES`. As defense in depth (0018 §4.1) it drops, with a warning,
@@ -117,15 +118,45 @@ def active_grant(db, grant, seen=None, lock=False) -> bool:
     return True
 
 
-def grants(db, actor, lock=False) -> List[EngineGrant]:
-    """Every active engines grant of `actor`, ranked by (created_at, id)."""
-    q = (
-        _engine_rows(db)
+def _locked_rows(db, actor) -> List[IamBinding]:
+    """
+    The actor's engines bindings, each locked by primary key (`lock=True`).
+
+    A locking range read over the actor's index range would take InnoDB next-key
+    locks whose gap reaches back to the previous subject's rows. An effect
+    admission holding that gap while it waits on the parent owner's `users` row
+    deadlocks with a 0014 grant to that owner, which holds the row and inserts its
+    binding into the gap (0018 §4.3, CA5). So the ids come from a plain read and
+    every row is then locked alone: a record lock, no gap, and `populate_existing`
+    brings the latest committed revocation even through an older snapshot. No
+    engines binding can appear meanwhile, since every engines write takes the epoch
+    the caller already holds; one committed before the epoch lock but after an
+    older snapshot is only missed, which denies.
+    """
+    ids = [
+        i
+        for (i,) in _engine_rows(db)
         .filter(IamBinding.subject_id == str(actor))
         .order_by(IamBinding.created_at, IamBinding.id)
-        .populate_existing()
+        .with_entities(IamBinding.id)
+    ]
+    rows = (
+        _engine_rows(db).filter(IamBinding.id == i).populate_existing().with_for_update().first()
+        for i in ids
     )
+    return [b for b in rows if b is not None]
+
+
+def grants(db, actor, lock=False) -> List[EngineGrant]:
+    """Every active engines grant of `actor`, ranked by (created_at, id)."""
     if lock:
-        q = q.with_for_update()
+        q = _locked_rows(db, actor)
+    else:
+        q = (
+            _engine_rows(db)
+            .filter(IamBinding.subject_id == str(actor))
+            .order_by(IamBinding.created_at, IamBinding.id)
+            .populate_existing()
+        )
     rows = [as_grant(b) for b in q if well_formed(db, b)]
     return [g for g in rows if active_grant(db, g, lock=lock)]

@@ -353,11 +353,17 @@ def bind(db, engine, body, actor):
     )
 
 
-def _delegator(db, actor, permission_set, constraints, expires_at, delegation=None):
+def _delegator(db, actor, permission_set, constraints, expires_at, delegation=None, lock=False):
+    """
+    The actor's grant whose envelope covers the request. `lock=True` reads the
+    grants with locking reads, as the effect admission does: under the epoch lock a
+    concurrent revocation of the parent is then seen even by a transaction that
+    already holds an older snapshot (0018 §7).
+    """
     user = db.get(User, actor)
     if is_effective_admin(user):
         return None
-    for g in policy.grants(db, actor):
+    for g in policy.grants(db, actor, lock):
         envelope = g.delegation
         if "access.grants.manage" not in g.permissions or not envelope:
             continue

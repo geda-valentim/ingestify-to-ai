@@ -301,8 +301,44 @@ def _schema(engine):
     return cols, fks, idx
 
 
+def _drop_every_table(engine):
+    with engine.begin() as conn:
+        conn.execute(text("SET FOREIGN_KEY_CHECKS=0"))
+        for table in inspect(conn).get_table_names():
+            conn.execute(text(f"DROP TABLE `{table}`"))
+        conn.execute(text("SET FOREIGN_KEY_CHECKS=1"))
+
+
+@pytest.fixture(params=["sqlite", "mysql"])
+def migration_world(request, world):  # noqa: F811
+    """
+    The CA18 round trip on SQLite and on InnoDB. MySQL is opt-in like the other
+    InnoDB gates (ENGINE_CONTROL_TEST_DATABASE_URL naming a disposable
+    engine_control_test_* database): there DDL commits implicitly and an index
+    backing a foreign key cannot be dropped before the key.
+    """
+    if request.param == "sqlite":
+        yield world
+        return
+    from tests.test_execution_profiles_migration import mysql_url
+
+    sql = create_engine(mysql_url(), pool_pre_ping=True)
+    _drop_every_table(sql)
+    Base.metadata.create_all(sql)
+    # The synthetic users, engines and epoch of the shared fixture.
+    with world() as source, sql.begin() as target:
+        for table in Base.metadata.sorted_tables:
+            rows = source.execute(table.select()).mappings().all()
+            if rows:
+                target.execute(table.insert(), [dict(row) for row in rows])
+    yield sessionmaker(bind=sql)
+    _drop_every_table(sql)
+    sql.dispose()
+
+
 @pytest.mark.parametrize("start", ["new", "existing_0014"])
-def test_upgrade_downgrade_upgrade_round_trip(world, start, settings_off):  # noqa: F811
+def test_upgrade_downgrade_upgrade_round_trip(migration_world, start, settings_off):
+    world = migration_world
     engine = _engine(world)
     with world() as db:
         ids = legacy_state(db)

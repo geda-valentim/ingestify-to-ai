@@ -85,7 +85,7 @@ Rascunho ──▶ Em revisão ──▶ Aprovada ──▶ Implementada
 | 0015 | IAM: API keys escopadas | Reservada (0013) | 2026-10-06 |
 | 0016 | IAM: organizações pessoais | Reservada (0013) | 2026-10-06 |
 | 0017 | IAM: compartilhamento, grupos e organizações de time | Reservada (0013) | 2026-10-06 |
-| 0018 | [IAM: convergência do RBAC/ABAC de engines (0009) no IAM](0018-iam-convergencia-do-rbac-abac-de-engines.md) | Em implementação; pendentes CA5 e CA18 em MySQL | 2026-10-07 |
+| 0018 | [IAM: convergência do RBAC/ABAC de engines (0009) no IAM](0018-iam-convergencia-do-rbac-abac-de-engines.md) | Em implementação; CA1–CA18 cumpridos, aguardando merge | 2026-10-07 |
 
 | 0011 | [Full Analysis de imagens](0011-full-analysis.md) | Implementada | 2026-10-06 |
 | 0012 | [Detecção facial e expressões](0012-deteccao-facial-e-expressoes.md) | Implementada; ativação opt-in | 2026-10-06 |
