@@ -26,11 +26,15 @@ assert.deepEqual(
   sections(viewer(["platform.stats.read", "platform.routing.read", "platform.jobs.read"])),
   ["/admin/routing", "/admin/status"],
 );
-// platform_auditor: the bindings list and the read-only platform views.
+// platform_auditor: the bindings list (Acesso) and the read-only platform views.
 assert.deepEqual(
   sections(viewer(["platform.routing.read", "iam.bindings.read", "platform.audit.read"])),
-  ["/admin/platform-access", "/admin/routing", "/admin/status"],
+  ["/admin/access", "/admin/routing", "/admin/status"],
 );
+// Acesso serves both binding families (spec 0018 CA11): either authority opens it.
+assert.equal(canOpenAdminSection(viewer(["access.grants.manage"]), "/admin/access"), true);
+assert.equal(canOpenAdminSection(viewer(["iam.bindings.read"]), "/admin/access"), true);
+assert.ok(!("/admin/platform-access" in ADMIN_SECTION_PERMISSIONS));
 // remote_engine_user only: no admin section at all.
 assert.deepEqual(sections(viewer(["engines.remote.use"])), []);
 // 0009 observer: engines and profiles.
@@ -49,7 +53,8 @@ const backend = ["shared/iam/catalog.py", "shared/access/service.py", "shared/ac
   .map((f) => fs.readFileSync(f, "utf8"))
   .join("\n");
 for (const needed of Object.values(ADMIN_SECTION_PERMISSIONS)) {
-  if (needed !== null) assert.ok(backend.includes(`"${needed}"`), `unknown permission ${needed}`);
+  for (const p of needed === null ? [] : [].concat(needed))
+    assert.ok(backend.includes(`"${p}"`), `unknown permission ${p}`);
 }
 
 console.log("admin-nav: ok");
