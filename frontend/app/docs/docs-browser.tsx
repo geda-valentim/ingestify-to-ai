@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { ArrowLeft, ArrowRight } from "lucide-react";
-import { AppHeader } from "@/components/app-header";
+import { PublicHeader } from "@/components/public-header";
 import { DOCS_API_URL as API_URL } from "./config";
 import {
   DOCS_GROUPS,
@@ -84,7 +84,7 @@ export function DocsBrowser({
   return (
     <div className="min-h-screen bg-background" lang={pt ? "pt-BR" : "en"}>
       <DocsEnhancements topic={topic} lang={lang} />
-      <AppHeader className="sticky top-0 z-20" />
+      <PublicHeader />
       <div className="container mx-auto px-4 py-6 lg:py-8">
         <div className="mb-6 flex flex-wrap items-center justify-between gap-3 border-b pb-4">
           <Link
