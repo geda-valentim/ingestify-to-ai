@@ -107,10 +107,13 @@ systemctl start ingestify-engine-host-agent
 
 Use exatamente os mesmos `--host-id`, `--api-url`, `--manifest`, `--service`
 e `--gpu-uuid` do registro original (os perfis vinculados apontam para o
-`host_id`; os valores anteriores estão no backup `/etc/ingestify/engine-host.json.$stamp`). O script reescreve o arquivo de identidades no lugar: mantém o
+`host_id`; os valores anteriores estão no backup `/etc/ingestify/engine-host.json.$stamp`). O script valida o JSON, prepara o conteúdo num temporário
+no mesmo diretório (fsync), guarda o conteúdo anterior em `<arquivo>.bak` e reescreve o
+arquivo de identidades no lugar: mantém o
 inode (a API o monta como arquivo único; um `mv`/rename deixaria o container
 lendo a versão antiga), o modo e o grupo (por exemplo `0640 root:10001`). Se o
-arquivo for novo, aplique o passo 4. Não edite esse arquivo com ferramentas que
+arquivo for novo, ele nasce `0600`; passe `--identities-group 10001` para criá-lo já
+`0640` com o grupo da API, ou aplique o passo 4. Não edite esse arquivo com ferramentas que
 substituem o arquivo (por exemplo `sed -i`). A API relê as identidades a cada requisição do host; não é preciso
 reiniciá-la. Se o inventário do host mudou (GPU ou manifests), vincule de novo
 o perfil de execução das engines locais (`PROFILE_INVENTORY_CHANGED`).

@@ -478,6 +478,23 @@ CATALOG = {
         "A configuração atual da engine não forma um RuntimeSettings válido; revise o binding da feature.",
         ["create_profile"],
     ),
+    "SEEDED_PROFILE_STALE": (
+        "A configuração da engine mudou desde que o perfil padrão foi criado, e o perfil já foi "
+        "alterado por um administrador; o vínculo automático não o sobrescreve. Revise e publique "
+        "uma revisão do perfil com a configuração atual e vincule-o à engine.",
+        ["publish_revision", "bind_profile"],
+    ),
+    "HOST_AMBIGUOUS": (
+        "Mais de um host registrado atende a esta feature (e GPU); o perfil padrão local precisa "
+        "de um host concreto. Crie o perfil escolhendo o host.",
+        ["create_profile"],
+    ),
+    "ENVIRONMENT_UNKNOWN": (
+        "ENVIRONMENT do servidor não é um ambiente conhecido (development/dev/local, staging, "
+        "production/prod); nenhum perfil padrão é criado nem engine classificada. Ajuste "
+        "ENVIRONMENT ou classifique as engines em Admin → Acesso.",
+        ["classify_environment"],
+    ),
 }
 
 _CODE = re.compile(r"^([A-Z][A-Z0-9_]{3,})(?:\s*:\s*(.*))?$", re.S)

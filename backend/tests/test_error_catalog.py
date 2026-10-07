@@ -291,3 +291,69 @@ def test_register_rewrites_identities_in_place_keeping_mode(tmp_path):
     fresh = tmp_path / "new.json"
     write_identities(fresh, {})
     assert fresh.stat().st_mode & 0o777 == 0o600
+
+
+def test_register_keeps_a_backup_and_never_leaves_temp_files(tmp_path):
+    _scripts()
+    import os
+    from register_engine_host import write_identities
+
+    path = tmp_path / "ids.json"
+    path.write_text('{"old": "' + "a" * 64 + '"}')
+    os.chmod(path, 0o640)
+    inode = path.stat().st_ino
+    write_identities(path, {"old": "a" * 64, "new": "b" * 64})
+    backup = tmp_path / "ids.json.bak"
+    assert json.loads(backup.read_text()) == {"old": "a" * 64}
+    assert backup.stat().st_mode & 0o777 == 0o640
+    # A shorter rewrite leaves no stale tail behind (write + truncate, same inode).
+    write_identities(path, {})
+    assert path.read_text() == "{}" and path.stat().st_ino == inode
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["ids.json", "ids.json.bak"]
+    # Invalid input never touches the target.
+    with pytest.raises((ValueError, TypeError)):
+        write_identities(path, ["not", "an", "object"])
+    with pytest.raises((ValueError, TypeError)):
+        write_identities(path, {"h": object()})
+    assert path.read_text() == "{}"
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["ids.json", "ids.json.bak"]
+
+
+def test_register_creates_a_new_identities_file_exclusively_with_the_group(tmp_path):
+    _scripts()
+    import os
+    from register_engine_host import write_identities
+
+    fresh = tmp_path / "new.json"
+    write_identities(fresh, {"h": "x" * 64}, group=os.getgid())
+    assert fresh.stat().st_mode & 0o777 == 0o640 and fresh.stat().st_gid == os.getgid()
+    assert not (tmp_path / "new.json.bak").exists()
+
+
+def test_host_identity_retries_once_on_a_partial_identities_file(tmp_path, monkeypatch):
+    import hashlib
+    from types import SimpleNamespace
+    from fastapi import HTTPException
+    from api import engine_control_routes as routes
+
+    token = "t" * 40
+    good = json.dumps({"host-1": hashlib.sha256(token.encode()).hexdigest()})
+    path = tmp_path / "ids.json"
+    path.write_text(good)
+    settings = SimpleNamespace(engine_control_enabled=True, engine_host_identities_file=str(path))
+    monkeypatch.setattr(routes, "get_settings", lambda: settings)
+    monkeypatch.setattr(routes, "IDENTITIES_RETRY_SECONDS", 0)
+    request = SimpleNamespace(headers={"x-engine-host-token": token})
+    reads = []
+    real = Path.read_text
+
+    def flaky(self, *a, **k):
+        reads.append(self)
+        return good[: len(good) // 2] if len(reads) == 1 else real(self, *a, **k)
+
+    monkeypatch.setattr(Path, "read_text", flaky)
+    assert routes.host_identity("host-1", request) == "host-1" and len(reads) == 2
+    monkeypatch.setattr(Path, "read_text", lambda self, *a, **k: good[:5])
+    with pytest.raises(HTTPException) as exc:
+        routes.host_identity("host-1", request)
+    assert exc.value.detail == {"code": "HOST_IDENTITY_REQUIRED"}

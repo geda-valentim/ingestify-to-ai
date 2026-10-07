@@ -62,6 +62,13 @@ def _engine(id, adapter, features, **config):
     )
 
 
+@pytest.fixture(autouse=True)
+def _fresh_host_rate_limit():
+    seed._host_seeded_at.clear()
+    yield
+    seed._host_seeded_at.clear()
+
+
 @pytest.fixture
 def Session(monkeypatch):
     sql = create_engine(
@@ -354,8 +361,9 @@ def test_dry_run_reports_the_plan_and_writes_nothing(Session):
 # --- CA5 ----------------------------------------------------------------------------------------
 
 
-def test_root_registration_seeds_and_a_seeding_failure_never_fails_it(Session, monkeypatch):
+def test_root_registration_seeds_in_the_background_and_a_seeding_failure_never_fails_it(Session, monkeypatch):
     monkeypatch.setattr(rate_limit, "hit", lambda *a, **k: None)
+    from fastapi import BackgroundTasks
     from api import auth_routes
     from shared.schemas import UserCreate
 
@@ -363,17 +371,31 @@ def test_root_registration_seeds_and_a_seeding_failure_never_fails_it(Session, m
         db.query(User).delete()
         db.commit()
 
-    def register(db, name):
+    def register(db, name, tasks):
         body = UserCreate(email=f"{name}@example.com", username=name, password="Secret123")
         req = SimpleNamespace(headers={}, client=SimpleNamespace(host="10.0.0.9"))
-        return asyncio.run(auth_routes.register(body, req, db))
+        return asyncio.run(auth_routes.register(body, req, db, tasks))
 
+    calls = []
+    real = seed.seed_execution_profiles
+    monkeypatch.setattr(
+        seed, "seed_execution_profiles", lambda *a, **k: calls.append(1) or real(*a, **k)
+    )
     with Session() as db:
-        created = register(db, "alice")
+        tasks = BackgroundTasks()
+        created = register(db, "alice", tasks)
         assert created.is_root
+        # Registration returns before seeding: the seed is only scheduled.
+        assert calls == [] and len(tasks.tasks) == 1
+        assert db.query(ExecutionProfile).count() == 0
+        asyncio.run(tasks())
+        assert calls == [1]
+    with Session() as db:
         assert {p.created_by for p in db.query(ExecutionProfile)} == {str(created.id)}
         assert db.query(RuntimeProfile).count() == 2
-        register(db, "bruno")  # a plain account does not seed again
+        plain = BackgroundTasks()
+        register(db, "bruno", plain)  # a plain account does not seed again
+        assert plain.tasks == []
         assert db.query(AdminAudit).filter(AdminAudit.action == "execution_profile.created").count() == db.query(ExecutionProfile).count()
 
     with Session() as db:
@@ -381,7 +403,9 @@ def test_root_registration_seeds_and_a_seeding_failure_never_fails_it(Session, m
         db.commit()
     monkeypatch.setattr(seed, "seed_execution_profiles", lambda *a, **k: 1 / 0)
     with Session() as db:
-        assert register(db, "carol").is_root
+        tasks = BackgroundTasks()
+        assert register(db, "carol", tasks).is_root
+        asyncio.run(tasks())  # best effort: never raises
 
 
 def test_make_admin_root_seeds(Session, monkeypatch):
@@ -555,3 +579,173 @@ def test_host_readiness_rule():
     assert seed.host_became_ready(now - timedelta(minutes=1), "m", inv, now)
     assert seed.host_became_ready(now, "old", inv, now)
     assert not seed.host_became_ready(now - timedelta(seconds=5), "m", inv, now)
+
+
+def test_host_readiness_is_rate_limited_per_host_for_manifest_changes():
+    t0 = datetime.utcnow()
+
+    def beat(host, seconds, previous, current, gap=5):
+        now = t0 + timedelta(seconds=seconds)
+        return seed.host_became_ready(now - timedelta(seconds=gap), previous, {"manifest_hash": current}, now, host_id=host)
+
+    assert seed.host_became_ready(None, None, {"manifest_hash": "a"}, t0, host_id="h1")
+    # A host that flips its manifest_hash on every heartbeat seeds at most once a minute.
+    assert not beat("h1", 10, "a", "b")
+    assert not beat("h1", 59, "b", "c")
+    assert beat("h1", 61, "c", "d")
+    assert not beat("h1", 70, "d", "e")
+    # Other hosts are independent; a host back from stale always seeds.
+    assert beat("h2", 10, "a", "b")
+    assert beat("h1", 75, "e", "e", gap=300)
+    # Steady heartbeats never do.
+    assert not beat("h1", 500, "e", "e")
+
+
+# --- review fixes: drift, host choice, environment, classification, cooldown window ---------
+
+
+def _qualify(db, engine_id, **config):
+    engine = db.get(Engine, engine_id)
+    engine.config = dict(engine.config, control_identity=f"ap-{engine_id}", **config)
+    db.commit()
+
+
+def test_a_seed_owned_profile_that_drifted_from_the_engine_is_revised_before_binding(Session):
+    first = run(Session)  # modal_2 is seeded with workers=2 but cannot bind yet
+    assert ("engine:modal_2:transcription", "bind", "TEST_CONNECTION_FIRST") in keys(first)
+    retuned = dict(MODAL_BINDING, gpu_type="A10G", workers=4)
+    with Session() as db:
+        _qualify(db, "modal_2", features={"transcription": dict(retuned)})
+    second = run(Session)
+    with Session() as db:
+        p = profiles(db)["modal_2 — transcription"]
+        r = latest(db, p)
+        assert r.revision == 2 and set_(r.settings["binding"]) == retuned
+        assert r.settings["max_replicas"] == 4
+        rp = control.latest_profile(db, "modal_2", "transcription")
+        assert rp.source_profile_revision_id == r.id and rp.profile["binding"]["workers"] == 4
+        audits = db.query(AdminAudit).filter(AdminAudit.target_id == p.id).all()
+        assert {a.after["origin"] for a in audits} == {"seed"}
+    refreshed = [x for x in second.published if x.get("refreshed")]
+    assert [x["key"] for x in refreshed] == ["engine:modal_2:transcription"]
+    assert second.created == []
+
+
+def test_a_drifted_seeded_profile_touched_by_a_human_is_not_overwritten(Session):
+    run(Session)
+    with Session() as db:
+        p = profiles(db)["modal_2 — transcription"]
+        body = C.RevisionCreate(version=p.version, settings=latest(db, p).settings, warm_for_seconds=None)
+        view = service.revise(db, p.id, body, "root")  # a human revision (no seed origin)
+        new = next(x for x in view["revisions"] if x["revision"] == 2)
+        service.publish(db, p.id, C.Publish(version=view["version"], revision_id=new["id"]), "root")
+        _qualify(db, "modal_2", features={"transcription": dict(MODAL_BINDING, workers=4)})
+        revisions = db.query(ExecutionRevision).filter_by(profile_id=p.id).count()
+    report = run(Session)
+    stale = next(r for r in report.skipped if r["reason"] == "SEEDED_PROFILE_STALE")
+    assert (stale["key"], stale["stage"]) == ("engine:modal_2:transcription", "bind")
+    assert "alterado por um administrador" in stale["message"]
+    with Session() as db:
+        assert db.query(ExecutionRevision).filter_by(profile_id=p.id).count() == revisions
+        assert control.latest_profile(db, "modal_2", "transcription") is None
+        assert db.get(EngineAttributes, "modal_2") is None
+
+
+def test_an_unchanged_engine_binds_the_existing_revision(Session):
+    run(Session)
+    with Session() as db:
+        _qualify(db, "modal_2")
+    report = run(Session)
+    assert report.published == [] and {r["engine_id"] for r in report.bound} == {"modal_2"}
+    with Session() as db:
+        assert latest(db, profiles(db)["modal_2 — transcription"]).revision == 1
+
+
+def test_local_profiles_name_the_host_that_serves_the_feature_and_gpu(Session):
+    with Session() as db:
+        # Seen more recently, but serves no audio and holds another GPU.
+        db.add(ControlHost(id="host-0", inventory={"services": ["worker"], "gpu_uuids": ["GPU-9"], "manifest_hash": "m"}, seen_at=datetime.utcnow() + timedelta(seconds=1)))
+        db.commit()
+    run(Session)
+    with Session() as db:
+        assert latest(db, profiles(db)["local — transcription"]).settings["provider_settings"] == {"host_id": "host-1"}
+        assert control.latest_profile(db, "local", "transcription").profile["provider_settings"] == {"host_id": "host-1"}
+
+
+def test_two_hosts_serving_the_feature_are_ambiguous(Session):
+    with Session() as db:
+        db.add(ControlHost(id="host-2", inventory=dict(INVENTORY, gpu_uuids=["GPU-2"]), seen_at=datetime.utcnow()))
+        db.commit()
+    report = run(Session)
+    locals_ = {f"catalog:{m['id']}:local" for m, a in approved_catalog() if a == "local"}
+    # Catalog profiles pin no GPU: both hosts qualify. The engine pins GPU-1: host-1 only.
+    assert locals_ <= {r["key"] for r in report.skipped if r["reason"] == "HOST_AMBIGUOUS"}
+    assert ("local", "transcription") in {(r["engine_id"], r["feature"]) for r in report.bound}
+    with Session() as db:
+        # A stale duplicate does not make the choice ambiguous.
+        db.get(ControlHost, "host-2").seen_at = datetime.utcnow() - timedelta(minutes=10)
+        db.commit()
+    again = run(Session)
+    assert not [r for r in again.skipped if r["reason"] == "HOST_AMBIGUOUS"]
+    assert locals_ <= {r["key"] for r in again.created}
+
+
+@pytest.mark.parametrize(
+    "value, expected",
+    [("dev", "development"), ("LOCAL", "development"), ("staging", "staging"), ("prod", "production"), ("production", "production"), ("qa", None), ("", None)],
+)
+def test_environment_is_mapped_explicitly(monkeypatch, value, expected):
+    monkeypatch.setattr(get_settings(), "environment", value)
+    assert seed.installation_environment() == expected
+
+
+def test_an_unknown_environment_seeds_and_classifies_nothing(Session, monkeypatch):
+    monkeypatch.setattr(get_settings(), "environment", "qa")
+    report = run(Session)
+    assert report.created == [] and report.bound == [] and report.classified == []
+    assert {r["reason"] for r in report.skipped} >= {"ENVIRONMENT_UNKNOWN"}
+    with Session() as db:
+        assert db.query(EngineAttributes).count() == 0
+        assert db.query(ExecutionProfile).count() == 0
+
+
+def test_classification_is_reported_and_rolled_back_with_a_refused_bind(Session, monkeypatch):
+    real_bind = service.bind
+
+    def refuse(db, engine, *a, **k):
+        if engine.id == "modal_1":
+            raise control.ControlError("OPERATION_CONFLICT")
+        return real_bind(db, engine, *a, **k)
+
+    monkeypatch.setattr(service, "bind", refuse)
+    report = run(Session)
+    assert ("engine:modal_1:transcription", "bind", "OPERATION_CONFLICT") in keys(report)
+    assert [(r["engine_id"], r["environment"]) for r in report.classified] == [("local", "development")]
+    with Session() as db:
+        assert db.get(EngineAttributes, "modal_1") is None  # same transaction as the bind
+        assert db.get(EngineAttributes, "local").environment == "development"
+        assert not db.query(AdminAudit).filter_by(action="access.engine_classified", target_id="modal_1").count()
+
+
+def test_the_seeded_profile_uses_the_engine_scaledown_window(Session):
+    from workers.engines.modal_apps.fingerprint import deploy_spec
+
+    with Session() as db:
+        for engine_id, window in (("modal_1", 300), ("modal_2", 99999)):
+            engine = db.get(Engine, engine_id)
+            engine.config = dict(engine.config, scaledown_window=window)
+        db.commit()
+    run(Session)
+    with Session() as db:
+        by_name = profiles(db)
+        assert latest(db, by_name["modal_1 — transcription"]).settings["idle_timeout_seconds"] == 300
+        assert latest(db, by_name["modal_2 — transcription"]).settings["idle_timeout_seconds"] == 3600
+        assert latest(db, by_name["local — transcription"]).settings["idle_timeout_seconds"] == 60
+        engine = db.get(Engine, "modal_1")
+        rp = control.latest_profile(db, "modal_1", "transcription").profile
+        assert rp["idle_timeout_seconds"] == 300
+        config = dict(engine.config, control_fingerprint_version=2, control_memory_mb=rp["memory_mb"])
+        current = dict(engine.config, control_fingerprint_version=2, control_memory_mb=None)
+        assert deploy_spec("transcription", config, Binding(**rp["binding"]))["fingerprint"] == deploy_spec(
+            "transcription", current, Binding(**engine.config["features"]["transcription"])
+        )["fingerprint"]

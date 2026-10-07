@@ -22,6 +22,7 @@ Usage (inside the api container):
 
 import copy
 import logging
+import threading
 from datetime import timedelta
 from dataclasses import asdict, dataclass, field
 from typing import Optional
@@ -43,6 +44,9 @@ logger = logging.getLogger(__name__)
 ORIGIN = "seed"
 MODAL_DEFAULT_GPU = "L4"  # the GPU the engine console and benchmarks default to
 HOST_READY_SECONDS = 30  # local driver: a host agent seen longer ago is not ready
+HOST_SEED_INTERVAL_SECONDS = 60  # manifest changes re-seed a host at most this often
+DEFAULT_IDLE_TIMEOUT = 60  # engine console default when the engine sets no scaledown window
+IDLE_TIMEOUT_MIN, IDLE_TIMEOUT_MAX = 2, 3600  # RuntimeSettings.idle_timeout_seconds bounds
 
 
 def reason_text(code):
@@ -61,6 +65,7 @@ class SeedReport:
     created: list = field(default_factory=list)
     published: list = field(default_factory=list)
     bound: list = field(default_factory=list)
+    classified: list = field(default_factory=list)
     skipped: list = field(default_factory=list)
 
     def skip(self, key, reason, stage="create", **extra):
@@ -76,12 +81,13 @@ class SeedReport:
         lines = [
             f"execution profiles: {len(self.created)} {verb}created, "
             f"{len(self.published)} {verb}published, {len(self.bound)} {verb}bound, "
-            f"{len(self.skipped)} skipped"
+            f"{len(self.classified)} engines {verb}classified, {len(self.skipped)} skipped"
         ]
         for title, rows in (
             ("created", self.created),
             ("published", self.published),
             ("bound", self.bound),
+            ("classified", self.classified),
         ):
             for r in rows:
                 lines.append(f"  {title:<9} {r['key']}  {r.get('name', '')}".rstrip())
@@ -92,12 +98,19 @@ class SeedReport:
         return "\n".join(lines)
 
 
-def installation_environment():
-    """ENVIRONMENT as an access environment; unknown values count as production"""
-    value = (get_settings().environment or "").strip().lower()
-    if value in ("development", "staging", "production"):
-        return value
-    return "development" if value.startswith("dev") else "production"
+ENVIRONMENTS = {
+    "development": "development",
+    "dev": "development",
+    "local": "development",
+    "staging": "staging",
+    "production": "production",
+    "prod": "production",
+}
+
+
+def installation_environment() -> Optional[str]:
+    """ENVIRONMENT as an access environment; None when it is not a known value"""
+    return ENVIRONMENTS.get((get_settings().environment or "").strip().lower())
 
 
 def root_user(db) -> Optional[User]:
@@ -131,16 +144,50 @@ def _seeded(db, key) -> Optional[ExecutionProfile]:
     return None
 
 
-def _host(db) -> Optional[ControlHost]:
-    """The registered host agent last seen; local profiles name a concrete host"""
-    return (
-        db.query(ControlHost)
-        .order_by(ControlHost.seen_at.desc(), ControlHost.id)
-        .first()
-    )
+def _host(db, feature, gpu_uuid=None):
+    """
+    (host, None) for the one registered host agent that serves `feature` (and holds
+    `gpu_uuid`, when the binding pins a GPU), else (None, skip code). Several such
+    hosts narrow to those seen within HOST_READY_SECONDS; still more than one is
+    HOST_AMBIGUOUS, since a seeded profile must name a concrete host.
+    """
+    from workers.engine_control.local import SERVICES
+
+    hosts = db.query(ControlHost).order_by(ControlHost.id).all()
+    if not hosts:
+        return None, "NO_REGISTERED_HOST"
+    service_name = SERVICES.get(feature, feature)
+    candidates = [
+        h
+        for h in hosts
+        if service_name in ((h.inventory or {}).get("services") or [])
+        and (gpu_uuid is None or gpu_uuid in ((h.inventory or {}).get("gpu_uuids") or []))
+    ]
+    if len(candidates) > 1:
+        cutoff = control.now() - timedelta(seconds=HOST_READY_SECONDS)
+        fresh = [h for h in candidates if h.seen_at and h.seen_at >= cutoff]
+        if len(fresh) == 1:
+            candidates = fresh
+    if not candidates:
+        return None, "SERVICE_NOT_REGISTERED"
+    if len(candidates) > 1:
+        return None, "HOST_AMBIGUOUS"
+    return candidates[0], None
 
 
-def _runtime(binding, model_id, provider_settings):
+def _idle_timeout(config):
+    """The engine's scaledown window (Modal `scaledown_window`), within RuntimeSettings bounds"""
+    value = (config or {}).get("scaledown_window")
+    if value is None or isinstance(value, bool):
+        return DEFAULT_IDLE_TIMEOUT
+    try:
+        value = int(value)
+    except (TypeError, ValueError):
+        return DEFAULT_IDLE_TIMEOUT
+    return max(IDLE_TIMEOUT_MIN, min(IDLE_TIMEOUT_MAX, value))
+
+
+def _runtime(binding, model_id, provider_settings, idle_timeout=None):
     workers = binding["workers"]
     # Same defaults as the engine console form (frontend engine-control.tsx).
     return dict(
@@ -151,7 +198,7 @@ def _runtime(binding, model_id, provider_settings):
         desired_replicas=workers,
         max_replicas=workers,
         min_ready_replicas=0,
-        idle_timeout_seconds=60,
+        idle_timeout_seconds=idle_timeout or DEFAULT_IDLE_TIMEOUT,
         memory_mb=None,
         warmup_mode="on_start",
         warm_until=None,
@@ -159,15 +206,15 @@ def _runtime(binding, model_id, provider_settings):
     )
 
 
-def _provider_settings(db, adapter, report, key):
+def _provider_settings(db, adapter, report, key, feature, gpu_uuid=None):
     """provider_settings for `adapter`, or None (and a skip) when they cannot be known"""
     fields = [f["name"] for f in registry.descriptor(adapter)["provider_fields"]]
     if not fields:
         return {}
     if adapter == "local":
-        host = _host(db)
+        host, reason = _host(db, feature, gpu_uuid)
         if host is None:
-            report.skip(key, "NO_REGISTERED_HOST")
+            report.skip(key, reason)
             return None
         return {"host_id": host.id}
     report.skip(key, "PROVIDER_SETTINGS_REQUIRED")
@@ -195,6 +242,9 @@ def catalog_plans(db, report):
             if not m["approved"]:
                 report.skip(key, "MODEL_NOT_APPROVED")
                 continue
+            if env is None:
+                report.skip(key, "ENVIRONMENT_UNKNOWN")
+                continue
             try:
                 d = registry.descriptor(adapter)
             except ValueError:
@@ -203,7 +253,7 @@ def catalog_plans(db, report):
             if m["feature"] not in d["features"]:
                 report.skip(key, "FEATURE_NOT_SUPPORTED")
                 continue
-            provider = _provider_settings(db, adapter, report, key)
+            provider = _provider_settings(db, adapter, report, key, m["feature"])
             if provider is None:
                 continue
             binding = {"workers": 1, "executions_per_worker": 1}
@@ -253,6 +303,9 @@ def engine_plans(db, report):
             if feature not in d["features"]:
                 report.skip(key, "FEATURE_NOT_SUPPORTED")
                 continue
+            if env is None:
+                report.skip(key, "ENVIRONMENT_UNKNOWN")
+                continue
             if engine.adapter_type == "modal" and config.get("whisperx_manifest"):
                 report.skip(key, "WHISPERX_CONTROL_PROFILE_NOT_QUALIFIED")
                 continue
@@ -275,15 +328,32 @@ def engine_plans(db, report):
                 if model is None:
                     report.skip(key, "MODEL_NOT_APPROVED")
                     continue
-                provider = _provider_settings(db, engine.adapter_type, report, key)
-                if provider is None:
-                    continue
                 binding = {
                     k: v
                     for k, v in (config["features"][feature] or {}).items()
                     if v is not None
                 }
-                settings = _runtime(binding, model["id"], provider)
+                gpu = next(
+                    (
+                        g
+                        for g in config.get("gpus") or []
+                        if binding.get("gpu_ref") and g.get("ref") == binding["gpu_ref"]
+                    ),
+                    None,
+                )
+                provider = _provider_settings(
+                    db,
+                    engine.adapter_type,
+                    report,
+                    key,
+                    feature,
+                    (gpu or {}).get("uuid"),
+                )
+                if provider is None:
+                    continue
+                settings = _runtime(
+                    binding, model["id"], provider, _idle_timeout(config)
+                )
             plans.append(
                 dict(
                     key=key,
@@ -368,6 +438,75 @@ def ensure_profile(db, plan, actor, report, dry_run):
         return None
 
 
+def _seed_owned(db, profile, key):
+    """
+    Every change ever made to `profile` came from this seed key: its audit rows all
+    carry origin=seed and the same seed_key (human revisions, renames, publishes and
+    archives are audited without them), and every revision was created by the seeder.
+    """
+    rows = (
+        db.query(AdminAudit)
+        .filter(
+            AdminAudit.target_type == "access",
+            AdminAudit.target_id == str(profile.id),
+            AdminAudit.action.like("execution_profile.%"),
+        )
+        .all()
+    )
+    if not rows or not all(
+        isinstance(r.after, dict)
+        and r.after.get("origin") == ORIGIN
+        and r.after.get("seed_key") == key
+        for r in rows
+    ):
+        return False
+    authors = {
+        a
+        for (a,) in db.query(ExecutionRevision.created_by).filter_by(profile_id=profile.id)
+    }
+    return authors == {profile.created_by}
+
+
+def _refresh(db, plan, profile, actor, report, dry_run):
+    """
+    The seeded profile whose published revision matches the plan's settings (the
+    engine's CURRENT configuration), publishing a new revision when it drifted; None
+    (and a SEEDED_PROFILE_STALE skip) when a human has touched the profile.
+    """
+    key = plan["key"]
+    body = _body(plan)
+    wanted, _ = service.normalize(body.adapter_type, body.feature, body)
+    current = db.get(ExecutionRevision, profile.latest_published_revision_id)
+    if current is not None and current.settings == wanted:
+        return profile
+    if not _seed_owned(db, profile, key):
+        report.skip(key, "SEEDED_PROFILE_STALE", stage="bind", profile_id=profile.id)
+        return None
+    row = dict(key=key, name=plan["name"], profile_id=profile.id, refreshed=True)
+    if dry_run:
+        report.published.append(row)
+        return profile
+    view = service.revise(
+        db,
+        profile.id,
+        C.RevisionCreate(
+            version=profile.version, settings=body.settings, warm_for_seconds=None
+        ),
+        actor,
+        _audit(key),
+    )
+    new = max(view["revisions"], key=lambda r: r["revision"])
+    service.publish(
+        db,
+        profile.id,
+        C.Publish(version=view["version"], revision_id=new["id"]),
+        actor,
+        _audit(key),
+    )
+    report.published.append(dict(row, revision_id=new["id"]))
+    return db.get(ExecutionProfile, profile.id)
+
+
 def ensure_bound(db, plan, profile, actor, report, dry_run):
     """Bind the engine profile when the engine/feature has no runtime profile (CA3)"""
     key, feature = plan["key"], plan["feature"]
@@ -383,26 +522,42 @@ def ensure_bound(db, plan, profile, actor, report, dry_run):
             report.skip(key, "ENGINE_ENVIRONMENT_REQUIRED", stage="bind")
             return
         # The adapter's own checks first (host agent, GPU, connection test), so a bind
-        # that cannot succeed does not classify the engine on its way to failing.
+        # that cannot succeed neither publishes nor classifies anything.
         raw = copy.deepcopy(plan["settings"])
         driver = registry.create(engine.adapter_type, raw["adapter_version"])
         driver.validate(engine, feature, raw, db)
+        if profile is not None:
+            # The profile was seeded from the engine as it was then; bind what the
+            # engine is configured with now (MAJOR: workers/GPU retuned in between).
+            profile = _refresh(db, plan, profile, actor, report, dry_run)
+            if profile is None:
+                return
+        classify = dict(
+            key=key, engine_id=engine.id, environment=plan["environment"]
+        )
         if dry_run:
+            if attr is None:
+                report.classified.append(classify)
             report.bound.append(row)
             return
-        if attr is None:
+        _lock(db, dry_run)
+        engine = db.get(Engine, plan["engine_id"])
+        if control.latest_profile(db, engine.id, feature):
+            report.skip(key, "RUNTIME_PROFILE_EXISTS", stage="bind")
+            return
+        profile = db.get(ExecutionProfile, profile.id)
+        classified = False
+        if db.get(EngineAttributes, engine.id) is None:
+            # Same transaction as the bind: a refused bind rolls the classification back.
             service.set_attributes(
                 db,
                 engine,
                 C.AttributesUpdate(version=0, environment=plan["environment"]),
                 actor,
                 _audit(key),
+                commit=False,
             )
-            _lock(db, dry_run)
-            engine = db.get(Engine, plan["engine_id"])
-            if control.latest_profile(db, engine.id, feature):
-                report.skip(key, "RUNTIME_PROFILE_EXISTS", stage="bind")
-                return
+            classified = True
         service.bind(
             db,
             engine,
@@ -414,6 +569,8 @@ def ensure_bound(db, plan, profile, actor, report, dry_run):
             actor,
             _audit(key),
         )
+        if classified:
+            report.classified.append(classify)
         report.bound.append(dict(row, profile_id=profile.id))
     except Exception as exc:  # best effort: record the code and carry on
         db.rollback()
@@ -481,17 +638,37 @@ def seed_on_boot(session_factory=None) -> Optional[SeedReport]:
     return seed_if_root(session_factory, "boot")
 
 
-def host_became_ready(previous_seen_at, previous_manifest, inventory, now) -> bool:
+# Last heartbeat-triggered seeding per host (in-process; each API worker has its own).
+_host_seeded_at = {}
+_host_seeded_lock = threading.Lock()
+
+
+def host_became_ready(previous_seen_at, previous_manifest, inventory, now, host_id=None) -> bool:
     """
     A heartbeat that should re-run the seeding: a new host, one back after being
     stale (the bind window of the local driver), or a changed manifest. Steady
-    heartbeats every few seconds do not.
+    heartbeats every few seconds do not. With `host_id`, a manifest change only
+    re-runs it once per HOST_SEED_INTERVAL_SECONDS for that host, so a host that
+    reports a new manifest_hash on every heartbeat cannot force a seed each time;
+    a new host or one back from stale always triggers it.
     """
-    if previous_seen_at is None:
-        return True
-    if previous_seen_at < now - timedelta(seconds=HOST_READY_SECONDS):
-        return True
-    return previous_manifest != (inventory or {}).get("manifest_hash")
+    if previous_seen_at is None or previous_seen_at < now - timedelta(
+        seconds=HOST_READY_SECONDS
+    ):
+        ready, limited = True, False
+    else:
+        ready = previous_manifest != (inventory or {}).get("manifest_hash")
+        limited = True
+    if not ready or host_id is None:
+        return ready
+    with _host_seeded_lock:
+        last = _host_seeded_at.get(host_id)
+        if limited and last is not None and now - last < timedelta(
+            seconds=HOST_SEED_INTERVAL_SECONDS
+        ):
+            return False
+        _host_seeded_at[host_id] = now
+    return True
 
 
 def main(argv=None) -> int:

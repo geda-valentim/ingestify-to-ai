@@ -1,7 +1,7 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Form, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status, Form, Request
 from sqlalchemy import func, or_
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, sessionmaker
 from datetime import timedelta
 
 from shared.database import get_db
@@ -25,7 +25,12 @@ router = APIRouter()
 
 
 @router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
-async def register(user_data: UserCreate, request: Request, db: Session = Depends(get_db)):
+async def register(
+    user_data: UserCreate,
+    request: Request,
+    db: Session = Depends(get_db),
+    background: BackgroundTasks = None,
+):
     """
     Register a new user
 
@@ -86,6 +91,13 @@ async def register(user_data: UserCreate, request: Request, db: Session = Depend
         db.rollback()
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Email or username already exists")
 
+    if new_user.is_root and background is not None:
+        # Spec 0020: the new root creates the default execution profiles. Seeding takes
+        # the authorization epoch lock, so it runs after the response, off the event
+        # loop (Starlette runs sync background tasks in the threadpool); best effort.
+        from shared.access.seed import seed_if_root
+
+        background.add_task(seed_if_root, sessionmaker(bind=db.get_bind()), "root created")
     return UserResponse.for_user(new_user)
 
 

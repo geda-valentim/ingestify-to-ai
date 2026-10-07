@@ -117,26 +117,13 @@ def create_user(db: Session, user: User, *, setup_token: Optional[str], ip: Opti
                     hashed_password=user.hashed_password, is_active=True,
                 )
             else:
-                seed_default_profiles(db, user)
+                # Spec 0020: the caller seeds the default execution profiles (the API
+                # in a background task, after the response).
                 return user
     db.add(user)
     db.commit()
     db.refresh(user)
     return user
-
-
-def seed_default_profiles(db: Session, user: User) -> None:
-    """
-    Spec 0020: the new root creates the installation's default execution profiles.
-    Best effort - a seeding problem never fails the root's registration.
-    """
-    from shared.access.seed import seed_quietly
-
-    seed_quietly(db, user.id, "root created")
-    try:
-        db.refresh(user)
-    except Exception:
-        db.rollback()
 
 
 def refuse_root_change(user: User, change) -> None:
