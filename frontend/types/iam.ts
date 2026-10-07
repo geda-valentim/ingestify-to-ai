@@ -1,6 +1,8 @@
 /** Spec 0014 §4.9: platform roles granted through IAM bindings. */
 export interface IamRole {
   key: string;
+  /** Role family (spec 0018): `engines` are the 0009 roles, granted with a condition. */
+  family: "platform" | "engines";
   permissions: string[];
   description: string;
 }

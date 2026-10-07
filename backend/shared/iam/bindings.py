@@ -200,7 +200,8 @@ def revoke(
     now = decider.now()
 
     b = db.get(IamBinding, str(binding_id))
-    if b is None:
+    # Engines bindings (spec 0018) are not this family's to see or revoke.
+    if b is None or catalog.family(b.role) == catalog.ENGINES_FAMILY:
         raise IamError("BINDING_NOT_FOUND", 404)
     if b.revoked_at is not None:
         raise IamError("ALREADY_REVOKED", 409)
@@ -238,7 +239,11 @@ def list_bindings(db: Session, actor, *, include_inactive: bool = False, decider
     decider = decider or Decider(db)
     _require_manager(decider, actor, "iam.bindings.read")
     now = decider.now()
-    q = db.query(IamBinding).filter(IamBinding.scope_type == "platform")
+    q = db.query(IamBinding).filter(
+        IamBinding.scope_type == "platform",
+        # Engines bindings (spec 0018) are never listed to the platform family.
+        IamBinding.role.notin_(list(catalog.ENGINE_ROLES)),
+    )
     if not include_inactive:
         q = q.filter(IamBinding.revoked_at.is_(None), IamBinding.expires_at > now)
     return [view(b, now) for b in q.order_by(IamBinding.created_at.desc(), IamBinding.id).all()]

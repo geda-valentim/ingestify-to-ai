@@ -5,7 +5,7 @@
 | **Status** | Rascunho |
 | **Autor** | Geda Valentim / Claude |
 | **Criada em** | 2026-10-06 |
-| **Atualizada em** | 2026-10-06 |
+| **Atualizada em** | 2026-10-07 |
 | **Relacionadas** | [0018](0018-iam-convergencia-do-rbac-abac-de-engines.md), [0004](0004-projects-and-folders.md), [0009](0009-perfis-de-execucao-e-controle-de-acesso.md), [0014](0014-iam-nucleo-de-decisao-e-papeis-de-plataforma.md), 0015, 0016, 0017 |
 | **Substituída por** | — |
 
@@ -65,13 +65,25 @@ organização sejam implementados uma única vez.
 
 Valem para todas as fatias; uma spec de fatia pode detalhar, nunca contrariar.
 
-1. **Um ponto de decisão.** `shared/iam/decide.py`. Permissões de engine delegam a
-   `shared/access/policy.authorize` da 0009 sem alterá-la.
-2. **Tabelas da 0009 intactas.** Bindings do IAM vivem em `iam_bindings`, nunca em
-   `access_role_grants`. O epoch da 0009 (`access_authorization_epoch`, linha única com
-   `FOR UPDATE`) continua exclusivo de admissões de efeito em engines. *(Revisão: gravar
-   bindings de dados nos grants da 0009 quebrava `active_grant`, `list_grants` e
-   `navigation`, e serializava compartilhamentos contra operações de engine.)*
+1. **Um ponto de decisão.** `shared/iam/decide.py`. Permissões de engine são decididas
+   por `shared/access/policy.authorize` com a semântica da 0009 (lendo `iam_bindings`
+   desde a 0018). *(Emendada pela [0018](0018-iam-convergencia-do-rbac-abac-de-engines.md)
+   §4.7; texto original: "Permissões de engine delegam a
+   `shared/access/policy.authorize` da 0009 sem alterá-la.")*
+2. **Duas famílias que nunca se enxergam.** Desde a 0018 toda concessão vive em
+   `iam_bindings`, em duas famílias (`platform`, `engines`) que nunca se enxergam:
+   `policy.grants`, `active_grant`, `navigation` e `list_grants` filtram papéis
+   `engines` e `subject_type='user'`; o `Decider` filtra papéis `platform`.
+   `access_role_grants` é espelho só-escrita até sua remoção. O epoch da 0009
+   (`access_authorization_epoch`, linha única com `FOR UPDATE`) continua tocado apenas
+   por escrita de bindings `engines`, políticas, atributos e principais, e por admissões
+   de efeito. *(Emendada pela [0018](0018-iam-convergencia-do-rbac-abac-de-engines.md)
+   §4.7. Texto original: "Tabelas da 0009 intactas. Bindings do IAM vivem em
+   `iam_bindings`, nunca em `access_role_grants`. O epoch da 0009 continua exclusivo de
+   admissões de efeito em engines." Revisão original: gravar bindings de dados nos
+   grants da 0009 quebrava `active_grant`, `list_grants` e `navigation`, e serializava
+   compartilhamentos contra operações de engine — o que a 0018 evita mantendo as
+   famílias separadas e o epoch fora da família `platform`.)*
 3. **Autoridade só do SQL.** Nada de claims do JWT, Redis ou parâmetros do request. O
    vínculo pai/filho de jobs SPLIT/MERGE hoje vem do Redis (`api/deps.py:129-132`); a 0016
    o leva para SQL antes de qualquer compartilhamento existir.

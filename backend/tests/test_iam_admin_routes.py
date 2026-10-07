@@ -455,7 +455,8 @@ def test_me_does_not_audit(db, people, client):
 def test_permissions_catalog_is_served_to_any_session(people, client):
     body = call(client, "GET", "/iam/permissions", people.alice).json()
     assert {p["name"] for p in body["permissions"]} == set(catalog.PERMISSIONS)
-    assert {r["key"] for r in body["roles"]} == set(catalog.ROLES)
+    # Spec 0018: the engines family is described too, apart (`family`).
+    assert {r["key"] for r in body["roles"] if r["family"] == "platform"} == set(catalog.ROLES)
     assert body["mode"] == "enforce"
 
 

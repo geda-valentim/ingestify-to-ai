@@ -424,8 +424,12 @@ downgrade (CA9); migração e head único (CA18); flag/alias (CA10) e compose (C
 As fatias 1 e 2 são PRs separados mas **implantados juntos** (um deploy); a 1 sozinha
 não vai a produção.
 
-- [ ] 1. Emenda da 0013 §4 (§4.7); colunas novas, `catalog.ENGINE_ROLES`, revisão
+- [x] 1. Emenda da 0013 §4 (§4.7); colunas novas, `catalog.ENGINE_ROLES`, revisão
   Alembic, cópia + reconciliação + validação, `engine_equivalence.py` (CA1, CA4, CA18).
+  Revisão `d4e80018a2b6`; leitor sobre `iam_bindings` em `shared/iam/engine_bindings.py`
+  (ainda não ligado a `policy.grants`, fatia 2); script
+  `scripts/iam_engine_equivalence.py`. Até a fatia 3, a rota `/admin/iam/bindings` não
+  lista nem revoga bindings `engines` (404 `BINDING_NOT_FOUND`).
 - [ ] 2. Leitura e escrita da 0009 sobre `iam_bindings`, delegação, epoch e ordem de
   locks, espelho, reconciliação no boot, flag e compose; docstrings de
   `shared/iam/models.py`, `catalog.py`, `api/iam_routes.py` e mensagem de
