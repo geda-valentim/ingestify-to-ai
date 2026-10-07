@@ -47,6 +47,8 @@ export default function PlatformAccessPage() {
   const bindings = useQuery({
     queryKey: ["iam-bindings", showInactive],
     queryFn: () => iamApi.bindings(showInactive),
+    // Engines bindings are administered under Admin → Access (spec 0018).
+    select: (rows: IamBinding[]) => rows.filter((b) => b.family === "platform"),
   });
   // The 0009 subject list is bootstrap-only; others type the user ID.
   const subjects = useQuery({

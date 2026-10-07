@@ -115,9 +115,9 @@ Guias de imagem: [PT](https://dev.ingestify.ai/pt/docs/images) / [EN](https://de
 | PUT | `/admin/access/subjects/{id}/state` | JWT | Subject State |
 | GET | `/iam/permissions` | JWT ou API key | The permission catalog and the managed roles |
 | POST | `/iam/check` | JWT ou API key | Which platform permissions the caller holds |
-| GET | `/admin/iam/bindings` | Administrador (JWT ou API key) | Platform bindings |
-| POST | `/admin/iam/bindings` | Administrador (somente JWT) | Grant a platform role |
-| POST | `/admin/iam/bindings/{binding_id}/revoke` | Administrador (somente JWT) | Revoke a platform binding |
+| GET | `/admin/iam/bindings` | Administrador (JWT ou API key) | Platform and engines bindings |
+| POST | `/admin/iam/bindings` | Administrador (somente JWT) | Grant a platform or engines role |
+| POST | `/admin/iam/bindings/{binding_id}/revoke` | Administrador (somente JWT) | Revoke a platform or engines binding |
 | GET | `/admin/engine-control-adapters` | JWT | Adapters |
 | GET | `/admin/engines/{engine_id}/capabilities` | JWT | Caps |
 | GET | `/admin/model-profiles` | JWT | Model Profiles |
@@ -2498,6 +2498,8 @@ Grants
 
 Autorização: **JWT**. Operation ID: `grants_admin_access_grants_get`.
 
+**Depreciada**: mantida por compatibilidade; veja a rota que a substitui.
+
 Respostas declaradas:
 
 | Status | Content-Type | Esquema | Descrição |
@@ -2509,6 +2511,8 @@ Respostas declaradas:
 Grant
 
 Autorização: **JWT**. Operation ID: `grant_admin_access_grants_post`.
+
+**Depreciada**: mantida por compatibilidade; veja a rota que a substitui.
 
 Corpo obrigatório: sim.
 
@@ -2535,6 +2539,8 @@ Respostas declaradas:
 Revoke
 
 Autorização: **JWT**. Operation ID: `revoke_admin_access_grants__id__revoke_post`.
+
+**Depreciada**: mantida por compatibilidade; veja a rota que a substitui.
 
 Parâmetros:
 
@@ -2773,9 +2779,13 @@ Respostas declaradas:
 
 ### GET /admin/iam/bindings
 
-Platform bindings
+Platform and engines bindings
 
 Autorização: **Administrador (JWT ou API key)**. Operation ID: `list_bindings_admin_iam_bindings_get`.
+
+Filtered per row: platform bindings for `iam.bindings.read` (as IAM_MODE
+decides it); engines bindings the caller's 0009 delegation covers (bootstrap
+sees them all), with `engine_access_enabled`. Newest first.
 
 Parâmetros:
 
@@ -2792,7 +2802,7 @@ Respostas declaradas:
 
 ### POST /admin/iam/bindings
 
-Grant a platform role
+Grant a platform or engines role
 
 Autorização: **Administrador (somente JWT)**. Operation ID: `grant_binding_admin_iam_bindings_post`.
 
@@ -2806,6 +2816,10 @@ Content-Type: `application/json`. Esquema: [BindingCreate](#model-bindingcreate)
 | `subject_id` | sim | string |  |  |
 | `role` | sim | string |  |  |
 | `expires_at` | não | string / null |  |  |
+| `permissions` | não | array de string / null |  |  |
+| `condition_ref` | não | string / null |  |  |
+| `delegation` | não | [Delegation](#model-delegation) / null |  |  |
+| `parent_id` | não | string / null |  |  |
 
 Respostas declaradas:
 
@@ -2816,7 +2830,7 @@ Respostas declaradas:
 
 ### POST /admin/iam/bindings/{binding_id}/revoke
 
-Revoke a platform binding
+Revoke a platform or engines binding
 
 Autorização: **Administrador (somente JWT)**. Operation ID: `revoke_binding_admin_iam_bindings__binding_id__revoke_post`.
 
@@ -4331,6 +4345,10 @@ Esquema JSON completo:
 | `subject_id` | sim | string |  |  |
 | `role` | sim | string |  |  |
 | `expires_at` | não | string / null |  |  |
+| `permissions` | não | array de string / null |  |  |
+| `condition_ref` | não | string / null |  |  |
+| `delegation` | não | [Delegation](#model-delegation) / null |  |  |
+| `parent_id` | não | string / null |  |  |
 
 Esquema JSON completo:
 
@@ -4363,6 +4381,53 @@ Esquema JSON completo:
       "examples": [
         "2027-01-31T00:00:00Z"
       ]
+    },
+    "permissions": {
+      "anyOf": [
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "maxItems": 100
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Permissions"
+    },
+    "condition_ref": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Condition Ref"
+    },
+    "delegation": {
+      "anyOf": [
+        {
+          "$ref": "#/components/schemas/Delegation"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "parent_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Parent Id"
     }
   },
   "type": "object",

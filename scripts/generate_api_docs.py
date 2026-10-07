@@ -90,6 +90,8 @@ def render_reference(schema):
         for path, method, op in group:
             lines += [f'### {method.upper()} {path}', '', op.get('summary', ''), '',
                       f"Autorização: **{ACCESS[op['x-access']]}**. Operation ID: `{op.get('operationId', '')}`.", '']
+            if op.get('deprecated'):
+                lines += ['**Depreciada**: mantida por compatibilidade; veja a rota que a substitui.', '']
             if op.get('description'):
                 lines += [op['description'], '']
             for note in op.get('x-contract-notes', []):

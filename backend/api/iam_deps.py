@@ -16,6 +16,10 @@ Every HTTP/WS route declares **exactly one** of these (CA1, enforced by
                                                decided by `access_session` /
                                                `require_admin_session` and
                                                `shared.access.policy`
+    binding_admin(write=...)                   `/admin/iam/bindings*` only (0018
+                                               §4.5): the authority of either
+                                               role family; the handler decides
+                                               per family
     authenticated()                            any active user, about themselves
                                                only (`/auth/me`, `/iam/*`): the
                                                "sessão" of 0014 §4.9
@@ -77,7 +81,7 @@ SESSION_REQUIRED_DETAIL = "This change requires a login session (JWT); API keys 
 
 @dataclass(frozen=True)
 class Declaration:
-    kind: str  # require | authorized | visible | engine_access | authenticated
+    kind: str  # require | authorized | visible | engine_access | iam_or_engine_access | authenticated
     permission: Optional[str] = None
     model: Optional[type] = None
     session: bool = False
@@ -483,6 +487,73 @@ def engine_access(note: str = "0009"):
         return None
 
     return _declare(dependency, Declaration("engine_access", note), f"engine_access[{note}]")
+
+
+# ============================================
+# binding_admin() — /admin/iam/bindings (0018 §4.5)
+# ============================================
+
+@dataclass(frozen=True)
+class BindingAdmin:
+    """Who reached the unified bindings API, and through which family's authority."""
+
+    user: User
+    principal: Principal
+    platform: bool
+    engines: bool
+
+
+def binding_admin(*, write: bool):
+    """
+    The one declaration of `/admin/iam/bindings*` (kind `iam_or_engine_access`):
+    an active user holding the administration of **some** family —
+
+    - `platform`: `iam.bindings.manage` (writes) / `iam.bindings.read` (list), as
+      IAM_MODE decides it (`decide.can`: bootstrap only outside `enforce`);
+    - `engines`: bootstrap or `access.grants.manage` (0009), while
+      `engine_access_enabled`.
+
+    Writes also need a login session (JWT; an API key is a 403), checked after
+    the permission, as `require(..., session=True)` does. Refusals keep the
+    plain-string `detail` of `require`. The handler then decides per family (the
+    role on a grant, the target binding on a revoke, each row on a list):
+    passing here never lets one family's authority act on the other.
+    """
+    permission = "iam.bindings.manage" if write else "iam.bindings.read"
+    _check_require_permission(permission)
+
+    def dependency(
+        request: Request,
+        user: User = Depends(get_current_active_user),
+        decider: Decider = Depends(request_decider),
+    ) -> BindingAdmin:
+        from shared.iam import bindings
+
+        principal = request_principal(request, user)
+        db = decider.db
+        # `can` honours IAM_MODE, reports a shadow divergence and audits a
+        # bootstrap mutation in every mode (CA8), like `require`.
+        platform = bindings.platform_authority(db, principal, permission, decider)
+        # Commit that audit row now: the engines check below autoflushes it out
+        # of `db.new`, where `_flush_audit` looks for it.
+        _flush_audit(db)
+        engines = bindings.engines_authority(db, principal)
+        if not (platform or engines):
+            logger.warning(f"[IAM] {permission} / access.grants.manage denied for user {user.id}")
+            raise HTTPException(status_code=403, detail=PLATFORM_DENIED_DETAIL)
+        if write and not is_login_session(request):
+            raise HTTPException(
+                status_code=403,
+                detail="Changing access requires a login session (JWT); API keys are not accepted",
+            )
+        return BindingAdmin(user, principal, platform, engines)
+
+    suffix = "_session" if write else ""
+    return _declare(
+        dependency,
+        Declaration("iam_or_engine_access", permission, session=write),
+        f"binding_admin[{permission}]{suffix}",
+    )
 
 
 # ============================================

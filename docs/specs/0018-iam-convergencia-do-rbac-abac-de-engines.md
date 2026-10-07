@@ -447,8 +447,18 @@ não vai a produção.
   `init_db` e no `worker_init` de todo worker Celery (com engines ligado; falha
   impede o boot). Testes em `tests/test_iam_engine_bindings_writes.py`. O teste de
   concorrência em MySQL de CA5 fica para quando houver banco InnoDB descartável no CI.
-- [ ] 3. API unificada por família, aliases depreciados, auditoria e docs de API (CA6,
-  CA8, CA12, CA16, CA17).
+- [x] 3. API unificada por família, aliases depreciados, auditoria e docs de API (CA6,
+  CA8, CA12, CA16, CA17). `/admin/iam/bindings*` declaram `binding_admin(write=...)`
+  (kind `iam_or_engine_access`) e chamam `shared/iam/bindings.grant_binding` /
+  `revoke_binding` / `list_all`, que escolhem a família antes de qualquer checagem;
+  a escrita `engines` encerra a transação de leitura das dependências antes de travar
+  o epoch. `parent_id` no corpo é recusado nas duas famílias (422
+  `FIELD_NOT_ALLOWED_FOR_ROLE`). As duas famílias auditam `iam.binding.grant` /
+  `iam.binding.revoke` em `iam_binding`. Contrato dos aliases provado contra a captura
+  do código anterior à 0018 (`tests/fixtures/pre_0018_access_grants_*.json`, commit
+  `bca96be`) em `tests/test_iam_access_grant_aliases.py`; regras por família em
+  `tests/test_iam_bindings_api.py`. A tela de plataforma filtra a família `platform`
+  até a fatia 4.
 - [ ] 4. Tela única de Acesso (CA11).
 - [ ] 5. Documentação de features/runbook (deploy em uma etapa, flag, rollback),
   CHANGELOG, status das specs.

@@ -1,28 +1,33 @@
 """
-IAM API (spec 0014 §4.9).
+IAM API (spec 0014 §4.9; spec 0018 §4.5).
 
     GET  /iam/permissions                   any session: the closed catalog and managed roles
     POST /iam/check                         any session: [{permission}] -> [{permission, allowed}],
-                                            platform/IAM permissions only in this slice
-    GET  /admin/iam/bindings                iam.bindings.read
-    POST /admin/iam/bindings                iam.bindings.manage + login session (JWT)
-    POST /admin/iam/bindings/{id}/revoke    iam.bindings.manage + login session (JWT)
+                                            platform/IAM permissions only
+    GET  /admin/iam/bindings                either family's administration, rows filtered per family
+    POST /admin/iam/bindings                either family's administration + login session (JWT)
+    POST /admin/iam/bindings/{id}/revoke    either family's administration + login session (JWT)
 
-Handler errors carry `{"code", "message"}` in `detail`: 404 unknown binding; 409
-version conflict, already revoked or an active binding for the same role; 422
-unknown role or subject, self-grant, a role above the grantor or an invalid
-`expires_at`. The 401 (no session) and 403 (platform permission missing, or an
-API key on a write) come from the dependencies and keep the legacy plain-string
-`detail` of `require_admin` (CA12).
+Since spec 0018 the bindings routes serve both role families, each with its own
+authority and rules, which never cross (`shared.iam.bindings.grant_binding`,
+`revoke_binding`, `list_all`):
+
+- `platform` (0014): `iam.bindings.read|manage` as IAM_MODE decides it; self-grant,
+  role above the grantor, one active binding per (subject, role);
+- `engines` (0009): bootstrap or `access.grants.manage` + the delegation envelope,
+  a mandatory `condition_ref` (policy revision), materialized `permissions`,
+  `delegation` for `access_admin` only, several bindings of one role per user;
+  503 ACCESS_NOT_ENABLED while `engine_access_enabled` is false.
+
+Handler errors carry `{"code", "message"}` in `detail` (codes per family in 0018
+§4.5). The 401 (no session) and 403 (no family's administration, or an API key
+on a write) come from the dependency and keep the legacy plain-string `detail`
+of `require_admin` (0014 CA12). `/admin/access/grants*` are deprecated aliases
+for the engines family with the 0009 contract.
 
 A platform binding never opens the 0009 engine routes: `access_session` reads
 only engines-family bindings, through `shared.access.policy.navigation` (§4.9,
 tested; spec 0018 CA13).
-
-Since spec 0018 the engines family (the 0009 grants) lives in `iam_bindings` too,
-written by `shared.iam.bindings.grant_engine` / `revoke_engine` behind
-`/admin/access/grants*`. Until 0018 slice 3 these routes serve the platform family
-only: they neither list nor revoke an engines binding (404 BINDING_NOT_FOUND).
 """
 
 from typing import List, Optional
@@ -31,12 +36,14 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from api.iam_deps import (
+    BindingAdmin,
     authenticated,
+    binding_admin,
     platform_view,
     request_decider,
     request_principal,
-    require,
 )
+from shared.access.contracts import Delegation
 from shared.config import get_settings
 from shared.iam import bindings, catalog
 from shared.iam.decide import Decider
@@ -46,12 +53,6 @@ router = APIRouter(tags=["IAM"])
 
 MAX_CHECKS = 100
 
-# Writes need a login session, as `require_admin_session` always did (§4.7, §4.9).
-MANAGE = require(
-    "iam.bindings.manage",
-    session=True,
-    session_detail="Changing platform access requires a login session (JWT); API keys are not accepted",
-)
 
 
 class PermissionCheck(BaseModel):
@@ -70,6 +71,18 @@ class BindingCreate(BaseModel):
     # ISO-8601; an aware value is converted to UTC, a naive one is taken as UTC.
     # Required, in the future and at most 365 days away (CA7).
     expires_at: Optional[str] = Field(None, examples=["2027-01-31T00:00:00Z"])
+    # Engines roles only (spec 0018 CA6); any of them on a platform role is a
+    # 422 FIELD_NOT_ALLOWED_FOR_ROLE.
+    # The 0009 permission subset; omitted = every permission of the role, stored
+    # materialized (a later action added to the role never widens the binding).
+    permissions: Optional[List[str]] = Field(None, max_length=100)
+    # The condition: an access policy revision id. Required for an engines role.
+    condition_ref: Optional[str] = None
+    # The delegation envelope, `access_admin` only.
+    delegation: Optional[Delegation] = None
+    # Set by the service (the delegation that authorizes the grant), never by
+    # the caller: refused on both families.
+    parent_id: Optional[str] = None
 
 
 class BindingRevoke(BaseModel):
@@ -117,58 +130,67 @@ def check_permissions(
     return [PermissionCheckResult(permission=c.permission, allowed=c.permission in held) for c in body]
 
 
-@router.get("/admin/iam/bindings", summary="Platform bindings")
+@router.get("/admin/iam/bindings", summary="Platform and engines bindings")
 def list_bindings(
     request: Request,
     include_inactive: bool = False,
-    user: User = Depends(require("iam.bindings.read")),
+    admin: BindingAdmin = Depends(binding_admin(write=False)),
     decider: Decider = Depends(request_decider),
 ):
+    """
+    Filtered per row: platform bindings for `iam.bindings.read` (as IAM_MODE
+    decides it); engines bindings the caller's 0009 delegation covers (bootstrap
+    sees them all), with `engine_access_enabled`. Newest first.
+    """
     try:
-        rows = bindings.list_bindings(
-            decider.db, request_principal(request, user), include_inactive=include_inactive, decider=decider
+        rows = bindings.list_all(
+            decider.db, admin.principal, include_inactive=include_inactive, decider=decider
         )
     except bindings.IamError as e:
         raise _iam_error(e)
     return {"bindings": rows}
 
 
-@router.post("/admin/iam/bindings", status_code=201, summary="Grant a platform role")
+@router.post("/admin/iam/bindings", status_code=201, summary="Grant a platform or engines role")
 def grant_binding(
     body: BindingCreate,
     request: Request,
-    user: User = Depends(MANAGE),
+    admin: BindingAdmin = Depends(binding_admin(write=True)),
     decider: Decider = Depends(request_decider),
 ):
     try:
-        b = bindings.grant(
+        b = bindings.grant_binding(
             decider.db,
-            request_principal(request, user),
+            admin.principal,
             subject_type=body.subject_type,
             subject_id=body.subject_id,
             role=body.role,
             expires_at=body.expires_at,
+            permissions=body.permissions,
+            condition_ref=body.condition_ref,
+            delegation=body.delegation,
+            parent_id=body.parent_id,
             ip=_client_ip(request),
             decider=decider,
         )
     except bindings.IamError as e:
         decider.db.rollback()
         raise _iam_error(e)
-    return bindings.view(b, decider.now())
+    return bindings.view_any(decider.db, b, decider.now())
 
 
-@router.post("/admin/iam/bindings/{binding_id}/revoke", summary="Revoke a platform binding")
+@router.post("/admin/iam/bindings/{binding_id}/revoke", summary="Revoke a platform or engines binding")
 def revoke_binding(
     binding_id: str,
     body: BindingRevoke,
     request: Request,
-    user: User = Depends(MANAGE),
+    admin: BindingAdmin = Depends(binding_admin(write=True)),
     decider: Decider = Depends(request_decider),
 ):
     try:
-        b = bindings.revoke(
+        b = bindings.revoke_binding(
             decider.db,
-            request_principal(request, user),
+            admin.principal,
             binding_id,
             version=body.version,
             ip=_client_ip(request),
@@ -177,4 +199,4 @@ def revoke_binding(
     except bindings.IamError as e:
         decider.db.rollback()
         raise _iam_error(e)
-    return bindings.view(b, decider.now())
+    return bindings.view_any(decider.db, b, decider.now())

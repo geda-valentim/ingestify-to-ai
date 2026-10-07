@@ -3,6 +3,7 @@ import type { IamBinding, IamBindingCreate, IamCatalog } from "@/types/iam";
 const base = "/admin/iam/bindings";
 export const iamApi = {
   catalog: () => request<IamCatalog>("/iam/permissions"),
+  /** Both families (spec 0018), each row as the caller's authority allows. */
   bindings: (includeInactive = false) =>
     request<{ bindings: IamBinding[] }>(
       `${base}${includeInactive ? "?include_inactive=true" : ""}`,

@@ -3924,6 +3924,7 @@
             }
           }
         },
+        "deprecated": true,
         "security": [
           {
             "bearerAuth": []
@@ -3967,6 +3968,7 @@
             }
           }
         },
+        "deprecated": true,
         "security": [
           {
             "bearerAuth": []
@@ -3982,6 +3984,7 @@
         ],
         "summary": "Revoke",
         "operationId": "revoke_admin_access_grants__id__revoke_post",
+        "deprecated": true,
         "security": [
           {
             "bearerAuth": []
@@ -4477,7 +4480,8 @@
         "tags": [
           "IAM"
         ],
-        "summary": "Platform bindings",
+        "summary": "Platform and engines bindings",
+        "description": "Filtered per row: platform bindings for `iam.bindings.read` (as IAM_MODE\ndecides it); engines bindings the caller's 0009 delegation covers (bootstrap\nsees them all), with `engine_access_enabled`. Newest first.",
         "operationId": "list_bindings_admin_iam_bindings_get",
         "security": [
           {
@@ -4525,7 +4529,7 @@
         "tags": [
           "IAM"
         ],
-        "summary": "Grant a platform role",
+        "summary": "Grant a platform or engines role",
         "operationId": "grant_binding_admin_iam_bindings_post",
         "security": [
           {
@@ -4570,7 +4574,7 @@
         "tags": [
           "IAM"
         ],
-        "summary": "Revoke a platform binding",
+        "summary": "Revoke a platform or engines binding",
         "operationId": "revoke_binding_admin_iam_bindings__binding_id__revoke_post",
         "security": [
           {
@@ -7343,6 +7347,53 @@
             "examples": [
               "2027-01-31T00:00:00Z"
             ]
+          },
+          "permissions": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array",
+                "maxItems": 100
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Permissions"
+          },
+          "condition_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Condition Ref"
+          },
+          "delegation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Delegation"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "parent_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Id"
           }
         },
         "type": "object",

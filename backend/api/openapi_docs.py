@@ -24,6 +24,9 @@ def platform_declaration(dependant):
         decl = declaration_of(current.call)
         if decl is not None and decl.kind == 'require' and catalog.permission(decl.permission).level != catalog.OWNER:
             return decl
+        # Spec 0018: /admin/iam/bindings* are administrative routes of either family.
+        if decl is not None and decl.kind == 'iam_or_engine_access':
+            return decl
         stack.extend(current.dependencies)
     return None
 

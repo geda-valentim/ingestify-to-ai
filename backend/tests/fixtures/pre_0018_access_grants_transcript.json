@@ -1,0 +1,182 @@
+[
+ [
+  "list empty",
+  200,
+  "[]"
+ ],
+ [
+  "grant observer",
+  201,
+  "{\"id\":\"<id0>\",\"user_id\":\"observer\",\"role\":\"observer\",\"permissions\":[\"engine_operations.read\",\"engines.read\",\"execution_profiles.read\"],\"policy_revision_id\":\"<id1>\",\"expires_at\":\"<ts>\",\"revoked_at\":null,\"version\":0,\"parent_id\":null,\"delegation\":null}"
+ ],
+ [
+  "grant subset",
+  201,
+  "{\"id\":\"<id2>\",\"user_id\":\"operator\",\"role\":\"engine_operator\",\"permissions\":[\"engines.read\"],\"policy_revision_id\":\"<id1>\",\"expires_at\":\"<ts>\",\"revoked_at\":null,\"version\":0,\"parent_id\":null,\"delegation\":null}"
+ ],
+ [
+  "grant same role again",
+  201,
+  "{\"id\":\"<id3>\",\"user_id\":\"observer\",\"role\":\"observer\",\"permissions\":[\"engine_operations.read\",\"engines.read\",\"execution_profiles.read\"],\"policy_revision_id\":\"<id1>\",\"expires_at\":\"<ts>\",\"revoked_at\":null,\"version\":0,\"parent_id\":null,\"delegation\":null}"
+ ],
+ [
+  "unknown role",
+  422,
+  "{\"detail\":{\"code\":\"ROLE_UNKNOWN\",\"message\":\"ROLE_UNKNOWN\"}}"
+ ],
+ [
+  "platform role",
+  422,
+  "{\"detail\":{\"code\":\"ROLE_UNKNOWN\",\"message\":\"ROLE_UNKNOWN\"}}"
+ ],
+ [
+  "outside role",
+  422,
+  "{\"detail\":{\"code\":\"PERMISSIONS_OUTSIDE_ROLE\",\"message\":\"PERMISSIONS_OUTSIDE_ROLE\"}}"
+ ],
+ [
+  "empty permissions",
+  422,
+  "{\"detail\":{\"code\":\"PERMISSIONS_OUTSIDE_ROLE\",\"message\":\"PERMISSIONS_OUTSIDE_ROLE\"}}"
+ ],
+ [
+  "missing user",
+  404,
+  "{\"detail\":{\"code\":\"GRANT_TARGET_NOT_FOUND\",\"message\":\"GRANT_TARGET_NOT_FOUND\"}}"
+ ],
+ [
+  "missing revision",
+  404,
+  "{\"detail\":{\"code\":\"GRANT_TARGET_NOT_FOUND\",\"message\":\"GRANT_TARGET_NOT_FOUND\"}}"
+ ],
+ [
+  "past expiry",
+  422,
+  "{\"detail\":{\"code\":\"GRANT_EXPIRY_INVALID\",\"message\":\"GRANT_EXPIRY_INVALID\"}}"
+ ],
+ [
+  "expiry over a year",
+  422,
+  "{\"detail\":{\"code\":\"GRANT_EXPIRY_INVALID\",\"message\":\"GRANT_EXPIRY_INVALID\"}}"
+ ],
+ [
+  "naive expiry",
+  422,
+  "{\"detail\":[{\"type\":\"timezone_aware\",\"loc\":[\"body\",\"expires_at\"],\"msg\":\"Input should have timezone info\",\"input\":\"<ts>\",\"url\":\"https://errors.pydantic.dev/2.13/v/timezone_aware\"}]}"
+ ],
+ [
+  "unknown field",
+  422,
+  "{\"detail\":[{\"type\":\"extra_forbidden\",\"loc\":[\"body\",\"subject_type\"],\"msg\":\"Extra inputs are not permitted\",\"input\":\"user\",\"url\":\"https://errors.pydantic.dev/2.13/v/extra_forbidden\"}]}"
+ ],
+ [
+  "delegation on observer",
+  422,
+  "{\"detail\":{\"code\":\"DELEGATION_INVALID\",\"message\":\"DELEGATION_INVALID\"}}"
+ ],
+ [
+  "delegation outside the catalog",
+  422,
+  "{\"detail\":{\"code\":\"DELEGATION_INVALID\",\"message\":\"DELEGATION_INVALID\"}}"
+ ],
+ [
+  "delegate",
+  201,
+  "{\"id\":\"<id4>\",\"user_id\":\"delegate\",\"role\":\"access_admin\",\"permissions\":[\"access.grants.manage\"],\"policy_revision_id\":\"<id1>\",\"expires_at\":\"<ts>\",\"revoked_at\":null,\"version\":0,\"parent_id\":null,\"delegation\":{\"permissions\":[\"engine_operations.read\",\"engines.read\",\"execution_profiles.read\"],\"constraints\":{\"engine_ids\":[\"engine-a\"],\"profile_ids\":null,\"adapters\":[\"profile-test-provider\"],\"features\":[\"transcription\"],\"environments\":[\"development\"],\"host_ids\":null,\"gpu_uuids\":null,\"model_ids\":[\"approved-profile-test\"],\"max_replicas\":2,\"max_concurrency\":2,\"max_cpu\":2.0,\"max_memory_mb\":1024,\"max_warm_seconds\":3600,\"max_usd\":\"0.20\"},\"max_grant_seconds\":1800}}"
+ ],
+ [
+  "delegated grant",
+  201,
+  "{\"id\":\"<id5>\",\"user_id\":\"editor\",\"role\":\"observer\",\"permissions\":[\"engine_operations.read\",\"engines.read\",\"execution_profiles.read\"],\"policy_revision_id\":\"<id1>\",\"expires_at\":\"<ts>\",\"revoked_at\":null,\"version\":0,\"parent_id\":\"<id4>\",\"delegation\":null}"
+ ],
+ [
+  "delegated grant too long",
+  403,
+  "{\"detail\":{\"code\":\"DELEGATION_EXCEEDED\",\"message\":\"DELEGATION_EXCEEDED\"}}"
+ ],
+ [
+  "delegated grant above envelope",
+  403,
+  "{\"detail\":{\"code\":\"DELEGATION_EXCEEDED\",\"message\":\"DELEGATION_EXCEEDED\"}}"
+ ],
+ [
+  "delegate lists",
+  200,
+  "[{\"id\":\"<id5>\",\"user_id\":\"editor\",\"role\":\"observer\",\"permissions\":[\"engine_operations.read\",\"engines.read\",\"execution_profiles.read\"],\"policy_revision_id\":\"<id1>\",\"expires_at\":\"<ts>\",\"revoked_at\":null,\"version\":0,\"parent_id\":\"<id4>\",\"delegation\":null},{\"id\":\"<id3>\",\"user_id\":\"observer\",\"role\":\"observer\",\"permissions\":[\"engine_operations.read\",\"engines.read\",\"execution_profiles.read\"],\"policy_revision_id\":\"<id1>\",\"expires_at\":\"<ts>\",\"revoked_at\":null,\"version\":0,\"parent_id\":null,\"delegation\":null},{\"id\":\"<id2>\",\"user_id\":\"operator\",\"role\":\"engine_operator\",\"permissions\":[\"engines.read\"],\"policy_revision_id\":\"<id1>\",\"expires_at\":\"<ts>\",\"revoked_at\":null,\"version\":0,\"parent_id\":null,\"delegation\":null},{\"id\":\"<id0>\",\"user_id\":\"observer\",\"role\":\"observer\",\"permissions\":[\"engine_operations.read\",\"engines.read\",\"execution_profiles.read\"],\"policy_revision_id\":\"<id1>\",\"expires_at\":\"<ts>\",\"revoked_at\":null,\"version\":0,\"parent_id\":null,\"delegation\":null}]"
+ ],
+ [
+  "observer lists",
+  403,
+  "{\"detail\":{\"code\":\"ACCESS_DENIED\",\"message\":\"ACCESS_DENIED\"}}"
+ ],
+ [
+  "outsider lists",
+  403,
+  "{\"detail\":{\"code\":\"ACCESS_DENIED\"}}"
+ ],
+ [
+  "outsider grants",
+  403,
+  "{\"detail\":{\"code\":\"ACCESS_DENIED\"}}"
+ ],
+ [
+  "api key",
+  403,
+  "{\"detail\":{\"code\":\"LOGIN_SESSION_REQUIRED\"}}"
+ ],
+ [
+  "no session",
+  403,
+  "{\"detail\":{\"code\":\"LOGIN_SESSION_REQUIRED\"}}"
+ ],
+ [
+  "revoke stale version",
+  409,
+  "{\"detail\":{\"code\":\"VERSION_CONFLICT\",\"message\":\"VERSION_CONFLICT\"}}"
+ ],
+ [
+  "revoke",
+  200,
+  "{\"id\":\"<id0>\",\"user_id\":\"observer\",\"role\":\"observer\",\"permissions\":[\"engine_operations.read\",\"engines.read\",\"execution_profiles.read\"],\"policy_revision_id\":\"<id1>\",\"expires_at\":\"<ts>\",\"revoked_at\":\"<ts>\",\"version\":1,\"parent_id\":null,\"delegation\":null}"
+ ],
+ [
+  "revoke again",
+  200,
+  "{\"id\":\"<id0>\",\"user_id\":\"observer\",\"role\":\"observer\",\"permissions\":[\"engine_operations.read\",\"engines.read\",\"execution_profiles.read\"],\"policy_revision_id\":\"<id1>\",\"expires_at\":\"<ts>\",\"revoked_at\":\"<ts>\",\"version\":2,\"parent_id\":null,\"delegation\":null}"
+ ],
+ [
+  "revoke missing",
+  404,
+  "{\"detail\":{\"code\":\"GRANT_NOT_FOUND\",\"message\":\"GRANT_NOT_FOUND\"}}"
+ ],
+ [
+  "revoke bad body",
+  422,
+  "{\"detail\":[{\"type\":\"greater_than_equal\",\"loc\":[\"body\",\"version\"],\"msg\":\"Input should be greater than or equal to 0\",\"input\":-1,\"ctx\":{\"ge\":0},\"url\":\"https://errors.pydantic.dev/2.13/v/greater_than_equal\"}]}"
+ ],
+ [
+  "outsider revokes",
+  403,
+  "{\"detail\":{\"code\":\"ACCESS_DENIED\"}}"
+ ],
+ [
+  "list everything",
+  200,
+  "[{\"id\":\"<id5>\",\"user_id\":\"editor\",\"role\":\"observer\",\"permissions\":[\"engine_operations.read\",\"engines.read\",\"execution_profiles.read\"],\"policy_revision_id\":\"<id1>\",\"expires_at\":\"<ts>\",\"revoked_at\":null,\"version\":0,\"parent_id\":\"<id4>\",\"delegation\":null},{\"id\":\"<id4>\",\"user_id\":\"delegate\",\"role\":\"access_admin\",\"permissions\":[\"access.grants.manage\"],\"policy_revision_id\":\"<id1>\",\"expires_at\":\"<ts>\",\"revoked_at\":null,\"version\":0,\"parent_id\":null,\"delegation\":{\"permissions\":[\"engine_operations.read\",\"engines.read\",\"execution_profiles.read\"],\"constraints\":{\"engine_ids\":[\"engine-a\"],\"profile_ids\":null,\"adapters\":[\"profile-test-provider\"],\"features\":[\"transcription\"],\"environments\":[\"development\"],\"host_ids\":null,\"gpu_uuids\":null,\"model_ids\":[\"approved-profile-test\"],\"max_replicas\":2,\"max_concurrency\":2,\"max_cpu\":2.0,\"max_memory_mb\":1024,\"max_warm_seconds\":3600,\"max_usd\":\"0.20\"},\"max_grant_seconds\":1800}},{\"id\":\"<id3>\",\"user_id\":\"observer\",\"role\":\"observer\",\"permissions\":[\"engine_operations.read\",\"engines.read\",\"execution_profiles.read\"],\"policy_revision_id\":\"<id1>\",\"expires_at\":\"<ts>\",\"revoked_at\":null,\"version\":0,\"parent_id\":null,\"delegation\":null},{\"id\":\"<id2>\",\"user_id\":\"operator\",\"role\":\"engine_operator\",\"permissions\":[\"engines.read\"],\"policy_revision_id\":\"<id1>\",\"expires_at\":\"<ts>\",\"revoked_at\":null,\"version\":0,\"parent_id\":null,\"delegation\":null},{\"id\":\"<id0>\",\"user_id\":\"observer\",\"role\":\"observer\",\"permissions\":[\"engine_operations.read\",\"engines.read\",\"execution_profiles.read\"],\"policy_revision_id\":\"<id1>\",\"expires_at\":\"<ts>\",\"revoked_at\":\"<ts>\",\"version\":2,\"parent_id\":null,\"delegation\":null}]"
+ ],
+ [
+  "off: list",
+  503,
+  "{\"detail\":{\"code\":\"ACCESS_NOT_ENABLED\",\"message\":\"ACCESS_NOT_ENABLED\"}}"
+ ],
+ [
+  "off: grant",
+  503,
+  "{\"detail\":{\"code\":\"ACCESS_NOT_ENABLED\",\"message\":\"ACCESS_NOT_ENABLED\"}}"
+ ],
+ [
+  "off: revoke",
+  503,
+  "{\"detail\":{\"code\":\"ACCESS_NOT_ENABLED\",\"message\":\"ACCESS_NOT_ENABLED\"}}"
+ ]
+]
