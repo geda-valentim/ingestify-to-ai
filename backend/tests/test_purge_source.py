@@ -315,6 +315,39 @@ def test_all_pages_settled_with_failures_make_the_job_partial_and_purge(worker):
     assert ("ingestify-pages", f"pages/{JOB_ID}/") in worker.minio.deleted
 
 
+def test_job_settled_partial_by_its_last_page_completing_purges(worker):
+    """The page that settles the job may be a *completion* (an earlier page failed for good)."""
+    add_job(worker.Session, purge=True, status=JobStatus.PROCESSING, path=PDF_PATH, filename="livro.pdf",
+            pages={1: JobStatus.FAILED, 2: JobStatus.PROCESSING})
+    page_file = worker.tmp / JOB_ID / "pages" / "page_0002.pdf"
+    page_file.parent.mkdir(parents=True, exist_ok=True)
+    page_file.write_bytes(b"%PDF-1.4 page")
+    tasks.get_es_client().store_page_result.return_value = True
+
+    result = tasks.convert_page_task.run(page_job_id="page-2", parent_job_id=JOB_ID, page_number=2,
+                                         page_file_path=str(page_file), options={})
+
+    assert result["status"] == "completed"
+    job = worker.job()
+    assert job.status == JobStatus.PARTIAL and (job.pages_completed, job.pages_failed) == (1, 1)
+    assert ("ingestify-uploads", PDF_PATH) in worker.minio.deleted
+    assert ("ingestify-pages", f"pages/{JOB_ID}/") in worker.minio.deleted
+
+
+def test_page_completion_that_does_not_settle_the_job_does_not_purge(worker):
+    add_job(worker.Session, purge=True, status=JobStatus.PROCESSING, path=PDF_PATH, filename="livro.pdf",
+            pages={1: JobStatus.FAILED, 2: JobStatus.PROCESSING, 3: JobStatus.PROCESSING})
+    page_file = worker.tmp / JOB_ID / "pages" / "page_0002.pdf"
+    page_file.parent.mkdir(parents=True, exist_ok=True)
+    page_file.write_bytes(b"%PDF-1.4 page")
+
+    tasks.convert_page_task.run(page_job_id="page-2", parent_job_id=JOB_ID, page_number=2,
+                                page_file_path=str(page_file), options={})
+
+    assert worker.job().status == JobStatus.PROCESSING
+    assert worker.minio.deleted == []
+
+
 def test_partial_job_without_purge_keeps_its_files(worker):
     add_job(worker.Session, status=JobStatus.PROCESSING, path=PDF_PATH, filename="livro.pdf",
             pages={1: JobStatus.COMPLETED, 2: JobStatus.PROCESSING})

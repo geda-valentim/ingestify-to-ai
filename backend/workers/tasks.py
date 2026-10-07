@@ -924,10 +924,21 @@ def _upsert_split_page(split_job_id: str, parent_job_id: str, page_number: int, 
 
     db = SessionLocal()
     try:
-        for _ in range(2):
-            page = db.query(PageModel).filter(
+        for _ in range(3):
+            # Looked up with a plain read, then locked by primary key: a locking read
+            # of a row that does not exist yet takes an InnoDB gap lock, and two
+            # sessions holding the same gap that both insert deadlock (1213) - a
+            # redelivered split, or another job's split whose rows share the gap
+            found = db.query(PageModel.id).filter(
                 PageModel.job_id == parent_job_id, PageModel.page_number == page_number,
-            ).order_by(PageModel.created_at).with_for_update().first()
+            ).order_by(PageModel.created_at).first()
+            page = None
+            if found is not None:
+                page = db.query(PageModel).filter(PageModel.id == found.id) \
+                    .with_for_update().populate_existing().first()
+                if page is None:  # deleted meanwhile (DELETE /jobs/{id}): look again
+                    db.rollback()
+                    continue
             if page is not None:
                 if minio_path:
                     page.minio_page_path = minio_path
@@ -994,16 +1005,18 @@ def _submit_page(page_job_id: str, parent_job_id: str, page_number: int, options
 # PAGE JOB - Converte página individual
 # ============================================
 
-def _recount_parent_pages(db, parent_job_id: str):
-    """Recompute pages_completed / pages_failed on the parent job.
+def _recount_parent_pages(db, parent_job_id: str) -> bool:
+    """Recompute pages_completed / pages_failed on the parent job (and commit).
 
     Both counters are recomputed on every outcome: a retry that succeeds moves a
     page out of FAILED, so pages_failed is only correct if it is recounted too.
+    Returns True when this recount settled the MAIN job (PARTIAL).
     """
     from shared.engines.ledger import recount_parent_pages
 
-    recount_parent_pages(db, parent_job_id)
+    settled = recount_parent_pages(db, parent_job_id)
     db.commit()
+    return settled
 
 
 def _mark_page_failed(
@@ -1186,6 +1199,7 @@ def _run_page_conversion(
             logger.error(f"{log_prefix} Failed to upload page {page_number} markdown to MinIO: {e}")
 
         # Update MySQL: Mark page as completed with markdown content
+        settled = False
         db = SessionLocal()
         try:
             from shared.models import Page as PageModel
@@ -1205,11 +1219,15 @@ def _run_page_conversion(
             if pages:
                 db.commit()
 
-            _recount_parent_pages(db, parent_job_id)
+            settled = _recount_parent_pages(db, parent_job_id)
         except Exception as e:
             logger.error(f"{log_prefix} MySQL completion error: {e}")
         finally:
             db.close()
+        if settled:
+            # The last page to settle was this completion and an earlier page failed
+            # for good: the MAIN job is PARTIAL now, purge_source applies
+            _purge_source_if_requested(parent_job_id)
 
         # Mark page job as completed in Redis
         redis_client.set_job_status(

@@ -172,9 +172,12 @@ def subject_state(db: Session, subject_type: Optional[str], subject_id: Optional
     return "open", None
 
 
-def recount_parent_pages(db: Session, parent_job_id: str) -> None:
+def recount_parent_pages(db: Session, parent_job_id: str) -> bool:
     """
     pages_completed / pages_failed of a split job, recounted from its Page rows (no commit).
+    Returns True when this recount settled the MAIN job (PARTIAL): the caller lets
+    purge_source apply once it committed, whichever page settled last (a failure or
+    a completion).
 
     When every page has settled and some failed for good, the MAIN job is settled
     too: PARTIAL (the converted pages are kept, the failed ones can be retried),
@@ -188,12 +191,12 @@ def recount_parent_pages(db: Session, parent_job_id: str) -> None:
     """
     parent = db.query(Job).filter(Job.id == parent_job_id).with_for_update().populate_existing().first()
     if parent is None:
-        return
+        return False
     statuses = [status for (status,) in db.query(Page.status).filter(Page.job_id == parent_job_id)
                 .with_for_update().all()]
     parent.pages_completed = sum(1 for status in statuses if status == JobStatus.COMPLETED)
     parent.pages_failed = sum(1 for status in statuses if status == JobStatus.FAILED)
-    settle_parent_with_failed_pages(db, parent, page_count=len(statuses))
+    return settle_parent_with_failed_pages(db, parent, page_count=len(statuses))
 
 
 def settle_parent_with_failed_pages(db: Session, parent: Job, page_count: Optional[int] = None) -> bool:
