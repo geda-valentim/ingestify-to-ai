@@ -135,6 +135,9 @@ def _validate(conn):
     fks = _foreign_keys(conn)
     if any(fks.get(c) != t for c, t in COLUMNS_0018.items() if t):
         raise RuntimeError("This release requires the 0018 iam_bindings foreign keys")
+    # The platform BINDING_EXISTS locking read forces this index on MySQL (§4.3)
+    if INDEX_0018 not in {i["name"] for i in inspect(conn).get_indexes("iam_bindings")}:
+        raise RuntimeError("This release requires the 0018 iam_bindings index")
     if "access_role_grants" in tables:
         orphan = conn.execute(
             select(_grants.c.id)

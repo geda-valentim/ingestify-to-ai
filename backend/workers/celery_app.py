@@ -114,6 +114,33 @@ import workers.engine_control.tasks  # noqa: F401,E402
 from workers.engine_control.readiness import install as install_runtime_readiness
 install_runtime_readiness()
 
+
+from celery.signals import worker_init  # noqa: E402
+
+
+@worker_init.connect(weak=False)
+def reconcile_engine_grants_on_boot(**_):
+    """
+    Spec 0018 §4.2.3 in every worker, not only at API boot: workers admit engine
+    effects from iam_bindings, so a revocation the pre-0018 code wrote only to
+    access_role_grants during a rollback must be brought back before this worker
+    decides anything, whether or not an api process has booted yet. Idempotent and
+    serialized by the 0009 epoch lock. Runs in the parent, before the pool forks.
+    """
+    if not get_settings().engine_access_enabled:
+        return
+    from shared.database import engine
+    from shared.iam.migration import reconcile_on_boot
+
+    try:
+        reconcile_on_boot(engine)
+    except Exception as exc:
+        # Celery logs and swallows a handler's Exception: refuse to boot instead,
+        # like init_db does for the api, rather than decide on unreconciled grants
+        raise SystemExit(f"engine grant reconciliation failed: {exc!r}") from exc
+    finally:
+        engine.dispose()  # no pooled connection crosses into the forked children
+
 if settings.engine_control_enabled and settings.engine_control_beat:
     celery_app.conf.beat_schedule = {
         **(celery_app.conf.beat_schedule or {}),

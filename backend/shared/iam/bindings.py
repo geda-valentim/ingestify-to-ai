@@ -31,6 +31,8 @@ from shared.iam.models import SUBJECT_TYPES, IamBinding
 from shared.models import AdminAudit, User
 
 MAX_PLATFORM_TTL = timedelta(days=365)
+# The BINDING_EXISTS locking read is pinned to it (0018 §4.3); see migration.INDEX_0018
+INDEX_SUBJECT_ROLE = "ix_iam_bindings_subject_role"
 
 
 class IamError(Exception):
@@ -170,23 +172,7 @@ def grant(
     if expires > now + MAX_PLATFORM_TTL:
         raise IamError("INVALID_EXPIRES_AT", 422, "Platform bindings last at most 365 days")
 
-    existing = (
-        db.query(IamBinding)
-        .filter(
-            IamBinding.subject_type == subject_type,
-            IamBinding.subject_id == subject_id,
-            IamBinding.role == role,
-            # Lock order of 0018 §4.3: only platform-role rows, through
-            # ix_iam_bindings_subject_role, never an engines binding of the subject.
-            IamBinding.role.in_(list(catalog.ROLES)),
-            IamBinding.scope_type == "platform",
-            IamBinding.revoked_at.is_(None),
-            IamBinding.expires_at > now,
-        )
-        # A locking read sees the latest commit, not this transaction's snapshot.
-        .with_for_update()
-        .first()
-    )
+    existing = _active_platform_binding(db, subject_type, subject_id, role, now).first()
     if existing is not None:
         raise IamError("BINDING_EXISTS", 409, f"An active binding exists: {existing.id}")
 
@@ -206,6 +192,29 @@ def grant(
     _audit(db, principal, "iam.binding.grant", b, None, view(b, now), ip)
     db.commit()
     return b
+
+
+def _active_platform_binding(db: Session, subject_type: str, subject_id: str, role: str, now):
+    """The locking read behind BINDING_EXISTS; `role` is already a platform role."""
+    return (
+        db.query(IamBinding)
+        .filter(
+            IamBinding.subject_type == subject_type,
+            IamBinding.subject_id == subject_id,
+            IamBinding.role == role,
+            IamBinding.scope_type == "platform",
+            IamBinding.revoked_at.is_(None),
+            IamBinding.expires_at > now,
+        )
+        # Lock order of 0018 §4.3: pinning the (subject_type, subject_id, role)
+        # index keeps this locking read on that platform role's rows. Through
+        # ix_iam_bindings_subject InnoDB would lock every active binding of the
+        # subject, engines ones included, which an effect admission may already
+        # hold while it waits on this subject's users row (deadlock).
+        .with_hint(IamBinding, f"FORCE INDEX ({INDEX_SUBJECT_ROLE})", "mysql")
+        # A locking read sees the latest commit, not this transaction's snapshot.
+        .with_for_update()
+    )
 
 
 def revoke(
@@ -442,8 +451,10 @@ def revoke_engine(
         raise _control_error("ALREADY_REVOKED", 409)
     if b.version != version:
         raise _control_error("VERSION_CONFLICT")
-    b.revoked_at = datetime.utcnow()
-    b.revoked_by = str(actor)
+    # A re-revocation (alias path) is accepted but keeps who cut the access, and when
+    if b.revoked_at is None:
+        b.revoked_at = datetime.utcnow()
+        b.revoked_by = str(actor)
     b.version += 1
     authority.version += 1
     db.flush()
