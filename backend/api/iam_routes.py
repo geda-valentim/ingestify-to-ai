@@ -32,6 +32,7 @@ tested; spec 0018 CA13).
 
 from typing import List, Optional
 
+from api.error_guidance import GuidedRoute
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
@@ -50,7 +51,7 @@ from shared.iam import bindings, catalog
 from shared.iam.decide import Decider
 from shared.models import User
 
-router = APIRouter(tags=["IAM"])
+router = APIRouter(tags=["IAM"], route_class=GuidedRoute)
 
 MAX_CHECKS = 100
 

@@ -1,6 +1,7 @@
 "use client";
 import { useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -9,23 +10,31 @@ import { engineControlApi } from "@/lib/engine-control-api";
 import { useAuthStore } from "@/lib/store/auth";
 import type { Engine } from "@/types/compute";
 import { settingsSelectClass } from "./runtime-settings-fields";
+import { AdminError } from "./admin-error";
 export function ExecutionProfileBinding({
   engine,
   feature,
   onChanged,
+  onTestConnection,
+  connectionVerified,
 }: {
   engine: Engine;
   feature: string;
   onChanged: () => void;
+  /** Runs the engine's "Testar" (records the provider identity binding requires). */
+  onTestConnection?: () => void;
+  /** false when the adapter needs a verified identity that is still missing. */
+  connectionVerified?: boolean | null;
 }) {
   const user = useAuthStore((s) => s.user);
+  const router = useRouter();
   const canBind =
     user?.is_admin || user?.permissions?.includes("engine_runtime.bind");
   const canCreate =
     user?.is_admin || user?.permissions?.includes("execution_profiles.create");
   const [selected, setSelected] = useState("");
   const [revision, setRevision] = useState("");
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
   const list = useQuery({
     queryKey: ["execution-profiles"],
@@ -57,7 +66,7 @@ export function ExecutionProfileBinding({
       await current.refetch();
       onChanged();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Falha ao vincular");
+      setError(e);
     } finally {
       setBusy(false);
     }
@@ -69,6 +78,30 @@ export function ExecutionProfileBinding({
         Vincular salva uma revisão desejada. Use uma operação para aplicar ao
         executor.
       </p>
+      {connectionVerified === false && (
+        <AdminError
+          tone="info"
+          title="Teste a conexão antes de vincular"
+          guided={{
+            message:
+              "Esta engine precisa de uma conexão verificada com o provedor antes de receber um perfil. Use “Testar conexão”; depois escolha o perfil.",
+            nextSteps: ["test_connection"],
+            code: "TEST_CONNECTION_FIRST",
+          }}
+          actions={onTestConnection ? { test_connection: onTestConnection } : {}}
+        />
+      )}
+      {canBind && list.isSuccess && choices?.length === 0 && (
+        <AdminError
+          tone="info"
+          title="Nenhum perfil disponível"
+          guided={{
+            message: `Não há perfil de execução ativo para ${engine.adapter_type} / ${feature} no seu escopo. ${canCreate ? "Crie e publique um perfil para vinculá-lo aqui." : "Peça a quem configura runtime para criar e publicar um."}`,
+            nextSteps: canCreate ? ["create_profile"] : ["request_access"],
+          }}
+          actions={canCreate ? { create_profile: () => router.push(createUrl) } : {}}
+        />
+      )}
       {current.data?.source_profile_revision_id && (
         <p className="text-sm">
           Origem: {current.data.source_profile_revision_id} · desejado r
@@ -201,10 +234,22 @@ export function ExecutionProfileBinding({
           </Link>
         )}
       </div>
-      {(error || list.error || detail.error) && (
-        <p role="alert" className="text-destructive">
-          {error || String(list.error || detail.error)}
-        </p>
+      {(error != null || list.error || detail.error) && (
+        <AdminError
+          error={error ?? list.error ?? detail.error}
+          fallback="Falha ao vincular"
+          actions={{
+            ...(onTestConnection && { test_connection: onTestConnection }),
+            ...(canCreate && {
+              create_profile: () => router.push(createUrl),
+            }),
+            reload: () => {
+              setError(null);
+              current.refetch();
+              list.refetch();
+            },
+          }}
+        />
       )}
     </div>
   );

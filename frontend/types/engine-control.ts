@@ -23,8 +23,22 @@ export interface Capabilities {
     supported: boolean;
     enabled: boolean;
     reason: string | null;
+    /** Portuguese explanation of `reason` (null when enabled). */
+    message?: string | null;
+    next_steps?: string[];
   }[];
   hosts: { id: string; services: string[] }[];
+  requires_control_identity?: boolean;
+  /** 0009 CA1: what is missing before operating the selected feature. */
+  setup?: {
+    feature: string | null;
+    code: string | null;
+    profile_bound: boolean;
+    /** null when the adapter has no provider identity to verify. */
+    connection_verified: boolean | null;
+    message: string | null;
+    next_steps: string[];
+  };
 }
 export interface ModelProfile {
   id: string;
@@ -77,7 +91,12 @@ export interface Operation {
   can_cancel: boolean;
   can_recover?: boolean;
   last_seq: number;
-  error: { code?: string; message?: string } | null;
+  error: {
+    code?: string;
+    message?: string;
+    human_message?: string;
+    next_steps?: string[];
+  } | null;
   result: Record<string, unknown>;
   created_at: string;
   reserved_usd: string;
