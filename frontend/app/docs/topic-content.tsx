@@ -1,3 +1,4 @@
+import { PlatformGuide, isPlatformGuide } from "./platform-guides";
 import { ImagesGuide } from "./images/images-guide";
 import { ComputeGuide, ComputeGuideLinks } from "./compute-guides";
 import Link from "next/link";
@@ -1752,10 +1753,7 @@ curl --fail "${API_URL}/admin/gpus" \\
       <Endpoint method="POST" path="/admin/access/grants/{id}/revoke" />
 
       <Endpoint method="GET" path="/admin/execution-profiles" />
-      <Endpoint
-        method="POST"
-        path="/admin/engines/{id}/runtime-profile/bind"
-      />
+      <Endpoint method="POST" path="/admin/engines/{id}/runtime-profile/bind" />
       <P>{t.capacity}</P>
       <P>{t.health}</P>
       <P>{t.privacy}</P>
@@ -1853,6 +1851,8 @@ function PlatformSettingsDocs({ lang }: { lang: Lang }) {
 }
 
 export function TopicContent({ topic, lang }: { topic: string; lang: Lang }) {
+  if (isPlatformGuide(topic))
+    return <PlatformGuide topic={topic} lang={lang} />;
   const t = COPY[lang];
   const code = samples(lang);
   const block = (c: string) => <CodeBlock code={c} copyLabel={t.copy} />;
@@ -1872,29 +1872,100 @@ export function TopicContent({ topic, lang }: { topic: string; lang: Lang }) {
           </P>
           <P>
             {lang === "pt"
-              ? "Ao enviar um documento, áudio/vídeo ou iniciar uma captura ao vivo, escolha a conexão, o bucket e a pasta em Destino dos resultados. Na aba Datalake do dashboard você também pode selecionar um arquivo que já esteja no bucket. No Azure, o bucket corresponde ao container."
-              : "When uploading a document, audio/video or starting live capture, choose a connection, bucket and folder under Result destination. The dashboard Datalake tab also lets you process a file already in a bucket. For Azure, the bucket is the container."}
+              ? "Nesta versão, a entrega ao datalake está conectada ao processamento de imagens Full Analysis e rostos, pela API e pela interface. Documentos, transcrições de arquivos e sessões live ainda não ligam um destino ao job; campos isolados em schemas não garantem entrega. No Azure, o bucket corresponde ao container."
+              : "In this version, datalake delivery is connected to Full Analysis and faces image processing, through the API and interface. Documents, file transcripts and live sessions do not yet bind a destination to their job; isolated schema fields do not guarantee delivery. In Azure, bucket means container."}
           </P>
           <A href="/datalakes">
             {lang === "pt" ? "Configurar conexões" : "Configure connections"}
           </A>
           <Subheading>
-            {lang === "pt" ? "Solicitação pela API" : "API request"}
+            {lang === "pt"
+              ? "Conexões, buckets e prévia"
+              : "Connections, buckets and preview"}
           </Subheading>
-          {block(
-            `curl -X POST '${API_URL}/transcribe' \\\n  -H 'Authorization: Bearer YOUR_TOKEN' \\\n  -F 'file=@meeting.mp3' \\\n  -F 'project=Meetings' \\\n  -F 'datalake_connection_id=YOUR_CONNECTION_ID' \\\n  -F 'datalake_bucket=transcripts' \\\n  -F 'datalake_prefix=meetings/2026'`,
-          )}
+          <Endpoint method="GET" path="/datalakes" />
+          <Endpoint method="POST" path="/datalakes" />
+          <Endpoint method="PATCH" path="/datalakes/{connection_id}" />
+          <Endpoint method="DELETE" path="/datalakes/{connection_id}" />
+          <Endpoint method="POST" path="/datalakes/discover" />
+          <Endpoint method="POST" path="/datalakes/buckets" />
+          <Endpoint method="GET" path="/datalakes/{connection_id}/buckets" />
+          <Endpoint method="GET" path="/datalakes/{connection_id}/objects" />
+          <Endpoint method="POST" path="/datalakes/{connection_id}/test" />
+          <Endpoint method="POST" path="/datalakes/partition-preview" />
           <P>
             {lang === "pt"
-              ? "Os mesmos campos são aceitos em /upload e /convert. Para captura ao vivo, envie datalake: {connection_id, bucket, prefix} no JSON de criação da sessão."
-              : "The same fields are accepted by /upload and /convert. For live capture, send datalake: {connection_id, bucket, prefix} in the session creation JSON."}
+              ? "discover testa configurações provisórias sem salvar a conexão. POST /datalakes/buckets cria armazenamento externo imediatamente; salvar a conexão é uma operação separada. Um bucket existente retorna 409; falta de permissão de criação retorna 403. GCS aceita location; S3/MinIO usam a região configurada; Azure usa a região da conta."
+              : "discover tests draft settings without saving a connection. POST /datalakes/buckets creates external storage immediately; saving the connection is a separate operation. An existing bucket returns 409; missing creation permission returns 403. GCS accepts location; S3/MinIO use the configured region; Azure uses the account region."}
+          </P>
+          <Subheading>
+            {lang === "pt"
+              ? "Particionamento configurável pela API"
+              : "API-configurable partitioning"}
+          </Subheading>
+          <Table
+            head={[
+              lang === "pt" ? "Campo" : "Field",
+              lang === "pt" ? "Uso" : "Use",
+            ]}
+            rows={[
+              [
+                "config.partitioning / config.default_partition_values",
+                lang === "pt"
+                  ? "Estratégia e valores padrão da conexão; usados por novas solicitações."
+                  : "Connection strategy and default values; used by new requests.",
+              ],
+              [
+                "datalake.partitioning / datalake.partition_values",
+                lang === "pt"
+                  ? "Objetos no destino de requisições JSON de Full Analysis e rostos. No multipart, datalake é uma string JSON com o mesmo objeto."
+                  : "Objects in Full Analysis and faces JSON request destinations. In multipart, datalake is a JSON string containing the same object.",
+              ],
+              ["mode", "none | date | project_date | custom"],
+              [
+                "fields / granularity / timezone",
+                lang === "pt"
+                  ? "Dimensões ordenadas, mês/dia/hora e fuso IANA."
+                  : "Ordered dimensions, month/day/hour and an IANA time zone.",
+              ],
+              [
+                "missing / fallback / analytics",
+                lang === "pt"
+                  ? "require ou fallback para ausências; analytics=jsonl adiciona registros analíticos por job."
+                  : "require or fallback for missing values; analytics=jsonl adds per-job analytical records.",
+              ],
+            ]}
+          />
+          <P>
+            {lang === "pt"
+              ? "A prévia abaixo não cria job nem escreve no bucket. O resultado informa resolved_path, layout_id, partitions, dataset_path e schema_path. O ID do job na prévia é ilustrativo; a entrega fixa o caminho com a criação do job e preserva esse destino nos retries. Novas estratégias não movem arquivos já exportados."
+              : "The preview below does not create a job or write to the bucket. Its result contains resolved_path, layout_id, partitions, dataset_path and schema_path. The preview job ID is illustrative; delivery fixes the path using job creation time and preserves it on retries. New strategies do not move already exported files."}
+          </P>
+          {block(`curl -X POST '${API_URL}/datalakes/partition-preview' \\
+  -H 'X-API-Key: YOUR_KEY' \\
+  -H 'Content-Type: application/json' \\
+  --data '{"connection_id":"YOUR_CONNECTION_ID","prefix":"conversations","partitioning":{"mode":"custom","fields":[{"field":"custom","key":"customer_id"},{"field":"date"}],"granularity":"day","timezone":"America/Sao_Paulo","missing":"require","analytics":"jsonl"},"partition_values":{"customer_id":"customer-42"}}'`)}
+          <Subheading>
+            {lang === "pt" ? "Solicitação pela API" : "API request"}
+          </Subheading>
+          {block(`curl -X POST '${API_URL}/images/analyze/upload' \\
+  -H 'X-API-Key: YOUR_KEY' \\
+  -H 'Idempotency-Key: SAME_KEY_FOR_RETRY' \\
+  -F 'file=@image.jpg' \\
+  -F 'project=Customer images' \\
+  -F 'mode=full' \\
+  -F 'datalake={"connection_id":"YOUR_CONNECTION_ID","bucket":"results","prefix":"customers","partition_values":{"customer_id":"customer-42"}}'`)}
+          <P>
+            {lang === "pt"
+              ? "O exemplo herda a estratégia da conexão. Configure customer_id como dimensão personalizada se quiser diretórios por cliente; valores adicionais podem ser preservados como contexto sem criar dimensões. O contrato de imagens detalha full_options, limites e idempotência."
+              : "This example inherits the connection strategy. Configure customer_id as a custom dimension for customer directories; additional values may be retained as context without creating dimensions. The image contract details full_options, limits and idempotency."}
           </P>
           <Endpoint method="GET" path="/jobs/{job_id}/datalake" />
           <Endpoint method="POST" path="/jobs/{job_id}/datalake/retry" />
           <P>
             {lang === "pt"
-              ? "A entrega tem status próprio. Se falhar, corrija a conexão e use Tentar entrega novamente na página do job, sem repetir a conversão ou transcrição. Os arquivos ficam em pasta/job_id/: result.json, result.md, metadata.json e, para transcrições, TXT, SRT, VTT e JSON. Excluir o job ou a conexão no Ingestify preserva os arquivos do bucket externo."
-              : "Delivery has its own status. If it fails, fix the connection and retry delivery from the job page without repeating conversion or transcription. Files are stored under folder/job_id/: result.json, result.md, metadata.json and, for transcripts, TXT, SRT, VTT and JSON. Deleting an Ingestify job or connection preserves files in the external bucket."}
+              ? "A entrega tem status próprio. Se falhar, corrija a conexão e use Tentar entrega novamente na página do job, sem repetir a análise. Os arquivos de resultado e metadados ficam no resolved_path do job; com analytics=jsonl, o registro e o esquema têm caminhos próprios. Excluir o job ou a conexão no Ingestify preserva os arquivos do bucket externo."
+              : "Delivery has its own status. If it fails, fix the connection and retry delivery from the job page without repeating analysis. Result and metadata files are stored under the job resolved_path; with analytics=jsonl, the record and schema have separate paths. Deleting an Ingestify job or connection preserves files in the external bucket."}
           </P>
         </Section>
       );
@@ -2002,7 +2073,11 @@ export function TopicContent({ topic, lang }: { topic: string; lang: Lang }) {
             label={lang === "pt" ? "Formatos de resultado" : "Result formats"}
             copyLabel={t.copy}
             examples={[
-              { label: "markdown", code: RESPONSES.markdown, note: t.deviceNote },
+              {
+                label: "markdown",
+                code: RESPONSES.markdown,
+                note: t.deviceNote,
+              },
               { label: "vtt", code: RESPONSES.vtt },
               { label: "srt", code: RESPONSES.srt },
               { label: "txt", code: RESPONSES.txt },

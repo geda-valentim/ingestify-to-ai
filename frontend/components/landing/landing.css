@@ -2057,7 +2057,8 @@
 }
 
 @media (max-width: 767px) {
-  .landing-header .landing-agents {
+  .landing-header .landing-agents,
+  .landing-header .landing-business {
     display: none;
   }
 }

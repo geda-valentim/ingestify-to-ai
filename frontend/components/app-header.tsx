@@ -8,6 +8,7 @@ import * as Dialog from "@radix-ui/react-dialog";
 import { useQuery } from "@tanstack/react-query";
 import {
   LayoutDashboard,
+  Building2,
   BookOpen,
   ChevronDown,
   Cpu,
@@ -36,6 +37,7 @@ const PRIMARY_LINKS: NavLink[] = [
   { href: "/jobs", label: "My Jobs", icon: Search },
 ];
 const DOCS_LINK: NavLink = { href: "/docs", label: "Docs", icon: BookOpen };
+const BUSINESS_LINK: NavLink = { href: "/business", label: "Business", icon: Building2 };
 const LINK_STYLE =
   "flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
 
@@ -154,6 +156,7 @@ export function AppHeader({ className }: { className?: string }) {
         )}
 
         <div className="ml-auto hidden items-center gap-3 xl:flex">
+          {renderLink(BUSINESS_LINK)}
           {renderLink(DOCS_LINK)}
           {user ? (
             <DropdownMenu.Root open={accountOpen} onOpenChange={setAccountOpen}>
@@ -243,6 +246,7 @@ export function AppHeader({ className }: { className?: string }) {
                     renderLink(link, () => setMobileOpen(false)),
                   )}
                 {renderLink(DOCS_LINK, () => setMobileOpen(false))}
+                {renderLink(BUSINESS_LINK, () => setMobileOpen(false))}
               </nav>
               <div className="mt-5 space-y-1 border-t pt-4">
                 {user ? (
