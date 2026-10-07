@@ -111,11 +111,13 @@ e e-mail da mesma conta compartilham o contador de falhas. Se o Redis cair, o li
   `/auth/me` expõe as permissões para navegação: as de engines vêm só dos bindings
   `engines` vigentes. Veja [perfis e acesso](execution-profiles.md).
 - **Usuário root ([spec 0019](../specs/0019-usuario-root-na-primeira-inicializacao.md)):** a
-  primeira conta cadastrada numa instalação sem root nasce **root**: admin de emergência
+  primeira conta cadastrada numa instalação **sem nenhum usuário** nasce **root**: admin de emergência
   (bootstrap) do IAM, único (índice único em `users.root_slot`) e irrevogável pela aplicação
   — não pode ser desativado nem perder o admin (`409 ROOT_IMMUTABLE`), e continua admin mesmo
-  com `is_admin` zerado por SQL. `GET /auth/setup` (público) diz se o root já existe e se o
-  token é exigido; a tela de cadastro usa isso. Com `ENVIRONMENT=production`, o root só nasce
+  com `is_admin` zerado por SQL. `GET /auth/setup` (público) diz se o root já existe, se o
+  próximo cadastro vira root (`root_pending`) e se o token é exigido; a tela de cadastro usa
+  isso. Instalações que já tinham usuários continuam com cadastros comuns até um operador
+  designar o root com `make_admin.py --root`. Com `ENVIRONMENT=production`, o root só nasce
   com `ROOT_SETUP_TOKEN` (`403 ROOT_SETUP_TOKEN_REQUIRED` enquanto não estiver configurado;
   `403 ROOT_SETUP_TOKEN_INVALID` com token ausente ou errado). Fora de produção o token é
   opcional e, se configurado, obrigatório. Depois que o root existe, o token é ignorado;

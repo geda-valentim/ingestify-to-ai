@@ -325,6 +325,9 @@ class UserCreate(BaseModel):
 class SetupStatus(BaseModel):
     """Whether the installation still needs its root user (spec 0019)"""
     root_exists: bool
+    # Brand-new installation (no users): the next registration becomes root
+    root_pending: bool
+    # Whether that root registration needs ROOT_SETUP_TOKEN
     setup_token_required: bool
 
 
