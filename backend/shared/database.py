@@ -86,9 +86,13 @@ def init_db():
         from shared.access.migration import validate_schema
 
         validate_schema(engine)
-    if settings.iam_mode != "off":
-        from shared.iam.migration import validate_schema as validate_iam_schema
+    # Engine grants live in iam_bindings since spec 0018: engine access needs the
+    # IAM schema too. Reconciliation runs on every boot, only ever restricts, and
+    # brings back revocations the pre-0018 code made during a rollback (§4.2.3).
+    from shared.iam.migration import reconcile_on_boot, validate_schema as validate_iam_schema
 
+    reconcile_on_boot(engine)
+    if settings.iam_mode != "off" or settings.engine_access_enabled:
         validate_iam_schema(engine)
 
     # The built-in local engine (spec 0003): this server's workers, no bindings until declared

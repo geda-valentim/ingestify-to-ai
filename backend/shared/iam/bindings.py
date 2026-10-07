@@ -1,7 +1,16 @@
 """
-Granting and revoking platform bindings (spec 0014 §4.8, §4.9, CA7).
+Granting and revoking IAM bindings: the single write service of both role
+families (spec 0014 §4.8, §4.9, CA7; spec 0018 §4.3).
 
-Rules:
+Each write branches on the role family before any check, and the families never
+cross (0018 §2):
+
+- `platform` (`grant`, `revoke`, `list_bindings`): the 0014 rules below, unchanged;
+- `engines` (`grant_engine`, `revoke_engine`, `list_engine_grants`): the 0009
+  rules of `create_grant` / `revoke` / `list_grants` over `iam_bindings` — see the
+  section at the end of this module.
+
+Platform rules:
 - the actor holds `iam.bindings.manage` (bootstrap or a binding);
 - nobody grants to themselves (0013 §4 rule 6);
 - nobody grants a role holding a permission they do not hold themselves;
@@ -167,6 +176,9 @@ def grant(
             IamBinding.subject_type == subject_type,
             IamBinding.subject_id == subject_id,
             IamBinding.role == role,
+            # Lock order of 0018 §4.3: only platform-role rows, through
+            # ix_iam_bindings_subject_role, never an engines binding of the subject.
+            IamBinding.role.in_(list(catalog.ROLES)),
             IamBinding.scope_type == "platform",
             IamBinding.revoked_at.is_(None),
             IamBinding.expires_at > now,
@@ -258,3 +270,206 @@ def list_bindings(db: Session, actor, *, include_inactive: bool = False, decider
     if not include_inactive:
         q = q.filter(IamBinding.revoked_at.is_(None), IamBinding.expires_at > now)
     return [view(b, now) for b in q.order_by(IamBinding.created_at.desc(), IamBinding.id).all()]
+
+
+# -- engines family (spec 0018 §4.3, CA5, CA7, CA9, CA17) ----------------------------
+#
+# The 0009 grant rules, now over `iam_bindings`: bootstrap or `access.grants.manage`
+# plus a covering delegation envelope (`shared.access.service._delegator`); a
+# materialized, non-empty `permissions` within the role; a mandatory condition
+# (`condition_ref`, a policy revision); `delegation` for `access_admin` only;
+# several active bindings of the same role per user are valid. No BINDING_EXISTS
+# and no ROLE_ABOVE_GRANTOR: the limit is the envelope. Self-grants are refused
+# (0013 §4 rule 6, an intentional deviation from 0009).
+#
+# Lock order: the 0009 epoch (FOR UPDATE) before reading or changing any binding
+# or user, then `users`, then `iam_bindings` / `access_role_grants`. Every write
+# bumps the epoch and is mirrored into `access_role_grants` in the same
+# transaction (`shared.iam.engine_mirror`), so a rollback never widens access.
+#
+# Errors are `ControlError`s with the 0009 codes, as `/admin/access/grants`
+# answers them.
+
+
+def _control_error(code, status=409):
+    from shared.engine_control.service import ControlError
+
+    return ControlError(code, status)
+
+
+def _engine_query(db: Session):
+    return db.query(IamBinding).filter(
+        IamBinding.subject_type == "user",
+        IamBinding.role.in_(list(catalog.ENGINE_ROLES)),
+    )
+
+
+def _covered(db: Session, actor: str, b: IamBinding) -> None:
+    """`_delegator` covers binding `b`, as 0009 checked before listing or revoking."""
+    from shared.access import service as access
+    from shared.access.models import PolicyRevision
+    from shared.admin import is_effective_admin
+
+    if is_effective_admin(db.get(User, actor)):
+        return
+    revision = db.get(PolicyRevision, b.condition_ref) if b.condition_ref else None
+    if revision is None or not b.permissions:
+        # A malformed binding is never covered by an envelope; bootstrap only.
+        raise _control_error("DELEGATION_EXCEEDED", 403)
+    access._delegator(
+        db,
+        actor,
+        b.permissions,
+        revision.constraints,
+        min(b.expires_at, datetime.utcnow() + timedelta(seconds=60)),
+        b.delegation,
+    )
+
+
+def _engine_audit(db: Session, actor: str, action: str, b: IamBinding, after=None):
+    from shared.access import policy
+
+    policy.audit(db, actor, action, b.id, after)
+
+
+def grant_engine(
+    db: Session,
+    actor: str,
+    *,
+    subject_id: str,
+    role: str,
+    condition_ref: str,
+    expires_at,
+    permissions=None,
+    delegation=None,
+    subject_type: str = "user",
+) -> IamBinding:
+    """Grant an engines role (0009 `create_grant`); `parent_id` comes from `_delegator`."""
+    from shared.access import policy
+    from shared.access import service as access
+    from shared.access.models import PolicyRevision
+
+    access.require_enabled()
+    authority = policy.epoch(db, True)
+    policy.authorize(db, actor, "access.grants.manage")
+    if role not in policy.ROLES:
+        raise _control_error("ROLE_UNKNOWN", 422)
+    if subject_type != "user":
+        raise _control_error("INVALID_SUBJECT", 422)
+    ps = list(permissions) if permissions is not None else sorted(policy.ROLES[role])
+    if not ps or not set(ps).issubset(policy.ROLES[role]):
+        raise _control_error("PERMISSIONS_OUTSIDE_ROLE", 422)
+    if str(subject_id) == str(actor):
+        raise _control_error("SELF_GRANT", 422)
+    revision = db.get(PolicyRevision, condition_ref) if condition_ref else None
+    target = db.get(User, subject_id)
+    if not revision or not target or not target.is_active:
+        raise _control_error("GRANT_TARGET_NOT_FOUND", 404)
+    try:
+        expiry = to_utc_naive(expires_at)
+    except IamError:
+        raise _control_error("GRANT_EXPIRY_INVALID", 422) from None
+    now = datetime.utcnow()
+    if expiry <= now or expiry > now + timedelta(days=365):
+        raise _control_error("GRANT_EXPIRY_INVALID", 422)
+    if delegation is not None and hasattr(delegation, "model_dump"):
+        delegation = delegation.model_dump(mode="json")
+    if delegation and (
+        role != "access_admin"
+        or not set(delegation["permissions"]).issubset(policy.PERMISSIONS)
+    ):
+        raise _control_error("DELEGATION_INVALID", 422)
+    parent = access._delegator(db, actor, ps, revision.constraints, expiry, delegation)
+
+    from shared.iam.engine_mirror import mirror
+
+    b = IamBinding(
+        subject_type="user",
+        subject_id=target.id,
+        role=role,
+        scope_type="platform",
+        scope_id=None,
+        permissions=ps,
+        condition_ref=revision.id,
+        delegation=delegation or None,
+        parent_id=parent,
+        granted_by=actor,
+        expires_at=expiry,
+        version=0,
+        created_at=now,
+    )
+    db.add(b)
+    db.flush()
+    authority.version += 1
+    mirror(db, b)
+    _engine_audit(
+        db,
+        actor,
+        "access.granted",
+        b,
+        {"subject_id": target.id, "role": role, "policy_revision_id": revision.id},
+    )
+    db.commit()
+    return b
+
+
+def revoke_engine(
+    db: Session, actor: str, binding_id: str, version: int, *, strict: bool = False
+) -> IamBinding:
+    """
+    Revoke an engines binding (0009 `revoke`).
+
+    `strict=False` is the 0009 contract of `/admin/access/grants/{id}/revoke`:
+    GRANT_NOT_FOUND, and a re-revocation is accepted (`version += 1`).
+    `strict=True` is the unified route's: BINDING_NOT_FOUND and ALREADY_REVOKED.
+    """
+    from shared.access import policy
+    from shared.iam.engine_mirror import mirror
+
+    authority = policy.epoch(db, True)
+    policy.authorize(db, actor, "access.grants.manage")
+    b = (
+        _engine_query(db)
+        .filter(IamBinding.id == str(binding_id))
+        .populate_existing()
+        .with_for_update()
+        .first()
+    )
+    if b is None:
+        raise _control_error("BINDING_NOT_FOUND" if strict else "GRANT_NOT_FOUND", 404)
+    _covered(db, actor, b)
+    if strict and b.revoked_at is not None:
+        raise _control_error("ALREADY_REVOKED", 409)
+    if b.version != version:
+        raise _control_error("VERSION_CONFLICT")
+    b.revoked_at = datetime.utcnow()
+    b.revoked_by = str(actor)
+    b.version += 1
+    authority.version += 1
+    db.flush()
+    mirror(db, b)
+    _engine_audit(db, actor, "access.revoked", b)
+    db.commit()
+    return b
+
+
+def list_engine_grants(db: Session, actor: str):
+    """
+    Every engines binding the actor's envelope covers (0009 `list_grants`),
+    revoked and expired included, newest first. Never a platform binding.
+    """
+    from shared.access import policy
+    from shared.engine_control.service import ControlError
+    from shared.iam.engine_bindings import as_grant, well_formed
+
+    policy.authorize(db, actor, "access.grants.manage")
+    rows = []
+    for b in _engine_query(db).order_by(IamBinding.created_at.desc(), IamBinding.id):
+        if not well_formed(db, b):
+            continue
+        try:
+            _covered(db, actor, b)
+        except ControlError:
+            continue
+        rows.append(as_grant(b))
+    return rows

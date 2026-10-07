@@ -434,11 +434,16 @@ não vai a produção.
   (ainda não ligado a `policy.grants`, fatia 2); script
   `scripts/iam_engine_equivalence.py`. Até a fatia 3, a rota `/admin/iam/bindings` não
   lista nem revoga bindings `engines` (404 `BINDING_NOT_FOUND`).
-- [ ] 2. Leitura e escrita da 0009 sobre `iam_bindings`, delegação, epoch e ordem de
+- [x] 2. Leitura e escrita da 0009 sobre `iam_bindings`, delegação, epoch e ordem de
   locks, espelho, reconciliação no boot, flag e compose; docstrings de
   `shared/iam/models.py`, `catalog.py`, `api/iam_routes.py` e mensagem de
   `shared/access/migration.downgrade` atualizadas (CA2, CA3, CA5, CA7, CA9, CA10,
-  CA13, CA15).
+  CA13, CA15). `policy.grants`/`active_grant` delegam a `shared/iam/engine_bindings.py`;
+  `shared/iam/bindings.grant_engine`/`revoke_engine`/`list_engine_grants` servem
+  `create_grant`/`revoke`/`list_grants` (códigos e auditoria da 0009 até a fatia 3);
+  espelho em `shared/iam/engine_mirror.py`; `migration.reconcile_on_boot` em
+  `init_db`. Testes em `tests/test_iam_engine_bindings_writes.py`. O teste de
+  concorrência em MySQL de CA5 fica para quando houver banco InnoDB descartável no CI.
 - [ ] 3. API unificada por família, aliases depreciados, auditoria e docs de API (CA6,
   CA8, CA12, CA16, CA17).
 - [ ] 4. Tela única de Acesso (CA11).

@@ -82,5 +82,8 @@ def validate_schema(bind):
 
 def downgrade(bind):
     raise RuntimeError(
-        "Audit, grants and profile history are retained. Disable ENGINE_ACCESS_ENABLED to roll back access."
+        "Audit, grants and profile history are retained. Engine grants live in "
+        "iam_bindings since spec 0018 (downgrade its revision to mirror them back). "
+        "Set ENGINE_ACCESS_ENABLED=false (or leave it unset with IAM_MODE other than "
+        "enforce) to roll back engine access."
     )

@@ -15,8 +15,14 @@ unknown role or subject, self-grant, a role above the grantor or an invalid
 API key on a write) come from the dependencies and keep the legacy plain-string
 `detail` of `require_admin` (CA12).
 
-A platform binding never opens the 0009 engine routes: `access_session` still
-reads only the 0009 grants (§4.9, tested).
+A platform binding never opens the 0009 engine routes: `access_session` reads
+only engines-family bindings, through `shared.access.policy.navigation` (§4.9,
+tested; spec 0018 CA13).
+
+Since spec 0018 the engines family (the 0009 grants) lives in `iam_bindings` too,
+written by `shared.iam.bindings.grant_engine` / `revoke_engine` behind
+`/admin/access/grants*`. Until 0018 slice 3 these routes serve the platform family
+only: they neither list nor revoke an engines binding (404 BINDING_NOT_FOUND).
 """
 
 from typing import List, Optional

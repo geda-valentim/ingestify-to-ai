@@ -21,6 +21,8 @@ outside the platform family is left.
 Reconciliation runs on every upgrade regardless of the marker, and only ever
 restricts: revocations made by the pre-0018 code during a rollback come back.
 
+`reconcile_on_boot` runs the same reconciliation at every API boot (`init_db`).
+
 This module, the rollback mirror and the frozen copy of
 `shared.iam.engine_equivalence` are the only readers of `access_role_grants`
 (0018 CA2).
@@ -441,6 +443,32 @@ def reconcile_engine_grants(conn) -> dict:
     if copied or restricted:
         _bump_epoch(conn)
     return {"copied": copied, "restricted": restricted}
+
+
+def reconcile_on_boot(bind) -> dict:
+    """
+    §4.2.3 at API boot (`init_db`): reconcile whenever `access_role_grants` and the
+    0018 columns exist, independently of the marker. Skipped before the 0018
+    migration (nothing to reconcile into) and on a database without the 0009
+    epoch and without grants (a fresh install).
+    """
+    def step(conn):
+        tables = _tables(conn)
+        if not {"access_role_grants", "iam_bindings"} <= tables:
+            return {"copied": 0, "restricted": 0}
+        present = {c["name"] for c in inspect(conn).get_columns("iam_bindings")}
+        if not set(COLUMNS_0018) <= present:
+            return {"copied": 0, "restricted": 0}
+        has_epoch = "access_authorization_epoch" in tables and conn.execute(
+            select(_epoch.c.id).where(_epoch.c.id == 1)
+        ).first() is not None
+        if not has_epoch:
+            if conn.execute(select(_grants.c.id).limit(1)).first() is not None:
+                raise RuntimeError("0009 authorization epoch is missing")
+            return {"copied": 0, "restricted": 0}
+        return reconcile_engine_grants(conn)
+
+    return _in_transaction(bind, step)
 
 
 def _data_0018(conn):

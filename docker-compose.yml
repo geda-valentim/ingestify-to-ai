@@ -159,6 +159,9 @@ services:
       # IAM decision core (spec 0014): the same value in api and every worker that
       # decides engines.remote.use (worker submits pages/audio, worker-dispatch places)
       - IAM_MODE=${IAM_MODE:-off}
+      # Engine RBAC/ABAC (spec 0018 §4.4): unset = follow IAM_MODE=enforce;
+      # ENGINE_ACCESS_ENABLED is a deprecated alias (true/false wins when set)
+      - ENGINE_ACCESS_ENABLED=${ENGINE_ACCESS_ENABLED:-}
       # Seals remote engine credentials (spec 0003); the private key never comes here
       - ENGINE_SECRETS_PUBLIC_KEY=${ENGINE_SECRETS_PUBLIC_KEY:-}
       # Optional: engine alerts are also POSTed here as generic JSON (spec 0003, 4.8)
@@ -188,6 +191,9 @@ services:
       # admins and IAM_MODE as the api (spec 0014 §4.6)
       - ADMIN_USER_IDS=${ADMIN_USER_IDS:-}
       - IAM_MODE=${IAM_MODE:-off}
+      # Engine RBAC/ABAC (spec 0018 §4.4): unset = follow IAM_MODE=enforce;
+      # ENGINE_ACCESS_ENABLED is a deprecated alias (true/false wins when set)
+      - ENGINE_ACCESS_ENABLED=${ENGINE_ACCESS_ENABLED:-}
       - REDIS_PASSWORD=${REDIS_PASSWORD:-}
       - REDIS_HOST=${REDIS_HOST:-redis}
       - REDIS_PORT=${REDIS_PORT:-6379}
@@ -292,6 +298,9 @@ services:
       - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND:-redis://${REDIS_HOST:-redis}:6379/1}
       - CELERY_TASK_DEFAULT_QUEUE=ingestify
       - CELERY_WORKER_NAME=ingestify-vision
+      # Same IAM flag as the api: shared.access.policy runs here too (spec 0018 CA15)
+      - IAM_MODE=${IAM_MODE:-off}
+      - ENGINE_ACCESS_ENABLED=${ENGINE_ACCESS_ENABLED:-}
       - ENVIRONMENT=development
       - LOG_LEVEL=INFO
       - MAX_FILE_SIZE_MB=50
@@ -402,6 +411,9 @@ services:
       - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND:-redis://${REDIS_HOST:-redis}:6379/1}
       - CELERY_TASK_DEFAULT_QUEUE=ingestify
       - CELERY_WORKER_NAME=ingestify-remote
+      # Same IAM flag as the api: shared.access.policy runs here too (spec 0018 CA15)
+      - IAM_MODE=${IAM_MODE:-off}
+      - ENGINE_ACCESS_ENABLED=${ENGINE_ACCESS_ENABLED:-}
       - ENVIRONMENT=development
       - LOG_LEVEL=INFO
       - TEMP_STORAGE_PATH=/tmp/ingestify
@@ -462,6 +474,9 @@ services:
       - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND:-redis://${REDIS_HOST:-redis}:6379/1}
       - CELERY_TASK_DEFAULT_QUEUE=ingestify
       - CELERY_WORKER_NAME=ingestify-beat
+      # Same IAM flag as the api: shared.access.policy runs here too (spec 0018 CA15)
+      - IAM_MODE=${IAM_MODE:-off}
+      - ENGINE_ACCESS_ENABLED=${ENGINE_ACCESS_ENABLED:-}
       - ENVIRONMENT=development
       - SQL_ECHO=${SQL_ECHO:-false}  # true = log every SQL statement (debug only)
       - LOG_LEVEL=INFO

@@ -53,6 +53,38 @@ def _delegated(db, delegate, child):
     return parent, kid
 
 
+def drop_engine_bindings(db, ids=None):
+    """
+    Back to the pre-0018 store: the grants live only in access_role_grants.
+
+    The 0009 service writes engines bindings (mirrored into access_role_grants)
+    since 0018 slice 2; the migration under test starts from the old store.
+    """
+    q = db.query(IamBinding).filter(IamBinding.role.in_(list(policy.ROLES)))
+    if ids is not None:
+        q = q.filter(IamBinding.id.in_(list(ids)))
+    q.update({IamBinding.parent_id: None}, synchronize_session=False)
+    q.delete(synchronize_session=False)
+    db.commit()
+
+
+def legacy_grant(db, **kw):
+    """A grant as the pre-0018 code wrote it: only in access_role_grants."""
+    g = grant(db, **kw)
+    drop_engine_bindings(db, [g["id"]])
+    return g
+
+
+def legacy_revoke(db, grant_id, actor):
+    """A revocation as the pre-0018 `service.revoke` made it: access_role_grants only."""
+    g = db.get(RoleGrant, grant_id)
+    g.revoked_at = datetime.utcnow()
+    g.version += 1
+    db.get(AuthorizationEpoch, 1).version += 1
+    policy.audit(db, actor, "access.revoked", grant_id)
+    db.commit()
+
+
 def legacy_state(db):
     """Every CA4 fixture, written through the 0009 code into access_role_grants."""
     _users(db, EXTRA_USERS)
@@ -93,6 +125,7 @@ def legacy_state(db):
     db.get(RoleGrant, b).parent_id = a
     db.commit()
     ids["cycle_a"], ids["cycle_b"] = a, b
+    drop_engine_bindings(db)
     return ids
 
 
@@ -144,7 +177,7 @@ def test_a_legacy_revocation_reconciled_is_denied_by_the_iam_store(migrated):
     """The pre-0018 code revokes during a rollback; reconciliation brings it back."""
     factory, ids = migrated
     with factory() as db:
-        service.revoke(db, ids["child"], 0, "bootstrap")  # writes access_role_grants only
+        legacy_revoke(db, ids["child"], "bootstrap")  # writes access_role_grants only
         epoch = db.get(AuthorizationEpoch, 1).version
     with _engine(factory).begin() as conn:
         assert migration.reconcile_engine_grants(conn) == {"copied": 0, "restricted": 1}
