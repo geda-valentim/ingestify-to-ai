@@ -80,5 +80,10 @@ Rascunho ──▶ Em revisão ──▶ Aprovada ──▶ Implementada
 | 0006 | [WhisperX e identificação de falantes](0006-whisperx-e-identificacao-de-falantes.md) | Aprovada; canário opt-in, qualificação pendente | 2026-10-05 |
 | 0007 | [Operar engines e modelos pelo painel admin](0007-operacao-de-engines-pelo-admin.md) | Em implementação | 2026-10-06 |
 | 0009 | [Perfis de execução com RBAC e ABAC](0009-perfis-de-execucao-e-controle-de-acesso.md) | Implementada; habilitada no dev, canário físico pendente | 2026-10-06 |
+| 0013 | [IAM da plataforma (guarda-chuva)](0013-iam-da-plataforma.md) | Rascunho | 2026-10-06 |
+| 0014 | [IAM: núcleo de decisão, cobertura de rotas e papéis de plataforma](0014-iam-nucleo-de-decisao-e-papeis-de-plataforma.md) | Em implementação | 2026-10-06 |
+| 0015 | IAM: API keys escopadas | Reservada (0013) | 2026-10-06 |
+| 0016 | IAM: organizações pessoais | Reservada (0013) | 2026-10-06 |
+| 0017 | IAM: compartilhamento, grupos e organizações de time | Reservada (0013) | 2026-10-06 |
 
 <!-- Adicione uma linha aqui ao criar cada spec. -->
