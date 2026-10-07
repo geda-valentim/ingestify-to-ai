@@ -337,7 +337,7 @@ def _engine_query(db: Session):
     )
 
 
-def _covered(db: Session, actor: str, b: IamBinding) -> None:
+def _covered(db: Session, actor: str, b: IamBinding, lock: bool = False) -> None:
     """`_delegator` covers binding `b`, as 0009 checked before listing or revoking."""
     from shared.access import service as access
     from shared.access.models import PolicyRevision
@@ -356,6 +356,7 @@ def _covered(db: Session, actor: str, b: IamBinding) -> None:
         revision.constraints,
         min(b.expires_at, datetime.utcnow() + timedelta(seconds=60)),
         b.delegation,
+        lock=lock,
     )
 
 
@@ -399,7 +400,9 @@ def grant_engine(
 
     access.require_enabled()
     authority = policy.epoch(db, True)
-    policy.authorize(db, actor, "access.grants.manage")
+    # Locking reads (0018 §7): a parent revoked before this epoch lock is seen even
+    # through an older snapshot; lock order epoch -> users -> bindings.
+    policy.authorize(db, actor, "access.grants.manage", lock=True)
     if role not in policy.ROLES:
         raise _control_error("ROLE_UNKNOWN", 422)
     if subject_type != "user":
@@ -427,7 +430,7 @@ def grant_engine(
         or not set(delegation["permissions"]).issubset(policy.PERMISSIONS)
     ):
         raise _control_error("DELEGATION_INVALID", 422)
-    parent = access._delegator(db, actor, ps, revision.constraints, expiry, delegation)
+    parent = access._delegator(db, actor, ps, revision.constraints, expiry, delegation, lock=True)
 
     from shared.iam.engine_mirror import mirror
 
@@ -469,7 +472,9 @@ def revoke_engine(
     from shared.iam.engine_mirror import mirror
 
     authority = policy.epoch(db, True)
-    policy.authorize(db, actor, "access.grants.manage")
+    # The actor's own chain is locked before the target binding (lock order of
+    # 0018 §4.3); `_covered` then re-reads rows this transaction already holds.
+    policy.authorize(db, actor, "access.grants.manage", lock=True)
     b = (
         _engine_query(db)
         .filter(IamBinding.id == str(binding_id))
@@ -479,7 +484,7 @@ def revoke_engine(
     )
     if b is None:
         raise _control_error("BINDING_NOT_FOUND" if strict else "GRANT_NOT_FOUND", 404)
-    _covered(db, actor, b)
+    _covered(db, actor, b, lock=True)
     if strict and b.revoked_at is not None:
         raise _control_error("ALREADY_REVOKED", 409)
     if b.version != version:

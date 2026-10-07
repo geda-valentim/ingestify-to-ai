@@ -31,6 +31,12 @@ Ver [specs/0018](specs/0018-iam-convergencia-do-rbac-abac-de-engines.md) e a
   apagando a linha) passa a ligar o enforcement de engines e a exigir o esquema da 0009, e
   os grants ativos de `access_role_grants` voltam a valer: fixe `ENGINE_ACCESS_ENABLED=false`
   ou revise/revogue esses grants antes do deploy (runbook §6.1).
+- **InnoDB:** as leituras com lock da família `engines` travam bindings só pela chave
+  primária (sem gap): uma admissão de efeito de um filho delegado não entra mais em deadlock
+  com uma concessão de plataforma ao dono do pai. Conceder e revogar papéis `engines` leem
+  autoridade e delegação com lock, vendo uma revogação do pai mesmo com snapshot antigo.
+  Testes opt-in em MySQL (`ENGINE_CONTROL_TEST_DATABASE_URL`) para concorrência e para o
+  round trip da migração.
 - **Boot:** com `IAM_MODE` diferente de `off` (inclusive `shadow` com engines desligado) ou
   engines ligado, a API não sobe sem a migração da 0018 (colunas, FKs, índice), e esta exige a
   migração da 0009 mesmo em instalações só com IAM de plataforma.
