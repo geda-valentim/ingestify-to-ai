@@ -5990,7 +5990,7 @@
           "Conversion"
         ],
         "summary": "Upload e converter arquivo",
-        "description": "Upload direto de arquivo para conversão\n\nEste endpoint é dedicado exclusivamente para upload de arquivos.\nUse os outros endpoints para converter de URL, Google Drive ou Dropbox.\n\n## Parâmetros:\n- `file`: Arquivo para upload\n- `name`: Nome de identificação opcional (se não fornecido, usa o nome do arquivo)\n- `docling_preset`: Quality/speed preset (apenas para PDFs):\n  - **fast** (padrão): Conversão rápida, apenas texto (~35s/MB)\n    - OCR: Desligado | Images: Desligadas | Tables: Ligadas\n  - **balanced**: Velocidade moderada, extrai imagens (~70-105s/MB)\n    - OCR: Desligado | Images: Ligadas | Tables: Ligadas\n  - **quality**: Máxima qualidade, inclui OCR para documentos escaneados (~350s/MB)\n    - OCR: Ligado | Images: Ligadas | Tables: Ligadas\n\n## Formatos suportados\nPDF, DOCX, DOC, HTML, PPTX, XLSX, RTF, ODT\n\n## Retorno\nRetorna imediatamente um `job_id` para consultar o progresso via `/jobs/{job_id}`,\ne onde o job ficou (`project`, `folder`)\n\n## Exemplos:\n```bash\n# Fast mode (default)\ncurl -X POST http://localhost:8000/upload       -H \"X-API-Key: your-api-key\"       -F \"file=@documento.pdf\"       -F \"project=Cliente X\"\n\n# Quality mode with OCR\ncurl -X POST http://localhost:8000/upload       -H \"X-API-Key: your-api-key\"       -F \"file=@documento_escaneado.pdf\"       -F \"docling_preset=quality\"\n```",
+        "description": "Upload direto de arquivo para conversão\n\nEste endpoint é dedicado exclusivamente para upload de arquivos.\nUse os outros endpoints para converter de URL, Google Drive ou Dropbox.\n\n## Parâmetros:\n- `file`: Arquivo para upload\n- `name`: Nome de identificação opcional (se não fornecido, usa o nome do arquivo)\n- `docling_preset`: Quality/speed preset (apenas para PDFs):\n  - **fast** (padrão): Conversão rápida, apenas texto (~35s/MB)\n    - OCR: Desligado | Images: Desligadas | Tables: Ligadas\n  - **balanced**: Velocidade moderada, extrai imagens (~70-105s/MB)\n    - OCR: Desligado | Images: Ligadas | Tables: Ligadas\n  - **quality**: Máxima qualidade, inclui OCR para documentos escaneados (~350s/MB)\n    - OCR: Ligado | Images: Ligadas | Tables: Ligadas\n- `purge_source`: Se `true`, apaga o arquivo original (MinIO e cópia local) quando\n  o job termina `completed`; fica só o resultado. Se o job falhar ou tiver páginas\n  com falha, o original é mantido (o retry de página precisa dele) e só é apagado\n  quando um retry levar o job a `completed`. Os PDFs por página continuam\n  disponíveis. Para apagar depois: `DELETE /jobs/{job_id}/source`\n\n## Formatos suportados\nPDF, DOCX, DOC, HTML, PPTX, XLSX, RTF, ODT\n\n## Retorno\nRetorna imediatamente um `job_id` para consultar o progresso via `/jobs/{job_id}`,\ne onde o job ficou (`project`, `folder`)\n\n## Exemplos:\n```bash\n# Fast mode (default)\ncurl -X POST http://localhost:8000/upload       -H \"X-API-Key: your-api-key\"       -F \"file=@documento.pdf\"       -F \"project=Cliente X\"\n\n# Quality mode with OCR\ncurl -X POST http://localhost:8000/upload       -H \"X-API-Key: your-api-key\"       -F \"file=@documento_escaneado.pdf\"       -F \"docling_preset=quality\"\n```",
         "operationId": "upload_and_convert_upload_post",
         "requestBody": {
           "content": {
@@ -6092,7 +6092,7 @@
           "Conversion"
         ],
         "summary": "Convert Document",
-        "description": "Conversão de documentos para Markdown\n\n## Opções de uso:\n\n### 1. Upload de arquivo (multipart/form-data)\n- `source_type`: \"file\"\n- `file`: Selecione o arquivo para upload\n- `source`: Deixe vazio\n\n### 2. URL pública\n- `source_type`: \"url\"\n- `source`: \"https://example.com/document.pdf\"\n- `file`: Deixe vazio\n\n### 3. Google Drive\n- `source_type`: \"gdrive\"\n- `source`: \"1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms\" (file ID)\n- header `X-Source-Token`: \"ya29.a0AfH6SMB...\" (OAuth2 token do Google)\n- `file`: Deixe vazio\n\n### 4. Dropbox\n- `source_type`: \"dropbox\"\n- `source`: \"/documents/report.pdf\" (path do arquivo)\n- header `X-Source-Token`: \"sl.B1a2c3...\" (access token do Dropbox)\n\nO header `Authorization` autentica no Ingestify e nunca é repassado ao\nprovedor nem colocado na mensagem do Celery (S-01).\n- `file`: Deixe vazio\n\n## Projeto (obrigatório) e pasta\n`project` (nome; criado se não existir) ou `project_id`, e opcionalmente\n`folder`/`folder_id`. Uma API key vinculada a um projeto dispensa o campo\n(só sem JWT). Sem projeto: 422. Um arquivo repetido só é reaproveitado\ndentro do mesmo projeto.\n\n## Formatos suportados\nPDF, DOCX, DOC, HTML, PPTX, XLSX, RTF, ODT\n\n## Retorno\nRetorna imediatamente um `job_id` para consultar o progresso via `/jobs/{job_id}`",
+        "description": "Conversão de documentos para Markdown\n\n## Opções de uso:\n\n### 1. Upload de arquivo (multipart/form-data)\n- `source_type`: \"file\"\n- `file`: Selecione o arquivo para upload\n- `source`: Deixe vazio\n\n### 2. URL pública\n- `source_type`: \"url\"\n- `source`: \"https://example.com/document.pdf\"\n- `file`: Deixe vazio\n\n### 3. Google Drive\n- `source_type`: \"gdrive\"\n- `source`: \"1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms\" (file ID)\n- header `X-Source-Token`: \"ya29.a0AfH6SMB...\" (OAuth2 token do Google)\n- `file`: Deixe vazio\n\n### 4. Dropbox\n- `source_type`: \"dropbox\"\n- `source`: \"/documents/report.pdf\" (path do arquivo)\n- header `X-Source-Token`: \"sl.B1a2c3...\" (access token do Dropbox)\n\nO header `Authorization` autentica no Ingestify e nunca é repassado ao\nprovedor nem colocado na mensagem do Celery (S-01).\n- `file`: Deixe vazio\n\n## Projeto (obrigatório) e pasta\n`project` (nome; criado se não existir) ou `project_id`, e opcionalmente\n`folder`/`folder_id`. Uma API key vinculada a um projeto dispensa o campo\n(só sem JWT). Sem projeto: 422. Um arquivo repetido só é reaproveitado\ndentro do mesmo projeto.\n\n## Arquivo original (`purge_source`)\nCom `purge_source=true` o arquivo original (o enviado, ou o baixado da URL) é\napagado quando o job termina `completed`. Falha ou páginas com falha: o original\nfica para o retry de página, e é apagado quando um retry completar o job.\nPara apagar depois: `DELETE /jobs/{job_id}/source`\n\n## Formatos suportados\nPDF, DOCX, DOC, HTML, PPTX, XLSX, RTF, ODT\n\n## Retorno\nRetorna imediatamente um `job_id` para consultar o progresso via `/jobs/{job_id}`",
         "operationId": "convert_document_convert_post",
         "security": [
           {
@@ -6284,6 +6284,58 @@
             "content": {
               "application/json": {
                 "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "x-access": "user"
+      }
+    },
+    "/jobs/{job_id}/source": {
+      "delete": {
+        "tags": [
+          "Conversion"
+        ],
+        "summary": "Apagar o arquivo original do job",
+        "description": "Apaga o arquivo original de um job (o documento, áudio ou vídeo enviado),\nmantendo o job e o resultado (markdown, páginas, transcrições).\n\nRemove o objeto no MinIO (`uploads/...` ou `audio/...`) e a cópia local, e\nzera a referência do job. Depois disso `GET /jobs/{job_id}` responde\n`source_available: false` e o retry de página deixa de ser possível\n(ele restaura o original do MinIO). Os PDFs por página continuam disponíveis.\n\nPara apagar automaticamente ao terminar, envie `purge_source=true` em\n`/upload`, `/convert` ou `/transcribe`.\n\n## Retorno\n- 200: `{\"job_id\": \"...\", \"source_deleted\": true}`\n- 404: job inexistente, de outro usuário, ou sem arquivo original\n- 409: `{\"code\": \"JOB_STILL_PROCESSING\"}`: o job ainda está na fila ou em processamento\n- 503: `{\"code\": \"SOURCE_DELETE_FAILED\"}`: o armazenamento recusou; o original foi mantido",
+        "operationId": "delete_job_source_jobs__job_id__source_delete",
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SourceDeletedResponse"
+                }
               }
             }
           },
@@ -7809,6 +7861,12 @@
             ],
             "title": "Include Word Timestamps"
           },
+          "purge_source": {
+            "type": "boolean",
+            "title": "Purge Source",
+            "description": "Apagar o arquivo original (MinIO e cópia local) quando o job terminar com sucesso; fica só o resultado. Mantido se o job falhar ou tiver páginas com falha (o retry de página precisa dele) e apagado quando um retry levar o job a completed. Também é possível apagar depois com DELETE /jobs/{job_id}/source",
+            "default": false
+          },
           "project": {
             "anyOf": [
               {
@@ -8304,6 +8362,12 @@
               }
             ],
             "title": "Include Word Timestamps"
+          },
+          "purge_source": {
+            "type": "boolean",
+            "title": "Purge Source",
+            "description": "Apagar o arquivo original (MinIO e cópia local) quando o job terminar com sucesso; fica só o resultado. Mantido se o job falhar ou tiver páginas com falha (o retry de página precisa dele) e apagado quando um retry levar o job a completed. Também é possível apagar depois com DELETE /jobs/{job_id}/source",
+            "default": false
           },
           "project": {
             "anyOf": [
@@ -12914,6 +12978,11 @@
             "title": "Tags",
             "default": []
           },
+          "source_available": {
+            "type": "boolean",
+            "title": "Source Available",
+            "default": false
+          },
           "project": {
             "anyOf": [
               {
@@ -14427,6 +14496,25 @@
         ],
         "title": "SetupStatus",
         "description": "Whether the installation still needs its root user (spec 0019)"
+      },
+      "SourceDeletedResponse": {
+        "properties": {
+          "job_id": {
+            "type": "string",
+            "title": "Job Id"
+          },
+          "source_deleted": {
+            "type": "boolean",
+            "title": "Source Deleted"
+          }
+        },
+        "type": "object",
+        "required": [
+          "job_id",
+          "source_deleted"
+        ],
+        "title": "SourceDeletedResponse",
+        "description": "Resposta de DELETE /jobs/{job_id}/source"
       },
       "SpendCap": {
         "properties": {

@@ -112,6 +112,7 @@ export default function JobStatusPage({ params }: PageProps) {
   const hasHydrated = useAuthStore((state) => state._hasHydrated);
 
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [sourceDialogOpen, setSourceDialogOpen] = useState(false);
   const [selectedPage, setSelectedPage] = useState<PageInfo | null>(null);
 
   const [activeTab, setActiveTab] = useState<"pdf" | "markdown">("pdf");
@@ -270,6 +271,27 @@ export default function JobStatusPage({ params }: PageProps) {
     onError: (error: any) => {
       toast({
         title: "Error deleting job",
+        description: formatApiError(error),
+        variant: "destructive",
+      });
+    },
+  });
+
+  // DELETE /jobs/{id}/source: drops the original file, keeps the job and its result
+  const deleteSourceMutation = useMutation({
+    mutationFn: () => jobsApi.deleteSource(resolvedParams.id),
+    onSuccess: () => {
+      setSourceDialogOpen(false);
+      queryClient.invalidateQueries({ queryKey: ["job-status", resolvedParams.id] });
+      toast({
+        title: "Arquivo original apagado",
+        description: "O job e o resultado da conversão foram mantidos.",
+      });
+    },
+    onError: (error: unknown) => {
+      setSourceDialogOpen(false);
+      toast({
+        title: "Não foi possível apagar o arquivo original",
         description: formatApiError(error),
         variant: "destructive",
       });
@@ -677,6 +699,19 @@ export default function JobStatusPage({ params }: PageProps) {
                 <Trash2 className="h-4 w-4 mr-2" />
                 Delete Job
               </Button>
+              {status.source_available && (
+                <Button
+                  variant="outline"
+                  className="w-full"
+                  onClick={() => setSourceDialogOpen(true)}
+                  disabled={["queued", "pending", "processing"].includes(status.status) || deleteSourceMutation.isPending}
+                  title={["queued", "pending", "processing"].includes(status.status) ? "Disponível quando o job terminar" : undefined}
+                  size="sm"
+                >
+                  <Trash2 className="h-4 w-4 mr-2" />
+                  Apagar arquivo original
+                </Button>
+              )}
             </div>
 
             {/* Pages List in Sidebar */}
@@ -1018,6 +1053,40 @@ export default function JobStatusPage({ params }: PageProps) {
             )}
           </main>
         </div>
+
+        {/* Delete-original Confirmation Dialog */}
+        <AlertDialog open={sourceDialogOpen} onOpenChange={setSourceDialogOpen}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Apagar o arquivo original?</AlertDialogTitle>
+              <AlertDialogDescription>
+                O arquivo enviado será apagado de forma permanente. O job, o resultado da conversão
+                e os PDFs por página continuam disponíveis, mas não será mais possível refazer
+                páginas que falharam.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancelar</AlertDialogCancel>
+              <AlertDialogAction
+                onClick={(event) => {
+                  event.preventDefault();
+                  deleteSourceMutation.mutate();
+                }}
+                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                disabled={deleteSourceMutation.isPending}
+              >
+                {deleteSourceMutation.isPending ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Apagando...
+                  </>
+                ) : (
+                  "Apagar arquivo original"
+                )}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
 
         {/* Delete Confirmation Dialog */}
         <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>

@@ -29,6 +29,7 @@ import { FileUpload } from "@/components/upload/file-upload";
 import { TagInput } from "@/components/tag-input";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Checkbox } from "@/components/ui/checkbox";
 import type { LocationChoice } from "@/components/projects/location-combobox";
 import { UploadLocationFields, locationLabel } from "@/components/projects/upload-location-fields";
 import {
@@ -78,6 +79,7 @@ function ConversionWorkspace() {
   const imageKey = useRef<{ signature: string; key: string } | null>(null);
   const [customName, setCustomName] = useState("");
   const [tags, setTags] = useState<string[]>([]);
+  const [purgeSource, setPurgeSource] = useState(false);
   const [uploadSuccess, setUploadSuccess] = useState<string | null>(null);
   const [urlSource, setUrlSource] = useState("");
   const [gdriveSource, setGdriveSource] = useState("");
@@ -167,6 +169,7 @@ function ConversionWorkspace() {
       setSelectedFile(null);
       setCustomName("");
       setTags([]);
+      setPurgeSource(false);
       setUrlSource("");
       setGdriveSource("");
       setGdriveToken("");
@@ -193,6 +196,7 @@ function ConversionWorkspace() {
       file: selectedFile,
       name: isImage ? undefined : customName || undefined,
       tags,
+      purge_source: !isImage && purgeSource,
       ...toUploadLocation(project, folder),
     });
   };
@@ -332,6 +336,27 @@ function ConversionWorkspace() {
                     <Label htmlFor="tagsFile">Tags (Optional)</Label>
                     <TagInput id="tagsFile" value={tags} onChange={setTags} />
                   </div>
+
+                  {!isImage && (
+                    <div className="flex items-start space-x-2">
+                      <Checkbox
+                        id="purgeSourceFile"
+                        checked={purgeSource}
+                        onCheckedChange={(checked) => setPurgeSource(checked === true)}
+                        disabled={uploadMutation.isPending}
+                        className="mt-0.5"
+                      />
+                      <div className="space-y-1">
+                        <Label htmlFor="purgeSourceFile" className="font-normal">
+                          Não guardar o arquivo original após converter
+                        </Label>
+                        <p className="text-xs text-muted-foreground">
+                          O arquivo é apagado quando a conversão termina com sucesso; fica só o resultado.
+                          Se alguma página falhar, ele é mantido até o retry concluir.
+                        </p>
+                      </div>
+                    </div>
+                  )}
 
                   <Button
                     onClick={handleFileUpload}

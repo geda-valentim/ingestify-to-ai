@@ -81,6 +81,17 @@ def _remove_job_files(job_id: str) -> None:
             logger.error(f"[JOB {job_id}] Could not remove {directory}: {e}")
 
 
+def _purge_source_if_requested(job_id: str) -> None:
+    """
+    After a MAIN job completed: delete its original (MinIO + local copy) when it was
+    created with purge_source=true. The option is read from the DB, so a merge run
+    by any worker, after any page retry, honours it. Never raises.
+    """
+    from shared.job_source import purge_source_if_requested
+
+    purge_source_if_requested(job_id, session_factory=SessionLocal, minio_factory=get_minio_client)
+
+
 # ============================================
 # MAIN JOB - Ponto de entrada
 # ============================================
@@ -603,8 +614,10 @@ def process_conversion(
             finally:
                 db.close()
 
-            # Cleanup (work dir and the uploaded file; the original stays in MinIO)
+            # Cleanup (work dir and the uploaded file; the original stays in MinIO
+            # unless the job asked for purge_source)
             _remove_job_files(job_id)
+            _purge_source_if_requested(job_id)
 
             # Mark as completed in Redis
             redis_client.set_job_status(
@@ -1438,6 +1451,8 @@ def merge_pages_task(
 
         # Cleanup temp files (pages, merged output and the uploaded file; the original stays in MinIO)
         _remove_job_files(parent_job_id)
+        # The split per-page PDFs are separate objects and stay
+        _purge_source_if_requested(parent_job_id)
         logger.info(f"[MERGE JOB {merge_job_id}] Cleanup completed")
 
         return {"merge_job_id": merge_job_id, "pages_merged": total_pages}

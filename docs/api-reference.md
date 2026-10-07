@@ -2,7 +2,7 @@
 
 Gerado do OpenAPI da aplicação por `scripts/generate_api_docs.py`. Não edite este arquivo à mão.
 
-API `1.0.0`: **137 operações HTTP** e **1 WebSocket(s)**.
+API `1.0.0`: **138 operações HTTP** e **1 WebSocket(s)**.
 
 Base pública de desenvolvimento: `https://dev.ingestify.ai/api`. Os caminhos abaixo são relativos à base.
 
@@ -149,6 +149,7 @@ Guias de imagem: [PT](https://dev.ingestify.ai/pt/docs/images) / [EN](https://de
 | POST | `/convert` | JWT ou API key | Convert Document |
 | GET | `/jobs/{job_id}` | JWT ou API key | Get Job Status |
 | DELETE | `/jobs/{job_id}` | JWT ou API key | Deletar job |
+| DELETE | `/jobs/{job_id}/source` | JWT ou API key | Apagar o arquivo original do job |
 | GET | `/jobs/{job_id}/result` | JWT ou API key | Get Job Result |
 | GET | `/jobs/{job_id}/transcript/partial` | JWT ou API key | Get Partial Transcript |
 | GET | `/jobs/{job_id}/pages` | JWT ou API key | Get Job Pages |
@@ -3179,6 +3180,11 @@ Use os outros endpoints para converter de URL, Google Drive ou Dropbox.
     - OCR: Desligado | Images: Ligadas | Tables: Ligadas
   - **quality**: Máxima qualidade, inclui OCR para documentos escaneados (~350s/MB)
     - OCR: Ligado | Images: Ligadas | Tables: Ligadas
+- `purge_source`: Se `true`, apaga o arquivo original (MinIO e cópia local) quando
+  o job termina `completed`; fica só o resultado. Se o job falhar ou tiver páginas
+  com falha, o original é mantido (o retry de página precisa dele) e só é apagado
+  quando um retry levar o job a `completed`. Os PDFs por página continuam
+  disponíveis. Para apagar depois: `DELETE /jobs/{job_id}/source`
 
 ## Formatos suportados
 PDF, DOCX, DOC, HTML, PPTX, XLSX, RTF, ODT
@@ -3211,6 +3217,7 @@ Content-Type: `multipart/form-data`. Esquema: [Body_upload_and_convert_upload_po
 | `max_speakers` | não | integer / null |  |  |
 | `language` | não | string / null |  | Idioma para áudio/vídeo; omitido detecta automaticamente |
 | `include_word_timestamps` | não | boolean / null |  |  |
+| `purge_source` | não | boolean | default=false | Apagar o arquivo original (MinIO e cópia local) quando o job terminar com sucesso; fica só o resultado. Mantido se o job falhar ou tiver páginas com falha (o retry de página precisa dele) e apagado quando um retry levar o job a completed. Também é possível apagar depois com DELETE /jobs/{job_id}/source |
 | `project` | não | string / null |  | Nome do projeto (obrigatório, a menos que a API key esteja vinculada a um projeto). É criado se não existir; grafias equivalentes ('Reunião', ' reuniao ') são o mesmo projeto. |
 | `project_id` | não | string / null |  | ID de um projeto existente (alternativa a 'project'; nunca cria). |
 | `folder` | não | string / null |  | Nome da pasta dentro do projeto (opcional; criada se não existir; sem '/'). |
@@ -3385,6 +3392,12 @@ provedor nem colocado na mensagem do Celery (S-01).
 (só sem JWT). Sem projeto: 422. Um arquivo repetido só é reaproveitado
 dentro do mesmo projeto.
 
+## Arquivo original (`purge_source`)
+Com `purge_source=true` o arquivo original (o enviado, ou o baixado da URL) é
+apagado quando o job termina `completed`. Falha ou páginas com falha: o original
+fica para o retry de página, e é apagado quando um retry completar o job.
+Para apagar depois: `DELETE /jobs/{job_id}/source`
+
 ## Formatos suportados
 PDF, DOCX, DOC, HTML, PPTX, XLSX, RTF, ODT
 
@@ -3414,6 +3427,7 @@ Content-Type: `multipart/form-data`. Esquema: [Body_convert_document_convert_pos
 | `max_speakers` | não | integer / null |  |  |
 | `language` | não | string / null |  | Idioma para áudio/vídeo; omitido detecta automaticamente |
 | `include_word_timestamps` | não | boolean / null |  |  |
+| `purge_source` | não | boolean | default=false | Apagar o arquivo original (MinIO e cópia local) quando o job terminar com sucesso; fica só o resultado. Mantido se o job falhar ou tiver páginas com falha (o retry de página precisa dele) e apagado quando um retry levar o job a completed. Também é possível apagar depois com DELETE /jobs/{job_id}/source |
 | `project` | não | string / null |  | Nome do projeto (obrigatório, a menos que a API key esteja vinculada a um projeto). É criado se não existir; grafias equivalentes ('Reunião', ' reuniao ') são o mesmo projeto. |
 | `project_id` | não | string / null |  | ID de um projeto existente (alternativa a 'project'; nunca cria). |
 | `folder` | não | string / null |  | Nome da pasta dentro do projeto (opcional; criada se não existir; sem '/'). |
@@ -3500,6 +3514,42 @@ Respostas declaradas:
 | Status | Content-Type | Esquema | Descrição |
 | --- | --- | --- | --- |
 | 200 | application/json | objeto livre | Successful Response |
+| 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
+
+### DELETE /jobs/{job_id}/source
+
+Apagar o arquivo original do job
+
+Autorização: **JWT ou API key**. Operation ID: `delete_job_source_jobs__job_id__source_delete`.
+
+Apaga o arquivo original de um job (o documento, áudio ou vídeo enviado),
+mantendo o job e o resultado (markdown, páginas, transcrições).
+
+Remove o objeto no MinIO (`uploads/...` ou `audio/...`) e a cópia local, e
+zera a referência do job. Depois disso `GET /jobs/{job_id}` responde
+`source_available: false` e o retry de página deixa de ser possível
+(ele restaura o original do MinIO). Os PDFs por página continuam disponíveis.
+
+Para apagar automaticamente ao terminar, envie `purge_source=true` em
+`/upload`, `/convert` ou `/transcribe`.
+
+## Retorno
+- 200: `{"job_id": "...", "source_deleted": true}`
+- 404: job inexistente, de outro usuário, ou sem arquivo original
+- 409: `{"code": "JOB_STILL_PROCESSING"}`: o job ainda está na fila ou em processamento
+- 503: `{"code": "SOURCE_DELETE_FAILED"}`: o armazenamento recusou; o original foi mantido
+
+Parâmetros:
+
+| Nome | Local | Obrigatório | Tipo | Padrões/limites | Descrição |
+| --- | --- | --- | --- | --- | --- |
+| `job_id` | path | sim | string |  |  |
+
+Respostas declaradas:
+
+| Status | Content-Type | Esquema | Descrição |
+| --- | --- | --- | --- |
+| 200 | application/json | [SourceDeletedResponse](#model-sourcedeletedresponse) | Successful Response |
 | 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
 
 ### GET /jobs/{job_id}/result
@@ -4805,6 +4855,7 @@ Esquema JSON completo:
 | `max_speakers` | não | integer / null |  |  |
 | `language` | não | string / null |  | Idioma para áudio/vídeo; omitido detecta automaticamente |
 | `include_word_timestamps` | não | boolean / null |  |  |
+| `purge_source` | não | boolean | default=false | Apagar o arquivo original (MinIO e cópia local) quando o job terminar com sucesso; fica só o resultado. Mantido se o job falhar ou tiver páginas com falha (o retry de página precisa dele) e apagado quando um retry levar o job a completed. Também é possível apagar depois com DELETE /jobs/{job_id}/source |
 | `project` | não | string / null |  | Nome do projeto (obrigatório, a menos que a API key esteja vinculada a um projeto). É criado se não existir; grafias equivalentes ('Reunião', ' reuniao ') são o mesmo projeto. |
 | `project_id` | não | string / null |  | ID de um projeto existente (alternativa a 'project'; nunca cria). |
 | `folder` | não | string / null |  | Nome da pasta dentro do projeto (opcional; criada se não existir; sem '/'). |
@@ -4929,6 +4980,12 @@ Esquema JSON completo:
         }
       ],
       "title": "Include Word Timestamps"
+    },
+    "purge_source": {
+      "type": "boolean",
+      "title": "Purge Source",
+      "description": "Apagar o arquivo original (MinIO e cópia local) quando o job terminar com sucesso; fica só o resultado. Mantido se o job falhar ou tiver páginas com falha (o retry de página precisa dele) e apagado quando um retry levar o job a completed. Também é possível apagar depois com DELETE /jobs/{job_id}/source",
+      "default": false
     },
     "project": {
       "anyOf": [
@@ -5415,6 +5472,7 @@ Esquema JSON completo:
 | `max_speakers` | não | integer / null |  |  |
 | `language` | não | string / null |  | Idioma para áudio/vídeo; omitido detecta automaticamente |
 | `include_word_timestamps` | não | boolean / null |  |  |
+| `purge_source` | não | boolean | default=false | Apagar o arquivo original (MinIO e cópia local) quando o job terminar com sucesso; fica só o resultado. Mantido se o job falhar ou tiver páginas com falha (o retry de página precisa dele) e apagado quando um retry levar o job a completed. Também é possível apagar depois com DELETE /jobs/{job_id}/source |
 | `project` | não | string / null |  | Nome do projeto (obrigatório, a menos que a API key esteja vinculada a um projeto). É criado se não existir; grafias equivalentes ('Reunião', ' reuniao ') são o mesmo projeto. |
 | `project_id` | não | string / null |  | ID de um projeto existente (alternativa a 'project'; nunca cria). |
 | `folder` | não | string / null |  | Nome da pasta dentro do projeto (opcional; criada se não existir; sem '/'). |
@@ -5528,6 +5586,12 @@ Esquema JSON completo:
         }
       ],
       "title": "Include Word Timestamps"
+    },
+    "purge_source": {
+      "type": "boolean",
+      "title": "Purge Source",
+      "description": "Apagar o arquivo original (MinIO e cópia local) quando o job terminar com sucesso; fica só o resultado. Mantido se o job falhar ou tiver páginas com falha (o retry de página precisa dele) e apagado quando um retry levar o job a completed. Também é possível apagar depois com DELETE /jobs/{job_id}/source",
+      "default": false
     },
     "project": {
       "anyOf": [
@@ -11290,6 +11354,7 @@ Esquema JSON completo:
 | `error` | não | string / null |  |  |
 | `name` | não | string / null |  |  |
 | `tags` | não | array de string | default=[] |  |
+| `source_available` | não | boolean | default=false |  |
 | `project` | não | [ProjectRef](#model-projectref) / null |  |  |
 | `folder` | não | [FolderRef](#model-folderref) / null |  |  |
 | `parent_job_id` | não | string (uuid) / null |  |  |
@@ -11389,6 +11454,11 @@ Esquema JSON completo:
       "type": "array",
       "title": "Tags",
       "default": []
+    },
+    "source_available": {
+      "type": "boolean",
+      "title": "Source Available",
+      "default": false
     },
     "project": {
       "anyOf": [
@@ -13439,6 +13509,41 @@ Esquema JSON completo:
   ],
   "title": "SetupStatus",
   "description": "Whether the installation still needs its root user (spec 0019)"
+}
+```
+
+<a id="model-sourcedeletedresponse"></a>
+
+### SourceDeletedResponse
+
+Resposta de DELETE /jobs/{job_id}/source
+
+| Campo | Obrigatório | Tipo | Padrões/limites | Descrição |
+| --- | --- | --- | --- | --- |
+| `job_id` | sim | string |  |  |
+| `source_deleted` | sim | boolean |  |  |
+
+Esquema JSON completo:
+
+```json
+{
+  "properties": {
+    "job_id": {
+      "type": "string",
+      "title": "Job Id"
+    },
+    "source_deleted": {
+      "type": "boolean",
+      "title": "Source Deleted"
+    }
+  },
+  "type": "object",
+  "required": [
+    "job_id",
+    "source_deleted"
+  ],
+  "title": "SourceDeletedResponse",
+  "description": "Resposta de DELETE /jobs/{job_id}/source"
 }
 ```
 

@@ -108,6 +108,10 @@ pelo split aparecem como `queued` com `job_id: null`.
 
 Paginação da lista de páginas: `?page_limit=50&page_offset=0` (sem `page_limit`, todas).
 
+`source_available` (bool) diz se o arquivo original ainda existe (`Job.minio_upload_path`
+preenchido ou cópia local em `{TEMP_STORAGE_PATH}/uploads|audio/{job_id}/`). Fica `false`
+depois de `purge_source` ou de `DELETE /jobs/{job_id}/source`, e para jobs filhos.
+
 ### `GET /jobs/{job_id}/result`
 
 1. Status do Redis: `queued`/`processing` → `400`; `failed` → `500` com o erro.
@@ -146,9 +150,28 @@ objetos de áudio/legendas no MinIO; as linhas do MySQL (`jobs` filhos, `pages`,
 `user:{id}:jobs`). Responde `{message, job_id, deleted_at}`.
 
 **Lacuna:** para documentos, os objetos no MinIO **não** são apagados — o original
-(`ingestify-uploads/uploads/{job_id}/…`), os PDFs por página
+(`ingestify-uploads/uploads/{job_id}/…`; apague-o antes com `DELETE /jobs/{job_id}/source`
+ou use `purge_source`), os PDFs por página
 (`ingestify-pages/pages/{job_id}/…`) e os Markdown por página
 (`ingestify-results/results/{job_id}/…`) permanecem.
+
+### `DELETE /jobs/{job_id}/source`
+
+Apaga só o **arquivo original** (documento, áudio ou vídeo enviado), mantendo o job e o
+resultado: o objeto no MinIO (`ingestify-uploads` para `uploads/…`, `ingestify-audio` para
+`audio/…`) e a cópia local; zera `Job.minio_upload_path`. Autorização `jobs.delete`.
+
+| Resposta | Quando |
+|---|---|
+| `200 {"job_id": "...", "source_deleted": true}` | apagado |
+| `404` | job inexistente, de outro usuário, job filho, ou sem original (já apagado) |
+| `409 {"code": "JOB_STILL_PROCESSING", "message": ...}` | job `queued`/`processing` (inclui PDF dividido com páginas em andamento ou falhas ainda não resolvidas) |
+| `503 {"code": "SOURCE_DELETE_FAILED", ...}` | o MinIO recusou; o original continua referenciado |
+
+Depois disso o retry de página não tem mais de onde restaurar o PDF (`404`). Os PDFs por
+página continuam disponíveis. Para apagar automaticamente ao terminar, use
+`purge_source=true` no `/upload`, `/convert` ou `/transcribe` (ver
+[conversion.md](conversion.md#guardar-ou-apagar-o-arquivo-original-purge_source)).
 
 ## Configuração
 

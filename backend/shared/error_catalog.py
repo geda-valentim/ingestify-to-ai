@@ -53,6 +53,17 @@ _HOST_AGENT_HINT = (
 # code -> (message template, next steps). Templates may use {for_feature},
 # {host} and {since}; missing context renders as an empty string.
 CATALOG = {
+    # --- jobs ------------------------------------------------------------------
+    "JOB_STILL_PROCESSING": (
+        "O job ainda está na fila ou em processamento. Aguarde ele terminar para "
+        "apagar o arquivo original.",
+        ["retry"],
+    ),
+    "SOURCE_DELETE_FAILED": (
+        "Não foi possível apagar o arquivo original agora; ele foi mantido. "
+        "Tente novamente em instantes.",
+        ["retry"],
+    ),
     # --- setup / configuration -------------------------------------------------
     "RUNTIME_PROFILE_REQUIRED": (
         "Esta engine ainda não tem perfil de execução vinculado{for_feature}. "

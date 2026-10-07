@@ -94,6 +94,7 @@ FRONTEND_OPERATIONS = [
     ("get", "/jobs", "jobsApi.list - the 'My Jobs' page"),
     ("get", "/jobs/{job_id}", "jobsApi.getStatus - job detail polling"),
     ("delete", "/jobs/{job_id}", "jobsApi.delete - delete from list and detail"),
+    ("delete", "/jobs/{job_id}/source", "jobsApi.deleteSource - 'Apagar arquivo original' on the detail page"),
     ("get", "/jobs/{job_id}/result", "jobsApi.getResult"),
     ("get", "/jobs/{job_id}/pages", "jobsApi.getPages"),
     ("get", "/jobs/{job_id}/pages/{page_number}/pdf", "jobsApi.getPagePdf"),
@@ -395,6 +396,17 @@ class TestDeclaredResponseShapes:
             "surprises into 500s."
         )
         assert "job_id" not in page_info.get("required", [])
+
+    def test_job_status_says_whether_the_original_exists(self, schema):
+        """The detail page hides 'Apagar arquivo original' when source_available is false."""
+        props = schema["components"]["schemas"]["JobStatusResponse"]["properties"]
+        assert props["source_available"]["type"] == "boolean"
+
+    def test_delete_source_answers_job_id_and_source_deleted(self, schema):
+        """jobsApi.deleteSource reads {job_id, source_deleted}."""
+        content = schema["paths"]["/jobs/{job_id}/source"]["delete"]["responses"]["200"]["content"]
+        ref = content["application/json"]["schema"]["$ref"].rsplit("/", 1)[-1]
+        assert set(schema["components"]["schemas"][ref]["properties"]) >= {"job_id", "source_deleted"}
 
     def test_job_status_pages_use_page_job_info(self, schema):
         """The nullability above only helps if GET /jobs/{id} shares the model."""

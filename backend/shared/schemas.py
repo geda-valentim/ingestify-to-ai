@@ -174,6 +174,10 @@ class JobStatusResponse(BaseModel):
     name: Optional[str] = None
     tags: List[str] = []
 
+    # O arquivo original ainda existe (MinIO ou cópia local)? false depois de
+    # purge_source ou de DELETE /jobs/{job_id}/source, e para jobs filhos
+    source_available: bool = False
+
     # Onde o job está (spec 0004). Jobs filhos herdam do job MAIN.
     project: Optional[ProjectRef] = None
     folder: Optional[FolderRef] = None
@@ -202,6 +206,12 @@ class JobStatusResponse(BaseModel):
     datalake: Optional[dict] = None
     engine: Optional[JobEngine] = None
     queue_reason: Optional[Literal["in_queue", "starting"]] = None
+
+
+class SourceDeletedResponse(BaseModel):
+    """Resposta de DELETE /jobs/{job_id}/source"""
+    job_id: str
+    source_deleted: bool
 
 
 class TranscriptSegment(BaseModel):

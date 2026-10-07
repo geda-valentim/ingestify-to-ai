@@ -1,6 +1,7 @@
 from starlette.responses import JSONResponse
 import json
 from shared.job_configuration import job_configuration
+from shared.job_source import SourceDeleteError, delete_source, save_purge_option, source_available
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Header, Body, Depends, Request, Query
 from fastapi.responses import Response, StreamingResponse
 from starlette.concurrency import run_in_threadpool
@@ -27,6 +28,7 @@ from shared.schemas import (
     JobStatus,
     ChildJobs,
     PartialTranscriptResponse,
+    SourceDeletedResponse,
 )
 from shared.redis_client import get_redis_client
 from shared.elasticsearch_client import get_es_client
@@ -82,6 +84,14 @@ _page_retry = owned_page(_job_retry)
 PAGE_PDF_URL_TTL_SECONDS = 15 * 60
 
 
+PURGE_SOURCE_FORM_DESCRIPTION = (
+    "Apagar o arquivo original (MinIO e cópia local) quando o job terminar com sucesso; "
+    "fica só o resultado. Mantido se o job falhar ou tiver páginas com falha (o retry "
+    "de página precisa dele) e apagado quando um retry levar o job a completed. "
+    "Também é possível apagar depois com DELETE /jobs/{job_id}/source"
+)
+
+
 def _request_path(request) -> str:
     url = getattr(request, "url", None)
     return getattr(url, "path", "") or ""
@@ -101,6 +111,10 @@ async def upload_and_convert(
     max_speakers: Optional[int] = Form(None, ge=1, le=20),
     language: Optional[str] = Form(None, description="Idioma para áudio/vídeo; omitido detecta automaticamente"),
     include_word_timestamps: Optional[bool] = Form(None),
+    purge_source: bool = Form(
+        False,
+        description=PURGE_SOURCE_FORM_DESCRIPTION,
+    ),
     request: Request = None,
     location: LocationFields = Depends(upload_location_form),
     current_user: User = Depends(require("documents.convert")),
@@ -122,6 +136,11 @@ async def upload_and_convert(
         - OCR: Desligado | Images: Ligadas | Tables: Ligadas
       - **quality**: Máxima qualidade, inclui OCR para documentos escaneados (~350s/MB)
         - OCR: Ligado | Images: Ligadas | Tables: Ligadas
+    - `purge_source`: Se `true`, apaga o arquivo original (MinIO e cópia local) quando
+      o job termina `completed`; fica só o resultado. Se o job falhar ou tiver páginas
+      com falha, o original é mantido (o retry de página precisa dele) e só é apagado
+      quando um retry levar o job a `completed`. Os PDFs por página continuam
+      disponíveis. Para apagar depois: `DELETE /jobs/{job_id}/source`
 
     ## Formatos suportados
     PDF, DOCX, DOC, HTML, PPTX, XLSX, RTF, ODT
@@ -229,6 +248,8 @@ async def upload_and_convert(
             )
             db.add(db_job)
             set_job_tags(db_job, tag_list)
+            if purge_source is True:
+                save_purge_option(db, db_job)
             db.commit()
             logger.info(f"Job {job_id} created in MySQL with name: {job_name} and checksum: {file_checksum}")
         except Exception as e:
@@ -837,6 +858,10 @@ async def convert_document(
     max_speakers: Optional[int] = Form(None, ge=1, le=20),
     language: Optional[str] = Form(None, description="Idioma para áudio/vídeo; omitido detecta automaticamente"),
     include_word_timestamps: Optional[bool] = Form(None),
+    purge_source: bool = Form(
+        False,
+        description=PURGE_SOURCE_FORM_DESCRIPTION,
+    ),
     request: Request = None,
     location: LocationFields = Depends(upload_location_form),
     current_user: User = Depends(require("documents.convert")),
@@ -877,6 +902,12 @@ async def convert_document(
     `folder`/`folder_id`. Uma API key vinculada a um projeto dispensa o campo
     (só sem JWT). Sem projeto: 422. Um arquivo repetido só é reaproveitado
     dentro do mesmo projeto.
+
+    ## Arquivo original (`purge_source`)
+    Com `purge_source=true` o arquivo original (o enviado, ou o baixado da URL) é
+    apagado quando o job termina `completed`. Falha ou páginas com falha: o original
+    fica para o retry de página, e é apagado quando um retry completar o job.
+    Para apagar depois: `DELETE /jobs/{job_id}/source`
 
     ## Formatos suportados
     PDF, DOCX, DOC, HTML, PPTX, XLSX, RTF, ODT
@@ -1018,6 +1049,8 @@ async def convert_document(
             )
             db.add(db_job)
             set_job_tags(db_job, tag_list)
+            if purge_source is True:
+                save_purge_option(db, db_job)
             db.commit()
             checksum_info = f" and checksum: {file_checksum}" if file_checksum else ""
             logger.info(f"Job {job_id} created in MySQL with name: {job_name} (source_type: {source_type}){checksum_info}")
@@ -1251,6 +1284,8 @@ async def get_job_status(
             owned_job.name if owned_job is not None and str(owned_job.id) == job_id else None
         ),
         "tags": owned_job.tags if owned_job is not None and str(owned_job.id) == job_id else [],
+        # Whether the original file still exists (purge_source / DELETE /jobs/{id}/source)
+        "source_available": source_available(db_job),
         # Children have no row of their own: they inherit the MAIN job's location
         **_job_location_refs(db, owned_job),
     }
@@ -1584,6 +1619,53 @@ async def delete_job(
         "job_id": job_id,
         "deleted_at": datetime.utcnow().isoformat()
     }
+
+
+@router.delete("/jobs/{job_id}/source", response_model=SourceDeletedResponse,
+               summary="Apagar o arquivo original do job")
+async def delete_job_source(
+    job_id: str,
+    owned_job: Optional[Job] = Depends(authorized(Job, "jobs.delete")),
+    db: Session = Depends(get_db),
+):
+    """
+    Apaga o arquivo original de um job (o documento, áudio ou vídeo enviado),
+    mantendo o job e o resultado (markdown, páginas, transcrições).
+
+    Remove o objeto no MinIO (`uploads/...` ou `audio/...`) e a cópia local, e
+    zera a referência do job. Depois disso `GET /jobs/{job_id}` responde
+    `source_available: false` e o retry de página deixa de ser possível
+    (ele restaura o original do MinIO). Os PDFs por página continuam disponíveis.
+
+    Para apagar automaticamente ao terminar, envie `purge_source=true` em
+    `/upload`, `/convert` ou `/transcribe`.
+
+    ## Retorno
+    - 200: `{"job_id": "...", "source_deleted": true}`
+    - 404: job inexistente, de outro usuário, ou sem arquivo original
+    - 409: `{"code": "JOB_STILL_PROCESSING"}`: o job ainda está na fila ou em processamento
+    - 503: `{"code": "SOURCE_DELETE_FAILED"}`: o armazenamento recusou; o original foi mantido
+    """
+    from shared import error_catalog
+
+    # Child jobs (split/page/merge) are authorized by their parent's row, but
+    # have no original of their own
+    db_job = owned_job if (owned_job is not None and owned_job.id == job_id) else None
+    if db_job is None or not source_available(db_job):
+        raise HTTPException(status_code=404, detail="Arquivo original não encontrado")
+
+    if db_job.status in (DBJobStatus.PENDING, DBJobStatus.PROCESSING):
+        raise HTTPException(status_code=409, detail=error_catalog.detail("JOB_STILL_PROCESSING"))
+
+    try:
+        delete_source(db, db_job, get_minio_client)
+    except SourceDeleteError as e:
+        db.rollback()
+        logger.error(f"Could not delete the original of job {job_id}: {e}")
+        raise HTTPException(status_code=503, detail=error_catalog.detail("SOURCE_DELETE_FAILED"))
+
+    logger.info(f"Original file of job {job_id} deleted on request")
+    return SourceDeletedResponse(job_id=job_id, source_deleted=True)
 
 
 @router.get("/jobs/{job_id}/result", response_model=JobResultResponse)

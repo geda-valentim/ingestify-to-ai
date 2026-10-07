@@ -2,6 +2,22 @@
 
 > **Registro histórico (2025-10).** Não é mantido; para mudanças posteriores use `git log`. Observação: `workers/tasks_old.py`, citado abaixo, não existe (há um `workers/tasks.py.backup`). Exceção: mudanças de comportamento intencionais que uma spec manda registrar aqui entram na seção abaixo.
 
+## 2026-10: Guardar ou apagar o arquivo original de documentos
+
+- `POST /upload` e `POST /convert` aceitam `purge_source` (form, padrão `false`; mesmo
+  nome e sentido do `/transcribe`). Com `true`, o original (MinIO `uploads/…` e cópia
+  local) é apagado quando o job MAIN termina `completed` — documento único ou PDF dividido
+  depois do merge. Jobs que falham ou têm páginas com falha mantêm o original para o
+  retry de página; ele é apagado quando um retry completa o job. Os PDFs por página ficam.
+  A opção é gravada em `job_configurations` (sem migração). Falha ao apagar não falha o job.
+- Nova rota `DELETE /jobs/{job_id}/source` (`jobs.delete`): apaga o original de um job
+  terminado (documento ou áudio) e responde `{job_id, source_deleted: true}`; `404` sem
+  original ou de outro usuário, `409 JOB_STILL_PROCESSING` enquanto processa.
+- `GET /jobs/{job_id}` ganha `source_available`.
+- Transcrições criadas por `/upload` ou `/convert` também respeitam `purge_source`.
+- Frontend: caixa "Não guardar o arquivo original após converter" no formulário de
+  conversão e botão "Apagar arquivo original" (com diálogo de confirmação) na página do job.
+
 ## 2026-10: Spec 0020 — perfis de execução padrão na instalação
 
 - O root cria e publica um perfil `Padrão — <modelo>` por modelo aprovado do catálogo e

@@ -376,6 +376,8 @@ export interface JobStatusResponse {
   error?: string | null;
   name?: string | null;
   tags?: string[];
+  /** Whether the original file still exists (false after purge_source / DELETE /jobs/{id}/source) */
+  source_available?: boolean;
   parent_job_id?: string | null;
   total_pages?: number | null;
   pages_completed?: number | null;
@@ -462,6 +464,12 @@ export interface HealthCheckResponse {
   timestamp: string;
 }
 
+/** DELETE /jobs/{job_id}/source */
+export interface SourceDeletedResponse {
+  job_id: string;
+  source_deleted: boolean;
+}
+
 export interface ConvertRequest extends UploadLocation {
   source_type: SourceType;
   source?: string;
@@ -469,6 +477,8 @@ export interface ConvertRequest extends UploadLocation {
   name?: string;
   tags?: string[];
   authToken?: string; // OAuth token for gdrive/dropbox
+  /** Delete the original file once the job completes (kept on failure for page retry) */
+  purge_source?: boolean;
 }
 
 export interface UploadRequest extends UploadLocation {
@@ -486,6 +496,8 @@ export interface UploadRequest extends UploadLocation {
   file: File;
   name?: string;
   tags?: string[];
+  /** Delete the original file once the job completes (kept on failure for page retry) */
+  purge_source?: boolean;
 }
 
 /** What a job is, from the user's point of view (derived from its source). */

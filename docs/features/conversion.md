@@ -34,6 +34,7 @@ Os dois endpoints exigem autenticação (`Authorization: Bearer <jwt>` **ou**
 | `name` | não | nome do arquivo | Nome amigável do job. |
 | `tags` | não | — | Tags separadas por vírgula (ver [tags.md](tags.md)). |
 | `docling_preset` | não | `fast` | `fast`, `balanced` ou `quality` (tabela abaixo). Qualquer outro valor cai nos defaults do `config.py`. |
+| `purge_source` | não | `false` | `true` apaga o arquivo original quando o job termina `completed` (ver [Guardar ou apagar o original](#guardar-ou-apagar-o-arquivo-original-purge_source)). |
 
 ```bash
 curl -X POST http://localhost:8000/upload \
@@ -49,8 +50,8 @@ curl -X POST http://localhost:8000/upload \
 ### `POST /convert` — endpoint unificado (arquivo, URL, Google Drive, Dropbox)
 
 `multipart/form-data` com `source_type` (`file` | `url` | `gdrive` | `dropbox`), `source`
-(URL, file ID ou path; ignorado quando `source_type=file`), `file`, `name`, `tags` e os
-mesmos campos de projeto/pasta do `/upload`. Não envie JSON: o contrato da rota é form.
+(URL, file ID ou path; ignorado quando `source_type=file`), `file`, `name`, `tags`,
+`purge_source` e os mesmos campos de projeto/pasta do `/upload`. Não envie JSON: o contrato da rota é form.
 Detalhes de cada fonte em [sources.md](sources.md).
 
 ```bash
@@ -82,6 +83,45 @@ O projeto vem do request ou, quando não há campo de projeto, da API key vincul
 Com JWT e API key juntos, vale o JWT e a vinculação da key não é usada. IDs de projetos
 ou pastas de outro usuário retornam `404`. Nomes usam a normalização compartilhada
 (sem diferenciar maiúsculas, espaços repetidos e acentos latinos; até 100 caracteres).
+
+### Guardar ou apagar o arquivo original (`purge_source`)
+
+Por padrão o original fica guardado em `ingestify-uploads/uploads/{job_id}/…` (é dele que
+o retry de página restaura o PDF). Com `purge_source=true` em `/upload` ou `/convert`
+(mesmo nome e sentido do parâmetro do `/transcribe`), o original é apagado — objeto no
+MinIO e cópia local em `{TEMP_STORAGE_PATH}/uploads/{job_id}/` — quando o job MAIN
+termina **`completed`**:
+
+- documento único: ao fim da conversão;
+- PDF dividido: depois do merge. Os PDFs por página (`ingestify-pages`, servidos por
+  `/jobs/{id}/pages/{n}/pdf`) e os Markdown por página **ficam**;
+- job que falhou, ou com páginas que falharam: o original **fica**, porque o retry de
+  página precisa dele. Se um retry completar o job (merge), aí ele é apagado;
+- `source_type=url`: o arquivo baixado só existe no disco do worker e já é removido ao
+  fim do job; com `purge_source` o comportamento é o mesmo.
+
+A escolha é gravada com o job no MySQL (tabela `job_configurations`, `operation:
+"conversion"`, `options: {"purge_source": true}`), não só na mensagem do Celery: o merge
+depois de um retry, em qualquer worker, a respeita. Depois do apagamento,
+`Job.minio_upload_path` fica nulo e `GET /jobs/{id}` responde `source_available: false`.
+Se o MinIO recusar o apagamento, o erro é registrado no log, o original continua
+referenciado e o job **continua `completed`**.
+
+Um reenvio do mesmo arquivo que devolve um job existente (deduplicação) não muda a
+escolha daquele job.
+
+Para apagar o original de um job já terminado, sem ter enviado `purge_source`:
+
+```bash
+curl -X DELETE "http://localhost:8000/jobs/$JOB_ID/source" -H "X-API-Key: $INGESTIFY_API_KEY"
+# {"job_id":"<uuid>","source_deleted":true}
+```
+
+`404` se o job não existe, não é seu ou já não tem original; `409`
+(`code: JOB_STILL_PROCESSING`) enquanto está na fila ou processando. Ver
+[jobs-api.md](jobs-api.md#delete-jobsjob_idsource). Na interface: caixa "Não guardar o
+arquivo original após converter" no formulário de conversão e botão "Apagar arquivo
+original" na página do job.
 
 ### Presets do Docling
 

@@ -1,6 +1,7 @@
 import { useAuthStore } from "@/lib/store/auth";
 import { expireSession } from "@/lib/session";
 import type {
+  SourceDeletedResponse,
   UserCreate,
   SetupStatus,
   UserLogin,
@@ -219,6 +220,10 @@ export const jobsApi = {
       formData.append("auth_token", request.authToken);
     }
 
+    if (request.purge_source) {
+      formData.append("purge_source", "true");
+    }
+
     appendLocation(formData, request);
 
     const response = await apiFetch(`${API_URL}/convert`, {
@@ -282,6 +287,10 @@ export const jobsApi = {
 
     if (request.tags?.length) {
       formData.append("tags", request.tags.join(","));
+    }
+
+    if (request.purge_source) {
+      formData.append("purge_source", "true");
     }
 
     appendLocation(formData, request);
@@ -451,6 +460,20 @@ export const jobsApi = {
 
     if (!response.ok) {
       throw new Error(`Failed to delete job: ${response.statusText}`);
+    }
+
+    return response.json();
+  },
+
+  /** Delete the job's original file (keeps the job and its result). 409 while it still runs. */
+  async deleteSource(jobId: string): Promise<SourceDeletedResponse> {
+    const response = await apiFetch(`${API_URL}/jobs/${jobId}/source`, {
+      method: "DELETE",
+      headers: getHeaders(true),
+    });
+
+    if (!response.ok) {
+      await throwApiError(response, "Não foi possível apagar o arquivo original");
     }
 
     return response.json();
