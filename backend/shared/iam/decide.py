@@ -335,14 +335,26 @@ def can(
         return new
     legacy = legacy_allows(db, principal, permission, resource, decider=decider)
     if legacy != new:
-        p = as_principal(principal)
-        logger.warning(
-            "iam_shadow_divergence",
-            extra={
-                "permission": permission,
-                "subject": p.subject_id if p else None,
-                "legacy": legacy,
-                "iam": new,
-            },
-        )
+        report_divergence(permission, principal, legacy=legacy, iam=new)
     return legacy
+
+
+def report_divergence(permission: str, principal, *, legacy: bool, iam: bool, route: Optional[str] = None) -> None:
+    """
+    Shadow mode: the legacy rule and IAM disagree (0014 §4.11 step 2).
+
+    One structured log line per divergence. The fields are the labels of the
+    planned `iam_shadow_divergence_total{route,permission}` metric (§6); the
+    project has no metrics facility yet, so the log is the signal.
+    """
+    p = as_principal(principal)
+    logger.warning(
+        "iam_shadow_divergence",
+        extra={
+            "permission": permission,
+            "route": route,
+            "subject": p.subject_id if p else None,
+            "legacy": legacy,
+            "iam": iam,
+        },
+    )
