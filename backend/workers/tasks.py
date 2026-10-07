@@ -235,7 +235,7 @@ def _divert_audio_to_backlog(job_id: str, file_path: Path, options: dict, redis_
     hand it to dispatch.submit (spec 0003, 4.3). Returns (diverted, file path).
     Without an active route it returns at once and touches nothing.
     """
-    from shared.iam.remote import can_use_remote
+    from shared.iam.remote import remote_use_of
     from shared.engines import dispatch as engine_dispatch
     from shared.engines import routing
 
@@ -265,7 +265,7 @@ def _divert_audio_to_backlog(job_id: str, file_path: Path, options: dict, redis_
     try:
         job = db.query(Job).filter(Job.id == job_id).first()
         user_id = job.user_id if job else None
-        remote_use = can_use_remote(job.user if job is not None else None, db=db)
+        remote_use = remote_use_of(user_id, session_factory=SessionLocal)  # decided only on 'admins' routes
         name = job.name if job else None
         if job:
             job.status = JobStatus.PENDING
@@ -871,14 +871,14 @@ def _page_route():
 def _submit_page(page_job_id: str, parent_job_id: str, page_number: int, options: dict, *,
                  page_file_path: str = None, source_pdf_path: str = None, today=None) -> str:
     """Hand one PDF page to the document_conversion route (subject_type=page)"""
-    from shared.iam.remote import can_use_remote
+    from shared.iam.remote import remote_use_of
     from shared.engines import dispatch as engine_dispatch
 
     db = SessionLocal()
     try:
         job = db.query(Job).filter(Job.id == parent_job_id).first()
         user_id = job.user_id if job else None
-        remote_use = can_use_remote(job.user if job is not None else None, db=db)
+        remote_use = remote_use_of(user_id, session_factory=SessionLocal)  # decided only on 'admins' routes
     finally:
         db.close()
     payload = engine_dispatch.page_payload(

@@ -26,6 +26,7 @@ answers with the legacy rule and logs divergences, `enforce` answers with IAM.
 """
 
 import logging
+import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Callable, Dict, FrozenSet, List, Optional
@@ -316,10 +317,16 @@ def can(
     *,
     decider: Optional[Decider] = None,
     mode: Optional[str] = None,
+    route: Optional[str] = None,
+    report_every: Optional[float] = None,
 ) -> bool:
     """
     Whether to allow, honouring IAM_MODE (0014 §4.11). Rollback to `off` only ever
     reduces access: bindings stop counting, bootstrap keeps working.
+
+    `route` labels a shadow divergence; `report_every` (seconds) reports the same
+    (route, permission, subject) divergence at most once per period, for callers
+    that repeat one decision (the dispatcher, once per user per tick).
     """
     mode = mode or get_settings().iam_mode
     if mode == "off":
@@ -338,11 +345,16 @@ def can(
         return new
     legacy = legacy_allows(db, principal, permission, resource, decider=decider)
     if legacy != new:
-        report_divergence(permission, principal, legacy=legacy, iam=new)
+        report_divergence(permission, principal, legacy=legacy, iam=new, route=route, every=report_every)
     return legacy
 
 
-def report_divergence(permission: str, principal, *, legacy: bool, iam: bool, route: Optional[str] = None) -> None:
+# (route, permission, subject) -> monotonic time of its last report, for `every`
+_last_reported: Dict[tuple, float] = {}
+
+
+def report_divergence(permission: str, principal, *, legacy: bool, iam: bool, route: Optional[str] = None,
+                      every: Optional[float] = None) -> None:
     """
     Shadow mode: the legacy rule and IAM disagree (0014 §4.11 step 2).
 
@@ -358,6 +370,13 @@ def report_divergence(permission: str, principal, *, legacy: bool, iam: bool, ro
         "legacy": legacy,
         "iam": iam,
     }
+    if every:
+        key = (route, permission, fields["subject"])
+        now = time.monotonic()
+        last = _last_reported.get(key)
+        if last is not None and now - last < every:
+            return
+        _last_reported[key] = now
     # The fields go in the message itself: the API's log format (api/main.py)
     # prints only %(message)s, never `extra`. `extra` stays for structured handlers.
     logger.warning(

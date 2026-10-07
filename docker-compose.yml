@@ -152,6 +152,9 @@ services:
       - VISION_MAX_IMAGE_PIXELS=${VISION_MAX_IMAGE_PIXELS:-50000000}
       - VISION_CAPTION_TASK=${VISION_CAPTION_TASK:-<MORE_DETAILED_CAPTION>}
       - ADMIN_USER_IDS=${ADMIN_USER_IDS:-}
+      # IAM decision core (spec 0014): the same value in api and every worker that
+      # decides engines.remote.use (worker submits pages/audio, worker-dispatch places)
+      - IAM_MODE=${IAM_MODE:-off}
       # Seals remote engine credentials (spec 0003); the private key never comes here
       - ENGINE_SECRETS_PUBLIC_KEY=${ENGINE_SECRETS_PUBLIC_KEY:-}
       # Optional: engine alerts are also POSTed here as generic JSON (spec 0003, 4.8)
@@ -176,6 +179,11 @@ services:
       context: .
       dockerfile: docker/Dockerfile.worker
     environment:
+      # engines.remote.use is decided here too (page/audio submit, and worker-dispatch,
+      # which extends this service, at every remote placement): it must see the same
+      # admins and IAM_MODE as the api (spec 0014 §4.6)
+      - ADMIN_USER_IDS=${ADMIN_USER_IDS:-}
+      - IAM_MODE=${IAM_MODE:-off}
       - REDIS_PASSWORD=${REDIS_PASSWORD:-}
       - REDIS_HOST=${REDIS_HOST:-redis}
       - REDIS_PORT=${REDIS_PORT:-6379}

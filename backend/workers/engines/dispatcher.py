@@ -214,7 +214,7 @@ def _place_feature(tick: _Tick, route: routing.RouteSnapshot) -> None:
                     _count_skip(tick, db, route, earlier, placed_on, engines, blocked)
             else:
                 unplaced.append(cand)
-                if cand.blocked_engine_id:
+                if cand.blocked_engine_id and _keeps_reservation(tick, db, route, cand, engines):
                     blocked.setdefault(cand.blocked_engine_id, cand.id)
                 _unplaceable(tick, db, route, cand, refusals)
     finally:
@@ -243,7 +243,8 @@ def _excluded(cand: JobDispatch, engine_id: str, now: datetime) -> bool:
     return False
 
 
-def _ineligible(tick: _Tick, engine: Engine, cand: JobDispatch, feature: str, blocked: Dict[str, int]) -> Optional[str]:
+def _ineligible(tick: _Tick, engine: Engine, cand: JobDispatch, feature: str, blocked: Dict[str, int],
+                db: Optional[Session] = None, route=None) -> Optional[str]:
     if engine.status != "active":
         return "paused"
     if engine.health in BAD_HEALTH and (engine.health_until is None or engine.health_until > tick.now):
@@ -262,6 +263,10 @@ def _ineligible(tick: _Tick, engine: Engine, cand: JobDispatch, feature: str, bl
         return "unhealthy"
     if _excluded(cand, engine.id, tick.now):
         return "excluded"
+    if db is not None and route is not None and _remote(engine, executor) and not _may_use_remote(tick, db, route, cand):
+        # Before every transient refusal ("blocked", "full"): an item that may never
+        # use this engine is not waiting for its capacity, on_no_engine decides (CA9).
+        return "not_remote_allowed"
     from shared.engine_control.registry import external_data
     if external_data(engine.adapter_type) and not cand.remote_allowed:
         return 'not_remote_allowed'
@@ -318,7 +323,8 @@ def _latest_job_rows(db: Session, engines: List[Engine], feature: str, now: date
     return latest
 
 
-def _group_order(tick: _Tick, db: Session, step: dict, engines: List[Engine], cand, feature, blocked) -> List[Engine]:
+def _group_order(tick: _Tick, db: Session, step: dict, engines: List[Engine], cand, feature, blocked,
+                 route=None) -> List[Engine]:
     """
     priority: as listed. fill_first: the current engine first - the eligible one
     with the latest kind=job row of its period, else the first listed - then the
@@ -327,7 +333,7 @@ def _group_order(tick: _Tick, db: Session, step: dict, engines: List[Engine], ca
     if step.get("group_strategy") != "fill_first" or len(engines) < 2:
         return engines
     latest = _latest_job_rows(db, engines, feature, tick.now)
-    eligible = [e for e in engines if latest.get(e.id) and _ineligible(tick, e, cand, feature, blocked) is None]
+    eligible = [e for e in engines if latest.get(e.id) and _ineligible(tick, e, cand, feature, blocked, db, route) is None]
     if not eligible:
         return engines
     current = max(eligible, key=lambda e: latest[e.id])
@@ -348,8 +354,8 @@ def _try_place(tick: _Tick, db: Session, route, cand: JobDispatch, engines: Dict
         if reason is None:
             refusals.add("conditions")
             continue
-        for engine in _group_order(tick, db, step, step_engines, cand, route.feature, blocked):
-            why = _ineligible(tick, engine, cand, route.feature, blocked)
+        for engine in _group_order(tick, db, step, step_engines, cand, route.feature, blocked, route):
+            why = _ineligible(tick, engine, cand, route.feature, blocked, db, route)
             if why:
                 refusals.add(why)
                 continue
@@ -573,6 +579,25 @@ def _count_skip(tick: _Tick, db: Session, route, earlier: JobDispatch, engine: E
             logger.info(f"[ENGINES] {route.feature} item {earlier.id} skipped {skips} times: "
                         f"reserves {engine.slug} until it is placed")
     db.commit()
+
+
+def _keeps_reservation(tick: _Tick, db: Session, route, cand: JobDispatch, engines: Dict[str, Engine]) -> bool:
+    """
+    A reservation (blocked_engine_id) earned while the user had engines.remote.use
+    does not survive its revocation: the remote engine would idle for an item that
+    can never run there. The row's reservation and skip count are dropped (CA9).
+    """
+    engine = engines.get(cand.blocked_engine_id)
+    executor = executors.get(engine.adapter_type) if engine is not None else None
+    if executor is None or not _remote(engine, executor) or _may_use_remote(tick, db, route, cand):
+        return True
+    db.execute(update(JobDispatch).where(JobDispatch.id == cand.id, JobDispatch.state == "waiting",
+                                         JobDispatch.blocked_engine_id == cand.blocked_engine_id)
+               .values(blocked_engine_id=None, skip_count=0).execution_options(synchronize_session=False))
+    db.commit()
+    logger.info(f"[ENGINES] {route.feature} item {cand.id}: engines.remote.use revoked, "
+                f"drops its reservation of {engine.slug}")
+    return False
 
 
 def _unplaceable(tick: _Tick, db: Session, route, cand: JobDispatch, refusals: Set[str]) -> None:

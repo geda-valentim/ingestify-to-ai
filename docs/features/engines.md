@@ -266,6 +266,20 @@ Por rota: `max_attempts` (3), `on_no_engine` (`hold`/`fail` + `fail_after_second
 `remote_data_notice`), `dispatcher_fallback` (`local_direct`/`hold`), `dispatcher_down_seconds`
 (120).
 
+**Desde a spec 0014** `remote_allowed_for=admins` significa "exige `engines.remote.use`"
+(`shared/iam/remote.py`; em `IAM_MODE=off` continua sendo `is_effective_admin`, em `enforce`
+somam-se os bindings `platform_admin`/`remote_engine_user`). `JobDispatch.remote_allowed`,
+gravado no submit, é só um filtro: o dispatcher decide de novo, uma vez por usuário por tick,
+antes de cada placement remoto. Uma revogação alcança o que já está na fila (páginas ainda não
+colocadas vão para o caminho local ou seguem `on_no_engine`, e a reserva de skip-starvation
+num motor remoto é descartada). **Mudança intencional (CA10):** `user_period_limit_usd` vale
+também em rotas `admins`, bootstrap incluído. O dispatcher (`worker-dispatch`) e o `worker`
+decidem essa permissão: precisam de `ADMIN_USER_IDS` e `IAM_MODE` iguais aos da `api` (o
+`docker-compose.yml` repassa ambos). Divergências de shadow vindas do dispatcher saem com
+`route=dispatcher`, no máximo uma a cada 10 min por usuário. O custo por tick (CA11) é medido
+em statements SQL nos testes (`tests/test_iam_remote_engine.py`: até 2 por usuário, nunca por
+item); o p95 em ms não é medido em CI.
+
 Validação: motor sem binding para a feature, motor repetido, ou passo remoto com
 `remote_allowed_for=admins` sem passo local ⇒ 422; motor remoto não pronto (pausado, saúde ruim, sem
 orçamento, `needs_redeploy`), `worker-remote` sem heartbeat, ou capacidade remota acima de
