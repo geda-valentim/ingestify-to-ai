@@ -697,16 +697,25 @@ def revoke_binding(
     return revoke(db, principal, binding_id, version=version, ip=ip, decider=decider)
 
 
-def list_all(db: Session, actor, *, include_inactive: bool = False, decider: Optional[Decider] = None):
+def list_all(
+    db: Session,
+    actor,
+    *,
+    include_inactive: bool = False,
+    decider: Optional[Decider] = None,
+    session: bool = True,
+):
     """
     `GET /admin/iam/bindings`, filtered per row: platform bindings for
     `iam.bindings.read`, engines bindings through the 0009 `_delegator` filter of
-    `list_grants`. `include_inactive` applies to both; newest first.
+    `list_grants`. `include_inactive` applies to both; newest first. Engines
+    rows need a login `session` (0009's `access_session`): an API key sees
+    platform rows only.
     """
     decider = decider or Decider(db)
     principal = as_principal(actor)
     platform = platform_authority(db, principal, "iam.bindings.read", decider)
-    engines = engines_authority(db, principal)
+    engines = session and engines_authority(db, principal)
     if not (platform or engines):
         raise IamError("ACCESS_DENIED", 403)
     now = decider.now()

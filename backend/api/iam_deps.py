@@ -514,7 +514,9 @@ def binding_admin(*, write: bool):
       `engine_access_enabled`.
 
     Writes also need a login session (JWT; an API key is a 403), checked after
-    the permission, as `require(..., session=True)` does. Refusals keep the
+    the permission, as `require(..., session=True)` does. The engines family
+    needs one on reads too (0009's `access_session`): an API key is admitted
+    only on platform authority and lists platform rows only. Refusals keep the
     plain-string `detail` of `require`. The handler then decides per family (the
     role on a grant, the target binding on a revoke, each row on a list):
     passing here never lets one family's authority act on the other.
@@ -541,11 +543,19 @@ def binding_admin(*, write: bool):
         if not (platform or engines):
             logger.warning(f"[IAM] {permission} / access.grants.manage denied for user {user.id}")
             raise HTTPException(status_code=403, detail=PLATFORM_DENIED_DETAIL)
-        if write and not is_login_session(request):
+        session = is_login_session(request)
+        if write and not session:
             raise HTTPException(
                 status_code=403,
                 detail="Changing access requires a login session (JWT); API keys are not accepted",
             )
+        # The engines administration opens to a login session only, reads
+        # included, as 0009's `access_session` did (CA8/CA13): an API key is
+        # admitted on platform authority alone and never sees an engines row.
+        engines = engines and session
+        if not (platform or engines):
+            logger.warning(f"[IAM] access.grants.manage needs a login session for user {user.id}")
+            raise HTTPException(status_code=403, detail=PLATFORM_DENIED_DETAIL)
         return BindingAdmin(user, principal, platform, engines)
 
     suffix = "_session" if write else ""

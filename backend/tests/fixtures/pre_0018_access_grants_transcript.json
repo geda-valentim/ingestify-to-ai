@@ -178,5 +178,10 @@
   "off: revoke",
   503,
   "{\"detail\":{\"code\":\"ACCESS_NOT_ENABLED\",\"message\":\"ACCESS_NOT_ENABLED\"}}"
+ ],
+ [
+  "self grant",
+  201,
+  "{\"id\":\"<id6>\",\"user_id\":\"bootstrap\",\"role\":\"observer\",\"permissions\":[\"engine_operations.read\",\"engines.read\",\"execution_profiles.read\"],\"policy_revision_id\":\"<id1>\",\"expires_at\":\"<ts>\",\"revoked_at\":null,\"version\":0,\"parent_id\":null,\"delegation\":null}"
  ]
 ]

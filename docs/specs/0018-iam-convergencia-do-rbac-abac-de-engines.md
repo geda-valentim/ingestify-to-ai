@@ -121,7 +121,9 @@ sua semântica de decisão. As famílias nunca se enxergam (§4.3).
     válidos, cada um com sua condição) nem `ROLE_ABOVE_GRANTOR` (o limite é o
     envelope). Autoconcessão proibida (`SELF_GRANT`, desvio intencional da 0009).
     Com `engine_access_enabled` falso → 503 `ACCESS_NOT_ENABLED`, como os aliases.
-  - As duas famílias exigem sessão JWT nas escritas (API key → 403).
+  - As duas famílias exigem sessão JWT nas escritas (API key → 403). A família `engines`
+  exige sessão JWT também na leitura, como o `access_session` da 0009: uma API key só
+  lista bindings `platform` (e recebe 403 se não tiver autoridade de plataforma).
 
   Testes: quem tem só binding `platform_admin` (sem bootstrap) recebe 403
   `ACCESS_DENIED` ao conceder ou revogar papel `engines`; um `access_admin` delegado

@@ -231,6 +231,27 @@ def test_writes_of_both_families_need_a_login_session(world, api):  # noqa: F811
         assert r.status_code == 403 and "login session" in r.json()["detail"], r.text
 
 
+def test_an_api_key_never_reads_engines_bindings(world, api):  # noqa: F811
+    """0009's `access_session` refused API keys; the unified list does not widen it."""
+    _delegate(world)
+    revision = _revision(world)
+    assert api("delegate", "POST", BASE, _engines_body(revision)).status_code == 201
+    platform_id = _platform(world, "outsider", "platform_auditor")
+    key = {**HEADERS, "X-API-Key": "k"}
+
+    assert _code(api("delegate", "GET", "/admin/access/grants", headers=key)) == (403, "LOGIN_SESSION_REQUIRED")
+    # Engines authority alone: the route is closed to an API key.
+    r = api("delegate", "GET", BASE, headers=key)
+    assert (r.status_code, r.json()["detail"]) == (403, PLATFORM_DENIED_DETAIL)
+    # Bootstrap holds both: platform rows only.
+    rows = api("bootstrap", "GET", f"{BASE}?include_inactive=true", headers=key).json()["bindings"]
+    assert platform_id in {b["id"] for b in rows}
+    assert {b["family"] for b in rows} == {"platform"}
+    # The same callers with a login session do see the engines rows.
+    assert "engines" in {b["family"] for b in api("delegate", "GET", BASE).json()["bindings"]}
+    assert "engines" in {b["family"] for b in api("bootstrap", "GET", BASE).json()["bindings"]}
+
+
 # -- CA7: delegation through the unified route --------------------------------------------
 
 
@@ -247,7 +268,11 @@ def test_a_delegate_grants_within_the_envelope_and_the_child_dies_with_the_paren
     assert _code(api("delegate", "POST", BASE, _engines_body(revision, member, expires_at=_later(hours=1)))) == (
         403, "DELEGATION_EXCEEDED")
 
-    assert api(member, "GET", "/admin/access/me").status_code == 200
+    access_me = api(member, "GET", "/admin/access/me")
+    assert access_me.status_code == 200
+    me = api(member, "GET", "/auth/me").json()
+    engine_permissions = {p for p in me["permissions"] if p in policy.PERMISSIONS}
+    assert engine_permissions and engine_permissions == set(access_me.json()["permissions"])
     r = api("bootstrap", "POST", f"{BASE}/{parent['id']}/revoke", {"version": 0})
     assert r.status_code == 200, r.text
 
