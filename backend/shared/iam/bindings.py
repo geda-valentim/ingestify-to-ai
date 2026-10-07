@@ -82,11 +82,14 @@ def _audit(db, actor: Principal, action: str, b: IamBinding, before, after, ip):
     )
 
 
-def _require_manager(decider: Decider, actor, permission: str) -> Principal:
+def _require_manager(decider: Decider, actor, permission: str, *, writes: bool = False) -> Principal:
     principal = as_principal(actor)
     decision = decider.decide(principal, permission)
     if not decision.allow:
         raise IamError("ACCESS_DENIED", decision.status)
+    # granted_by / revoked_by are users.id FKs (§4.8): only a user writes bindings.
+    if writes and principal.subject_type != "user":
+        raise IamError("ACCESS_DENIED", 403, "Only a user grants or revokes bindings")
     return principal
 
 
@@ -111,7 +114,7 @@ def grant(
     decider: Optional[Decider] = None,
 ) -> IamBinding:
     decider = decider or Decider(db)
-    principal = _require_manager(decider, actor, "iam.bindings.manage")
+    principal = _require_manager(decider, actor, "iam.bindings.manage", writes=True)
     now = decider.now()
 
     managed = catalog.ROLES.get(role)
@@ -184,7 +187,7 @@ def revoke(
     decider: Optional[Decider] = None,
 ) -> IamBinding:
     decider = decider or Decider(db)
-    principal = _require_manager(decider, actor, "iam.bindings.manage")
+    principal = _require_manager(decider, actor, "iam.bindings.manage", writes=True)
     now = decider.now()
 
     b = db.get(IamBinding, str(binding_id))
