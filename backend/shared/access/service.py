@@ -204,7 +204,7 @@ def add_revision(db, p, body, actor):
     return r
 
 
-def create_profile(db, body, actor):
+def create_profile(db, body, actor, audit_extra=None):
     require_enabled()
     policy.epoch(db, True)
     p = ExecutionProfile(
@@ -246,7 +246,7 @@ def create_profile(db, body, actor):
         created_by=actor,
     )
     db.add(r)
-    policy.audit(db, actor, "execution_profile.created", p.id)
+    policy.audit(db, actor, "execution_profile.created", p.id, audit_extra)
     db.commit()
     return view(db, p, actor, True)
 
@@ -277,7 +277,7 @@ def metadata(db, id, body, actor):
     return view(db, p, actor, True)
 
 
-def publish(db, id, body, actor):
+def publish(db, id, body, actor, audit_extra=None):
     policy.epoch(db, True)
     p = get_profile(db, id, actor, "execution_profiles.publish", True)
     _version(p, body.version)
@@ -301,7 +301,13 @@ def publish(db, id, body, actor):
     p.latest_published_revision_id = r.id
     p.status = "published"
     p.version += 1
-    policy.audit(db, actor, "execution_profile.published", id, {"revision_id": r.id})
+    policy.audit(
+        db,
+        actor,
+        "execution_profile.published",
+        id,
+        {"revision_id": r.id, **(audit_extra or {})},
+    )
     db.commit()
     return view(db, p, actor, True)
 
@@ -317,7 +323,7 @@ def archive(db, id, version, actor):
     return view(db, p, actor, True)
 
 
-def bind(db, engine, body, actor):
+def bind(db, engine, body, actor, audit_extra=None):
     require_enabled()
     policy.epoch(db, True)
     engine = control.locked_engine(db, engine.id)
@@ -350,6 +356,7 @@ def bind(db, engine, body, actor):
         actor,
         source_profile_revision_id=r.id,
         source_hash=r.content_hash,
+        audit_extra=audit_extra,
     )
 
 
@@ -506,7 +513,7 @@ def revoke(db, id, version, actor):
     return grant_view(as_grant(bindings.revoke_engine(db, actor, id, version)))
 
 
-def set_attributes(db, engine, body, actor):
+def set_attributes(db, engine, body, actor, audit_extra=None):
     authority = policy.epoch(db, True)
     bootstrap(db, actor)
     row = db.get(EngineAttributes, engine.id)
@@ -524,7 +531,7 @@ def set_attributes(db, engine, body, actor):
         actor,
         "access.engine_classified",
         engine.id,
-        {"environment": body.environment},
+        {"environment": body.environment, **(audit_extra or {})},
     )
     db.commit()
     return dict(engine_id=engine.id, environment=row.environment, version=row.version)

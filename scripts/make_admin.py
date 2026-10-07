@@ -14,7 +14,8 @@ Usage:
 --root (spec 0019) also makes the user the installation's root user, for
 installations that had users before root existed. It refuses when a root already
 exists: root is never replaced by this script. New installations do not need it:
-the first registered account becomes root.
+the first registered account becomes root. Designating root also seeds the default
+execution profiles (spec 0020; scripts/seed_execution_profiles.py runs it again).
 
 The user is identified by email or id only - never by username, which anyone can
 choose at registration (a username like "alice@example.com" would otherwise be
@@ -128,6 +129,13 @@ def make_admin(email=None, user_id=None, assume_yes=False, as_root=False) -> int
         )
 
         print("\n✅ Promoted. They can now access the /admin/* endpoints.")
+        if as_root:
+            # Spec 0020: the new root creates the default execution profiles (best effort)
+            from shared.access.seed import seed_quietly
+
+            report = seed_quietly(db, user.id, "make_admin --root")
+            if report is not None:
+                print("\n" + report.summary())
         return 0
 
     except IntegrityError:

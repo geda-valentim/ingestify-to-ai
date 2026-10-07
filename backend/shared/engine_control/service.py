@@ -194,6 +194,7 @@ def save_profile(
     *,
     source_profile_revision_id=None,
     source_hash=None,
+    audit_extra=None,
 ):
     from shared.access import policy
 
@@ -313,7 +314,7 @@ def save_profile(
             target_type="engine",
             target_id=engine.id,
             before=None,
-            after={"feature": feature, "revision": row.revision},
+            after={"feature": feature, "revision": row.revision, **(audit_extra or {})},
         )
     )
     db.commit()
