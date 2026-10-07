@@ -30,9 +30,9 @@ operações já usam. A task **não** é revogada no timeout.
 
 ## Autorização
 
-Nada aqui é anônimo. `get_current_active_user` já aceita tanto um Bearer JWT
-quanto `X-API-Key`, e é a mesma dependência usada por `/upload` e
-`/transcribe`. As rotas não são endereçadas por `job_id`, então nada de
+Nada aqui é anônimo. Toda rota declara `require("images.analyze")` (spec 0014),
+que autentica por `get_current_active_user` — Bearer JWT ou `X-API-Key`, como
+`/upload` e `/transcribe` — e libera todo usuário ativo (criar no próprio espaço). As rotas não são endereçadas por `job_id`, então nada de
 `api/deps.py` se aplica — a posse é *escrita* aqui, antes do despacho, o que é
 o que faz `/jobs/{job_id}` e `/jobs/{job_id}/result` funcionarem depois sem
 nenhum caso especial.
@@ -51,7 +51,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Uplo
 from sqlalchemy.orm import Session
 
 from shared.admin import is_effective_admin
-from shared.auth import get_current_active_user
+from api.iam_deps import require
 from shared.config import get_settings
 from shared.database import SessionLocal, get_db
 from shared.engines import dispatch as engine_dispatch
@@ -713,7 +713,7 @@ def _ocr_response(common: Dict[str, Any]) -> ImageOcrResponse:
 async def describe_image(
     request: ImageDescribeRequest,
     http_request: Request,
-    current_user: User = Depends(get_current_active_user),
+    current_user: User = Depends(require("images.analyze")),
     db: Session = Depends(get_db),
 ):
     """
@@ -769,7 +769,7 @@ async def describe_image_upload(
     tags: Optional[str] = Form(None, description=TAGS_FORM_DESCRIPTION),
     http_request: Request = None,
     location: LocationFields = Depends(upload_location_form),
-    current_user: User = Depends(get_current_active_user),
+    current_user: User = Depends(require("images.analyze")),
     db: Session = Depends(get_db),
 ):
     """
@@ -813,7 +813,7 @@ async def describe_image_upload(
 async def ocr_image(
     request: ImageOcrRequest,
     http_request: Request,
-    current_user: User = Depends(get_current_active_user),
+    current_user: User = Depends(require("images.analyze")),
     db: Session = Depends(get_db),
 ):
     """
@@ -851,7 +851,7 @@ async def ocr_image_upload(
     tags: Optional[str] = Form(None, description=TAGS_FORM_DESCRIPTION),
     http_request: Request = None,
     location: LocationFields = Depends(upload_location_form),
-    current_user: User = Depends(get_current_active_user),
+    current_user: User = Depends(require("images.analyze")),
     db: Session = Depends(get_db),
 ):
     """Igual a `POST /images/ocr`, com a imagem em `multipart/form-data`."""
@@ -880,7 +880,7 @@ async def ocr_image_upload(
     summary="Estado do subsistema de visão",
 )
 async def vision_capabilities(
-    current_user: User = Depends(get_current_active_user),
+    current_user: User = Depends(require("images.analyze")),
 ):
     """
     O que o worker de visão consegue fazer *neste* deploy.

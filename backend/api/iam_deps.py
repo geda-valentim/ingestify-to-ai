@@ -40,6 +40,7 @@ import inspect
 import logging
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Optional, Tuple
+from uuid import UUID
 
 from fastapi import Depends, HTTPException, Request
 from sqlalchemy.orm import Session
@@ -59,7 +60,7 @@ from shared.iam.decide import (
     principal_for_user,
     report_divergence,
 )
-from shared.models import AdminAudit, APIKey, Folder, Job, Project, User
+from shared.models import AdminAudit, APIKey, Folder, Job, Page, Project, User
 
 logger = logging.getLogger(__name__)
 
@@ -238,6 +239,9 @@ class _Loader:
     resource: Callable[[Session, str], Any]
     # The 404 the legacy path raises (same detail, same error_code).
     not_found: Callable[[], HTTPException]
+    # The path parameter's type, as the legacy route declared it: a malformed id
+    # keeps its 422 instead of becoming a 404 (CA12).
+    annotation: Any = str
 
 
 _LOADERS: Dict[type, _Loader] = {
@@ -263,6 +267,14 @@ _LOADERS: Dict[type, _Loader] = {
         resource=lambda db, folder_id: db.get(Folder, str(folder_id)) if folder_id else None,
         not_found=lambda: deps.LocationError(404, "FOLDER_NOT_FOUND", deps.FOLDER_NOT_FOUND_DETAIL),
     ),
+    APIKey: _Loader(
+        param="key_id",
+        family=("api_keys",),
+        legacy=lambda db, key_id, user: deps.owned_api_key_or_404(db, key_id, user),
+        resource=lambda db, key_id: db.get(APIKey, str(key_id)) if key_id else None,
+        not_found=lambda: HTTPException(status_code=404, detail=deps.API_KEY_NOT_FOUND_DETAIL),
+        annotation=UUID,
+    ),
 }
 
 
@@ -280,8 +292,9 @@ def authorized(model: type, permission: str, *, param: Optional[str] = None):
     Loads `model` by its path parameter and decides `permission` on it (§4.4 step 4).
 
     Drop-in for the legacy dependency: returns what `get_owned_job` /
-    `get_owned_project` / `get_owned_folder` returned, and denies with the same
-    404 (identical for missing and someone else's).
+    `get_owned_project` / `get_owned_folder` (and the inline API key lookup)
+    returned, and denies with the same 404 (identical for missing and someone
+    else's).
     """
     if model not in _LOADERS:
         raise ValueError(f"authorized() does not know how to load {model.__name__}")
@@ -331,7 +344,7 @@ def authorized(model: type, permission: str, *, param: Optional[str] = None):
     # signature is rewritten: FastAPI reads `inspect.signature`.
     sig = inspect.signature(dependency)
     params = [
-        p.replace(name=name) if p.name == "resource_id" else p
+        p.replace(name=name, annotation=loader.annotation) if p.name == "resource_id" else p
         for p in sig.parameters.values()
     ]
     inner = dependency
@@ -360,6 +373,18 @@ class Scope:
     user: User
     permission: str
 
+    def of(self, model: type) -> Any:
+        """
+        The same principal's view of a related model, for a listing that also
+        counts or joins it (`GET /projects` counts jobs, folders and keys, `GET
+        /api-keys` names the bound projects). The route still declares one
+        `visible(...)`; the related predicate is today the same owner filter,
+        `Model.user_id == me`, and is where 0016/0017 widen it per model.
+        """
+        if model not in _VISIBLE_FAMILIES:
+            raise ValueError(f"visible() has no scope for {model.__name__}")
+        return model.user_id == self.user.id
+
 
 _VISIBLE_FAMILIES: Dict[type, Tuple[str, ...]] = {
     Job: ("jobs", "search"),
@@ -380,6 +405,35 @@ def visible(model: type, permission: str):
         return Scope(predicate=column == user.id, user=user, permission=permission)
 
     return _declare(dependency, Declaration("visible", permission, model), f"visible[{model.__name__}:{permission}]")
+
+
+def owned_page(job_dependency: Callable):
+    """
+    The page `page_number` of the job authorized by `job_dependency` (an
+    `authorized(Job, ...)`), or None when MySQL has no such page: page routes keep
+    their Redis fallback, as `api.deps.get_owned_page_or_none` did.
+
+    It declares nothing of its own: the route's one declaration is the job
+    dependency, so a route that takes both the job and the page passes the *same*
+    `authorized(...)` object to each and FastAPI resolves it once.
+    """
+    if not (declaration_of(job_dependency) and declaration_of(job_dependency).model is Job):
+        raise ValueError("owned_page() needs an authorized(Job, ...) dependency")
+
+    def dependency(
+        job_id: str,
+        page_number: int,
+        owned_job: Optional[Job] = Depends(job_dependency),
+        db: Session = Depends(get_db),
+    ) -> Optional[Page]:
+        return (
+            db.query(Page)
+            .filter(Page.job_id == job_id, Page.page_number == page_number)
+            .first()
+        )
+
+    dependency.__name__ = dependency.__qualname__ = "owned_page"
+    return dependency
 
 
 # ============================================

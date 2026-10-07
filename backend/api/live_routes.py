@@ -10,7 +10,6 @@ from typing import Literal, Optional
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy.orm import Session
-from shared.auth import get_current_active_user
 from shared.config import get_settings
 from shared.database import get_db, SessionLocal
 from shared.models import Job, JobStatus, LiveSession, User
@@ -22,7 +21,8 @@ from shared.live.store import LiveStore
 from shared.live.diarization import DiarizationState, annotate_result
 from shared.live.lifecycle import available, transition, terminate, sweep
 from shared.live.persistence import finish_live
-from api.deps import get_owned_job
+from api.iam_deps import authorized, require
+from shared.iam.decide import decide, principal_for_user
 from api.projects_api import LocationFields, prepare_upload_location, resolve_upload_location
 from api.tag_routes import parse_tags_or_422
 
@@ -80,7 +80,7 @@ def unavailable(code):
 
 @router.post('', status_code=201)
 def create_session(body: CreateSession, request: Request, response: Response,
-                   user: User = Depends(get_current_active_user), db: Session = Depends(get_db)):
+                   user: User = Depends(require('live.sessions.create')), db: Session = Depends(get_db)):
     settings = get_settings()
     fields = LocationFields(body.project, body.project_id, body.folder, body.folder_id)
     plan = prepare_upload_location(db, user, request, fields)
@@ -135,8 +135,8 @@ def create_session(body: CreateSession, request: Request, response: Response,
 
 
 @router.get('/{job_id}')
-def session_status(job_id: str, user: User = Depends(get_current_active_user),
-                   owned_job: Job = Depends(get_owned_job), db: Session = Depends(get_db)):
+def session_status(job_id: str, owned_job: Job = Depends(authorized(Job, 'jobs.read')),
+                   db: Session = Depends(get_db)):
     live = live_owned(job_id, owned_job, db)
     return {'job_id': job_id, 'state': live.state, 'duration_seconds': live.audio_samples / RATE,
             'backend': live.backend, 'model': live.model, 'language': live.language,
@@ -144,8 +144,8 @@ def session_status(job_id: str, user: User = Depends(get_current_active_user),
 
 
 @router.delete('/{job_id}')
-def cancel_session(job_id: str, user: User = Depends(get_current_active_user),
-                   owned_job: Job = Depends(get_owned_job), db: Session = Depends(get_db)):
+def cancel_session(job_id: str, owned_job: Job = Depends(authorized(Job, 'jobs.cancel')),
+                   db: Session = Depends(get_db)):
     live_owned(job_id, owned_job, db)
     db.rollback()
     terminate(job_id, 'cancelled', 'LIVE_CANCELLED', get_store(), get_redis_client())
@@ -236,7 +236,13 @@ async def live_stream(ws: WebSocket, job_id: str):
             job = db.get(Job, job_id)
             owner = db.get(User, binding['user_id'])
             live = db.get(LiveSession, job_id) if available(db) else None
-            if not job or not owner or not owner.is_active or job.user_id != binding['user_id'] or not live or live.generation != generation or live.state != 'created':
+            # The WS is public in the route inventory (CA1): it is authenticated by the
+            # single-use ticket, and the ticket's user must still own the job, decided
+            # here by shared.iam (an inactive or deleted owner, or another job, is 4404).
+            # Not mode-dependent: for data the legacy rule and IAM are one code path.
+            owns = owner is not None and job is not None and decide(
+                db, principal_for_user(owner), 'jobs.update', job).allow
+            if not owns or not live or live.generation != generation or live.state != 'created':
                 raise LiveError('LIVE_SESSION_GONE', 4404)
             model_name, language = live.model, live.language
         if not await asyncio.to_thread(store.renew, job_id, generation, True):
