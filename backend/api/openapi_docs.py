@@ -9,6 +9,28 @@ def dependency_names(dependant):
     return names
 
 
+def platform_declaration(dependant):
+    """
+    The spec 0014 `require(...)` of a platform/IAM permission in the route's tree,
+    if any: what `require_admin` / `require_admin_session` were before, so the
+    published access labels stay the same (CA12).
+    """
+    from api.iam_deps import declaration_of
+    from shared.iam import catalog
+
+    stack = [dependant]
+    while stack:
+        current = stack.pop()
+        decl = declaration_of(current.call)
+        if decl is not None and decl.kind == 'require' and catalog.permission(decl.permission).level != catalog.OWNER:
+            return decl
+        # Spec 0018: /admin/iam/bindings* are administrative routes of either family.
+        if decl is not None and decl.kind == 'iam_or_engine_access':
+            return decl
+        stack.extend(current.dependencies)
+    return None
+
+
 def annotate_openapi(schema, routes):
     from shared.schemas import ImageAnalyzeOptions, VisionGenerationOptions
     for model in (ImageAnalyzeOptions, VisionGenerationOptions):
@@ -23,17 +45,18 @@ def annotate_openapi(schema, routes):
         if not isinstance(route, APIRoute):
             continue
         names = dependency_names(route.dependant)
+        platform = platform_declaration(route.dependant)
         for method in route.methods:
             operation = schema['paths'].get(route.path, {}).get(method.lower())
             if operation is None:
                 continue
             if route.path.startswith('/internal/engine-hosts/'):
                 operation.update(security=[{'engineHostAuth': []}], **{'x-access': 'engine-host'})
-            elif 'require_admin_session' in names:
+            elif 'require_admin_session' in names or (platform is not None and platform.session):
                 operation.update(security=[{'bearerAuth': []}], **{'x-access': 'admin-session'})
             elif 'access_session' in names:
                 operation.update(security=[{'bearerAuth': []}], **{'x-access': 'jwt'})
-            elif 'require_admin' in names:
+            elif 'require_admin' in names or platform is not None:
                 operation['x-access'] = 'admin'
             else:
                 operation['x-access'] = ('jwt' if operation['security'] == [{'bearerAuth': []}] else 'user') if operation.get('security') else 'public'

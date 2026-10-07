@@ -42,11 +42,10 @@ from api.deps import (
     FOLDER_NOT_FOUND_DETAIL,
     PROJECT_NOT_FOUND_DETAIL,
     LocationError,
-    get_owned_project,
     owned_folder_or_404,
     owned_project_or_404,
 )
-from shared.auth import get_current_active_user
+from api.iam_deps import Scope, authorized, visible
 from shared.config import get_settings
 from shared.database import get_db
 from shared.models import APIKey, Folder, Job, JobStatus as DBJobStatus, Project, User
@@ -402,7 +401,7 @@ _ACTIVE = (DBJobStatus.PENDING, DBJobStatus.PROCESSING)
 )
 async def list_projects(
     include: Optional[str] = Query(None, description="`folders` inclui as pastas de cada projeto"),
-    current_user: User = Depends(get_current_active_user),
+    scope: Scope = Depends(visible(Project, "projects.read")),
     db: Session = Depends(get_db),
 ):
     """
@@ -414,14 +413,16 @@ async def list_projects(
     """
     with_folders = "folders" in {part.strip() for part in (include or "").split(",")}
 
-    projects = db.query(Project).filter(Project.user_id == current_user.id).all()
+    # One declaration, visible(Project); the counts read the same principal's jobs,
+    # keys and folders through `scope.of(...)` (today the same owner filter).
+    projects = db.query(Project).filter(scope.predicate).all()
     stats = {p.id: {"job_count": 0, "root_job_count": 0, "failed_count": 0, "active_count": 0,
                     "last_job_at": None} for p in projects}
     folder_counts: Dict[str, int] = {}
 
     rows = (
         db.query(Job.project_id, Job.folder_id, Job.status, func.count(Job.id), func.max(Job.created_at))
-        .filter(Job.user_id == current_user.id, Job.job_type == "MAIN", Job.project_id.isnot(None))
+        .filter(scope.of(Job), Job.job_type == "MAIN", Job.project_id.isnot(None))
         .group_by(Job.project_id, Job.folder_id, Job.status)
         .all()
     )
@@ -444,14 +445,14 @@ async def list_projects(
     keys_by_project: Dict[str, List[ProjectRef]] = {}
     for key_id, key_name, project_id in (
         db.query(APIKey.id, APIKey.name, APIKey.project_id)
-        .filter(APIKey.user_id == current_user.id, APIKey.project_id.isnot(None))
+        .filter(scope.of(APIKey), APIKey.project_id.isnot(None))
         .order_by(APIKey.name)
     ):
         keys_by_project.setdefault(project_id, []).append(ProjectRef(id=key_id, name=key_name or ""))
 
     folders_by_project: Dict[str, List[ProjectFolderSummary]] = {}
     if with_folders:
-        for folder in db.query(Folder).filter(Folder.user_id == current_user.id).all():
+        for folder in db.query(Folder).filter(scope.of(Folder)).all():
             folders_by_project.setdefault(folder.project_id, []).append(ProjectFolderSummary(
                 id=folder.id, name=folder.name, job_count=folder_counts.get(folder.id, 0)))
         for folders in folders_by_project.values():
@@ -495,7 +496,7 @@ def _resolve(kind: str, name: str, find) -> NameResolveResponse:
 )
 async def resolve_project_name(
     name: str = Query(..., description="O texto digitado"),
-    current_user: User = Depends(get_current_active_user),
+    scope: Scope = Depends(visible(Project, "projects.read")),
     db: Session = Depends(get_db),
 ):
     """
@@ -505,7 +506,11 @@ async def resolve_project_name(
     `{"valid": true, "match": {"id", "name"}}`, `{"valid": true, "match": null}`
     ou `{"valid": false, "error": "..."}`. Sempre 200.
     """
-    return _resolve("project", name, lambda key: find_project(db, current_user.id, key))
+    # `find_project`'s query, with the owner filter taken from the scope.
+    return _resolve(
+        "project", name,
+        lambda key: db.query(Project).filter(scope.predicate, Project.name_key == key).first(),
+    )
 
 
 @router.get(
@@ -516,7 +521,7 @@ async def resolve_project_name(
 )
 async def resolve_folder_name(
     name: str = Query(..., description="O texto digitado"),
-    project: Project = Depends(get_owned_project),
+    project: Project = Depends(authorized(Project, "projects.read")),
     db: Session = Depends(get_db),
 ):
     """Igual a `GET /projects/resolve`, para uma pasta do projeto. Projeto alheio: 404."""

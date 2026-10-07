@@ -9,7 +9,6 @@ from shared.models import User, Engine, AdminAudit
 from shared.engine_control.contracts import ACTIONS
 from shared.engine_control.service import ControlError, digest
 from shared.access.models import (
-    RoleGrant,
     PolicyRevision,
     AuthorizationEpoch,
     EngineAttributes,
@@ -69,31 +68,22 @@ def audit(db, actor, action, target, after=None):
 
 
 def active_grant(db, grant, seen=None, lock=False):
-    seen = set() if seen is None else seen
-    if (
-        not grant
-        or grant.id in seen
-        or grant.revoked_at
-        or grant.expires_at <= datetime.utcnow()
-    ):
-        return False
-    seen.add(grant.id)
-    q = db.query(User).filter_by(id=grant.user_id).populate_existing()
-    owner = (q.with_for_update() if lock else q).first()
-    if not owner or not owner.is_active:
-        return False
-    if grant.parent_id:
-        q = db.query(RoleGrant).filter_by(id=grant.parent_id).populate_existing()
-        parent = (q.with_for_update() if lock else q).first()
-        return active_grant(db, parent, seen, lock)
-    return True
+    """The grant and its whole parent chain are active (read from `iam_bindings`, 0018)."""
+    from shared.iam import engine_bindings
+
+    return engine_bindings.active_grant(db, grant, seen, lock)
 
 
 def grants(db, actor, lock=False):
-    q = db.query(RoleGrant).filter_by(user_id=str(actor)).populate_existing()
-    if lock:
-        q = q.with_for_update()
-    return [g for g in q if active_grant(db, g, lock=lock)]
+    """
+    Every active engines grant of `actor`.
+
+    Since spec 0018 the grants live in `iam_bindings` (engines family); the thin
+    adapter of `shared.iam.engine_bindings` keeps the 0009 interface and rules.
+    """
+    from shared.iam import engine_bindings
+
+    return engine_bindings.grants(db, actor, lock)
 
 
 def subset(child, parent):

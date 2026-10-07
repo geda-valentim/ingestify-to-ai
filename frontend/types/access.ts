@@ -54,21 +54,12 @@ export interface AccessPolicy {
   version: number;
   revisions: { id: string; revision: number; constraints: Constraints }[];
 }
-export interface Grant {
+/** An `installation:<name>` OS principal of the direct CLI (0009). */
+export interface InstallationPrincipal {
   id: string;
-  user_id: string;
-  role: string;
-  permissions: string[];
-  policy_revision_id: string;
+  active: boolean;
   version: number;
-  expires_at: string;
-  revoked_at: string | null;
-  parent_id: string | null;
-  delegation: {
-    permissions: string[];
-    constraints: Constraints;
-    max_grant_seconds: number;
-  } | null;
+  purpose: string;
 }
 export interface ResourceScope {
   key: string;

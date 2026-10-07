@@ -20,6 +20,7 @@ from api.engine_admin_routes import router as engine_admin_router
 from api.engine_control_routes import router as engine_control_router, host_router as engine_host_router
 from api.routing_admin_routes import router as routing_admin_router
 from api.projects_api import router as projects_router
+from api.iam_routes import router as iam_router
 
 # Configure logging
 logging.basicConfig(
@@ -243,6 +244,26 @@ async def startup_event():
         if not settings.redis_password:
             logger.warning("SECURITY: Redis has no password. Set REDIS_PASSWORD (Redis must only be reachable internally).")
 
+    # Spec 0019: say how the root user will be created (or why it cannot be yet)
+    try:
+        from shared.database import SessionLocal
+        from shared.root import root_exists, root_pending, setup_token_required
+
+        with SessionLocal() as db:
+            if not root_exists(db) and not root_pending(db):
+                logger.warning("SETUP: this installation has users but no root user; designate one with "
+                               "scripts/make_admin.py --email <email> --root.")
+            elif root_pending(db):
+                if settings.environment.strip().lower() == "production" and not settings.root_setup_token.strip():
+                    logger.warning("SETUP: no root user and no ROOT_SETUP_TOKEN: registration is closed until "
+                                   "ROOT_SETUP_TOKEN is set.")
+                elif setup_token_required():
+                    logger.warning("SETUP: no root user yet: the first registration with ROOT_SETUP_TOKEN becomes root.")
+                else:
+                    logger.warning("SETUP: no root user yet: the first registered account becomes root.")
+    except Exception as e:  # the database may be down; init_db reports that on its own
+        logger.warning(f"SETUP: could not check for the root user: {e}")
+
     # Refuse to start with a missing or insecure JWT secret: anyone could forge tokens
     from shared.auth import validate_jwt_secret
     validate_jwt_secret(settings.jwt_secret_key)
@@ -344,6 +365,7 @@ app.include_router(engine_admin_router)  # /admin/engines, /admin/gpus (spec 000
 from api.access_routes import router as access_router
 
 app.include_router(access_router)
+app.include_router(iam_router)  # /iam/*, /admin/iam/* (spec 0014 §4.9)
 app.include_router(engine_control_router)
 app.include_router(engine_host_router)
 app.include_router(projects_router)  # GET /projects, /projects/resolve, /projects/{id}/folders/resolve

@@ -27,6 +27,7 @@ import { useAuthStore } from "@/lib/store/auth";
 import { Button } from "@/components/ui/button";
 import { Brand } from "@/components/brand";
 import { cn } from "@/lib/utils";
+import { adminSectionsFor } from "@/lib/admin-nav";
 
 type NavLink = { href: string; label: string; icon: typeof UploadIcon };
 
@@ -73,7 +74,8 @@ export function AppHeader({ className }: { className?: string }) {
       profile.email !== user.email ||
       JSON.stringify(profile.permissions) !==
         JSON.stringify(user.permissions) ||
-      profile.engine_access_enabled !== user.engine_access_enabled
+      profile.engine_access_enabled !== user.engine_access_enabled ||
+      profile.bootstrap !== user.bootstrap
     ) {
       setAuth(profile, token);
     }
@@ -106,7 +108,7 @@ export function AppHeader({ className }: { className?: string }) {
     pathname === href || pathname.startsWith(`${href}/`);
   const accountLinks: NavLink[] = [
     { href: "/api-keys", label: "API Keys", icon: Key },
-    ...(user?.is_admin === true || !!user?.permissions?.length
+    ...(adminSectionsFor(user).length > 0
       ? [{ href: "/admin", label: "Admin", icon: Cpu }]
       : []),
   ];

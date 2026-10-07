@@ -282,9 +282,12 @@ def dispatch(job_id):
                     run.cancel_requested = True
                     db.commit()
                     return
-                from shared.admin import is_effective_admin
+                from shared.iam.remote import can_use_remote
+                # engines.remote.use through shared.iam (spec 0014 §4.6); deferred, and
+                # moot while Full keeps allow_remote=False.
                 placed = engine_dispatch.place_now(feature='vision', subject_id=f'{job_id}:{uuid4().hex[:26]}',
-                    job_id=job_id, user_id=job.user_id, is_admin=is_effective_admin(user), allow_remote=False)
+                    job_id=job_id, user_id=job.user_id, remote_use=lambda: can_use_remote(user, db=db),
+                    allow_remote=False)
                 if placed.outcome != 'placed':
                     run.dispatch_after = now + timedelta(seconds=10)
                     db.commit()

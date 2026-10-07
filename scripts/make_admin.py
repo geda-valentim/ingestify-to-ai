@@ -9,6 +9,12 @@ bootstrapped from the server / container shell with this script.
 Usage:
     python scripts/make_admin.py --email alice@example.com
     python scripts/make_admin.py --id 3f1c9a2e-...
+    python scripts/make_admin.py --email alice@example.com --root
+
+--root (spec 0019) also makes the user the installation's root user, for
+installations that had users before root existed. It refuses when a root already
+exists: root is never replaced by this script. New installations do not need it:
+the first registered account becomes root.
 
 The user is identified by email or id only - never by username, which anyone can
 choose at registration (a username like "alice@example.com" would otherwise be
@@ -37,12 +43,13 @@ sys.path.insert(0, str(ROOT_DIR / "backend"))
 # shared/ sits at the top level.
 from shared.admin import AdminPromotionError, find_user_to_promote
 from shared.database import SessionLocal
+from sqlalchemy.exc import IntegrityError
 
 logger = logging.getLogger("make_admin")
 
 
-def make_admin(email=None, user_id=None, assume_yes=False) -> int:
-    """Set is_admin = True for the user named by email or id, after confirmation"""
+def make_admin(email=None, user_id=None, assume_yes=False, as_root=False) -> int:
+    """Set is_admin = True (and, with as_root, root) for the user named by email or id"""
     db = SessionLocal()
 
     try:
@@ -56,7 +63,16 @@ def make_admin(email=None, user_id=None, assume_yes=False) -> int:
         print(f"   username: {user.username}")
         print(f"   email:    {user.email}")
 
-        if user.is_admin:
+        if as_root:
+            from shared.root import root_exists
+
+            if root_exists(db):
+                print("\n❌ This installation already has a root user; it is never replaced.")
+                return 1
+            if not user.is_active:
+                print("\n❌ This user is inactive; root must be an active account.")
+                return 1
+        elif user.is_admin:
             print("\n✅ Already an admin.")
             return 0
 
@@ -64,7 +80,8 @@ def make_admin(email=None, user_id=None, assume_yes=False) -> int:
             if not sys.stdin.isatty():
                 print("\n❌ Not a terminal: pass --yes to confirm.")
                 return 1
-            if input("\nPromote this user to admin? [y/N] ").strip().lower() not in ("y", "yes"):
+            question = "Make this user the installation's root?" if as_root else "Promote this user to admin?"
+            if input(f"\n{question} [y/N] ").strip().lower() not in ("y", "yes"):
                 print("Aborted.")
                 return 1
 
@@ -92,11 +109,31 @@ def make_admin(email=None, user_id=None, assume_yes=False) -> int:
                 )
             )
         user.is_admin = True
+        if as_root:
+            from shared.models import ROOT_SLOT, AdminAudit
+
+            user.root_slot = ROOT_SLOT  # the unique index refuses a concurrent second root
+            db.add(
+                AdminAudit(
+                    actor_user_id="installation:make_admin",
+                    auth_method="cli",
+                    action="platform.root.designated",
+                    target_type="user",
+                    target_id=user.id,
+                )
+            )
         db.commit()
-        logger.warning(f"[ADMIN] User {user.id} ({user.email}) promoted to admin by make_admin.py")
+        logger.warning(
+            f"[ADMIN] User {user.id} ({user.email}) promoted to {'root' if as_root else 'admin'} by make_admin.py"
+        )
 
         print("\n✅ Promoted. They can now access the /admin/* endpoints.")
         return 0
+
+    except IntegrityError:
+        db.rollback()
+        print("\n❌ Another user became root at the same time; root is never replaced.")
+        return 1
 
     except Exception as e:
         db.rollback()
@@ -120,9 +157,11 @@ def main():
     target.add_argument("--email", help="the user's email address")
     target.add_argument("--id", dest="user_id", help="the user's id")
     parser.add_argument("--yes", action="store_true", help="do not ask for confirmation")
+    parser.add_argument("--root", dest="as_root", action="store_true",
+                        help="also make the user root, only when the installation has none (spec 0019)")
     args = parser.parse_args()
 
-    sys.exit(make_admin(email=args.email, user_id=args.user_id, assume_yes=args.yes))
+    sys.exit(make_admin(email=args.email, user_id=args.user_id, assume_yes=args.yes, as_root=args.as_root))
 
 
 if __name__ == "__main__":

@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowDown, CheckCircle2, Cloud, Hourglass, Server } from "lucide-react";
 import { computeApi } from "@/lib/api";
@@ -8,6 +7,7 @@ import { useAuthStore } from "@/lib/store/auth";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   CommandHint,
+  EngineLink,
   ENGINES_CLI,
   Freshness,
   LoadingCards,
@@ -51,7 +51,7 @@ export default function RoutingPage() {
       {allImplicit && routes.length > 0 && (
         <p className="text-sm rounded-md border bg-muted/40 p-3">
           No feature has a route: everything runs on this server&apos;s workers, as it always has. Routes matter once
-          you add a <Link href="/admin/engines" className="underline">cloud engine</Link> for overflow.
+          you add a <EngineLink href="/admin/engines" className="underline">cloud engine</EngineLink> for overflow.
         </p>
       )}
       {routes.map((route) => (
@@ -127,7 +127,9 @@ function ExplicitRouteBody({ route }: { route: ExplicitRoute }) {
             : `fail after ${formatSeconds(route.fail_after_seconds)}`}
         </Term>
         <Term label="Attempts per item">{route.max_attempts}</Term>
-        <Term label="Cloud engines usable by">{route.remote_allowed_for === "all" ? "every user" : "admins only"}</Term>
+        <Term label="Cloud engines usable by">
+          {route.remote_allowed_for === "all" ? "every user" : "restricted (needs the remote engine permission)"}
+        </Term>
         <Term label="Per-user limit per period">
           {route.user_period_limit_usd === null ? "none" : formatUsd(route.user_period_limit_usd)}
         </Term>
@@ -163,14 +165,14 @@ function StepRow({ step, index }: { step: RouteStep; index: number }) {
           {index + 1}
         </span>
         {step.engines.map((e) => (
-          <Link
+          <EngineLink
             key={e.id}
             href={`/admin/engines/${encodeURIComponent(e.slug ?? e.id)}`}
             className="inline-flex items-center gap-1 rounded border px-2 py-0.5 text-sm hover:bg-muted"
           >
             {e.adapter_type === "local" ? <Server className="h-3.5 w-3.5" aria-hidden /> : <Cloud className="h-3.5 w-3.5" aria-hidden />}
             {e.slug ?? `${e.id.slice(0, 8)} (deleted)`}
-          </Link>
+          </EngineLink>
         ))}
         {step.engines.length > 1 && (
           <span className="text-xs text-muted-foreground">

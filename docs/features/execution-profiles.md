@@ -1,8 +1,13 @@
 # Perfis de execução e acesso a Compute
 
 Implementação da [spec 0009](../specs/0009-perfis-de-execucao-e-controle-de-acesso.md),
-verificada contra o código em **2026-10-06**; opt-in com `ENGINE_ACCESS_ENABLED`. Ativação e migração:
-[runbook](../runbooks/execution-profiles-access.md). Controles físicos continuam
+verificada contra o código em **2026-10-07**; opt-in com `IAM_MODE=enforce` (ou o alias
+depreciado `ENGINE_ACCESS_ENABLED=true`). Ativação e migração:
+[runbook](../runbooks/execution-profiles-access.md).
+
+Desde a [spec 0018](../specs/0018-iam-convergencia-do-rbac-abac-de-engines.md) os grants
+abaixo são `iam_bindings` da **família `engines`**, administrados com os de plataforma
+numa só tela e numa só API; a decisão da 0009 não mudou. Controles físicos continuam
 exigindo a configuração da [spec 0007](../runbooks/engine-control-bootstrap.md).
 
 ## Onde configurar
@@ -12,7 +17,7 @@ exigindo a configuração da [spec 0007](../runbooks/engine-control-bootstrap.md
 | `/admin/execution-profiles` | Criar, clonar, revisar, publicar e arquivar perfis de execução |
 | `/admin/engines/{id}` → Configuração | Escolher a revisão publicada e vincular ao desejado |
 | `/admin/engines/{id}` → Visão geral / Operações | Ver desejado, aplicado e observado; preparar e executar uma operação |
-| `/admin/access` | Políticas, revisões, grants, validade e revogação; bootstrap também classifica ambientes e consumidores |
+| `/admin/access` (Admin → Acesso) | Abas Concessões (bindings de plataforma e de engines), Políticas, Atributos de engine, Recursos e Principais de instalação; as três últimas só para o bootstrap |
 
 Um **perfil de execução** contém os parâmetros de runtime. Um **modelo aprovado**
 é uma entrada do catálogo instalado. Um **papel de acesso** contém permissões;
@@ -77,7 +82,10 @@ nem renova o aquecimento.
 | `connection_manager` | Leitura e gestão de credenciais da conexão; exige senha atual |
 | `access_admin` | Gerenciar políticas/grants dentro do envelope de delegação; não recebe execução pelo papel |
 
-O grant fixa uma **revisão da política**, permissões de um papel e validade UTC.
+O grant (binding de engines) fixa uma **revisão da política** como condição
+(`condition_ref`), um subconjunto materializado das permissões do papel e validade UTC.
+Um usuário pode ter vários bindings do mesmo papel, cada um com sua condição.
+Ninguém concede papel de engines a si mesmo (`422 SELF_GRANT`, desde a 0018).
 Nova revisão da política não amplia grants existentes. Para alterar a autoridade,
 conceda um novo grant e revogue o anterior. A autoria de um perfil não dá poder
 fora da política; criação usa os atributos permitidos porque ainda não existe ID.
@@ -175,8 +183,10 @@ Biblioteca, controles e IAM exigem sessão JWT; API keys não substituem essa se
 | GET | `/access/me` | Permissões de navegação e estado do rollout |
 | GET / POST | `/access/policies` | Listar / criar política |
 | POST | `/access/policies/{id}/revisions` | Nova revisão, grants anteriores permanecem fixados |
-| GET / POST | `/access/grants` | Listar / conceder papel com revisão e validade |
-| POST | `/access/grants/{id}/revoke` | Revogar com versão esperada |
+| GET / POST | `/iam/bindings` | Listar / conceder papel de engines (`condition_ref`, `permissions`, `delegation`) ou de plataforma |
+| POST | `/iam/bindings/{id}/revoke` | Revogar com versão esperada; já revogado → `409 ALREADY_REVOKED` |
+| GET / POST | `/access/grants` | **Depreciado** (0018): alias com o contrato da 0009, só papéis de engines |
+| POST | `/access/grants/{id}/revoke` | **Depreciado** (0018): alias, aceita re-revogação |
 | GET / PUT | `/access/engine-attributes[/{id}]` | Bootstrap: ambientes confiáveis |
 | GET / PUT | `/access/resources` | Bootstrap: consumidores completos e qualificação |
 | GET / POST / PUT | `/access/installation-principals[/{id}]` | Bootstrap: registrar, listar, ativar/desativar principal CLI |
@@ -184,10 +194,11 @@ Biblioteca, controles e IAM exigem sessão JWT; API keys não substituem essa se
 
 `/auth/me` também retorna permissões de navegação e `engine_access_enabled`.
 Alterações externas de `ADMIN_USER_IDS` precisam de rollout coordenado de API e
-executores. Não altere grants, usuários ou atributos confiáveis diretamente no
-banco durante operações; use os caminhos que atualizam o epoch e a auditoria.
+executores. Não altere bindings, usuários ou atributos confiáveis diretamente no
+banco durante operações; use os caminhos que atualizam o epoch, a auditoria
+(`iam_binding`) e o espelho `access_role_grants`, mantido só para rollback.
 
-Erros úteis: `ACCESS_NOT_ENABLED`, `ACCESS_DENIED`, `DELEGATION_EXCEEDED`,
+Erros úteis: `ACCESS_NOT_ENABLED`, `ACCESS_DENIED`, `DELEGATION_EXCEEDED`, `SELF_GRANT`,
 `PUBLISHED_REVISION_REQUIRED`, `ENGINE_ENVIRONMENT_REQUIRED`,
 `PROFILE_INCOMPATIBLE`, `MODEL_METADATA_CHANGED`, `VERSION_CONFLICT` e os gates
 anteriores `CONTROL_NOT_ENABLED`, `HOST_AGENT_NOT_READY`, `CLEANUP_WATCHDOG_NOT_READY`.

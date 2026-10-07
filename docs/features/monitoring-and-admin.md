@@ -1,11 +1,12 @@
 # Monitoramento, health check e rotas de admin
 
-> Verificado contra o código em 2026-10-04. Fonte da verdade:
+> Verificado contra o código em 2026-10-07. Fonte da verdade:
 > [backend/api/admin_routes.py](../../backend/api/admin_routes.py),
 > [backend/workers/monitoring.py](../../backend/workers/monitoring.py),
 > [backend/workers/celery_app.py](../../backend/workers/celery_app.py),
 > [backend/shared/queries.py](../../backend/shared/queries.py),
-> [backend/api/routes.py](../../backend/api/routes.py) (`GET /health`).
+> [backend/api/routes.py](../../backend/api/routes.py) (`GET /health`),
+> [backend/shared/iam/catalog.py](../../backend/shared/iam/catalog.py) (papéis e permissões).
 
 ## Health check (público)
 
@@ -31,20 +32,28 @@ Para visão, use `GET /images/capabilities` ([vision.md](vision.md)).
 
 ## Rotas de admin (`/admin`)
 
-Exigem um usuário admin: `users.is_admin = true` (via `python scripts/make_admin.py --email …`;
+Com `IAM_MODE=off` (padrão) ou `shadow`, exigem um usuário admin: `users.is_admin = true` (via
+`python scripts/make_admin.py --email …`;
 ver [auth-and-api-keys.md](auth-and-api-keys.md#autorização-de-recursos)) ou
-id listado em `ADMIN_USER_IDS`. Outros usuários recebem `403`. Não há UI no frontend.
+id listado em `ADMIN_USER_IDS`. Outros usuários recebem `403`. Com `IAM_MODE=enforce`
+([spec 0014](../specs/0014-iam-nucleo-de-decisao-e-papeis-de-plataforma.md)), cada rota exige a
+permissão de plataforma indicada abaixo, concedida por um binding de plataforma
+(`platform_admin`, `platform_operator`, `platform_auditor`) em **Admin → Acesso**
+(`/admin/access`, aba Concessões); o admin de bootstrap continua com todas. Papéis de
+engines, administrados na mesma tela desde a
+[spec 0018](../specs/0018-iam-convergencia-do-rbac-abac-de-engines.md), não dão acesso a
+estas rotas. Não há UI no frontend para as rotas abaixo.
 
 | Método e caminho | O que faz |
 |---|---|
-| `GET /admin/stats` | Contagem de jobs/páginas por status, travados, info do Redis e a configuração de monitoramento. |
-| `GET /admin/jobs/stuck?threshold_minutes=&limit=100` | Lista jobs e páginas travados em `PROCESSING`. |
-| `POST /admin/jobs/recover-stuck` | Executa `detect_stuck_jobs` na hora (síncrono). |
-| `POST /admin/jobs/{job_id}/retry-all-failed` | Marca para retry as páginas `failed` do job com `retry_count < MONITORING_MAX_RETRY_COUNT` (ver lacunas). |
-| `POST /admin/cleanup` | Executa `cleanup_old_jobs` na hora. |
-| `GET /admin/health/monitoring` | Tasks agendadas e registradas no Celery. |
-| `GET /admin/broker/unacked` | Mensagens que o broker guarda como entregues e não confirmadas, mais o resultado da última checagem de órfãs. |
-| `POST /admin/broker/unacked/{delivery_tag}/requeue` | Devolve uma mensagem órfã para o início da fila dela. `409` se a última checagem não a marcou como órfã ou se algum worker a está segurando agora. |
+| `GET /admin/stats` (`platform.stats.read`) | Contagem de jobs/páginas por status, travados, info do Redis e a configuração de monitoramento. |
+| `GET /admin/jobs/stuck?threshold_minutes=&limit=100` (`platform.jobs.read`) | Lista jobs e páginas travados em `PROCESSING`. |
+| `POST /admin/jobs/recover-stuck` (`platform.jobs.recover`) | Executa `detect_stuck_jobs` na hora (síncrono). |
+| `POST /admin/jobs/{job_id}/retry-all-failed` (`platform.jobs.recover`) | Marca para retry as páginas `failed` do job com `retry_count < MONITORING_MAX_RETRY_COUNT` (ver lacunas). |
+| `POST /admin/cleanup` (`platform.jobs.cleanup`) | Executa `cleanup_old_jobs` na hora. |
+| `GET /admin/health/monitoring` (`platform.monitoring.read`) | Tasks agendadas e registradas no Celery. |
+| `GET /admin/broker/unacked` (`platform.monitoring.read`) | Mensagens que o broker guarda como entregues e não confirmadas, mais o resultado da última checagem de órfãs. |
+| `POST /admin/broker/unacked/{delivery_tag}/requeue` (`platform.broker.requeue`) | Devolve uma mensagem órfã para o início da fila dela. `409` se a última checagem não a marcou como órfã ou se algum worker a está segurando agora. |
 
 ```bash
 curl -H "Authorization: Bearer $ADMIN_TOKEN" http://localhost:8000/admin/stats

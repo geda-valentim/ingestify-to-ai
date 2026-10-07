@@ -578,7 +578,7 @@ Eles descrevem comportamento da implementação; ativação das flags não compr
 
 ### RF012.2 - Pré-condições, interfaces e limites
 
-- Biblioteca/delegação: schema de acesso migrado, `ENGINE_ACCESS_ENABLED` e sessão JWT.
+- Biblioteca/delegação: schemas de acesso e IAM (0009, 0014, 0018) migrados, `IAM_MODE=enforce` (ou o alias depreciado `ENGINE_ACCESS_ENABLED=true`) e sessão JWT.
 - Controle físico: schema de controle migrado, `ENGINE_CONTROL_ENABLED`, runner e dependências do adapter.
 - Local: agente com manifests/comandos/imagens e serviços registrados, heartbeat ≤30 s e inventário válido.
 - Modal: credenciais, identidade testada, orçamento, worker remoto, watchdog e artifact/protocolo compatíveis.

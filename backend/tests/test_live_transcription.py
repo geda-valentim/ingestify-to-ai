@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from starlette.websockets import WebSocketDisconnect
 from sqlalchemy import create_engine, inspect
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -382,6 +383,27 @@ def test_public_ws_consumed_ticket_and_wrong_job_are_denied(world, monkeypatch):
     with world.client.websocket_connect(f"/transcribe/live/sessions/{data['job_id']}/stream") as ws:
         ws.send_json({'type': 'authenticate', 'protocol': 1, 'ticket': data['ticket']})
         assert ws.receive_json()['code'] == 'LIVE_INVALID_TICKET'
+
+
+@pytest.mark.parametrize('revoke', ['deactivate_owner', 'owner_deleted', 'owner_changed'])
+def test_public_ws_ticket_of_a_user_who_no_longer_owns_the_job_is_gone(world, monkeypatch, revoke):
+    # The ticket was issued while `u` owned the job; by the time it is presented the
+    # owner is inactive, gone (SET NULL) or someone else: shared.iam denies, 4404.
+    import websockets
+    monkeypatch.setattr(websockets, 'connect', lambda *a, **k: FakeWorkerSocket())
+    data = world.client.post('/transcribe/live/sessions', json={'project_id': 'p'}).json()
+    with world.db() as db:
+        if revoke == 'deactivate_owner':
+            db.get(User, 'u').is_active = False
+        else:
+            db.get(Job, data['job_id']).user_id = None if revoke == 'owner_deleted' else 'other'
+        db.commit()
+    with world.client.websocket_connect(f"/transcribe/live/sessions/{data['job_id']}/stream") as ws:
+        ws.send_json({'type': 'authenticate', 'protocol': 1, 'ticket': data['ticket']})
+        assert ws.receive_json()['code'] == 'LIVE_SESSION_GONE'
+        with pytest.raises(WebSocketDisconnect) as closed:
+            ws.receive_json()
+        assert closed.value.code == 4404
 
 
 def test_public_ws_out_of_order_fails_and_frees_capacity(world, monkeypatch):

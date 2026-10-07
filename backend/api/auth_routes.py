@@ -1,22 +1,24 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Form, Request
 from sqlalchemy import func, or_
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from datetime import timedelta
 
 from shared.database import get_db
 from shared.models import User
-from shared.schemas import UserCreate, UserLogin, UserResponse, Token
+from shared.schemas import SetupStatus, UserCreate, UserLogin, UserResponse, Token
 from fastapi.security import HTTPAuthorizationCredentials
 from shared.auth import (
     hash_password,
     authenticate_user,
     bearer_scheme,
     create_access_token,
-    get_current_active_user,
     verify_token,
 )
 from shared.config import get_settings
-from shared import rate_limit
+from shared import rate_limit, root
+from api.iam_deps import authenticated, platform_view, request_decider, request_principal
+from shared.iam.decide import Decider
 
 settings = get_settings()
 router = APIRouter()
@@ -39,8 +41,12 @@ async def register(user_data: UserCreate, request: Request, db: Session = Depend
     ## Returns:
     User object with id, email, username, is_active, created_at, is_admin
 
+    The first account of an installation without root becomes its root user
+    (spec 0019); see GET /auth/setup. `setup_token` is only read for that account.
+
     ## Errors:
     - 400: Email or username already exists
+    - 403: ROOT_SETUP_TOKEN_REQUIRED / ROOT_SETUP_TOKEN_INVALID (root account only)
     - 429: Too many registrations from this IP
     """
     rate_limit.hit("register:ip", rate_limit.client_ip(request), settings.register_limit_per_hour, 3600)
@@ -61,7 +67,7 @@ async def register(user_data: UserCreate, request: Request, db: Session = Depend
             detail="Username already taken"
         )
 
-    # Create new user
+    # Create new user - as the installation's root when there is none yet (spec 0019)
     hashed_pw = hash_password(user_data.password)
     new_user = User(
         email=user_data.email,
@@ -69,12 +75,36 @@ async def register(user_data: UserCreate, request: Request, db: Session = Depend
         hashed_password=hashed_pw,
         is_active=True,
     )
-
-    db.add(new_user)
-    db.commit()
-    db.refresh(new_user)
+    try:
+        new_user = root.create_user(
+            db, new_user, setup_token=user_data.setup_token, ip=rate_limit.client_ip(request)
+        )
+    except root.RootError as exc:
+        raise HTTPException(status_code=exc.status, detail={"code": exc.code, "message": exc.message})
+    except IntegrityError:
+        # A concurrent registration took the same email or username after the checks above
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Email or username already exists")
 
     return UserResponse.for_user(new_user)
+
+
+@router.get("/setup", response_model=SetupStatus, summary="Installation setup state (public)")
+def setup_status(db: Session = Depends(get_db)):
+    """
+    Whether this installation still needs its root user (spec 0019).
+
+    `root_pending` is true only for a brand-new installation (no users): the next
+    registration becomes root. An installation with users but no root keeps plain
+    registrations; an operator designates root with `make_admin.py --root`.
+    Public on purpose: the registration screen uses it to explain that the account
+    becomes root and whether a setup token is needed. Reveals nothing else.
+    """
+    return SetupStatus(
+        root_exists=root.root_exists(db),
+        root_pending=root.root_pending(db),
+        setup_token_required=root.setup_token_required(),
+    )
 
 
 def _lockout_identity(db: Session, login: str) -> str:
@@ -197,8 +227,11 @@ async def refresh_token(
 
 
 @router.get("/me", response_model=UserResponse)
-async def get_current_user_info(
-    current_user: User = Depends(get_current_active_user), db: Session = Depends(get_db)
+def get_current_user_info(
+    request: Request,
+    current_user: User = Depends(authenticated()),
+    db: Session = Depends(get_db),
+    decider: Decider = Depends(request_decider),
 ):
     """
     Get information about the currently authenticated user
@@ -213,17 +246,25 @@ async def get_current_user_info(
     ```
 
     ## Returns:
-    User object with id, email, username, is_active, created_at
+    User object with id, email, username, is_active, created_at, is_admin, and:
+    - `permissions`: flat list, the 0009 engine permissions plus the platform/IAM
+      permissions the caller holds under the current IAM_MODE (spec 0014 CA12)
+    - `bootstrap`: emergency access (the is_admin column or ADMIN_USER_IDS)
+    - `platform_roles`: managed roles held through active bindings
 
     ## Errors:
     - 401: Not authenticated or invalid token/API key
     """
     from shared.access.policy import navigation
 
+    # Plain `def` (threadpool): navigation and the bindings lookup are blocking DB I/O.
     access = navigation(db, current_user)
+    platform = platform_view(decider, request_principal(request, current_user))
     return UserResponse.for_user(current_user).model_copy(
         update={
-            "permissions": access["permissions"],
+            "permissions": sorted(set(access["permissions"]) | platform.permissions),
             "engine_access_enabled": access["enabled"],
+            "bootstrap": platform.bootstrap,
+            "platform_roles": list(platform.roles),
         }
     )

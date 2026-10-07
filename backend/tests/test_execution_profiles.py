@@ -25,9 +25,9 @@ from shared.access.models import (
     ExecutionRevision,
     PolicyRevision,
     ResourceScope,
-    RoleGrant,
     EffectAdmission,
 )
+from shared.iam.models import IamBinding
 from shared.engine_control import registry, service as control
 from shared.engine_control.contracts import PlanRequest, utc_deadline
 from shared.engine_control.models import (
@@ -168,6 +168,16 @@ def world(monkeypatch):
     yield factory
     registry._registry.pop((ADAPTER, 1), None)
     sql.dispose()
+
+
+def grant_row(db, id):
+    """The stored grant row: an engines `iam_binding` since spec 0018."""
+    return db.get(IamBinding, id)
+
+
+def grant_rows(db, user_id):
+    """The stored grant rows of a user: engines `iam_bindings` since spec 0018."""
+    return db.query(IamBinding).filter_by(subject_type="user", subject_id=user_id)
 
 
 def grant(
@@ -635,11 +645,11 @@ def test_stale_session_identity_cannot_override_current_sql_authority(world, cha
         if change == "inactive":
             db.get(User, "observer").is_active = False
         elif change == "expired":
-            db.get(RoleGrant, g["id"]).expires_at = datetime.utcnow() - timedelta(
+            grant_row(db, g["id"]).expires_at = datetime.utcnow() - timedelta(
                 seconds=1
             )
         else:
-            db.get(RoleGrant, g["id"]).revoked_at = datetime.utcnow()
+            grant_row(db, g["id"]).revoked_at = datetime.utcnow()
         db.commit()
         assert not policy.allowed(
             db, "observer", "engines.read", engine=db.get(Engine, "engine-a")
@@ -788,7 +798,7 @@ def test_api_operation_detail_events_and_cursor_are_hidden_after_revocation(
     base = "/admin/engine-operations/" + op["operation_id"]
     assert http.get(base, headers=HEADERS).status_code == 200
     with world() as db:
-        observer_grant = db.query(RoleGrant).filter_by(user_id="observer").one()
+        observer_grant = grant_rows(db, "observer").one()
         service.revoke(db, observer_grant.id, 0, "bootstrap")
         # Retain unrelated navigation permission so denial occurs at the resource boundary.
         grant(

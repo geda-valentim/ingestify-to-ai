@@ -428,8 +428,8 @@ const guides: Record<string, Guide> = {
         title: x("Requisitos e dependências", "Requirements and dependencies"),
         paragraphs: [
           x(
-            "ENGINE_CONTROL_ENABLED ativa a API e o runner de controle após migração. ENGINE_ACCESS_ENABLED ativa biblioteca e delegação após sua migração. Sessão JWT é obrigatória para controles; API key não substitui a sessão. Os dois flags são independentes e vêm desabilitados por padrão.",
-            "ENGINE_CONTROL_ENABLED enables the control API and runner after migration. ENGINE_ACCESS_ENABLED enables the library and delegation after its migration. Controls require a JWT session; an API key cannot replace it. These flags are independent and disabled by default.",
+            "ENGINE_CONTROL_ENABLED ativa a API e o runner de controle após migração. IAM_MODE=enforce ativa biblioteca e delegação após sua migração; ENGINE_ACCESS_ENABLED é um alias depreciado que, quando definido (true ou false), vence IAM_MODE. Sessão JWT é obrigatória para controles; API key não substitui a sessão. Controle e acesso são independentes e vêm desabilitados por padrão.",
+            "ENGINE_CONTROL_ENABLED enables the control API and runner after migration. IAM_MODE=enforce enables the library and delegation after its migration; ENGINE_ACCESS_ENABLED is a deprecated alias that, when set (true or false), overrides IAM_MODE. Controls require a JWT session; an API key cannot replace it. Control and access are independent and disabled by default.",
           ),
           x(
             "Local: host registrado, agente ativo, heartbeat de até 30 segundos, manifests íntegros, serviços permitidos, comandos e imagens instaladas fixados e UUIDs corretos. O agente opera somente serviços registrados, sem build/pull arbitrário ou shell recebido do navegador.",
@@ -861,8 +861,8 @@ curl --fail "${DOCS_API_URL}/admin/engine-operations/OPERATION_ID/events?after=0
         title: x("Requisitos para configurar", "Configuration prerequisites"),
         paragraphs: [
           x(
-            "Abra Compute → Perfis de execução (/admin/execution-profiles). A biblioteca requer ENGINE_ACCESS_ENABLED, migração concluída e sessão JWT com grant adequado ou bootstrap ativo. O catálogo instalado e os descriptors fornecem opções; não é permitido enviar código, URL livre de modelo ou segredos.",
-            "Open Compute → Execution profiles (/admin/execution-profiles). The library requires ENGINE_ACCESS_ENABLED, completed migration and a JWT session with an appropriate grant or active bootstrap. Installed catalogs and descriptors provide options; arbitrary code, model URLs or secrets are prohibited.",
+            "Abra Compute → Perfis de execução (/admin/execution-profiles). A biblioteca requer acesso de engines ligado (IAM_MODE=enforce ou ENGINE_ACCESS_ENABLED=true), migração concluída e sessão JWT com grant adequado ou bootstrap ativo. O catálogo instalado e os descriptors fornecem opções; não é permitido enviar código, URL livre de modelo ou segredos.",
+            "Open Compute → Execution profiles (/admin/execution-profiles). The library requires engine access enabled (IAM_MODE=enforce or ENGINE_ACCESS_ENABLED=true), completed migration and a JWT session with an appropriate grant or active bootstrap. Installed catalogs and descriptors provide options; arbitrary code, model URLs or secrets are prohibited.",
           ),
           x(
             "Antes de vincular, o bootstrap classifica a engine como development, staging ou production. Adapter, feature e ambiente do perfil precisam corresponder à engine. Controle local requer host/serviço/GPU registrados; controle Modal requer identidade testada e credenciais na conexão.",
@@ -1220,8 +1220,8 @@ print(desired)  # Desired snapshot only; review an operation plan to apply it.`,
         title: x("Requisitos e papéis", "Requirements and roles"),
         paragraphs: [
           x(
-            "Compute → Acesso (/admin/access) usa sessão JWT, schema migrado e ENGINE_ACCESS_ENABLED. Bootstrap é o admin efetivo ativo (is_admin ou ADMIN_USER_IDS); mantém acesso de emergência e gerencia atributos confiáveis. Usuários delegados precisam de grants válidos e não se tornam admin global.",
-            "Compute → Access (/admin/access) uses a JWT session, migrated schema and ENGINE_ACCESS_ENABLED. Bootstrap is the active effective admin (is_admin or ADMIN_USER_IDS); it retains emergency access and manages trusted attributes. Delegated users need valid grants and do not become global admins.",
+            "Admin → Acesso (/admin/access) reúne, numa só tela, os bindings de plataforma e de engines; a parte de engines usa sessão JWT, schema migrado e IAM_MODE=enforce (ou ENGINE_ACCESS_ENABLED=true). Bootstrap é o admin efetivo ativo (is_admin ou ADMIN_USER_IDS); mantém acesso de emergência e gerencia atributos confiáveis. Usuários delegados precisam de bindings de engines válidos e não se tornam admin global. Ninguém concede papel a si mesmo.",
+            "Admin → Access (/admin/access) holds platform and engine bindings on one screen; the engine part uses a JWT session, migrated schema and IAM_MODE=enforce (or ENGINE_ACCESS_ENABLED=true). Bootstrap is the active effective admin (is_admin or ADMIN_USER_IDS); it retains emergency access and manages trusted attributes. Delegated users need valid engine bindings and do not become global admins. Nobody grants a role to themselves.",
           ),
         ],
         head: [
@@ -1468,10 +1468,10 @@ print(desired)  # Desired snapshot only; review an operation plan to apply it.`,
   }
 }
 
-// POST /admin/access/grants
+// POST /admin/iam/bindings
 {
-  "user_id": "USER_ID", "role": "engine_operator",
-  "policy_revision_id": "POLICY_REVISION_ID",
+  "subject_type": "user", "subject_id": "USER_ID", "role": "engine_operator",
+  "condition_ref": "POLICY_REVISION_ID",
   "permissions": ["engines.read", "execution_profiles.read",
     "engine_operations.read", "engine_operations.plan",
     "engine_operations.execute.test", "engine_operations.execute.apply_profile"],
@@ -1520,12 +1520,15 @@ print(desired)  # Desired snapshot only; review an operation plan to apply it.`,
       ],
       [
         "GET / POST",
-        "/admin/access/grants",
-        x("Listar / conceder", "List / grant"),
+        "/admin/iam/bindings",
+        x(
+          "Listar / conceder (plataforma e engines; /admin/access/grants é alias depreciado)",
+          "List / grant (platform and engines; /admin/access/grants is a deprecated alias)",
+        ),
       ],
       [
         "POST",
-        "/admin/access/grants/{id}/revoke",
+        "/admin/iam/bindings/{id}/revoke",
         x("Revogar com version", "Revoke with version"),
       ],
       [

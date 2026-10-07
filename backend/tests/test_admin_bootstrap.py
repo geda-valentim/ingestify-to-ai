@@ -10,7 +10,6 @@ Usernames are free-form, so someone could register the username
 It now takes --email or --id and refuses when an email is also someone's username.
 """
 
-import asyncio
 from types import SimpleNamespace
 
 import pytest
@@ -21,6 +20,7 @@ import workers.celery_app  # noqa: F401  (import order used by the worker; avoid
 from api import auth_routes
 from shared.admin import AdminPromotionError, admin_user_ids, find_user_to_promote, is_effective_admin
 from shared.database import Base
+from shared.iam.decide import Decider
 from shared.models import User
 from shared.schemas import UserResponse
 
@@ -45,6 +45,11 @@ def _user(db, username, email, is_admin=False):
 
 def _settings(ids=""):
     return SimpleNamespace(admin_user_ids=ids)
+
+
+def _me(db, user):
+    request = SimpleNamespace(state=SimpleNamespace(api_key=None))
+    return auth_routes.get_current_user_info(request=request, current_user=user, db=db, decider=Decider(db))
 
 
 # --- the rule ------------------------------------------------------------------------
@@ -75,7 +80,7 @@ def test_me_reports_an_admin_listed_in_admin_user_ids(db, monkeypatch):
     user = _user(db, "ops", "ops@example.com")
     monkeypatch.setattr("shared.admin.get_settings", lambda: _settings(user.id))
 
-    me = asyncio.run(auth_routes.get_current_user_info(current_user=user))
+    me = _me(db, user)
 
     assert me.is_admin is True
     assert me.email == "ops@example.com"
@@ -85,7 +90,7 @@ def test_me_reports_a_regular_user_as_not_admin(db, monkeypatch):
     user = _user(db, "alice", "alice@example.com")
     monkeypatch.setattr("shared.admin.get_settings", lambda: _settings())
 
-    assert asyncio.run(auth_routes.get_current_user_info(current_user=user)).is_admin is False
+    assert _me(db, user).is_admin is False
 
 
 def test_user_response_never_takes_is_admin_from_the_column_alone(db, monkeypatch):

@@ -2,7 +2,7 @@
 
 Gerado do OpenAPI da aplicação por `scripts/generate_api_docs.py`. Não edite este arquivo à mão.
 
-API `1.0.0`: **131 operações HTTP** e **1 WebSocket(s)**.
+API `1.0.0`: **137 operações HTTP** e **1 WebSocket(s)**.
 
 Base pública de desenvolvimento: `https://dev.ingestify.ai/api`. Os caminhos abaixo são relativos à base.
 
@@ -24,6 +24,7 @@ Guias de imagem: [PT](https://dev.ingestify.ai/pt/docs/images) / [EN](https://de
 | Método | Caminho | Autorização | Resumo |
 | --- | --- | --- | --- |
 | POST | `/auth/register` | Público | Register |
+| GET | `/auth/setup` | Público | Installation setup state (public) |
 | POST | `/auth/login` | Público | Login |
 | POST | `/auth/refresh` | JWT | Refresh Token |
 | GET | `/auth/me` | JWT ou API key | Get Current User Info |
@@ -113,6 +114,11 @@ Guias de imagem: [PT](https://dev.ingestify.ai/pt/docs/images) / [EN](https://de
 | POST | `/admin/access/installation-principals` | JWT | Principal Create |
 | PUT | `/admin/access/installation-principals/{id}` | JWT | Principal State |
 | PUT | `/admin/access/subjects/{id}/state` | JWT | Subject State |
+| GET | `/iam/permissions` | JWT ou API key | The permission catalog and the managed roles |
+| POST | `/iam/check` | JWT ou API key | Which platform permissions the caller holds |
+| GET | `/admin/iam/bindings` | Administrador (JWT ou API key) | Platform and engines bindings |
+| POST | `/admin/iam/bindings` | Administrador (somente JWT) | Grant a platform or engines role |
+| POST | `/admin/iam/bindings/{binding_id}/revoke` | Administrador (somente JWT) | Revoke a platform or engines binding |
 | GET | `/admin/engine-control-adapters` | JWT | Adapters |
 | GET | `/admin/engines/{engine_id}/capabilities` | JWT | Caps |
 | GET | `/admin/model-profiles` | JWT | Model Profiles |
@@ -177,8 +183,12 @@ Register a new user
 ## Returns:
 User object with id, email, username, is_active, created_at, is_admin
 
+The first account of an installation without root becomes its root user
+(spec 0019); see GET /auth/setup. `setup_token` is only read for that account.
+
 ## Errors:
 - 400: Email or username already exists
+- 403: ROOT_SETUP_TOKEN_REQUIRED / ROOT_SETUP_TOKEN_INVALID (root account only)
 - 429: Too many registrations from this IP
 
 Corpo obrigatório: sim.
@@ -190,6 +200,7 @@ Content-Type: `application/json`. Esquema: [UserCreate](#model-usercreate).
 | `email` | sim | string |  |  |
 | `username` | sim | string | minLength=3; maxLength=50 |  |
 | `password` | sim | string | minLength=8; maxLength=20 |  |
+| `setup_token` | não | string / null |  | Installation setup token; only read when creating the root user |
 
 Respostas declaradas:
 
@@ -197,6 +208,26 @@ Respostas declaradas:
 | --- | --- | --- | --- |
 | 201 | application/json | [UserResponse](#model-userresponse) | Successful Response |
 | 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
+
+### GET /auth/setup
+
+Installation setup state (public)
+
+Autorização: **Público**. Operation ID: `setup_status_auth_setup_get`.
+
+Whether this installation still needs its root user (spec 0019).
+
+`root_pending` is true only for a brand-new installation (no users): the next
+registration becomes root. An installation with users but no root keeps plain
+registrations; an operator designates root with `make_admin.py --root`.
+Public on purpose: the registration screen uses it to explain that the account
+becomes root and whether a setup token is needed. Reveals nothing else.
+
+Respostas declaradas:
+
+| Status | Content-Type | Esquema | Descrição |
+| --- | --- | --- | --- |
+| 200 | application/json | [SetupStatus](#model-setupstatus) | Successful Response |
 
 ### POST /auth/login
 
@@ -285,7 +316,11 @@ X-API-Key: <api_key>
 ```
 
 ## Returns:
-User object with id, email, username, is_active, created_at
+User object with id, email, username, is_active, created_at, is_admin, and:
+- `permissions`: flat list, the 0009 engine permissions plus the platform/IAM
+  permissions the caller holds under the current IAM_MODE (spec 0014 CA12)
+- `bootstrap`: emergency access (the is_admin column or ADMIN_USER_IDS)
+- `platform_roles`: managed roles held through active bindings
 
 ## Errors:
 - 401: Not authenticated or invalid token/API key
@@ -2489,6 +2524,8 @@ Grants
 
 Autorização: **JWT**. Operation ID: `grants_admin_access_grants_get`.
 
+**Depreciada**: mantida por compatibilidade; veja a rota que a substitui.
+
 Respostas declaradas:
 
 | Status | Content-Type | Esquema | Descrição |
@@ -2500,6 +2537,8 @@ Respostas declaradas:
 Grant
 
 Autorização: **JWT**. Operation ID: `grant_admin_access_grants_post`.
+
+**Depreciada**: mantida por compatibilidade; veja a rota que a substitui.
 
 Corpo obrigatório: sim.
 
@@ -2526,6 +2565,8 @@ Respostas declaradas:
 Revoke
 
 Autorização: **JWT**. Operation ID: `revoke_admin_access_grants__id__revoke_post`.
+
+**Depreciada**: mantida por compatibilidade; veja a rota que a substitui.
 
 Parâmetros:
 
@@ -2719,6 +2760,119 @@ Content-Type: `application/json`. Esquema: [SubjectState](#model-subjectstate).
 | `expected_is_admin` | sim | boolean |  |  |
 | `is_active` | sim | boolean |  |  |
 | `is_admin` | sim | boolean |  |  |
+
+Respostas declaradas:
+
+| Status | Content-Type | Esquema | Descrição |
+| --- | --- | --- | --- |
+| 200 | application/json | objeto livre | Successful Response |
+| 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
+
+## IAM
+
+### GET /iam/permissions
+
+The permission catalog and the managed roles
+
+Autorização: **JWT ou API key**. Operation ID: `list_permissions_iam_permissions_get`.
+
+Respostas declaradas:
+
+| Status | Content-Type | Esquema | Descrição |
+| --- | --- | --- | --- |
+| 200 | application/json | objeto livre | Successful Response |
+
+### POST /iam/check
+
+Which platform permissions the caller holds
+
+Autorização: **JWT ou API key**. Operation ID: `check_permissions_iam_check_post`.
+
+Answers for the caller only, as IAM_MODE decides it, and never audits (asking
+is not exercising). Only platform/IAM permissions in this slice: a data or 0009
+engine permission, or a name outside the catalog, is a 422.
+
+Corpo obrigatório: sim.
+
+Content-Type: `application/json`. Esquema: array de [PermissionCheck](#model-permissioncheck).
+
+Respostas declaradas:
+
+| Status | Content-Type | Esquema | Descrição |
+| --- | --- | --- | --- |
+| 200 | application/json | array de [PermissionCheckResult](#model-permissioncheckresult) | Successful Response |
+| 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
+
+### GET /admin/iam/bindings
+
+Platform and engines bindings
+
+Autorização: **Administrador (JWT ou API key)**. Operation ID: `list_bindings_admin_iam_bindings_get`.
+
+Filtered per row: platform bindings for `iam.bindings.read` (as IAM_MODE
+decides it); engines bindings the caller's 0009 delegation covers (bootstrap
+sees them all), with `engine_access_enabled`. Newest first.
+
+Parâmetros:
+
+| Nome | Local | Obrigatório | Tipo | Padrões/limites | Descrição |
+| --- | --- | --- | --- | --- | --- |
+| `include_inactive` | query | não | boolean | default=false |  |
+
+Respostas declaradas:
+
+| Status | Content-Type | Esquema | Descrição |
+| --- | --- | --- | --- |
+| 200 | application/json | objeto livre | Successful Response |
+| 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
+
+### POST /admin/iam/bindings
+
+Grant a platform or engines role
+
+Autorização: **Administrador (somente JWT)**. Operation ID: `grant_binding_admin_iam_bindings_post`.
+
+Corpo obrigatório: sim.
+
+Content-Type: `application/json`. Esquema: [BindingCreate](#model-bindingcreate).
+
+| Campo | Obrigatório | Tipo | Padrões/limites | Descrição |
+| --- | --- | --- | --- | --- |
+| `subject_type` | não | string | default="user" |  |
+| `subject_id` | sim | string |  |  |
+| `role` | sim | string |  |  |
+| `expires_at` | não | string / null |  |  |
+| `permissions` | não | array de string / null |  |  |
+| `condition_ref` | não | string / null |  |  |
+| `delegation` | não | [Delegation](#model-delegation) / null |  |  |
+| `parent_id` | não | string / null |  |  |
+
+Respostas declaradas:
+
+| Status | Content-Type | Esquema | Descrição |
+| --- | --- | --- | --- |
+| 201 | application/json | objeto livre | Successful Response |
+| 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
+
+### POST /admin/iam/bindings/{binding_id}/revoke
+
+Revoke a platform or engines binding
+
+Autorização: **Administrador (somente JWT)**. Operation ID: `revoke_binding_admin_iam_bindings__binding_id__revoke_post`.
+
+Parâmetros:
+
+| Nome | Local | Obrigatório | Tipo | Padrões/limites | Descrição |
+| --- | --- | --- | --- | --- | --- |
+| `binding_id` | path | sim | string |  |  |
+
+Corpo obrigatório: sim.
+
+Content-Type: `application/json`. Esquema: [BindingRevoke](#model-bindingrevoke).
+
+| Campo | Obrigatório | Tipo | Padrões/limites | Descrição |
+| --- | --- | --- | --- | --- |
+| `version` | sim | integer |  |  |
 
 Respostas declaradas:
 
@@ -4204,6 +4358,136 @@ Esquema JSON completo:
     "revision_id"
   ],
   "title": "Bind"
+}
+```
+
+<a id="model-bindingcreate"></a>
+
+### BindingCreate
+
+| Campo | Obrigatório | Tipo | Padrões/limites | Descrição |
+| --- | --- | --- | --- | --- |
+| `subject_type` | não | string | default="user" |  |
+| `subject_id` | sim | string |  |  |
+| `role` | sim | string |  |  |
+| `expires_at` | não | string / null |  |  |
+| `permissions` | não | array de string / null |  |  |
+| `condition_ref` | não | string / null |  |  |
+| `delegation` | não | [Delegation](#model-delegation) / null |  |  |
+| `parent_id` | não | string / null |  |  |
+
+Esquema JSON completo:
+
+```json
+{
+  "properties": {
+    "subject_type": {
+      "type": "string",
+      "title": "Subject Type",
+      "default": "user"
+    },
+    "subject_id": {
+      "type": "string",
+      "title": "Subject Id"
+    },
+    "role": {
+      "type": "string",
+      "title": "Role"
+    },
+    "expires_at": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Expires At",
+      "examples": [
+        "2027-01-31T00:00:00Z"
+      ]
+    },
+    "permissions": {
+      "anyOf": [
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "maxItems": 100
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Permissions"
+    },
+    "condition_ref": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Condition Ref"
+    },
+    "delegation": {
+      "anyOf": [
+        {
+          "$ref": "#/components/schemas/Delegation"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "parent_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Parent Id"
+    }
+  },
+  "type": "object",
+  "required": [
+    "subject_id",
+    "role"
+  ],
+  "title": "BindingCreate"
+}
+```
+
+<a id="model-bindingrevoke"></a>
+
+### BindingRevoke
+
+| Campo | Obrigatório | Tipo | Padrões/limites | Descrição |
+| --- | --- | --- | --- | --- |
+| `version` | sim | integer |  |  |
+
+Esquema JSON completo:
+
+```json
+{
+  "properties": {
+    "version": {
+      "type": "integer",
+      "title": "Version"
+    }
+  },
+  "type": "object",
+  "required": [
+    "version"
+  ],
+  "title": "BindingRevoke"
 }
 ```
 
@@ -11990,6 +12274,64 @@ Esquema JSON completo:
 }
 ```
 
+<a id="model-permissioncheck"></a>
+
+### PermissionCheck
+
+| Campo | Obrigatório | Tipo | Padrões/limites | Descrição |
+| --- | --- | --- | --- | --- |
+| `permission` | sim | string |  |  |
+
+Esquema JSON completo:
+
+```json
+{
+  "properties": {
+    "permission": {
+      "type": "string",
+      "title": "Permission"
+    }
+  },
+  "type": "object",
+  "required": [
+    "permission"
+  ],
+  "title": "PermissionCheck"
+}
+```
+
+<a id="model-permissioncheckresult"></a>
+
+### PermissionCheckResult
+
+| Campo | Obrigatório | Tipo | Padrões/limites | Descrição |
+| --- | --- | --- | --- | --- |
+| `permission` | sim | string |  |  |
+| `allowed` | sim | boolean |  |  |
+
+Esquema JSON completo:
+
+```json
+{
+  "properties": {
+    "permission": {
+      "type": "string",
+      "title": "Permission"
+    },
+    "allowed": {
+      "type": "boolean",
+      "title": "Allowed"
+    }
+  },
+  "type": "object",
+  "required": [
+    "permission",
+    "allowed"
+  ],
+  "title": "PermissionCheckResult"
+}
+```
+
 <a id="model-planrequest"></a>
 
 ### PlanRequest
@@ -13059,6 +13401,47 @@ Esquema JSON completo:
 }
 ```
 
+<a id="model-setupstatus"></a>
+
+### SetupStatus
+
+Whether the installation still needs its root user (spec 0019)
+
+| Campo | Obrigatório | Tipo | Padrões/limites | Descrição |
+| --- | --- | --- | --- | --- |
+| `root_exists` | sim | boolean |  |  |
+| `root_pending` | sim | boolean |  |  |
+| `setup_token_required` | sim | boolean |  |  |
+
+Esquema JSON completo:
+
+```json
+{
+  "properties": {
+    "root_exists": {
+      "type": "boolean",
+      "title": "Root Exists"
+    },
+    "root_pending": {
+      "type": "boolean",
+      "title": "Root Pending"
+    },
+    "setup_token_required": {
+      "type": "boolean",
+      "title": "Setup Token Required"
+    }
+  },
+  "type": "object",
+  "required": [
+    "root_exists",
+    "root_pending",
+    "setup_token_required"
+  ],
+  "title": "SetupStatus",
+  "description": "Whether the installation still needs its root user (spec 0019)"
+}
+```
+
 <a id="model-spendcap"></a>
 
 ### SpendCap
@@ -13452,6 +13835,7 @@ Schema for user registration
 | `email` | sim | string |  |  |
 | `username` | sim | string | minLength=3; maxLength=50 |  |
 | `password` | sim | string | minLength=8; maxLength=20 |  |
+| `setup_token` | não | string / null |  | Installation setup token; only read when creating the root user |
 
 Esquema JSON completo:
 
@@ -13476,6 +13860,19 @@ Esquema JSON completo:
       "minLength": 8,
       "title": "Password",
       "example": "SecurePass123"
+    },
+    "setup_token": {
+      "anyOf": [
+        {
+          "type": "string",
+          "maxLength": 256
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Setup Token",
+      "description": "Installation setup token; only read when creating the root user"
     }
   },
   "type": "object",
@@ -13503,8 +13900,11 @@ Schema for user response
 | `is_active` | sim | boolean |  |  |
 | `created_at` | sim | string (date-time) |  |  |
 | `is_admin` | não | boolean | default=false |  |
+| `is_root` | não | boolean | default=false |  |
 | `permissions` | não | array de string | default=[] |  |
 | `engine_access_enabled` | não | boolean | default=false |  |
+| `bootstrap` | não | boolean | default=false |  |
+| `platform_roles` | não | array de string | default=[] |  |
 
 Esquema JSON completo:
 
@@ -13538,6 +13938,11 @@ Esquema JSON completo:
       "title": "Is Admin",
       "default": false
     },
+    "is_root": {
+      "type": "boolean",
+      "title": "Is Root",
+      "default": false
+    },
     "permissions": {
       "items": {
         "type": "string"
@@ -13550,6 +13955,19 @@ Esquema JSON completo:
       "type": "boolean",
       "title": "Engine Access Enabled",
       "default": false
+    },
+    "bootstrap": {
+      "type": "boolean",
+      "title": "Bootstrap",
+      "default": false
+    },
+    "platform_roles": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array",
+      "title": "Platform Roles",
+      "default": []
     }
   },
   "type": "object",

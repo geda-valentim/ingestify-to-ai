@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
 import { AlertTriangle, CheckCircle2, HelpCircle, Radio } from "lucide-react";
 import { computeApi } from "@/lib/api";
@@ -8,6 +7,7 @@ import { useAuthStore } from "@/lib/store/auth";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   CommandHint,
+  EngineLink,
   Freshness,
   HealthBadge,
   LoadingCards,
@@ -164,7 +164,7 @@ function CapacityCard({ status }: { status: EnginesStatus }) {
       <CardContent>
         {status.engines.length === 0 ? (
           <p className="text-sm text-muted-foreground">
-            No capacity declared on any engine. See <Link href="/admin/engines" className="underline">Engines</Link>.
+            No capacity declared on any engine. See <EngineLink href="/admin/engines" className="underline">Engines</EngineLink>.
           </p>
         ) : (
           <ul className="space-y-3">
@@ -172,9 +172,9 @@ function CapacityCard({ status }: { status: EnginesStatus }) {
               <li key={`${row.engine}-${row.feature}`} className="rounded-md border p-3 space-y-2">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <p className="text-sm">
-                    <Link href={`/admin/engines/${encodeURIComponent(row.engine)}`} className="font-medium hover:underline">
+                    <EngineLink href={`/admin/engines/${encodeURIComponent(row.engine)}`} className="font-medium hover:underline">
                       {row.engine}
-                    </Link>{" "}
+                    </EngineLink>{" "}
                     <span className="text-muted-foreground">· {featureTitle(row.feature)}</span>
                   </p>
                   <div className="flex flex-wrap gap-1.5">

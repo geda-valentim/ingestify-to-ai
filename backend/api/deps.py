@@ -42,7 +42,8 @@ from sqlalchemy.orm import Session
 
 from shared.auth import get_current_active_user
 from shared.database import get_db
-from shared.models import Folder, Job, Page, Project, User
+from shared.iam import ownership
+from shared.models import APIKey, Folder, Job, Page, Project, User
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +51,7 @@ logger = logging.getLogger(__name__)
 JOB_NOT_FOUND_DETAIL = "Job não encontrado"
 PROJECT_NOT_FOUND_DETAIL = "Projeto não encontrado"
 FOLDER_NOT_FOUND_DETAIL = "Pasta não encontrada"
+API_KEY_NOT_FOUND_DETAIL = "API key not found"
 
 
 class LocationError(HTTPException):
@@ -65,91 +67,43 @@ class LocationError(HTTPException):
         self.error_code = error_code
 
 # Profundidade máxima ao subir a hierarquia MAIN -> SPLIT/PAGE/MERGE.
-MAX_PARENT_CHAIN_DEPTH = 5
+MAX_PARENT_CHAIN_DEPTH = ownership.MAX_PARENT_CHAIN_DEPTH
 
 
 # ============================================
 # Helpers internos
 # ============================================
+# A resolução de dono vive em `shared.iam.ownership` (spec 0014), que também é
+# usada por `shared.iam.decide`. Os nomes abaixo continuam aqui para que a
+# camada de API (e os testes, via monkeypatch) tenham um único ponto de troca.
 
-def _resolve_owner_id(db: Session, job: Optional[Job]) -> Optional[str]:
-    """
-    Descobre o dono autoritativo de um job no MySQL.
-
-    Sobe pela cadeia `parent_job_id` enquanto o `user_id` for NULL.
-
-    Returns:
-        ID do usuário dono, ou None se não for possível determinar
-        (job órfão, cadeia quebrada ou ciclo).
-    """
-    current = job
-    visited = set()
-    depth = 0
-
-    while current is not None and depth < MAX_PARENT_CHAIN_DEPTH:
-        owner_id = current.user_id
-        if owner_id is not None:
-            return owner_id
-
-        parent_job_id = current.parent_job_id
-        if not parent_job_id or parent_job_id in visited:
-            return None
-
-        visited.add(current.id)
-        current = db.query(Job).filter(Job.id == parent_job_id).first()
-        depth += 1
-
-    return None
+_resolve_owner_id = ownership.resolve_owner_id
 
 
 def _redis_job_status(job_id: str) -> Optional[dict]:
     """Lê o status do Redis de forma tolerante a falhas (nunca autoriza sozinho)."""
-    try:
-        from shared.redis_client import get_redis_client
-
-        return get_redis_client().get_job_status(job_id)
-    except Exception as e:  # pragma: no cover - Redis indisponível
-        logger.warning(f"Não foi possível consultar status do job {job_id} no Redis: {e}")
-        return None
-
-
-def _find_parent_job_in_db(db: Session, job_id: str) -> Optional[Job]:
-    """
-    Encontra o job MAIN (no MySQL) de um job filho que não possui linha própria.
-
-    O vínculo pai/filho pode vir da tabela `pages` (jobs PAGE) ou do status no
-    Redis (jobs SPLIT/MERGE). Em ambos os casos o **dono** vem do MySQL.
-    """
-    page = db.query(Page).filter(Page.page_job_id == job_id).first()
-    if page is not None and page.job_id:
-        parent = db.query(Job).filter(Job.id == page.job_id).first()
-        if parent is not None:
-            return parent
-
-    status_data = _redis_job_status(job_id)
-    parent_job_id = status_data.get("parent_job_id") if status_data else None
-    if parent_job_id:
-        return db.query(Job).filter(Job.id == parent_job_id).first()
-
-    return None
+    return ownership.redis_job_status(job_id)
 
 
 def _redis_owner_matches(job_id: str, user_id: str) -> bool:
-    """
-    Fallback usado só quando o MySQL não conhece o job.
+    """Fallback usado só quando o MySQL não conhece o job (ver `shared.iam.ownership`)."""
+    return ownership.redis_owner_matches(job_id, user_id)
 
-    Exige igualdade explícita entre o dono registrado no Redis e o usuário
-    autenticado — a ausência do registro nunca autoriza.
-    """
-    try:
-        from shared.redis_client import get_redis_client
 
-        owner_id = get_redis_client().get_job_owner(job_id)
-    except Exception as e:  # pragma: no cover - Redis indisponível
-        logger.warning(f"Não foi possível consultar o dono do job {job_id} no Redis: {e}")
-        return False
+def _find_parent_job_in_db(db: Session, job_id: str) -> Optional[Job]:
+    """O job MAIN (no MySQL) de um job filho sem linha própria."""
+    return ownership.find_parent_job_in_db(db, job_id, lambda j: _redis_job_status(j))
 
-    return bool(owner_id) and bool(user_id) and owner_id == user_id
+
+def job_access(db: Session, job_id: str, user_id: Optional[str]) -> ownership.JobAccess:
+    """`ownership.job_access` com os fallbacks do Redis resolvidos neste módulo."""
+    return ownership.job_access(
+        db,
+        job_id,
+        user_id,
+        redis_status=lambda j: _redis_job_status(j),
+        owner_matches=lambda j, u: _redis_owner_matches(j, u),
+    )
 
 
 def resolve_owned_job(db: Session, job_id: str, user: User) -> Optional[Job]:
@@ -167,42 +121,10 @@ def resolve_owned_job(db: Session, job_id: str, user: User) -> Optional[Job]:
     Raises:
         HTTPException 404: job inexistente, órfão ou de outro usuário.
     """
-    not_found = HTTPException(status_code=404, detail=JOB_NOT_FOUND_DETAIL)
-
-    db_job = db.query(Job).filter(Job.id == job_id).first()
-
-    if db_job is not None:
-        owner_id = _resolve_owner_id(db, db_job)
-        # `owner_id is None` (job órfão) NUNCA autoriza.
-        if owner_id is not None and owner_id == user.id:
-            return db_job
-        logger.warning(
-            f"Acesso negado ao job {job_id} para o usuário {user.id} "
-            f"(dono resolvido: {owner_id})"
-        )
-        raise not_found
-
-    # Job filho: sem linha própria no MySQL, o dono vem do job MAIN.
-    parent_job = _find_parent_job_in_db(db, job_id)
-    if parent_job is not None:
-        owner_id = _resolve_owner_id(db, parent_job)
-        if owner_id is not None and owner_id == user.id:
-            return parent_job
-        logger.warning(
-            f"Acesso negado ao job filho {job_id} para o usuário {user.id} "
-            f"(dono do job pai {parent_job.id}: {owner_id})"
-        )
-        raise not_found
-
-    # MySQL não conhece o job: só um match positivo no Redis autoriza.
-    if _redis_owner_matches(job_id, user.id):
-        logger.info(
-            f"Job {job_id} não existe no MySQL; acesso autorizado pelo dono registrado no Redis"
-        )
-        # Autorizado, porém sem nenhuma linha correspondente no MySQL.
-        return None
-
-    raise not_found
+    access = job_access(db, job_id, user.id)
+    if not access.allowed:
+        raise HTTPException(status_code=404, detail=JOB_NOT_FOUND_DETAIL)
+    return access.job
 
 
 # ============================================
@@ -252,7 +174,7 @@ async def get_owned_page_or_none(
 def owned_project_or_404(db: Session, project_id: Optional[str], user: User) -> Project:
     """O projeto, se for do usuário; 404 igual para inexistente e alheio."""
     project = db.get(Project, str(project_id)) if project_id else None
-    if project is None or project.user_id is None or project.user_id != user.id:
+    if not ownership.owns(project, user.id):
         raise LocationError(404, "PROJECT_NOT_FOUND", PROJECT_NOT_FOUND_DETAIL)
     return project
 
@@ -260,7 +182,7 @@ def owned_project_or_404(db: Session, project_id: Optional[str], user: User) -> 
 def owned_folder_or_404(db: Session, folder_id: Optional[str], user: User) -> Folder:
     """A pasta, se for do usuário; 404 igual para inexistente e alheia."""
     folder = db.get(Folder, str(folder_id)) if folder_id else None
-    if folder is None or folder.user_id is None or folder.user_id != user.id:
+    if not ownership.owns(folder, user.id):
         raise LocationError(404, "FOLDER_NOT_FOUND", FOLDER_NOT_FOUND_DETAIL)
     return folder
 
@@ -281,3 +203,15 @@ async def get_owned_folder(
 ) -> Folder:
     """Dependência de autorização para rotas `/folders/{folder_id}/...`."""
     return owned_folder_or_404(db, folder_id, current_user)
+
+
+# ============================================
+# API keys
+# ============================================
+
+def owned_api_key_or_404(db: Session, key_id, user: User) -> APIKey:
+    """A key, se for do usuário; 404 igual para inexistente e alheia."""
+    key = db.get(APIKey, str(key_id)) if key_id else None
+    if not ownership.owns(key, user.id):
+        raise HTTPException(status_code=404, detail=API_KEY_NOT_FOUND_DETAIL)
+    return key

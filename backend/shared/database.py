@@ -59,6 +59,7 @@ def init_db():
                 or table.name == "engine_runtime_profiles"
                 or table.name.startswith("access_")
                 or table.name.startswith("execution_profile")
+                or table.name.startswith("iam_")
             )
         )
     ]
@@ -85,6 +86,14 @@ def init_db():
         from shared.access.migration import validate_schema
 
         validate_schema(engine)
+    # Engine grants live in iam_bindings since spec 0018: engine access needs the
+    # IAM schema too. Reconciliation runs on every boot, only ever restricts, and
+    # brings back revocations the pre-0018 code made during a rollback (§4.2.3).
+    from shared.iam.migration import reconcile_on_boot, validate_schema as validate_iam_schema
+
+    reconcile_on_boot(engine)
+    if settings.iam_mode != "off" or settings.engine_access_enabled:
+        validate_iam_schema(engine)
 
     # The built-in local engine (spec 0003): this server's workers, no bindings until declared
     from shared.engines.store import ensure_local_engine, ensure_lease_row
@@ -105,6 +114,14 @@ _ADDED_COLUMNS = {
     "engine_feature_state": {
         "workers_seen_at": "DATETIME(6) NULL",  # alembic 5d2e8f1a6c47 (spec 0003, slice 3b)
     },
+    "users": {
+        "root_slot": "SMALLINT NULL",  # alembic f1c90019d3e4 (spec 0019); unique index below
+    },
+}
+
+# Unique indexes on _ADDED_COLUMNS, created separately: SQLite cannot ADD COLUMN ... UNIQUE.
+_ADDED_UNIQUE_INDEXES = {
+    "uq_users_root_slot": ("users", "root_slot"),  # at most one root user (spec 0019)
 }
 
 
@@ -124,3 +141,10 @@ def _add_missing_columns(bind=None) -> None:
             for column, ddl in columns.items():
                 if column not in present:
                     conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}"))
+        for name, (table, column) in _ADDED_UNIQUE_INDEXES.items():
+            if table not in existing_tables:
+                continue
+            indexes = {i["name"] for i in inspector.get_indexes(table)}
+            indexes |= {u["name"] for u in inspector.get_unique_constraints(table)}
+            if name not in indexes:
+                conn.execute(text(f"CREATE UNIQUE INDEX {name} ON {table} ({column})"))

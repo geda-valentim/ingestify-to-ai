@@ -23,7 +23,7 @@ import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Any, Callable, Dict, Optional, Tuple
+from typing import Any, Callable, Dict, Optional, Tuple, Union
 
 from sqlalchemy.orm import Session
 
@@ -152,9 +152,32 @@ def dispatcher_down(route: routing.RouteSnapshot, seen: Optional[datetime], now:
 
 # --- submit ---------------------------------------------------------------------------
 
+# The submitter's `engines.remote.use`: a decision already taken, or a callable that
+# takes it (`shared.iam.remote.can_use_remote`), called only when it matters.
+RemoteUse = Union[bool, Callable[[], bool], None]
 
-def submit(*, feature: str, job_id: str, user_id: Optional[str], is_admin: bool, payload: Dict[str, Any],
-           today: Optional[Callable[[], Any]], celery, media_bytes: Optional[int] = None, allow_remote: bool = True,
+
+def _remote_allowed(route: routing.RouteSnapshot, allow_remote: bool, remote_use: RemoteUse, is_admin: bool) -> bool:
+    """
+    `JobDispatch.remote_allowed`: may the dispatcher consider remote executors for
+    this item at all? `remote_allowed_for='admins'` means "requires
+    engines.remote.use" (spec 0014 §4.6). This is only an optimization: the
+    dispatcher decides again before each remote placement on such a route, so a
+    revocation reaches what is already queued.
+    """
+    if not allow_remote:
+        return False
+    if route.remote_allowed_for == "all":
+        return True
+    if remote_use is None:
+        return bool(is_admin)
+    return bool(remote_use() if callable(remote_use) else remote_use)
+
+
+
+def submit(*, feature: str, job_id: str, user_id: Optional[str], payload: Dict[str, Any],
+           today: Optional[Callable[[], Any]], celery, remote_use: RemoteUse = None, is_admin: bool = False,
+           media_bytes: Optional[int] = None, allow_remote: bool = True,
            session_factory=None, now: Optional[datetime] = None, subject_type: str = "job",
            subject_id: Optional[str] = None) -> str:
     """
@@ -164,6 +187,10 @@ def submit(*, feature: str, job_id: str, user_id: Optional[str], is_admin: bool,
 
     The subject is the job itself, or (document_conversion) one page: subject_type
     "page", subject_id the page job id, job_id the parent job.
+
+    `remote_use` is the submitter's `engines.remote.use` (spec 0014 §4.6), a bool
+    or a callable evaluated only when the route restricts remote work; see
+    `_remote_allowed`. `is_admin` is its pre-0014 name, still accepted.
     """
     route = routing.get_route(feature, session_factory)
     if route is None or not route.active:
@@ -173,7 +200,7 @@ def submit(*, feature: str, job_id: str, user_id: Optional[str], is_admin: bool,
 
     subject = (subject_type, str(subject_id or job_id))
     now = now or datetime.utcnow()
-    remote_allowed = bool(allow_remote and (route.remote_allowed_for == "all" or is_admin))
+    remote_allowed = _remote_allowed(route, allow_remote, remote_use, is_admin)
     down = dispatcher_down(route, dispatcher_seen_at(session_factory), now)
 
     if down and route.dispatcher_fallback == "local_direct" and route.has_local_step():
@@ -336,7 +363,8 @@ class Placement:
     reason: Optional[str] = None
 
 
-def place_now(*, feature: str, subject_id: str, job_id: Optional[str], user_id: Optional[str], is_admin: bool,
+def place_now(*, feature: str, subject_id: str, job_id: Optional[str], user_id: Optional[str],
+              remote_use: RemoteUse = None, is_admin: bool = False,
               allow_remote: bool = True, session_factory=None, now: Optional[datetime] = None) -> Placement:
     """
     Place one synchronous request without a backlog: walk the route's steps in
@@ -351,7 +379,7 @@ def place_now(*, feature: str, subject_id: str, job_id: Optional[str], user_id: 
     if route is None or not route.active:
         return Placement("today")
     now = now or datetime.utcnow()
-    remote_allowed = bool(allow_remote and (route.remote_allowed_for == "all" or is_admin))
+    remote_allowed = _remote_allowed(route, allow_remote, remote_use, is_admin)
 
     def work(db: Session) -> Placement:
         from shared.engines.store import in_flight

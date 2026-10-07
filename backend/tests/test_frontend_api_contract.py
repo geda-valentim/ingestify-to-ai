@@ -66,6 +66,7 @@ import pytest
 from fastapi import FastAPI
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 
 from shared.database import Base, get_db
 from shared.models import Job, Page, User, JobStatus as DBJobStatus
@@ -411,7 +412,9 @@ MAIN_JOB_ID = "11111111-1111-4111-8111-111111111111"
 
 @pytest.fixture
 def db():
-    engine = create_engine("sqlite://")
+    # One connection shared across threads: the IAM route dependencies (spec 0014)
+    # are plain `def`, so FastAPI runs them in its threadpool.
+    engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
     Base.metadata.create_all(bind=engine)
     session = sessionmaker(bind=engine)()
     try:
