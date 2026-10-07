@@ -8,7 +8,10 @@ Two role families share this table and never see each other (0018 §4.3):
 - `engines` (keys of `catalog.ENGINE_ROLES`, the six 0009 roles): migrated from
   `access_role_grants` with the same ids (0018 §4.2.2). `permissions` is always
   materialized, `condition_ref` names the ABAC policy revision, and `delegation` /
-  `parent_id` carry the 0009 delegation envelope and parent grant.
+  `parent_id` carry the 0009 delegation envelope and parent grant. Read by
+  `shared.access.policy.grants` through `shared.iam.engine_bindings`, written only by
+  `shared.iam.bindings.grant_engine` / `revoke_engine` (which mirror every write into
+  `access_role_grants` for rollback, `shared.iam.engine_mirror`).
 """
 
 from datetime import datetime

@@ -19,7 +19,7 @@ from shared.iam.decide import Decider, principal_for_user
 from shared.iam.models import IamBinding
 from shared.models import AdminAudit, AppMigration, User
 from tests.test_execution_profiles import grant, world  # noqa: F401
-from tests.test_iam_engine_equivalence import legacy_state
+from tests.test_iam_engine_equivalence import legacy_grant, legacy_state
 
 CA1_FIELDS = (
     ("subject_id", "user_id"), ("role", "role"), ("permissions", "permissions"),
@@ -164,7 +164,7 @@ def test_grants_created_by_the_old_code_after_the_migration_are_copied(world):  
         legacy_state(db)
     migration.upgrade_0018(_engine(world))
     with world() as db:
-        late = grant(db, actor="observer", role="observer")["id"]
+        late = legacy_grant(db, actor="observer", role="observer")["id"]
     with pytest.raises(RuntimeError, match="without an iam_binding"):
         migration.validate_schema(_engine(world))
     with _engine(world).begin() as conn:
@@ -176,7 +176,7 @@ def test_grants_created_by_the_old_code_after_the_migration_are_copied(world):  
 
 def test_a_grant_with_a_missing_parent_or_condition_aborts_the_migration(world):  # noqa: F811
     with world() as db:
-        g = grant(db, actor="observer", role="observer")["id"]
+        g = legacy_grant(db, actor="observer", role="observer")["id"]
         db.execute(text("PRAGMA foreign_keys=OFF"))
         db.get(RoleGrant, g).parent_id = "vanished"
         db.commit()
@@ -208,7 +208,7 @@ def test_a_tampered_binding_fails_validation(world):  # noqa: F811
 
 def test_a_grant_whose_role_left_the_engines_family_aborts_the_migration(world):  # noqa: F811
     with world() as db:
-        g = grant(db, actor="observer", role="observer")["id"]
+        g = legacy_grant(db, actor="observer", role="observer")["id"]
         db.get(RoleGrant, g).role = "legacy_role"
         db.commit()
     with pytest.raises(RuntimeError, match="outside the engines family"):

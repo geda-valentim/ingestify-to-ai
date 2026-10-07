@@ -1,10 +1,13 @@
 # Opt in after the explicit 0007 migration and host registration.
+# Engine access follows IAM_MODE (enforce turns it on); ENGINE_ACCESS_ENABLED is a
+# deprecated alias that wins when set, `false` being the emergency lever (spec 0018 §4.4).
 # Merge with the actual GPU/live/production overlays used by the installation.
 services:
   api:
     environment:
       ENGINE_CONTROL_ENABLED: 'true'
-      ENGINE_ACCESS_ENABLED: '${ENGINE_ACCESS_ENABLED:-false}'
+      IAM_MODE: '${IAM_MODE:-off}'
+      ENGINE_ACCESS_ENABLED: '${ENGINE_ACCESS_ENABLED:-}'
       ENGINE_INSTALLATION_PRINCIPAL_ID: '${ENGINE_INSTALLATION_PRINCIPAL_ID:-}'
       ENGINE_HOST_IDENTITIES_FILE: /run/secrets/engine_host_identities
     volumes:
@@ -12,27 +15,32 @@ services:
   worker:
     environment:
       ENGINE_CONTROL_ENABLED: 'true'
-      ENGINE_ACCESS_ENABLED: '${ENGINE_ACCESS_ENABLED:-false}'
+      IAM_MODE: '${IAM_MODE:-off}'
+      ENGINE_ACCESS_ENABLED: '${ENGINE_ACCESS_ENABLED:-}'
       ENGINE_INSTALLATION_PRINCIPAL_ID: '${ENGINE_INSTALLATION_PRINCIPAL_ID:-}'
   worker-audio:
     environment:
       ENGINE_CONTROL_ENABLED: 'true'
-      ENGINE_ACCESS_ENABLED: '${ENGINE_ACCESS_ENABLED:-false}'
+      IAM_MODE: '${IAM_MODE:-off}'
+      ENGINE_ACCESS_ENABLED: '${ENGINE_ACCESS_ENABLED:-}'
       ENGINE_INSTALLATION_PRINCIPAL_ID: '${ENGINE_INSTALLATION_PRINCIPAL_ID:-}'
   worker-vision:
     environment:
       ENGINE_CONTROL_ENABLED: 'true'
-      ENGINE_ACCESS_ENABLED: '${ENGINE_ACCESS_ENABLED:-false}'
+      IAM_MODE: '${IAM_MODE:-off}'
+      ENGINE_ACCESS_ENABLED: '${ENGINE_ACCESS_ENABLED:-}'
       ENGINE_INSTALLATION_PRINCIPAL_ID: '${ENGINE_INSTALLATION_PRINCIPAL_ID:-}'
   worker-remote:
     environment:
       ENGINE_CONTROL_ENABLED: 'true'
-      ENGINE_ACCESS_ENABLED: '${ENGINE_ACCESS_ENABLED:-false}'
+      IAM_MODE: '${IAM_MODE:-off}'
+      ENGINE_ACCESS_ENABLED: '${ENGINE_ACCESS_ENABLED:-}'
       ENGINE_INSTALLATION_PRINCIPAL_ID: '${ENGINE_INSTALLATION_PRINCIPAL_ID:-}'
   worker-dispatch:
     environment:
       ENGINE_CONTROL_ENABLED: 'true'
-      ENGINE_ACCESS_ENABLED: '${ENGINE_ACCESS_ENABLED:-false}'
+      IAM_MODE: '${IAM_MODE:-off}'
+      ENGINE_ACCESS_ENABLED: '${ENGINE_ACCESS_ENABLED:-}'
       ENGINE_INSTALLATION_PRINCIPAL_ID: '${ENGINE_INSTALLATION_PRINCIPAL_ID:-}'
   worker-control:
     extends:
@@ -42,7 +50,8 @@ services:
     command: celery -A workers.celery_app worker --loglevel=info --pool=threads --concurrency=4 -Q ingestify-engine-control -n ingestify-control@%h -B --schedule /tmp/celerybeat-control
     environment:
       ENGINE_CONTROL_ENABLED: 'true'
-      ENGINE_ACCESS_ENABLED: '${ENGINE_ACCESS_ENABLED:-false}'
+      IAM_MODE: '${IAM_MODE:-off}'
+      ENGINE_ACCESS_ENABLED: '${ENGINE_ACCESS_ENABLED:-}'
       ENGINE_INSTALLATION_PRINCIPAL_ID: '${ENGINE_INSTALLATION_PRINCIPAL_ID:-}'
       ENGINE_CONTROL_BEAT: 'true'
       ENGINES_REMOTE_BEAT: 'false'
@@ -56,7 +65,8 @@ services:
     command: python -m workers.engine_control.watchdog
     environment:
       ENGINE_CONTROL_ENABLED: 'true'
-      ENGINE_ACCESS_ENABLED: '${ENGINE_ACCESS_ENABLED:-false}'
+      IAM_MODE: '${IAM_MODE:-off}'
+      ENGINE_ACCESS_ENABLED: '${ENGINE_ACCESS_ENABLED:-}'
       ENGINE_INSTALLATION_PRINCIPAL_ID: '${ENGINE_INSTALLATION_PRINCIPAL_ID:-}'
       ENGINES_REMOTE_BEAT: 'false'
     deploy:

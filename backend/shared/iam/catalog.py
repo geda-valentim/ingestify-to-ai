@@ -18,7 +18,9 @@ Role families (spec 0018 §4.1): `ROLES` holds the `platform` family only. The s
 0009 roles are the `engines` family, in the separate map `ENGINE_ROLES`, whose
 permissions are read from `shared.access.policy.ROLES` (one source). They never
 enter `ROLES`: the `Decider`, `platform_roles`, `/iam/check` and
-`ROLE_ABOVE_GRANTOR` must never see an engine binding (0018 CA13).
+`ROLE_ABOVE_GRANTOR` must never see an engine binding (0018 CA13). Engine
+bindings are decided by `shared.access.policy.authorize` (0009 semantics), which
+reads them from `iam_bindings` through `shared.iam.engine_bindings`.
 """
 
 from dataclasses import dataclass
