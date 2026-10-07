@@ -106,7 +106,7 @@ export const authApi = {
     return response.json();
   },
 
-  async register(data: UserCreate): Promise<{ message: string }> {
+  async register(data: UserCreate): Promise<UserResponse> {
     const response = await apiFetch(`${API_URL}/auth/register`, {
       method: "POST",
       headers: {

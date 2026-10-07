@@ -1,11 +1,10 @@
 """Spec 0019: the first registered account of an installation becomes its single root user."""
 import asyncio
-import threading
 from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
-from sqlalchemy import create_engine, event
+from sqlalchemy import create_engine
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -98,21 +97,22 @@ def test_losing_the_root_race_yields_a_plain_user(db, monkeypatch):
     """Another registration claims root between our check and our insert."""
     configure(monkeypatch)
     calls = {"n": 0}
-    real = root.root_exists
+    real = root.root_pending
 
-    def racing_root_exists(session):
+    def racing_root_pending(session):
         calls["n"] += 1
         if calls["n"] == 1:
+            answer = real(session)  # True: the installation is empty
             # The rival commits its root right after our check
             other = sessionmaker(bind=session.get_bind())()
             other.add(User(email="rival@x.io", username="rival", hashed_password="h",
                            is_admin=True, root_slot=ROOT_SLOT))
             other.commit()
             other.close()
-            return False
+            return answer
         return real(session)
 
-    monkeypatch.setattr(root, "root_exists", racing_root_exists)
+    monkeypatch.setattr(root, "root_pending", racing_root_pending)
     loser = register(db, "alice")
 
     assert (loser.is_root, loser.is_admin) == (False, False)
@@ -134,12 +134,55 @@ def test_a_duplicate_email_race_is_not_mistaken_for_the_root_race(db, monkeypatc
         other.close()
 
     monkeypatch.setattr(root, "check_setup_token", check_then_a_rival_commits)
-    with pytest.raises(IntegrityError):
+    with pytest.raises(HTTPException) as exc:
         register(db, "alice")
+    assert exc.value.status_code == 400  # CA2: never a 500
     assert db.query(User).filter(User.root_slot == ROOT_SLOT).count() == 0
 
 
+# --- spec 0019 §6: installations that already had users ---------------------------------------
+
+
+@pytest.mark.parametrize("environment", ["production", "development"])
+def test_an_installation_with_users_but_no_root_keeps_plain_registrations(db, monkeypatch, environment):
+    configure(monkeypatch, environment=environment)  # production without token stays open too
+    db.add(User(email="old@x.io", username="old", hashed_password="h"))
+    db.commit()
+    newcomer = register(db, "stranger")
+    assert (newcomer.is_root, newcomer.is_admin) == (False, False)
+    assert db.query(User).filter(User.root_slot == ROOT_SLOT).count() == 0
+
+
+def test_losing_the_first_user_race_without_a_token_yields_a_plain_user(db, monkeypatch):
+    """Production: B sends no token while A's root registration commits first."""
+    configure(monkeypatch, environment="production", token="s3cret")
+    real_check = root.check_setup_token
+
+    def rival_commits_first(*args, **kwargs):
+        other = sessionmaker(bind=db.get_bind())()
+        other.add(User(email="a@x.io", username="first", hashed_password="h", is_admin=True, root_slot=ROOT_SLOT))
+        other.commit()
+        other.close()
+        return real_check(*args, **kwargs)
+
+    monkeypatch.setattr(root, "check_setup_token", rival_commits_first)
+    loser = register(db, "bruno")
+    assert (loser.is_root, loser.is_admin) == (False, False)
+
+
 # --- CA3 -------------------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("configured", ["", "   ", "\n"])
+def test_a_blank_token_counts_as_unset(configured):
+    settings = SimpleNamespace(environment="development", root_setup_token=configured)
+    assert root.setup_token_required(settings) is False
+    root.check_setup_token(None, settings)  # no token needed
+
+
+def test_surrounding_whitespace_is_ignored_on_both_sides():
+    settings = SimpleNamespace(environment="production", root_setup_token="s3cret\n")
+    root.check_setup_token(" s3cret ", settings)
 
 
 def test_production_without_token_closes_registration_until_root_exists(db, monkeypatch):
@@ -211,23 +254,46 @@ def test_other_users_can_still_be_changed():
     root.refuse_root_change(User(id="r", root_slot=ROOT_SLOT), SimpleNamespace(is_active=True, is_admin=True))
 
 
-def test_the_subject_state_route_refuses_to_touch_root(monkeypatch):
+def _access_world(db, monkeypatch):
+    from shared.access import policy
+    from shared.access.models import AuthorizationEpoch
+
+    monkeypatch.setattr(policy, "enabled", lambda: True)
+    db.add(AuthorizationEpoch(id=1, version=0))
+    admin_user = User(id="admin", email="adm@x.io", username="adm", hashed_password="h", is_admin=True)
+    root_user = User(id="root", email="r@x.io", username="root", hashed_password="h",
+                     is_admin=True, root_slot=ROOT_SLOT)
+    plain = User(id="plain", email="p@x.io", username="plain", hashed_password="h")
+    db.add_all([admin_user, root_user, plain])
+    db.commit()
+    return admin_user
+
+
+@pytest.mark.parametrize("is_active,is_admin", [(False, True), (True, False), (False, False)])
+def test_the_subject_state_route_refuses_to_touch_root(db, monkeypatch, is_active, is_admin):
     """PUT /admin/access/subjects/{id}/state is the only app path that writes these flags."""
     from api import access_routes
+    from shared.access import contracts as C
+    from shared.access.models import AuthorizationEpoch
 
-    target = User(id="r", root_slot=ROOT_SLOT, is_active=True, is_admin=True)
-    query = SimpleNamespace(filter_by=lambda **k: query, populate_existing=lambda: query,
-                            with_for_update=lambda: query, first=lambda: target)
-    fake_db = SimpleNamespace(query=lambda model: query, commit=lambda: pytest.fail("must not commit"))
-    authority = SimpleNamespace(version=0)
-    monkeypatch.setattr(access_routes, "ready", lambda: None)
-    monkeypatch.setattr(access_routes, "invoke", lambda fn, *a, **k: authority)
-    body = SimpleNamespace(expected_is_active=True, expected_is_admin=True, is_active=False, is_admin=True)
-
+    actor = _access_world(db, monkeypatch)
+    body = C.SubjectState(expected_is_active=True, expected_is_admin=True, is_active=is_active, is_admin=is_admin)
     with pytest.raises(HTTPException) as exc:
-        access_routes.subject_state("r", body, user=SimpleNamespace(id="admin"), db=fake_db)
+        access_routes.subject_state("root", body, user=actor, db=db)
     assert exc.value.status_code == 409 and error_code(exc) == "ROOT_IMMUTABLE"
-    assert (target.is_active, target.is_admin, authority.version) == (True, True, 0)
+    db.rollback()
+    target = db.get(User, "root")
+    assert (target.is_active, target.is_admin, target.root_slot) == (True, True, ROOT_SLOT)
+    assert db.get(AuthorizationEpoch, 1).version == 0
+
+
+def test_the_subject_state_route_still_changes_other_users(db, monkeypatch):
+    from api import access_routes
+    from shared.access import contracts as C
+
+    actor = _access_world(db, monkeypatch)
+    body = C.SubjectState(expected_is_active=True, expected_is_admin=False, is_active=False, is_admin=False)
+    assert access_routes.subject_state("plain", body, user=actor, db=db)["is_active"] is False
 
 
 # --- CA6 -------------------------------------------------------------------------------------------
@@ -236,9 +302,20 @@ def test_the_subject_state_route_refuses_to_touch_root(monkeypatch):
 def test_setup_status_reports_only_root_and_token_need(db, monkeypatch):
     configure(monkeypatch, environment="production", token="s3cret")
     before = auth_routes.setup_status(db)
-    assert before.model_dump() == {"root_exists": False, "setup_token_required": True}
+    assert before.model_dump() == {"root_exists": False, "root_pending": True, "setup_token_required": True}
     register(db, "alice", setup_token="s3cret")
-    assert auth_routes.setup_status(db).model_dump() == {"root_exists": True, "setup_token_required": True}
+    assert auth_routes.setup_status(db).model_dump() == {
+        "root_exists": True, "root_pending": False, "setup_token_required": True,
+    }
+
+
+def test_setup_status_of_an_installation_with_users_but_no_root(db, monkeypatch):
+    configure(monkeypatch, environment="production")
+    db.add(User(email="old@x.io", username="old", hashed_password="h"))
+    db.commit()
+    assert auth_routes.setup_status(db).model_dump() == {
+        "root_exists": False, "root_pending": False, "setup_token_required": True,
+    }
 
 
 @pytest.mark.parametrize("environment,token,required", [

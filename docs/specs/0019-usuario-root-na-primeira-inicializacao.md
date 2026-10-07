@@ -23,7 +23,7 @@ reconheça como dona da instalação.
 
 ## 2. Objetivo
 
-O primeiro usuário cadastrado em uma instalação sem root nasce **root**: a identidade
+O primeiro usuário cadastrado em uma instalação **sem nenhum usuário** nasce **root**: a identidade
 única, irrevogável pela aplicação, que é o acesso de emergência (bootstrap) do IAM. Em
 produção, criar o root exige um token de instalação.
 
@@ -35,15 +35,19 @@ produção, criar o root exige um token de instalação.
 
 ## 3. Critérios de aceitação
 
-- [ ] CA1. Em uma instalação sem root, `POST /auth/register` cria o usuário com
-  `is_root=true` e `is_admin=true`; os cadastros seguintes criam usuários comuns.
+- [ ] CA1. Em uma instalação sem nenhum usuário, `POST /auth/register` cria o usuário com
+  `is_root=true` e `is_admin=true`; os cadastros seguintes criam usuários comuns. Uma
+  instalação que já tinha usuários e não tem root continua criando usuários comuns (o
+  root é designado por `make_admin.py --root`, CA10) — revisão de 2026-10-07: sem essa
+  regra, o próximo desconhecido a se cadastrar viraria root.
 - [ ] CA2. Existe no máximo um root, garantido pelo banco: dois cadastros simultâneos
   na instalação vazia produzem exatamente um root; o outro vira usuário comum (ou falha
   por e-mail/username duplicado, se for o caso), nunca um segundo root nem um 500.
-- [ ] CA3. Com `ENVIRONMENT=production` e `ROOT_SETUP_TOKEN` vazio, enquanto não houver
-  root todo cadastro é recusado com `403 {"code": "ROOT_SETUP_TOKEN_REQUIRED"}` e o boot
+- [ ] CA3. Com `ENVIRONMENT=production` e `ROOT_SETUP_TOKEN` vazio (ou só espaços), enquanto
+  a instalação não tiver usuários todo cadastro é recusado com `403 {"code": "ROOT_SETUP_TOKEN_REQUIRED"}` e o boot
   registra um aviso. Com o token configurado (qualquer ambiente), o cadastro que criaria
-  o root exige `setup_token` igual (comparação em tempo constante); ausente ou diferente →
+  o root exige `setup_token` igual, sem espaços nas pontas (comparação em tempo constante);
+  ausente ou diferente →
   `403 {"code": "ROOT_SETUP_TOKEN_INVALID"}`. Fora de produção sem token, o primeiro
   cadastro vira root sem token. Depois que o root existe, `setup_token` é ignorado.
 - [ ] CA4. Root é bootstrap para o IAM em qualquer `IAM_MODE`: `is_effective_admin`
@@ -51,17 +55,19 @@ produção, criar o root exige um token de instalação.
 - [ ] CA5. Nenhum caminho da aplicação desativa o root, tira seu `is_admin` ou cria um
   segundo root: as escritas existentes recusam com `409 {"code": "ROOT_IMMUTABLE"}`
   (ou erro equivalente no script), e há teste para cada caminho encontrado.
-- [ ] CA6. `GET /auth/setup` (público) devolve `{"root_exists": bool,
-  "setup_token_required": bool}` sem revelar mais nada; está na allowlist pública do
+- [ ] CA6. `GET /auth/setup` (público) devolve `{"root_exists": bool, "root_pending": bool,
+  "setup_token_required": bool}` sem revelar mais nada (`root_pending` = instalação sem
+  usuários, o próximo cadastro vira root); está na allowlist pública do
   teste de cobertura da 0014.
 - [ ] CA7. `/auth/me` e a resposta do cadastro incluem `is_root`.
 - [ ] CA8. A criação do root grava `AdminAudit` (`platform.root.created`) na mesma
   transação, sem senha nem token.
-- [ ] CA9. A tela de cadastro, quando `root_exists=false`, explica que a conta será o
+- [ ] CA9. A tela de cadastro, quando `root_pending=true`, explica que a conta será o
   root da plataforma e mostra o campo de token se `setup_token_required=true`; depois
   do cadastro o usuário entra com acesso ao `/admin`.
-- [ ] CA10. `scripts/make_admin.py --root` designa root um usuário existente somente
-  quando ainda não há root (instalações antigas); nunca sobrescreve um root existente.
+- [ ] CA10. `scripts/make_admin.py --root` designa root um usuário **ativo** existente somente
+  quando ainda não há root (instalações antigas); nunca sobrescreve um root existente, e uma
+  designação concorrente termina com mensagem de erro, não com traceback.
 - [ ] CA11. Suíte completa e `tsc` verdes (exceto falhas de ambiente conhecidas);
   documentação de API regenerada; `.env.example`, docs de auth e `CHANGELOG` atualizados.
 
@@ -80,10 +86,12 @@ atual) e o mesmo padrão de coluna-se-ausente usado pelas migrations de app.
 ```
 register(body):
   rate limit (inalterado); e-mail/username duplicados (inalterado)
-  if not exists(User.root_slot == 1):
-      exigir token conforme CA3
+  if instalação sem usuários (root_pending):
+      exigir token conforme CA3 (falhou e alguém criou o 1º usuário nesse meio-tempo
+      → segue como usuário comum)
       criar User(is_admin=True, root_slot=1) + AdminAudit na mesma transação
       IntegrityError em root_slot (corrida) → rollback e seguir como usuário comum
+      IntegrityError em e-mail/username (corrida) → 400, nunca 500
   else:
       criar usuário comum (inalterado)
 ```
@@ -132,6 +140,15 @@ fica fora do alcance da aplicação e é coberta pelo §4.3 (root continua admin
   residual: um deploy exposto só com o `docker-compose.yml` base roda com
   `ENVIRONMENT=development`, onde o token é opcional — a doc de auth manda configurá-lo.
 - **Operação:** nova env `ROOT_SETUP_TOKEN`; aviso de boot.
+
+### 4.7 Revisão de 2026-10-07
+
+Uma revisão adversarial do primeiro commit encontrou: root concedido ao próximo cadastro
+em instalações com usuários (bloqueador, corrigido com `root_pending`); `ROOT_SETUP_TOKEN`
+não repassado ao container da API pelo compose; corrida de e-mail virando 500; token sem
+normalização de espaços; `make_admin --root` aceitando usuário inativo; tela escondendo o
+campo de token quando `/auth/setup` falha; downgrade da migration quebrando no SQLite.
+Todos corrigidos, com testes.
 
 ## 7. Plano de testes
 

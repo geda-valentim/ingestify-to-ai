@@ -217,8 +217,11 @@ Autorização: **Público**. Operation ID: `setup_status_auth_setup_get`.
 
 Whether this installation still needs its root user (spec 0019).
 
-Public on purpose: the registration screen uses it to explain that the first
-account becomes root and whether a setup token is needed. Reveals nothing else.
+`root_pending` is true only for a brand-new installation (no users): the next
+registration becomes root. An installation with users but no root keeps plain
+registrations; an operator designates root with `make_admin.py --root`.
+Public on purpose: the registration screen uses it to explain that the account
+becomes root and whether a setup token is needed. Reveals nothing else.
 
 Respostas declaradas:
 
@@ -13407,6 +13410,7 @@ Whether the installation still needs its root user (spec 0019)
 | Campo | Obrigatório | Tipo | Padrões/limites | Descrição |
 | --- | --- | --- | --- | --- |
 | `root_exists` | sim | boolean |  |  |
+| `root_pending` | sim | boolean |  |  |
 | `setup_token_required` | sim | boolean |  |  |
 
 Esquema JSON completo:
@@ -13418,6 +13422,10 @@ Esquema JSON completo:
       "type": "boolean",
       "title": "Root Exists"
     },
+    "root_pending": {
+      "type": "boolean",
+      "title": "Root Pending"
+    },
     "setup_token_required": {
       "type": "boolean",
       "title": "Setup Token Required"
@@ -13426,6 +13434,7 @@ Esquema JSON completo:
   "type": "object",
   "required": [
     "root_exists",
+    "root_pending",
     "setup_token_required"
   ],
   "title": "SetupStatus",

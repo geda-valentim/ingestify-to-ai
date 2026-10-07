@@ -156,6 +156,7 @@ services:
       - VISION_MAX_IMAGE_PIXELS=${VISION_MAX_IMAGE_PIXELS:-50000000}
       - VISION_CAPTION_TASK=${VISION_CAPTION_TASK:-<MORE_DETAILED_CAPTION>}
       - ADMIN_USER_IDS=${ADMIN_USER_IDS:-}
+      - ROOT_SETUP_TOKEN=${ROOT_SETUP_TOKEN:-}  # spec 0019: only the API registers users
       # IAM decision core (spec 0014): the same value in api and every worker that
       # decides engines.remote.use (worker submits pages/audio, worker-dispatch places)
       - IAM_MODE=${IAM_MODE:-off}

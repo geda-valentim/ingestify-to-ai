@@ -22,6 +22,8 @@ export interface UserCreate {
 /** GET /auth/setup: whether the installation still needs its root user (spec 0019). */
 export interface SetupStatus {
   root_exists: boolean;
+  /** Brand-new installation (no users): the next registration becomes root. */
+  root_pending: boolean;
   setup_token_required: boolean;
 }
 

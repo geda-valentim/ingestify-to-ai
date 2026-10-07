@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Form, Request
 from sqlalchemy import func, or_
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from datetime import timedelta
 
@@ -80,6 +81,10 @@ async def register(user_data: UserCreate, request: Request, db: Session = Depend
         )
     except root.RootError as exc:
         raise HTTPException(status_code=exc.status, detail={"code": exc.code, "message": exc.message})
+    except IntegrityError:
+        # A concurrent registration took the same email or username after the checks above
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Email or username already exists")
 
     return UserResponse.for_user(new_user)
 
@@ -89,10 +94,17 @@ def setup_status(db: Session = Depends(get_db)):
     """
     Whether this installation still needs its root user (spec 0019).
 
-    Public on purpose: the registration screen uses it to explain that the first
-    account becomes root and whether a setup token is needed. Reveals nothing else.
+    `root_pending` is true only for a brand-new installation (no users): the next
+    registration becomes root. An installation with users but no root keeps plain
+    registrations; an operator designates root with `make_admin.py --root`.
+    Public on purpose: the registration screen uses it to explain that the account
+    becomes root and whether a setup token is needed. Reveals nothing else.
     """
-    return SetupStatus(root_exists=root.root_exists(db), setup_token_required=root.setup_token_required())
+    return SetupStatus(
+        root_exists=root.root_exists(db),
+        root_pending=root.root_pending(db),
+        setup_token_required=root.setup_token_required(),
+    )
 
 
 def _lockout_identity(db: Session, login: str) -> str:

@@ -247,13 +247,16 @@ async def startup_event():
     # Spec 0019: say how the root user will be created (or why it cannot be yet)
     try:
         from shared.database import SessionLocal
-        from shared.root import root_exists, setup_token_required
+        from shared.root import root_exists, root_pending, setup_token_required
 
         with SessionLocal() as db:
-            if not root_exists(db):
-                if settings.environment.strip().lower() == "production" and not settings.root_setup_token:
+            if not root_exists(db) and not root_pending(db):
+                logger.warning("SETUP: this installation has users but no root user; designate one with "
+                               "scripts/make_admin.py --email <email> --root.")
+            elif root_pending(db):
+                if settings.environment.strip().lower() == "production" and not settings.root_setup_token.strip():
                     logger.warning("SETUP: no root user and no ROOT_SETUP_TOKEN: registration is closed until "
-                                   "ROOT_SETUP_TOKEN is set (or run scripts/make_admin.py --root).")
+                                   "ROOT_SETUP_TOKEN is set.")
                 elif setup_token_required():
                     logger.warning("SETUP: no root user yet: the first registration with ROOT_SETUP_TOKEN becomes root.")
                 else:

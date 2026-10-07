@@ -55,7 +55,7 @@
           "Authentication"
         ],
         "summary": "Installation setup state (public)",
-        "description": "Whether this installation still needs its root user (spec 0019).\n\nPublic on purpose: the registration screen uses it to explain that the first\naccount becomes root and whether a setup token is needed. Reveals nothing else.",
+        "description": "Whether this installation still needs its root user (spec 0019).\n\n`root_pending` is true only for a brand-new installation (no users): the next\nregistration becomes root. An installation with users but no root keeps plain\nregistrations; an operator designates root with `make_admin.py --root`.\nPublic on purpose: the registration screen uses it to explain that the account\nbecomes root and whether a setup token is needed. Reveals nothing else.",
         "operationId": "setup_status_auth_setup_get",
         "responses": {
           "200": {
@@ -14410,6 +14410,10 @@
             "type": "boolean",
             "title": "Root Exists"
           },
+          "root_pending": {
+            "type": "boolean",
+            "title": "Root Pending"
+          },
           "setup_token_required": {
             "type": "boolean",
             "title": "Setup Token Required"
@@ -14418,6 +14422,7 @@
         "type": "object",
         "required": [
           "root_exists",
+          "root_pending",
           "setup_token_required"
         ],
         "title": "SetupStatus",

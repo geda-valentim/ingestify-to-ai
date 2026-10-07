@@ -43,6 +43,7 @@ sys.path.insert(0, str(ROOT_DIR / "backend"))
 # shared/ sits at the top level.
 from shared.admin import AdminPromotionError, find_user_to_promote
 from shared.database import SessionLocal
+from sqlalchemy.exc import IntegrityError
 
 logger = logging.getLogger("make_admin")
 
@@ -67,6 +68,9 @@ def make_admin(email=None, user_id=None, assume_yes=False, as_root=False) -> int
 
             if root_exists(db):
                 print("\n❌ This installation already has a root user; it is never replaced.")
+                return 1
+            if not user.is_active:
+                print("\n❌ This user is inactive; root must be an active account.")
                 return 1
         elif user.is_admin:
             print("\n✅ Already an admin.")
@@ -125,6 +129,11 @@ def make_admin(email=None, user_id=None, assume_yes=False, as_root=False) -> int
 
         print("\n✅ Promoted. They can now access the /admin/* endpoints.")
         return 0
+
+    except IntegrityError:
+        db.rollback()
+        print("\n❌ Another user became root at the same time; root is never replaced.")
+        return 1
 
     except Exception as e:
         db.rollback()

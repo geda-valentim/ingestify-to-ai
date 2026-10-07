@@ -29,14 +29,19 @@ export default function RegisterPage() {
   const [error, setError] = useState("");
 
   // Spec 0019: the first account of an installation without root becomes root
-  const setupQuery = useQuery({ queryKey: ["auth-setup"], queryFn: authApi.setupStatus });
-  const creatingRoot = setupQuery.data?.root_exists === false;
+  const setupQuery = useQuery({ queryKey: ["auth-setup"], queryFn: authApi.setupStatus, retry: 1 });
+  const creatingRoot = setupQuery.data?.root_pending === true;
   const tokenRequired = creatingRoot && setupQuery.data?.setup_token_required === true;
+  // Setup state unknown (request failed): offer the token field, optional, so a root
+  // registration in production is still possible
+  const tokenOffered = tokenRequired || setupQuery.isError;
   const [success, setSuccess] = useState(false);
+  const [createdRoot, setCreatedRoot] = useState(false);
 
   const registerMutation = useMutation({
     mutationFn: authApi.register,
-    onSuccess: () => {
+    onSuccess: (user) => {
+      setCreatedRoot(user.is_root === true);
       setSuccess(true);
       setTimeout(() => {
         router.push("/login");
@@ -54,7 +59,7 @@ export default function RegisterPage() {
       email,
       username,
       password,
-      ...(tokenRequired ? { setup_token: setupToken } : {}),
+      ...(tokenOffered && setupToken ? { setup_token: setupToken } : {}),
     });
   };
 
@@ -67,7 +72,7 @@ export default function RegisterPage() {
             <CardHeader>
               <CardTitle className="text-center text-2xl">Success!</CardTitle>
               <CardDescription className="text-center">
-                {creatingRoot
+                {createdRoot
                   ? "Your root account has been created. Sign in to open the admin console. Redirecting to login..."
                   : "Your account has been created. Redirecting to login..."}
               </CardDescription>
@@ -152,7 +157,7 @@ export default function RegisterPage() {
                   Password must be at least 6 characters long
                 </p>
               </div>
-              {tokenRequired && (
+              {tokenOffered && (
                 <div className="space-y-2">
                   <Label htmlFor="setup-token" className="flex items-center gap-1.5">
                     <ShieldCheck className="h-4 w-4" />
@@ -168,11 +173,13 @@ export default function RegisterPage() {
                       setSetupToken(e.target.value);
                       if (error) setError("");
                     }}
-                    required
+                    required={tokenRequired}
                     maxLength={256}
                   />
                   <p className="text-xs text-muted-foreground">
-                    Ask whoever deployed this server for the value of ROOT_SETUP_TOKEN.
+                    {tokenRequired
+                      ? "Ask whoever deployed this server for the value of ROOT_SETUP_TOKEN."
+                      : "Only needed if this is the first account of a new installation."}
                   </p>
                 </div>
               )}
@@ -181,7 +188,7 @@ export default function RegisterPage() {
               <Button
                 type="submit"
                 className="w-full"
-                disabled={registerMutation.isPending}
+                disabled={registerMutation.isPending || setupQuery.isLoading}
               >
                 {registerMutation.isPending ? (
                   <>
