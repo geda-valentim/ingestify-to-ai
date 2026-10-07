@@ -1,3 +1,6 @@
+from starlette.responses import JSONResponse
+import json
+from shared.job_configuration import job_configuration
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Header, Body, Depends, Request, Query
 from fastapi.responses import Response, StreamingResponse
 from starlette.concurrency import run_in_threadpool
@@ -1146,6 +1149,25 @@ def _job_location_refs(db: Session, job: Optional[Job]) -> dict:
     }
 
 
+def _job_status_with_db_fallback(redis_client, job_id: str, owned_job: Optional[Job]):
+    """Redis holds live progress; an expired cache must not hide a durable job.
+
+    A child may be authorized by its parent's row, which is never its status.
+    """
+    full = owned_job is not None and getattr(owned_job, 'source_type', None) == 'image' and owned_job.configuration_row and owned_job.configuration_row.options.get('mode') in ('full', 'faces')
+    status = None if full else redis_client.get_job_status(job_id)
+    if owned_job is None or owned_job.id != job_id:
+        return status
+    if status and owned_job.status not in (DBJobStatus.COMPLETED, DBJobStatus.PARTIAL, DBJobStatus.FAILED, DBJobStatus.CANCELLED):
+        return status
+    return {
+        **(status or {}),
+        "type": (owned_job.job_type or "main").lower(),
+        "status": owned_job.status.value,
+        "progress": 100 if owned_job.status == DBJobStatus.COMPLETED else (owned_job.progress or 0),
+        "error": owned_job.error_message,
+    }
+
 @router.get("/jobs/{job_id}", response_model=JobStatusResponse)
 async def get_job_status(
     job_id: str,
@@ -1173,7 +1195,7 @@ async def get_job_status(
     # Ownership já validada em authorized(Job) (MySQL como fonte da verdade)
 
     # Get job status from Redis (real-time data)
-    status_data = redis_client.get_job_status(job_id)
+    status_data = _job_status_with_db_fallback(redis_client, job_id, owned_job)
 
     if owned_job is not None and owned_job.id == job_id:
         from shared.live.lifecycle import available
@@ -1210,10 +1232,14 @@ async def get_job_status(
     job_type = status_data.get("type", "main").lower()
 
     # Build response based on job type
+    from shared.image_analysis import progress as image_progress
     response_data = {
         "job_id": job_id,
         "type": job_type,
         "status": status_data.get("status", "unknown"),
+        "kind": "image" if owned_job and getattr(owned_job, "source_type", None) == "image" else None,
+        "configuration": job_configuration(owned_job),
+        "image_analysis": image_progress(db, job_id) if owned_job and getattr(owned_job, "source_type", None) == "image" else None,
         "progress": status_data.get("progress", 0),
         "created_at": created_at,
         "started_at": started_at,
@@ -1264,7 +1290,7 @@ async def get_job_status(
             total_pages = db_job.total_pages
             pages_completed = db_job.pages_completed or 0
             pages_failed = db_job.pages_failed or 0
-        else:
+        elif not response_data.get("image_analysis"):
             # Fallback to Redis
             total_pages = redis_client.get_job_pages_total(job_id)
             if total_pages:
@@ -1442,9 +1468,27 @@ async def delete_job(
 
     logger.info(f"Deleting job {job_id} for user {current_user.username}")
 
+    if owned_job and getattr(owned_job, 'source_type', None) == 'image':
+        from shared.models import ImageAnalysisRun, ImageAnalysisSubmission
+        db.query(Job).filter_by(id=job_id).populate_existing().with_for_update().first()
+        full_run = db.query(ImageAnalysisRun).filter_by(job_id=job_id).with_for_update().first()
+        if full_run:
+            full_run.fence += 1
+            full_run.cancel_requested = True
+            full_run.status = 'cancelled'
+            full_run.holder = None
+            for submission in db.query(ImageAnalysisSubmission).filter_by(job_id=job_id):
+                submission.deleted_at = datetime.utcnow()
+                submission.purge_after = datetime.utcnow() + timedelta(seconds=960)
+            db.commit()
+
     # 1. Delete from Elasticsearch (if available)
     if es_client:
         try:
+            if db_job.source_type == "image":
+                from shared.models import ImageAnalysisRun, ImageAnalysisStep, JobDatalakeExport, JobDatalakePartition
+                for model in (ImageAnalysisStep, ImageAnalysisRun, JobDatalakePartition, JobDatalakeExport):
+                    db.query(model).filter_by(job_id=job_id).delete()
             # Delete main job result
             es_client.delete_job_result(job_id)
 
@@ -1469,6 +1513,15 @@ async def delete_job(
             logger.warning(f"Failed to delete audio objects of job {job_id} from MinIO: {e}")
         # Local copy left behind by a failed job (a completed one has none)
         shutil.rmtree(Path(settings.temp_storage_path) / "audio" / job_id, ignore_errors=True)
+
+    if db_job and db_job.source_type == "image":
+        try:
+            storage = get_minio_client()
+            storage.delete_folder(storage.bucket_results, f"images/{job_id}/")
+            storage.delete_folder(storage.bucket_results, f"datalake/{job_id}/")
+        except Exception:
+            logger.warning("Image purge deferred: job=%s", job_id)
+        shutil.rmtree(Path(settings.temp_storage_path) / "images" / job_id, ignore_errors=True)
 
     # 2. Delete from MySQL
     try:
@@ -1563,6 +1616,27 @@ async def get_job_result(
                 status_code=422,
                 detail=f"format inválido: {format_}. Use: markdown, {', '.join(TRANSCRIPT_FORMATS)}"
             )
+
+    if owned_job and getattr(owned_job, 'source_type', None) == 'image' and owned_job.configuration_row and owned_job.configuration_row.options.get('mode') in ('full', 'faces'):
+        from shared.image_full import TERMINAL
+        if owned_job.status.value not in TERMINAL:
+            return JSONResponse(status_code=202, content={'job_id': job_id, 'status': owned_job.status.value,
+                'poll_url': f'/jobs/{job_id}', 'result_url': f'/jobs/{job_id}/result'})
+        if not owned_job.minio_result_path:
+            raise HTTPException(503, 'Relatório aguardando recuperação durável')
+        storage = get_minio_client()
+        try:
+            from starlette.concurrency import run_in_threadpool
+            raw = await run_in_threadpool(storage.download_file, storage.bucket_results, owned_job.minio_result_path)
+            payload = json.loads(raw)
+        except Exception as exc:
+            raise HTTPException(503, 'Relatório temporariamente indisponível; tente consultar o mesmo job novamente') from exc
+        if format_ == 'json':
+            return JSONResponse(payload, headers={'Cache-Control': 'private, no-store'})
+        if format_ not in (None, 'markdown'):
+            raise HTTPException(422, 'Full Analysis suporta markdown e json')
+        return {'job_id': job_id, 'type': 'main', 'status': owned_job.status.value,
+                'result': payload, 'completed_at': owned_job.completed_at}
 
     redis_client = get_redis_client()
     es_client = get_es_client()
@@ -2093,6 +2167,7 @@ _DB_TO_API_STATUS = {
     DBJobStatus.COMPLETED: "completed",
     DBJobStatus.FAILED: "failed",
     DBJobStatus.CANCELLED: "cancelled",
+    DBJobStatus.PARTIAL: "partial",
 }
 _API_TO_DB_STATUS = {api: db for db, api in _DB_TO_API_STATUS.items()}
 

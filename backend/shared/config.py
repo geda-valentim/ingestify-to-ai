@@ -190,6 +190,11 @@ class Settings(BaseSettings):
     vision_request_timeout_seconds: int = 60
     # Per-task time_limit, deliberately double the request timeout so a request
     # that 504s leaves a task still running to completion.
+    face_analysis_enabled: bool = False
+    face_model_cache_dir: str = "/models/faces"
+    vision_full_task_timeout_seconds: int = 900
+    datalake_encryption_key: str = ""
+
     vision_task_timeout_seconds: int = 120
     vision_max_new_tokens: int = 1024
     vision_num_beams: int = 3  # 1 roughly halves CPU latency at some quality cost

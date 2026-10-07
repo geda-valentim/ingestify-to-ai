@@ -71,6 +71,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { formatDistanceToNow } from "date-fns";
 import { useToast } from "@/hooks/use-toast";
 import dynamic from "next/dynamic";
+import { ImageJobWorkspace } from "@/components/job/image-job-workspace";
 import { DocumentView, TranscriptView } from "@/components/job/result-views";
 import { JobTagsCard } from "@/components/job/job-tags-card";
 import { LiveTranscriptView, useLiveTranscript } from "@/components/job/live-transcript";
@@ -157,15 +158,15 @@ export default function JobStatusPage({ params }: PageProps) {
     enabled: !!token,
     refetchInterval: (query) => {
       const status = query.state.data?.status;
-      return status === "completed" || status === "failed" ? false : 3000;
+      return status && ["completed", "partial", "failed", "cancelled"].includes(status) ? false : 3000;
     },
   });
 
   // Fetch result when job is completed
-  const { data: result } = useQuery({
+  const { data: result, isError: isResultError, refetch: refetchResult } = useQuery({
     queryKey: ["job-result", resolvedParams.id, token],
     queryFn: () => jobsApi.getResult(resolvedParams.id),
-    enabled: status?.status === "completed" && !!token,
+    enabled: !!token && (status?.status === "completed" || (status?.kind === "image" && ["partial", "failed", "cancelled"].includes(status.status))),
   });
 
   // Fetch pages for PDF documents
@@ -430,6 +431,10 @@ export default function JobStatusPage({ params }: PageProps) {
         </div>
       </div>
     );
+  }
+
+  if (status.kind === "image" || result?.result.image) {
+    return <ImageJobWorkspace status={status} result={result} resultError={isResultError} retryResult={() => void refetchResult()} onDelete={() => deleteMutation.mutate()} deleting={deleteMutation.isPending} />;
   }
 
   const metadata = result?.result.metadata;

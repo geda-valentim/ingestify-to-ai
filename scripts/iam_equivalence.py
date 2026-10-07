@@ -2,7 +2,7 @@
 """
 Offline equivalence of the legacy and IAM data decisions (spec 0014 CA3).
 
-Walks every (user, job / project / folder / API key) pair of a database and
+Walks every (user, job / project / folder / API key / datalake connection) pair of a database and
 compares the pre-0014 owner rule with `shared.iam.decide` for read, update and
 delete. Prints each divergence and exits 1 if there is any (0 clean, 2 could not
 run). A clean run against the dev snapshot is the gate for IAM_MODE=enforce

@@ -20,7 +20,8 @@ from sqlalchemy.pool import StaticPool
 
 from shared.database import Base
 from shared.iam import equivalence, ownership
-from shared.models import APIKey, Folder, Job, JobStatus, Page, Project, User
+from shared.models import (APIKey, DatalakeConnection, Folder, ImageAnalysisRun, Job, JobStatus, Page, Project,
+                           User)
 
 ALICE, BOB, DAVE, EVE = "user-alice", "user-bob", "user-dave", "user-eve"  # dave inactive, eve admin
 
@@ -94,6 +95,18 @@ def db():
                project_id=f"{BOB}-p"),
         APIKey(id="00000000-0000-0000-0000-00000000000c", user_id=BOB, key_hash="hc", name="c"),
     ])
+    # Merged with #48: datalake connections (owned rows) and image runs (keyed by job).
+    session.add_all([
+        DatalakeConnection(id=f"{owner}-dl", user_id=owner, name="DL", provider="s3", config={},
+                           credentials_encrypted=b"x")
+        for owner in (ALICE, BOB, DAVE)
+    ])
+    session.add_all([job("alice-image", ALICE), job("bob-image", BOB), job("orphan-image", None)])
+    session.flush()
+    session.add_all([
+        ImageAnalysisRun(job_id=j, options={}, source_path=f"images/{j}/source", deadline_at=datetime(2026, 1, 2))
+        for j in ("alice-image", "bob-image", "orphan-image")
+    ])
     session.commit()
     try:
         yield session
@@ -114,9 +127,13 @@ def _run(db):
 def test_fixture_is_clean_and_covers_every_kind(db):
     report = _run(db)
     assert report.clean, "\n".join(map(str, report.divergences))
-    # 4 users × (8 job rows + 3 page children + 5 extras + 3 projects + 2 folders + 3 keys)
-    assert report.pairs == 4 * (8 + 3 + 5 + 3 + 2 + 3)
-    assert report.decisions == report.pairs * len(equivalence.ACTIONS)
+    # 4 users × (11 job rows + 3 page children + 5 extras + 3 projects + 2 folders + 3 keys
+    #            + 3 datalake connections + 3 image runs)
+    assert report.pairs == 4 * (11 + 3 + 5 + 3 + 2 + 3 + 3 + 3)
+    # read/update/delete everywhere, + datalakes.use; a run is one jobs.cancel.
+    per_user = (11 + 3 + 5 + 3 + 2 + 3) * len(equivalence.ACTIONS) \
+        + 3 * len(equivalence.DATALAKE_PERMISSIONS) + 3 * 1
+    assert report.decisions == 4 * per_user
 
 
 def test_legacy_copy_decides_the_tricky_shapes(db):
@@ -136,6 +153,11 @@ def test_legacy_copy_decides_the_tricky_shapes(db):
     assert legacy("dave-main", dave) and not equivalence.legacy_active(dave)
     assert equivalence.legacy_api_key_allowed(db, "00000000-0000-0000-0000-00000000000b", alice)
     assert not equivalence.legacy_project_allowed(db, f"{BOB}-p", alice)
+    assert equivalence.legacy_datalake_allowed(db, f"{ALICE}-dl", alice)
+    assert not equivalence.legacy_datalake_allowed(db, f"{ALICE}-dl", bob)
+    assert equivalence.legacy_image_cancel_allowed(db, "alice-image", alice)
+    assert not equivalence.legacy_image_cancel_allowed(db, "alice-image", bob)
+    assert not equivalence.legacy_image_cancel_allowed(db, "orphan-image", alice)
 
 
 def test_a_regression_in_ownership_is_reported(db, monkeypatch):
@@ -150,6 +172,29 @@ def test_a_regression_in_ownership_is_reported(db, monkeypatch):
     diverging = {(d.user_id, d.resource_id) for d in report.divergences}
     assert diverging == {(ALICE, "alice-split"), (BOB, "bob-merge")}
     assert all(d.legacy and not d.iam for d in report.divergences)
+
+
+def test_a_regression_on_the_merged_resources_is_reported(db, monkeypatch):
+    """Datalake connections and image cancel are really compared, not skipped."""
+    real = ownership.owns
+    monkeypatch.setattr(ownership, "owns", lambda resource, user_id: (
+        True if isinstance(resource, DatalakeConnection) else real(resource, user_id)))
+    report = _run(db)
+    assert report.divergences and {d.kind for d in report.divergences} == {"datalake"}
+    assert all(not d.legacy and d.iam for d in report.divergences)
+    monkeypatch.setattr(ownership, "owns", real)
+
+    real_access = ownership.job_access
+
+    def deny_images(s, job_id, user_id, *, redis_status, owner_matches):
+        if job_id.endswith("-image"):
+            return ownership.JobAccess(False, None)
+        return real_access(s, job_id, user_id, redis_status=redis_status, owner_matches=owner_matches)
+
+    monkeypatch.setattr(ownership, "job_access", deny_images)
+    report = _run(db)
+    diverging = {(d.kind, d.user_id, d.resource_id) for d in report.divergences}
+    assert ("image_cancel", ALICE, "alice-image") in diverging and ("image_cancel", BOB, "bob-image") in diverging
 
 
 def test_bootstrap_reads_no_one_elses_data(db):

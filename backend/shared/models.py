@@ -1,3 +1,4 @@
+from sqlalchemy import LargeBinary
 from sqlalchemy import Column, String, Boolean, DateTime, ForeignKey, Text, Integer, BigInteger, Enum, JSON, Index, UniqueConstraint
 from sqlalchemy.dialects import mysql
 from sqlalchemy.orm import relationship
@@ -36,6 +37,7 @@ class JobStatus(str, enum.Enum):
     """Job status enum"""
     PENDING = "pending"
     PROCESSING = "processing"
+    PARTIAL = "partial"
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
@@ -161,6 +163,8 @@ class Job(Base):
     started_at = Column(DateTime)
     completed_at = Column(DateTime)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    configuration_row = relationship('JobConfiguration', back_populates='job', uselist=False, cascade='all, delete-orphan', passive_deletes=True)
 
     # Relationships
     user = relationship("User", back_populates="jobs")
@@ -626,5 +630,121 @@ from shared.access.models import (
     LegacyRequest,
     ServicePrincipal,
 )  # noqa: E402,F401
+
+
+class JobConfiguration(Base):
+    """Durable request independently of queue messages and cache retention."""
+    __tablename__ = 'job_configurations'
+    job_id = Column(String(36), ForeignKey('jobs.id', ondelete='CASCADE'), primary_key=True)
+    operation = Column(String(50), nullable=False)
+    provider = Column(String(100), nullable=True)
+    model = Column(String(500), nullable=True)
+    options = Column(JSON, nullable=False)
+    fingerprint = Column(String(64), nullable=False, index=True)
+    job = relationship('Job', back_populates='configuration_row')
+
+
+class DatalakeConnection(Base):
+    """User-owned storage account. Credentials are encrypted, never serialized."""
+    __tablename__ = "datalake_connections"
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    user_id = Column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    name = Column(String(150), nullable=False)
+    provider = Column(String(20), nullable=False)
+    config = Column(JSON, nullable=False, default=dict)
+    credentials_encrypted = Column(LargeBinary, nullable=False)
+    enabled = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class JobDatalakeExport(Base):
+    """Chosen destination and durable delivery state, separate from inference."""
+    __tablename__ = "job_datalake_exports"
+    job_id = Column(String(36), ForeignKey("jobs.id", ondelete="CASCADE"), primary_key=True)
+    connection_id = Column(String(36), ForeignKey("datalake_connections.id", ondelete="RESTRICT"), nullable=False, index=True)
+    bucket = Column(String(255), nullable=False)
+    prefix = Column(String(1000), nullable=False, default="")
+    status = Column(String(20), nullable=False, default="pending", index=True)
+    attempts = Column(Integer, nullable=False, default=0)
+    error = Column(String(255))
+    snapshot_path = Column(String(500))
+    objects = Column(JSON, nullable=False, default=list)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)
+    completed_at = Column(DateTime)
+
+
+class JobDatalakePartition(Base):
+    """Immutable delivery layout and submission metadata; old exports need no row."""
+    __tablename__ = "job_datalake_partitions"
+    job_id = Column(String(36), ForeignKey("jobs.id", ondelete="CASCADE"), primary_key=True)
+    strategy = Column(JSON, nullable=False)
+    context = Column(JSON, nullable=False)
+    values = Column(JSON, nullable=False, default=dict)
+    partitions = Column(JSON, nullable=False, default=dict)
+    layout_id = Column(String(40), nullable=False)
+    resolved_path = Column(String(1024), nullable=False)
+    dataset_path = Column(String(1024))
+    schema_path = Column(String(1024))
+
+
+class ImageAnalysisRun(Base):
+    __tablename__ = 'image_analysis_runs'
+    job_id = Column(String(36), ForeignKey('jobs.id', ondelete='CASCADE'), primary_key=True)
+    options = Column(JSON, nullable=False)
+    source_path = Column(String(500), nullable=False)
+    deadline_at = Column(DateTime, nullable=False, index=True)
+    status = Column(String(20), nullable=False, default='pending')
+    holder = Column(String(36))
+    fence = Column(Integer, nullable=False, default=0)
+    lease_until = Column(DateTime)
+    calls_started = Column(Integer, nullable=False, default=0)
+    profile = Column(String(30), nullable=False, default='image-full-v1')
+    calls_by_provider = Column(JSON, nullable=False, default=dict)
+    faces_resolved = Column(Boolean, nullable=False, default=False)
+    resolved = Column(Boolean, nullable=False, default=False)
+    resolved_inputs = Column(JSON, nullable=False, default=dict)
+    cancel_requested = Column(Boolean, nullable=False, default=False)
+    dispatch_after = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+    dispatch_attempts = Column(Integer, nullable=False, default=0)
+    usage_id = Column(BigInteger)
+    task_id = Column(String(36))
+    width = Column(Integer, nullable=False, default=0)
+    height = Column(Integer, nullable=False, default=0)
+    preview_path = Column(String(500))
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+
+class ImageAnalysisStep(Base):
+    __tablename__ = 'image_analysis_steps'
+    __table_args__ = (UniqueConstraint('job_id', 'step_id', name='uq_image_analysis_step'),)
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    job_id = Column(String(36), ForeignKey('jobs.id', ondelete='CASCADE'), nullable=False, index=True)
+    step_id = Column(String(80), nullable=False)
+    task = Column(String(60), nullable=False)
+    step_kind = Column(String(20), nullable=False, default='florence')
+    provider = Column(String(30), nullable=False, default='florence')
+    input = Column(JSON, nullable=False, default=dict)
+    status = Column(String(20), nullable=False, default='pending')
+    attempts = Column(Integer, nullable=False, default=0)
+    result_path = Column(String(500))
+    result_hash = Column(String(64))
+    reason_code = Column(String(100))
+    duration_ms = Column(Integer, nullable=False, default=0)
+
+
+class ImageAnalysisSubmission(Base):
+    __tablename__ = 'image_analysis_submissions'
+    __table_args__ = (UniqueConstraint('user_id', 'key_hash', name='uq_image_analysis_submission'),)
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(String(36), ForeignKey('users.id', ondelete='CASCADE'), nullable=False)
+    key_hash = Column(String(64), nullable=False)
+    request_hash = Column(String(64), nullable=False)
+    job_id = Column(String(36), nullable=True, index=True)
+    deleted_at = Column(DateTime, index=True)
+    purge_after = Column(DateTime)
+    purged_at = Column(DateTime)
+
 # Spec 0014: explicit additive migration (shared/iam/migration.py).
 from shared.iam.models import IamBinding  # noqa: E402,F401
