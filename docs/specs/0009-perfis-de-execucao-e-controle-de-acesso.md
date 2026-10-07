@@ -7,7 +7,7 @@
 | **Criada em** | 2026-10-06 |
 | **Atualizada em** | 2026-10-06 |
 | **Relacionadas** | [0003](0003-motores-de-execucao-roteamento-e-orcamento.md), [0004](0004-projects-and-folders.md), [0007](0007-operacao-de-engines-pelo-admin.md) |
-| **Substituída por** | — |
+| **Substituída por** | [0018](0018-iam-convergencia-do-rbac-abac-de-engines.md) — somente armazenamento e administração de grants; a semântica de decisão permanece |
 
 ## 1. Problema
 

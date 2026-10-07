@@ -6,7 +6,7 @@
 | **Autor** | Geda Valentim / Claude |
 | **Criada em** | 2026-10-06 |
 | **Atualizada em** | 2026-10-06 |
-| **Relacionadas** | [0004](0004-projects-and-folders.md), [0009](0009-perfis-de-execucao-e-controle-de-acesso.md), [0014](0014-iam-nucleo-de-decisao-e-papeis-de-plataforma.md), 0015, 0016, 0017 |
+| **Relacionadas** | [0018](0018-iam-convergencia-do-rbac-abac-de-engines.md), [0004](0004-projects-and-folders.md), [0009](0009-perfis-de-execucao-e-controle-de-acesso.md), [0014](0014-iam-nucleo-de-decisao-e-papeis-de-plataforma.md), 0015, 0016, 0017 |
 | **Substituída por** | — |
 
 ---
@@ -55,8 +55,11 @@ escopadas**, preservando o ABAC de engines da 0009.
 | 0015 — API keys escopadas | Key = dono ∩ escopo; keys perdem `/admin/*` e gestão de keys | 0014 | Fecha o risco atual de key de admin vazada |
 | 0016 — Organizações pessoais | `organizations`, membros, `org_id` nas tabelas, `X-Org-Id`, índices, `org_id` no ES, link SQL de jobs filhos | 0014 | Raiz de tenant; equivalência com o modelo atual verificável exaustivamente |
 | 0017 — Compartilhamento e times | Orgs `team`, grupos, papéis customizados, bindings em projeto/pasta/job/datalake, "Compartilhados comigo" | 0014, 0016 | Colaboração |
+| [0018](0018-iam-convergencia-do-rbac-abac-de-engines.md) — Convergência da 0009 | Grants de engine viram `iam_bindings` com condição ABAC; uma API, uma tela, um flag; delegação no IAM | 0014 | Elimina o segundo plano de concessão antes que a 0017 o duplique |
 
-0015 e 0016 podem andar em paralelo após a 0014.
+Ordem recomendada (estudo de débito técnico de 2026-10-07): 0014 → 0018 → 0015 → 0016 → 0017.
+A 0018 vem antes da 0017 para que grupos, papéis customizados e delegação por
+organização sejam implementados uma única vez.
 
 ## 4. Regras transversais
 
