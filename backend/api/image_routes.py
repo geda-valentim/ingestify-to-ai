@@ -60,6 +60,8 @@ from shared.engines import dispatch as engine_dispatch
 from shared.models import Job, JobStatus as DBJobStatus, User
 from shared.redis_client import VISION_HEARTBEAT_TTL_SECONDS, get_redis_client
 from shared.schemas import (
+    IMAGE_ANALYZE_PURGE_SOURCE_DESCRIPTION,
+    IMAGE_PURGE_SOURCE_DESCRIPTION,
     ImageAnalyzeRequest,
     ImageFullAnalyzeRequest,
     ImageFullAnalyzeResponse,
@@ -352,6 +354,7 @@ def _create_vision_job(
     tags: Optional[List[str]] = None,
     location: Optional[UploadLocation] = None,
     configuration: Optional[dict] = None,
+    purge_source: bool = False,
 ) -> Job:
     """
     Cria o job antes do despacho, exatamente como `/transcribe`.
@@ -384,6 +387,11 @@ def _create_vision_job(
             from shared.job_configuration import save_configuration
             save_configuration(db, db_job, operation='image', options=configuration,
                                provider=settings.vision_provider, model=settings.vision_model_id)
+        if purge_source:
+            # Durable on the job (and in its requested configuration): the worker
+            # writes the result without the image and the purge runs when it settles
+            from shared.job_source import save_purge_option
+            save_purge_option(db, db_job)
         set_job_tags(db_job, tags or [])
         db.commit()
     except Exception as e:
@@ -427,6 +435,11 @@ def _mark_job_failed(job_id: str, db: Session, db_job: Optional[Job], error: str
     try:
         db_job.status = DBJobStatus.FAILED
         db_job.error_message = error
+        # Every caller already discarded the handoff, the only copy there was: the
+        # job settled, and purge_source says nothing of the original remains
+        from shared.job_source import purge_requested
+        if purge_requested(db_job) and db_job.source_deleted_at is None:
+            db_job.source_deleted_at = datetime.utcnow()
         db.commit()
     except Exception:
         db.rollback()
@@ -560,6 +573,7 @@ async def _run_vision(
     path: str = "",
     options: Optional[dict] = None,
     wait: bool = True,
+    purge_source: bool = False,
 ) -> Dict[str, Any]:
     """
     Valida, cria o job, despacha e espera — para os quatro pontos de entrada.
@@ -589,6 +603,7 @@ async def _run_vision(
         tags=tags,
         location=location,
         configuration=options if kind == 'analyze' else {'task': task or (DEFAULT_VISION_CAPTION_TASK if kind == 'describe' else '<OCR_WITH_REGION>')},
+        purge_source=purge_source,
     )
 
     logger.info(
@@ -784,6 +799,7 @@ async def describe_image(
         tags=tags,
         plan=plan,
         path=http_request.url.path,
+        purge_source=request.purge_source,
     )
     return _describe_response(common, request.task)
 
@@ -831,7 +847,8 @@ async def analyze_image(request: ImageFullAnalyzeRequest | ImageAnalyzeRequest, 
     plan = _plan_location(db, current_user, http_request, _json_location(request))
     common = await _run_vision(kind="analyze", image_bytes=_decode_base64_image(request.image_base64),
         filename=request.filename, task=request.task, current_user=current_user, db=db, tags=tags,
-        plan=plan, path=http_request.url.path, options=options.model_dump(), wait=request.wait)
+        plan=plan, path=http_request.url.path, options=options.model_dump(), wait=request.wait,
+        purge_source=request.purge_source)
     return _analyze_response(common, request.wait)
 
 
@@ -849,6 +866,7 @@ async def analyze_image_upload(
     generation: Optional[str] = Form(None, description="Objeto JSON conforme VisionGenerationOptions; omitido usa os padrões do worker."),
     wait: bool = Form(False, description="false retorna 202 com job_id; true espera pelo resultado."),
     tags: Optional[str] = Form(None, description=TAGS_FORM_DESCRIPTION),
+    purge_source: bool = Form(False, description=IMAGE_ANALYZE_PURGE_SOURCE_DESCRIPTION),
     http_request: Request = None,
     location: LocationFields = Depends(upload_location_form),
     current_user: User = Depends(require("images.analyze")), db: Session = Depends(get_db),
@@ -870,13 +888,13 @@ async def analyze_image_upload(
     if mode == 'full':
         from api.image_full_routes import run_full
         fields = await http_request.form()
-        allowed = {'file', 'mode', 'full_options', 'datalake', 'wait', 'tags', 'project', 'project_id', 'folder', 'folder_id'}
+        allowed = {'file', 'mode', 'full_options', 'datalake', 'wait', 'tags', 'purge_source', 'project', 'project_id', 'folder', 'folder_id'}
         if set(fields) - allowed:
             raise _error(422, 'INVALID_VISION_OPTIONS', 'Campos incompatíveis com mode=full: ' + ', '.join(sorted(set(fields)-allowed)))
         try:
             full = ImageFullAnalyzeRequest(mode='full', image_base64='multipart', filename=file.filename,
                 full_options=json.loads(full_options) if full_options else {},
-                datalake=json.loads(datalake) if datalake else None, wait=wait,
+                datalake=json.loads(datalake) if datalake else None, wait=wait, purge_source=purge_source,
                 **{key: getattr(location, key) for key in ("project", "project_id", "folder", "folder_id")})
         except (ValueError, TypeError) as exc:
             raise _error(422, 'INVALID_VISION_OPTIONS', str(exc)) from exc
@@ -896,7 +914,8 @@ async def analyze_image_upload(
     image_bytes = await file.read(settings.vision_max_image_size_mb * 1024 * 1024 + 1)
     common = await _run_vision(kind="analyze", image_bytes=image_bytes, filename=file.filename,
         task=options.task, current_user=current_user, db=db, tags=tag_list,
-        plan=plan, path=http_request.url.path, options=options.model_dump(), wait=wait)
+        plan=plan, path=http_request.url.path, options=options.model_dump(), wait=wait,
+        purge_source=purge_source)
     return _analyze_response(common, wait)
 
 
@@ -912,6 +931,7 @@ async def describe_image_upload(
         description="<MORE_DETAILED_CAPTION>, <DETAILED_CAPTION> ou <CAPTION>",
     ),
     tags: Optional[str] = Form(None, description=TAGS_FORM_DESCRIPTION),
+    purge_source: bool = Form(False, description=IMAGE_PURGE_SOURCE_DESCRIPTION),
     http_request: Request = None,
     location: LocationFields = Depends(upload_location_form),
     current_user: User = Depends(require("images.analyze")),
@@ -950,6 +970,7 @@ async def describe_image_upload(
         tags=tag_list,
         plan=plan,
         path=http_request.url.path if http_request is not None else "",
+        purge_source=purge_source,
     )
     return _describe_response(common, task)
 
@@ -986,6 +1007,7 @@ async def ocr_image(
         tags=tags,
         plan=plan,
         path=http_request.url.path,
+        purge_source=request.purge_source,
     )
     return _ocr_response(common)
 
@@ -994,6 +1016,7 @@ async def ocr_image(
 async def ocr_image_upload(
     file: UploadFile = File(..., description="Imagem (PNG, JPEG, WEBP, BMP, GIF, TIFF)"),
     tags: Optional[str] = Form(None, description=TAGS_FORM_DESCRIPTION),
+    purge_source: bool = Form(False, description=IMAGE_PURGE_SOURCE_DESCRIPTION),
     http_request: Request = None,
     location: LocationFields = Depends(upload_location_form),
     current_user: User = Depends(require("images.analyze")),
@@ -1015,6 +1038,7 @@ async def ocr_image_upload(
         tags=tag_list,
         plan=plan,
         path=http_request.url.path if http_request is not None else "",
+        purge_source=purge_source,
     )
     return _ocr_response(common)
 

@@ -213,6 +213,31 @@ def _run(
         # `workers/monitoring.cleanup_old_jobs` is a periodic backstop for the
         # hard-kill case, and periodic cannot bound a tight upload loop.
         discard_image_handoff(settings.temp_storage_path, job_id)
+        # Settled for good (max_retries=0): purge_source applies now, after the
+        # handoff is gone, so `source_deleted_at` is only recorded once nothing of
+        # the original remains. Never raises.
+        _purge_source_if_requested(job_id)
+
+
+def _purge_source_if_requested(job_id: str) -> None:
+    from shared.job_source import purge_source_if_requested
+    from shared.minio_client import get_minio_client
+
+    purge_source_if_requested(job_id, session_factory=SessionLocal, minio_factory=get_minio_client)
+
+
+def _purge_requested(job_id: str) -> bool:
+    """Did the job ask for purge_source? Durable, from the DB; unknown reads as
+    False (the purge strips the stored result anyway when it runs)."""
+    from shared.job_source import purge_requested
+    from shared.models import Job
+
+    try:
+        with SessionLocal() as db:
+            return purge_requested(db.get(Job, job_id))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("vision: could not read purge_source of job %s: %s", job_id, type(exc).__name__)
+        return False
 
 
 def _run_accounted(
@@ -325,10 +350,17 @@ def _run_inner(
     from shared.vision_results import vision_result
     from workers.vision.image_input import sniff_image_mime
     image_bytes = Path(image_path).read_bytes()
+    # purge_source: the stored result (Redis + MinIO) never carries the image
     payload = vision_result(payload, operation=operation, image_bytes=image_bytes,
-                            mime=sniff_image_mime(image_bytes), filename=Path(image_path).name)
+                            mime=sniff_image_mime(image_bytes), filename=Path(image_path).name,
+                            embed_image=not _purge_requested(job_id))
     _store_result(job_id, payload)
     _set_status(job_id, "completed", progress=100, completed_at=datetime.utcnow())
+    # The return value lands in the Celery result backend, which DELETE
+    # /jobs/{id}/source cannot reach: never put the image there (the waiting route
+    # echoes the request's own bytes, not these)
+    if isinstance(payload.get("image"), dict) and payload["image"].get("image_base64"):
+        payload = {**payload, "image": {**payload["image"], "image_base64": None}}
     return payload
 
 

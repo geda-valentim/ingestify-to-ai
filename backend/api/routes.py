@@ -1729,8 +1729,14 @@ async def delete_job_source(
     `GET /jobs/{job_id}/pages/{n}/pdf` responde 410 `SOURCE_PURGED` e o retry de
     página responde 409 `SOURCE_NOT_AVAILABLE`.
 
+    Job de imagem (`/images/*`): apaga toda cópia guardada da imagem original — a
+    cópia local de processamento, o original e a prévia normalizada da análise
+    completa/facial (`images/{job_id}/source` e `images/{job_id}/preview/` no bucket
+    de resultados) e a imagem embutida no resultado guardado (`image.image_base64`
+    passa a null); o resultado da inferência fica.
+
     Para apagar automaticamente quando o job terminar, envie `purge_source=true` em
-    `/upload`, `/convert` ou `/transcribe`.
+    `/upload`, `/convert`, `/transcribe` ou em qualquer rota `/images/*`.
 
     ## Retorno
     - 200: `{"job_id": "...", "source_deleted": true, "source_deleted_at": "..."}`

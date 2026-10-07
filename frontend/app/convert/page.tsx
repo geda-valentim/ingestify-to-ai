@@ -193,7 +193,9 @@ function ConversionWorkspace() {
     if (isImage && !imageValid) return;
     let image_idempotency_key: string | undefined;
     if (isImage && ["full", "faces"].includes(imageRequest.image_operation ?? "")) {
-      const signature = JSON.stringify([selectedFile.name, selectedFile.size, selectedFile.lastModified, imageRequest, tags, project, folder]);
+      // purge_source is not part of the server's idempotency fingerprint: changing it
+      // must mint a new key, or the replay would return the earlier attempt unchanged
+      const signature = JSON.stringify([selectedFile.name, selectedFile.size, selectedFile.lastModified, imageRequest, tags, project, folder, purgeSource]);
       if (imageKey.current?.signature !== signature) imageKey.current = { signature, key: crypto.randomUUID() };
       image_idempotency_key = imageKey.current.key;
     }
@@ -202,7 +204,7 @@ function ConversionWorkspace() {
       file: selectedFile,
       name: isImage ? undefined : customName || undefined,
       tags,
-      purge_source: !isImage && purgeSource,
+      purge_source: purgeSource,
       ...toUploadLocation(project, folder),
     });
   };
@@ -343,27 +345,27 @@ function ConversionWorkspace() {
                     <TagInput id="tagsFile" value={tags} onChange={setTags} />
                   </div>
 
-                  {!isImage && (
-                    <div className="flex items-start space-x-2">
-                      <Checkbox
-                        id="purgeSourceFile"
-                        checked={purgeSource}
-                        onCheckedChange={(checked) => setPurgeSource(checked === true)}
-                        disabled={uploadMutation.isPending}
-                        className="mt-0.5"
-                      />
-                      <div className="space-y-1">
-                        <Label htmlFor="purgeSourceFile" className="font-normal">
-                          Don't keep the original file after converting
-                        </Label>
-                        <p className="text-xs text-muted-foreground">
-                          The file and its page PDFs are deleted when the job finishes (also when it
-                          fails, after its automatic retries); only the Markdown result is kept, and
-                          failed pages can no longer be retried.
-                        </p>
-                      </div>
+                  <div className="flex items-start space-x-2">
+                    <Checkbox
+                      id="purgeSourceFile"
+                      checked={purgeSource}
+                      onCheckedChange={(checked) => setPurgeSource(checked === true)}
+                      disabled={uploadMutation.isPending}
+                      className="mt-0.5"
+                    />
+                    <div className="space-y-1">
+                      <Label htmlFor="purgeSourceFile" className="font-normal">
+                        {isImage
+                          ? "Don't keep the original file after processing"
+                          : "Don't keep the original file after converting"}
+                      </Label>
+                      <p className="text-xs text-muted-foreground">
+                        {isImage
+                          ? "Every stored copy of the image is deleted when the job finishes (also when it fails or is cancelled); only the analysis result is kept."
+                          : "The file and its page PDFs are deleted when the job finishes (also when it fails, after its automatic retries); only the Markdown result is kept, and failed pages can no longer be retried."}
+                      </p>
                     </div>
-                  )}
+                  </div>
 
                   <Button
                     onClick={handleFileUpload}

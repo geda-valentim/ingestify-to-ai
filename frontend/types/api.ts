@@ -505,7 +505,8 @@ export interface UploadRequest extends UploadLocation {
   file: File;
   name?: string;
   tags?: string[];
-  /** Delete the source files (original + page PDFs) once the job settles: completed, or failed/partial after its automatic retries */
+  /** Delete the source files (original + page PDFs) once the job settles: completed, or failed/partial after its automatic retries.
+   *  Images (every /images/* route): every stored copy of the original image, once the job settles (completed, failed, partial or cancelled). */
   purge_source?: boolean;
 }
 

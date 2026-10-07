@@ -119,6 +119,13 @@ nunca do Redis:
 - `source_deletable` (bool): `DELETE /jobs/{job_id}/source` pode rodar agora (há arquivo e
   nada pendente: nem o job, nem retry automático, nem página `pending`/`processing`).
 
+Jobs de imagem (`/images/*`): `source_available` é `true` enquanto alguma cópia da imagem
+original existe — o handoff `{TEMP_STORAGE_PATH}/images/{job_id}/`, o original e a prévia
+da Full Analysis/rostos (`ImageAnalysisRun.source_path`/`preview_path`) ou um resultado
+nativo que ainda embute a imagem. Um job nativo que falhou já não tem nenhuma (a task apaga
+o handoff), então responde `false` mesmo sem `purge_source`. Ver
+[vision.md](vision.md#guardar-ou-apagar-a-imagem-original-purge_source).
+
 `status` de um PDF dividido cujas páginas terminaram todas, com alguma falha definitiva,
 é **`partial`** (com `error_message` "N de M páginas falharam…"), não mais `processing`
 para sempre. Entre tentativas automáticas de `process_conversion` o job aparece `queued`
@@ -188,10 +195,18 @@ página, então um retry não começa entre a checagem e o apagamento.
 | `409 {"code": "JOB_STILL_PROCESSING", "message": ...}` | o job está `queued`/`processing` (inclui um retry automático agendado, que espera como `queued`), ou alguma página está `pending`/`processing` (retry de página, ou retry automático de página) |
 | `503 {"code": "SOURCE_DELETE_FAILED", ...}` | o MinIO recusou; o que não foi apagado continua referenciado (chamar de novo termina) |
 
+Jobs de imagem: apaga toda cópia da imagem original que resta — o handoff local,
+`images/{job_id}/source` e `images/{job_id}/preview/` (bucket de resultados) e a imagem
+embutida no resultado guardado (`image.image_base64` vira `null` no MinIO e no Redis; o
+relatório da Full Analysis é regravado sob o novo hash) — e mantém o resultado da
+inferência. `409` enquanto o job está `queued`/`processing`.
+
 Depois disso o retry de página responde `409 SOURCE_NOT_AVAILABLE` e o PDF de página `410
 SOURCE_PURGED`. Para apagar automaticamente quando o job terminar, use
-`purge_source=true` no `/upload`, `/convert` ou `/transcribe` (ver
-[conversion.md](conversion.md#guardar-ou-apagar-o-arquivo-original-purge_source)).
+`purge_source=true` no `/upload`, `/convert`, `/transcribe` (ver
+[conversion.md](conversion.md#guardar-ou-apagar-o-arquivo-original-purge_source)) ou em
+qualquer rota `/images/*` (ver
+[vision.md](vision.md#guardar-ou-apagar-a-imagem-original-purge_source)).
 
 ## Configuração
 

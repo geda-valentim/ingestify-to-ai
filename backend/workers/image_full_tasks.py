@@ -89,6 +89,7 @@ def run_full_image_task(self, job_id, usage_id=None):
     started = time.monotonic()
     accounting_claimed = False
     path = None
+    preview_path = None
     try:
         if usage_id:
             from shared.engines import ledger
@@ -141,8 +142,15 @@ def run_full_image_task(self, job_id, usage_id=None):
             raise RuntimeError('Preview persistence unavailable')
         with SessionLocal() as db:
             job, run = locked(db, job_id)
-            from shared.image_analysis import check
-            check(db, job, run, holder, fence)
+            from shared.image_analysis import check, discard_object
+            try:
+                check(db, job, run, holder, fence)
+            except LostLease:
+                # Fenced out (or the job settled and may have purged already): this
+                # full-size copy of the original is nobody's preview, never keep it
+                db.rollback()
+                discard_object(storage, preview_path)
+                raise
             run.width, run.height = width, height
             run.preview_path = preview_path
             run.options = {**run.options, 'model': model.info() if model else options['model']}
@@ -258,9 +266,20 @@ def run_full_image_task(self, job_id, usage_id=None):
             shutil.rmtree(path.parent, ignore_errors=True)
         # A deleted job has no selected objects; clean this holder's late writes.
         with SessionLocal() as db:
-            deleted = db.get(Job, job_id) is None
+            job = db.get(Job, job_id)
+            deleted = job is None
+            purged = job is not None and job.source_deleted_at is not None
+            run = db.get(Run, job_id)
+            stale_preview = bool(preview_path and run is not None and run.preview_path != preview_path)
         if deleted:
             storage.delete_folder(storage.bucket_results, f'images/{job_id}/')
+        elif purged:
+            # The original was deleted (purge_source / DELETE /jobs/{id}/source) while
+            # this holder still ran: whatever preview it wrote must go too
+            storage.delete_folder(storage.bucket_results, f'images/{job_id}/preview/')
+        elif stale_preview:
+            from shared.image_analysis import discard_object
+            discard_object(storage, preview_path)
 
 
 def dispatch(job_id):
@@ -305,8 +324,28 @@ def dispatch(job_id):
         send()
 
 
+# Image purges that failed (storage down when the job settled) are retried from
+# this beat task, at most once a minute per process
+IMAGE_PURGE_RETRY_INTERVAL_SECONDS = 60
+_last_purge_retry = None
+
+
+def retry_image_purges(force=False):
+    """Bounded, idempotent retry of failed image purges (shared.job_source)."""
+    global _last_purge_retry
+    if not force and _last_purge_retry is not None and time.monotonic() - _last_purge_retry < IMAGE_PURGE_RETRY_INTERVAL_SECONDS:
+        return 0
+    _last_purge_retry = time.monotonic()
+    from shared.job_source import retry_pending_image_purges
+    return retry_pending_image_purges(SessionLocal, get_minio_client)
+
+
 @celery_app.task(name='workers.image_full_tasks.reconcile')
 def reconcile():
+    try:
+        retry_image_purges()
+    except Exception:
+        logger.warning('Image purge retry deferred')
     now = datetime.utcnow()
     storage = get_minio_client()
     with SessionLocal() as db:

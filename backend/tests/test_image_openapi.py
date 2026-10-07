@@ -44,3 +44,30 @@ def test_facial_migrations_have_one_head_on_current_main_chain():
     assert scripts.get_revision('a1c40014e7b2').down_revision == 'f0b40009c4d3'
     assert scripts.get_revision('02c6000ce6e5').down_revision == '01b5000bd5d4'
     assert scripts.get_revision('01b5000bd5d4').down_revision == 'f0b40009c4d3'
+
+
+def test_every_image_route_publishes_purge_source():
+    """The external DAG integrates against the contract: purge_source must be in it."""
+    from api.main import app
+    schema = app.openapi()
+    components = schema['components']['schemas']
+
+    def body_properties(path):
+        content = schema['paths'][path]['post']['requestBody']['content']
+        media = content.get('multipart/form-data') or content['application/json']
+        ref = media['schema'].get('$ref')
+        if ref:
+            return components[ref.rsplit('/', 1)[-1]]['properties']
+        # a union body (analyze): every alternative carries it
+        alternatives = media['schema'].get('anyOf') or media['schema'].get('oneOf')
+        merged = {}
+        for alternative in alternatives:
+            merged.update(components[alternative['$ref'].rsplit('/', 1)[-1]]['properties'])
+        return merged
+
+    for path in ('/images/describe/upload', '/images/ocr/upload', '/images/analyze/upload',
+                 '/images/faces/upload', '/images/describe', '/images/ocr', '/images/analyze',
+                 '/images/faces'):
+        field = body_properties(path)['purge_source']
+        assert field['type'] == 'boolean' and field['default'] is False, path
+        assert 'DELETE /jobs/{job_id}/source' in field['description'], path

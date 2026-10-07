@@ -306,14 +306,91 @@ pré-baixa os pesos.
 
 `GET /jobs/{id}/result?format=markdown` retorna o envelope padrão com `markdown`,
 `metadata` e `image`: tarefa, entrada/configuração, imagem original, dimensões,
-modelo e resultado próprio. O status é mantido no MySQL. O resultado completo é
-salvo em `images/{job_id}/result.json` no bucket privado de resultados, com
-referência em `jobs.minio_result_path`; Redis é um cache. A leitura continua após
-expirar o cache e a exclusão do job remove esse objeto. O handoff temporário é
-apagado ao terminar a tarefa, sem perder a imagem presente no resultado.
+modelo e resultado próprio. O status é mantido no MySQL. Para describe/ocr/analyze
+single, o resultado completo é salvo em `images/{job_id}/result.json` no bucket privado
+de resultados, com referência em `jobs.minio_result_path` (é a cópia durável que a
+entrega ao datalake lê), mas `GET /jobs/{id}/result` lê o Elasticsearch e depois o Redis
+(`job:{id}:result`, cache com TTL): depois que o cache expira, o resultado nativo não é
+mais servido por essa rota. Full Analysis e rostos são lidos do relatório no MinIO. A
+exclusão do job remove esses objetos. O handoff temporário é apagado ao terminar a
+tarefa.
 
 Requisições síncronas concorrentes podem ultrapassar o prazo de espera. Prefira
 `analyze` com `wait=false` para acompanhar a fila sem manter uma conexão aberta.
+
+## Guardar ou apagar a imagem original (`purge_source`)
+
+Todas as rotas de imagem aceitam `purge_source` (padrão `false`, mesmo nome e sentido de
+`/upload`, `/convert` e `/transcribe`): campo de formulário em `/images/describe/upload`,
+`/images/ocr/upload`, `/images/analyze/upload` e `/images/faces/upload`; campo booleano do
+corpo JSON em `/images/describe`, `/images/ocr`, `/images/analyze` (single e `mode=full`) e
+`/images/faces`. Valor que não é booleano → `422`, sem criar job.
+
+Onde o original de um job de imagem fica guardado hoje (todas contam como "original"):
+
+| Cópia | Rotas | Ciclo de vida sem `purge_source` |
+|---|---|---|
+| handoff local `{TEMP_STORAGE_PATH}/images/{job_id}/` | todas (Full/rostos: `.../{job_id}/{holder}/full-source`) | a própria task apaga no `finally`; `cleanup_old_jobs` (`sweep_image_handoffs`) varre o que um worker morto deixou |
+| `image.image_base64` do resultado (`images/{job_id}/result.json` + `job:{id}:result`) | describe, ocr, analyze single | fica enquanto o job existir |
+| `images/{job_id}/source` (bucket de resultados, `ImageAnalysisRun.source_path`) | Full, rostos | fica enquanto o job existir |
+| prévia PNG em tamanho real, normalizada (`images/{job_id}/preview/…`) e embutida no relatório (`image.image_base64`) | Full, rostos | fica enquanto o job existir |
+
+O resto é resultado derivado e fica sempre: descrição, OCR, regiões, rostos (caixas,
+landmarks e expressões são coordenadas e rótulos, nunca recortes), markdown e as saídas
+por etapa (`images/{job_id}/steps/…`). O eco `image_base64` da resposta síncrona
+de describe/ocr e de analyze single com `wait=true` vem dos bytes da própria requisição,
+não de uma cópia guardada (Full Analysis e rostos respondem com o relatório, que traz
+`image.image_base64: null`); o valor que a task devolve ao backend de resultados do
+Celery nunca carrega a imagem.
+
+Com `purge_source=true`:
+
+- a opção fica no job (`jobs.purge_source`, e em `configuration.options.purge_source`);
+- os workers gravam o resultado/relatório **sem** a imagem (`image.image_base64: null`,
+  também no Redis e no que vai para o datalake);
+- quando o job termina — `completed`, `failed`, `partial` ou `cancelled` (rotas de imagem
+  não têm retry automático: as tasks nativas usam `max_retries=0`, e a Full Analysis só
+  termina quando `finish` grava o estado final) — o worker apaga o handoff, o
+  `images/{job_id}/source`, todas as prévias e grava `jobs.source_deleted_at`. Uma falha
+  antes de chegar ao worker (fila fora, sem motor) também grava `source_deleted_at`: o
+  handoff, única cópia, já foi apagado;
+- falha ao apagar (MinIO fora no fim do job) nunca muda o job e deixa
+  `source_deleted_at` vazio; a task periódica `workers.image_full_tasks.reconcile` refaz
+  o purge desses jobs (`purge_source=true`, terminados, `source_deleted_at` nulo), no
+  máximo uma vez por minuto e até 20 jobs por vez, mais antigos primeiro. É idempotente:
+  cada tentativa reconfere tudo sob o lock da linha do job, e o sucesso grava
+  `source_deleted_at`, que tira o job da fila. `DELETE /jobs/{id}/source` também termina;
+- um worker de Full Analysis/rostos que perdeu o lease (o reconciliador fechou o run, ou
+  o job já terminou e foi purgado) apaga a prévia que acabou de gravar; no `finally`, se
+  o original já foi apagado, apaga todo `images/{job_id}/preview/`, e se a prévia dele
+  não é a do run, apaga a dele.
+
+`GET /jobs/{id}` diz a verdade para jobs de imagem: `source_available` é `true` só enquanto
+alguma cópia acima existe (handoff com arquivo, `source_path`/`preview_path` do run, qualquer
+objeto listado em `images/{job_id}/source`, `images/{job_id}/preview/` ou um relatório que
+não é o selecionado, ou um resultado nativo — no MinIO ou no Redis — que ainda embute a
+imagem). Um job nativo que falhou sem `purge_source`
+responde `source_available: false` com `source_deleted_at: null` (a task já apagou o
+handoff, a única cópia). `DELETE /jobs/{id}/source` funciona para jobs de imagem: apaga as
+cópias que restam (reescreve o resultado sem `image_base64`; o relatório da Full Analysis é
+gravado sob o novo hash, o novo caminho é gravado no MySQL, e só depois o antigo é apagado;
+quem lê com `wait=true` no meio relê o caminho), `404` quando não há nenhuma, `409
+JOB_STILL_PROCESSING` enquanto o job está na fila ou processando. Entregas já feitas a um
+datalake do usuário não são alcançadas por `DELETE` (com `purge_source=true` elas nunca
+recebem a imagem).
+
+Sem deduplicação: rotas de imagem continuam criando um job por requisição. Na Full Analysis
+e em rostos, `purge_source` **não** faz parte do fingerprint da `Idempotency-Key`: repetir a
+chave com outro `purge_source` devolve a tentativa existente sem mudar nada (nem liga nem
+desliga o purge daquele job; use `DELETE /jobs/{id}/source`). Depois de uma tentativa
+`failed`, a próxima tentativa da mesma chave usa o `purge_source` do novo pedido. O
+formulário do front gera uma chave nova quando a opção muda.
+
+```bash
+curl -X POST http://localhost:8000/images/ocr/upload \
+  -H "X-API-Key: $INGESTIFY_API_KEY" \
+  -F "file=@recibo.png" -F "project=Cursos" -F "purge_source=true"
+```
 
 ## Com rota de visão (spec 0003, fatia 8)
 

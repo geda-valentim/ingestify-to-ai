@@ -11,6 +11,30 @@
   `test_upload_apikey.sh`, `test_conversion_flow.py` (cobertos pela suíte `pytest` e por `scripts/`).
 - Os `docker-compose*.yml` ficam na raiz: o host agent fixa o caminho e o hash de cada um.
 
+## 2026-10: `purge_source` nas rotas de imagem
+
+- As oito rotas de imagem aceitam `purge_source` (padrão `false`): form em
+  `/images/describe/upload`, `/images/ocr/upload`, `/images/analyze/upload`,
+  `/images/faces/upload`; campo JSON em `/images/describe`, `/images/ocr`,
+  `/images/analyze` e `/images/faces`. Está no contrato OpenAPI.
+- Com `true`, toda cópia guardada da imagem original é apagada quando o job termina
+  (`completed`, `failed`, `partial` ou `cancelled`): handoff local, `images/{job_id}/source`
+  e prévias normalizadas da Full Analysis/rostos, e a imagem embutida no resultado
+  (`image.image_base64`, que os workers já gravam como `null`). O resultado da inferência
+  fica. Grava `jobs.purge_source` e `jobs.source_deleted_at` (sem migração nova).
+- `GET /jobs/{id}` passa a reportar `source_available`/`source_deleted_at`/`source_deletable`
+  corretamente para jobs de imagem, e `DELETE /jobs/{id}/source` funciona neles (`404` sem
+  cópia, `409` em processamento).
+- O valor devolvido pelas tasks de visão ao backend do Celery não carrega mais a imagem.
+- Full Analysis/rostos: `purge_source` fica fora do fingerprint da `Idempotency-Key`;
+  repetir a chave com outro valor devolve a tentativa existente sem alterá-la.
+- Front: a opção "Don't keep the original file after processing" aparece também para imagens.
+- Purge de imagem que falhou (armazenamento fora) é refeito pela task periódica
+  `workers.image_full_tasks.reconcile` (até 20 jobs por minuto, idempotente).
+- Worker de Full Analysis que perdeu o lease não deixa mais a prévia em tamanho real para
+  trás; `source_available`/`DELETE /jobs/{id}/source` listam `images/{id}/source`,
+  `images/{id}/preview/` e relatórios não selecionados, e consideram o resultado no Redis.
+
 ## 2026-10: Guardar ou apagar os arquivos de origem de documentos
 
 - `POST /upload` e `POST /convert` aceitam `purge_source` (form, padrão `false`; mesmo
