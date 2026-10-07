@@ -36,9 +36,17 @@ PUBLIC_ROUTES = {
     "POST /auth/login",
     "POST /auth/register",
     "POST /auth/refresh",
-    # Authenticated by a single-use ticket bound to the session, not by a user.
-    "WS /transcribe/live/sessions/{job_id}/stream",
 }
+# WebSockets authenticated by a single-use ticket instead of a user dependency
+# (CA1 "WS /live/{id}/stream com ticket"). The ticket is only issued by a route
+# that declares IAM (`POST /transcribe/live/sessions`, require(live.sessions.create)),
+# and the handler must still decide, through shared.iam, that the ticket's user
+# owns the job (checked below): a route-level dependency cannot, since the
+# identity arrives in the first WS message, after the handshake.
+TICKET_ROUTES = {
+    "WS /transcribe/live/sessions/{job_id}/stream": "POST /transcribe/live/sessions",
+}
+TICKET_GUARD = "decide("
 # Named public by the spec (CA1) but not in the app yet. Kept apart so that every
 # PUBLIC_ROUTES entry is checked to exist; move it there when the route lands.
 RESERVED_PUBLIC_ROUTES = {
@@ -57,48 +65,16 @@ MACHINE_GUARD = "host_identity("
 # FastAPI's own documentation routes.
 DOCS_PATHS = {"/openapi.json", "/docs", "/docs/oauth2-redirect", "/redoc"}
 
-# Routes still on their legacy guard. Converted in spec 0014 §8 items 3 and 4;
-# this set may only shrink (and may not grow: see PENDING_MAX).
-PENDING_ROUTES = {
-    # §8.4: data routes by id and listings
-    "POST /api-keys/",
-    "GET /api-keys/",
-    "PATCH /api-keys/{key_id}",
-    "DELETE /api-keys/{key_id}",
-    "POST /images/describe",
-    "POST /images/describe/upload",
-    "POST /images/ocr",
-    "POST /images/ocr/upload",
-    "GET /images/capabilities",
-    "GET /tags",
-    "PUT /jobs/{job_id}/tags",
-    "GET /projects",
-    "GET /projects/resolve",
-    "GET /projects/{project_id}/folders/resolve",
-    "POST /transcribe/live/sessions",
-    "GET /transcribe/live/sessions/{job_id}",
-    "DELETE /transcribe/live/sessions/{job_id}",
-    "POST /upload",
-    "POST /transcribe",
-    "POST /convert",
-    "GET /jobs",
-    "GET /search",
-    "GET /jobs/{job_id}",
-    "DELETE /jobs/{job_id}",
-    "GET /jobs/{job_id}/result",
-    "GET /jobs/{job_id}/transcript/partial",
-    "GET /jobs/{job_id}/pages",
-    "GET /jobs/{job_id}/pages/{page_number}/status",
-    "GET /jobs/{job_id}/pages/{page_number}/result",
-    "POST /jobs/{job_id}/pages/{page_number}/retry",
-    "GET /jobs/{job_id}/pages/{page_number}/pdf",
-}
+# Routes still on their legacy guard. Every data route was converted in spec 0014
+# §8 item 4; the set stays, empty, so a future slice cannot reopen it unnoticed
+# (it may only shrink, and may not grow: see PENDING_MAX).
+PENDING_ROUTES: set = set()
 
 # Exact sizes, so the allowlists cannot grow unnoticed (a removal that is later
 # re-added would otherwise pass). Lower these in each slice that converts.
-PENDING_MAX = 31
+PENDING_MAX = 0
 ADMIN_ALLOWLIST_MAX = 21
-OWNER_ALLOWLIST_MAX = 16
+OWNER_ALLOWLIST_MAX = 4
 
 # The only routes that may declare authenticated(): they describe the caller to
 # themselves and read nobody else's data (0014 §4.9 "sessão").
@@ -162,7 +138,7 @@ def _inventory():
 
 
 def _public(key: str) -> bool:
-    return key in PUBLIC_ROUTES or key in MACHINE_ROUTES
+    return key in PUBLIC_ROUTES or key in MACHINE_ROUTES or key in TICKET_ROUTES
 
 
 def test_every_route_declares_exactly_one_authorization():
@@ -194,8 +170,8 @@ def test_pending_allowlist_only_shrinks():
 
 def test_public_and_machine_allowlists_name_real_routes():
     routes, _, _ = _inventory()
-    gone = sorted(k for k in PUBLIC_ROUTES | MACHINE_ROUTES if k not in routes)
-    assert not gone, f"public/machine allowlist entries with no route: {gone}"
+    gone = sorted(k for k in PUBLIC_ROUTES | MACHINE_ROUTES | set(TICKET_ROUTES) if k not in routes)
+    assert not gone, f"public/machine/ticket allowlist entries with no route: {gone}"
     landed = sorted(k for k in RESERVED_PUBLIC_ROUTES if k in routes)
     assert not landed, f"move from RESERVED_PUBLIC_ROUTES to PUBLIC_ROUTES: {landed}"
     unlisted = sorted(k for k in routes if k.split(" ", 1)[1].startswith("/internal/") and k not in MACHINE_ROUTES)
@@ -206,6 +182,14 @@ def test_machine_routes_authenticate_the_host():
     _, _, endpoints = _inventory()
     missing = sorted(k for k in MACHINE_ROUTES if MACHINE_GUARD not in inspect.getsource(endpoints[k]))
     assert not missing, f"/internal/ routes must call {MACHINE_GUARD}...): {missing}"
+
+
+def test_ticket_routes_decide_ownership_and_their_issuer_declares_iam():
+    routes, _, endpoints = _inventory()
+    for key, issuer in TICKET_ROUTES.items():
+        assert key.startswith("WS "), f"only WebSockets authenticate by ticket: {key}"
+        assert TICKET_GUARD in inspect.getsource(endpoints[key]), f"{key} must call {TICKET_GUARD}...)"
+        assert [d.kind for d in routes[issuer]] == ["require"], f"{issuer} issues the ticket of {key}"
 
 
 def test_allowlists_do_not_grow():
@@ -305,20 +289,9 @@ OWNER_ALLOWLIST = {
     # Non-authorizing uses (permanent while the code stays as it is).
     ("api/auth_routes.py", "user = db.query(User).filter(User.id == user_id).first()"): (1, "token subject lookup, not an ownership check"),
     ("api/projects_api.py", "Job.user_id == user_id,"): (1, "upload idempotency: duplicate detection within the user's own jobs"),
-    # Authorizing filters still inline: converted to visible()/authorized() in §8.4.
+    # Authorizing comparisons still inline: a key's project binding (0015 changes keys).
     ("api/apikey_routes.py", "if project is None or project.user_id != key.user_id:"): (1, PENDING + " (key binding, 0015)"),
-    ("api/apikey_routes.py", "keys = db.query(APIKey).filter(APIKey.user_id == current_user.id).all()"): (1, PENDING + " (visible(APIKey))"),
-    ("api/apikey_routes.py", "projects = {p.id: p for p in db.query(Project).filter(Project.user_id == current_user.id)}"): (1, PENDING + " (visible(Project))"),
-    ("api/apikey_routes.py", "APIKey.user_id == current_user.id"): (2, PENDING + " (authorized(APIKey))"),
-    ("api/live_routes.py", "if not job or not owner or not owner.is_active or job.user_id != binding['user_id'] or not live or live.generation != generation or live.state != 'created':"): (1, PENDING + " (WS ticket binding)"),
     ("api/projects_api.py", "if project is None or project.user_id != user.id or api_key.user_id != user.id:"): (1, PENDING + " (key binding, 0015)"),
-    ("api/projects_api.py", "projects = db.query(Project).filter(Project.user_id == current_user.id).all()"): (1, PENDING + " (visible(Project))"),
-    ("api/projects_api.py", '.filter(Job.user_id == current_user.id, Job.job_type == "MAIN", Job.project_id.isnot(None))'): (1, PENDING + " (visible(Job))"),
-    ("api/projects_api.py", ".filter(APIKey.user_id == current_user.id, APIKey.project_id.isnot(None))"): (1, PENDING + " (visible(APIKey))"),
-    ("api/projects_api.py", "for folder in db.query(Folder).filter(Folder.user_id == current_user.id).all():"): (1, PENDING + " (visible(Folder))"),
-    ("api/routes.py", "query = db.query(Job).filter(Job.user_id == current_user.id)"): (1, PENDING + " (visible(Job), GET /jobs)"),
-    ("api/routes.py", ".filter(Job.id.in_(live_ids), Job.user_id == current_user.id,"): (1, PENDING + " (visible(Job))"),
-    ("api/tag_routes.py", ".filter(Job.user_id == current_user.id)"): (1, PENDING + " (visible(Job), GET /tags)"),
 }
 
 

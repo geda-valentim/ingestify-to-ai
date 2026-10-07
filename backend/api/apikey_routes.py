@@ -5,6 +5,7 @@ from typing import Dict, List, Optional
 from uuid import UUID
 
 from api.deps import owned_project_or_404
+from api.iam_deps import Scope, authorized, require, visible
 from shared.database import get_db
 from shared.models import User, APIKey, Project
 from shared.projects import InvalidNameError, get_or_create_project
@@ -47,7 +48,7 @@ def _key_info(key: APIKey, project: Optional[Project]) -> APIKeyInfo:
 @router.post("/", response_model=APIKeyResponse, status_code=status.HTTP_201_CREATED)
 async def create_api_key(
     key_data: APIKeyCreate,
-    current_user: User = Depends(get_current_active_user),
+    current_user: User = Depends(require("api_keys.manage")),
     db: Session = Depends(get_db)
 ):
     """
@@ -135,7 +136,7 @@ async def create_api_key(
 
 @router.get("/", response_model=List[APIKeyInfo])
 async def list_api_keys(
-    current_user: User = Depends(get_current_active_user),
+    scope: Scope = Depends(visible(APIKey, "api_keys.read")),
     db: Session = Depends(get_db)
 ):
     """
@@ -163,8 +164,8 @@ async def list_api_keys(
     ## Errors:
     - 401: Not authenticated
     """
-    keys = db.query(APIKey).filter(APIKey.user_id == current_user.id).all()
-    projects = {p.id: p for p in db.query(Project).filter(Project.user_id == current_user.id)}
+    keys = db.query(APIKey).filter(scope.predicate).all()
+    projects = {p.id: p for p in db.query(Project).filter(scope.of(Project))}
 
     return [_key_info(key, _bound_project(db, key, projects)) for key in keys]
 
@@ -173,6 +174,7 @@ async def list_api_keys(
 async def update_api_key_project(
     key_id: UUID,
     body: APIKeyProjectUpdate,
+    key: APIKey = Depends(authorized(APIKey, "api_keys.manage")),
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
 ):
@@ -187,13 +189,6 @@ async def update_api_key_project(
     ## Errors:
     - 404: API key or project not found (or not yours)
     """
-    key = db.query(APIKey).filter(
-        APIKey.id == str(key_id),
-        APIKey.user_id == current_user.id
-    ).first()
-    if not key:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="API key not found")
-
     project_id = (body.project_id or "").strip() or None
     project = owned_project_or_404(db, project_id, current_user) if project_id else None
     key.project_id = project.id if project is not None else None
@@ -205,7 +200,7 @@ async def update_api_key_project(
 @router.delete("/{key_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def revoke_api_key(
     key_id: UUID,
-    current_user: User = Depends(get_current_active_user),
+    key: APIKey = Depends(authorized(APIKey, "api_keys.manage")),
     db: Session = Depends(get_db)
 ):
     """
@@ -221,17 +216,6 @@ async def revoke_api_key(
     - 401: Not authenticated
     - 404: API key not found or doesn't belong to user
     """
-    key = db.query(APIKey).filter(
-        APIKey.id == str(key_id),
-        APIKey.user_id == current_user.id
-    ).first()
-
-    if not key:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="API key not found"
-        )
-
     db.delete(key)
     db.commit()
 

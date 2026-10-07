@@ -43,7 +43,7 @@ from sqlalchemy.orm import Session
 from shared.auth import get_current_active_user
 from shared.database import get_db
 from shared.iam import ownership
-from shared.models import Folder, Job, Page, Project, User
+from shared.models import APIKey, Folder, Job, Page, Project, User
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +51,7 @@ logger = logging.getLogger(__name__)
 JOB_NOT_FOUND_DETAIL = "Job não encontrado"
 PROJECT_NOT_FOUND_DETAIL = "Projeto não encontrado"
 FOLDER_NOT_FOUND_DETAIL = "Pasta não encontrada"
+API_KEY_NOT_FOUND_DETAIL = "API key not found"
 
 
 class LocationError(HTTPException):
@@ -202,3 +203,15 @@ async def get_owned_folder(
 ) -> Folder:
     """Dependência de autorização para rotas `/folders/{folder_id}/...`."""
     return owned_folder_or_404(db, folder_id, current_user)
+
+
+# ============================================
+# API keys
+# ============================================
+
+def owned_api_key_or_404(db: Session, key_id, user: User) -> APIKey:
+    """A key, se for do usuário; 404 igual para inexistente e alheia."""
+    key = db.get(APIKey, str(key_id)) if key_id else None
+    if not ownership.owns(key, user.id):
+        raise HTTPException(status_code=404, detail=API_KEY_NOT_FOUND_DETAIL)
+    return key

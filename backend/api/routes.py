@@ -34,7 +34,8 @@ from shared.models import Folder, Job, JobTag, Page, Project, JobStatus as DBJob
 from shared.config import get_settings
 from shared.utils import calculate_file_checksum
 from shared.auth import get_current_active_user
-from api.deps import get_owned_job, get_owned_page_or_none, owned_folder_or_404, owned_project_or_404
+from api.deps import owned_folder_or_404, owned_project_or_404
+from api.iam_deps import Scope, authorized, owned_page, require, visible
 from shared.utils import sanitize_upload_filename
 from shared.tags import set_job_tags
 from shared.admin import is_effective_admin
@@ -56,6 +57,14 @@ from sqlalchemy.orm import Session
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["Conversion"])
 settings = get_settings()
+
+# Job authorization (spec 0014 §4.4). The page dependencies build on the job one,
+# so a route that takes both the job and its page shares one `authorized(...)`
+# object (FastAPI resolves it once; the route declares it once).
+_job_read = authorized(Job, "jobs.read")
+_job_retry = authorized(Job, "jobs.retry")
+_page_read = owned_page(_job_read)
+_page_retry = owned_page(_job_retry)
 
 # Validade da URL pré-assinada do PDF de uma página.
 #
@@ -91,7 +100,7 @@ async def upload_and_convert(
     include_word_timestamps: Optional[bool] = Form(None),
     request: Request = None,
     location: LocationFields = Depends(upload_location_form),
-    current_user: User = Depends(get_current_active_user),
+    current_user: User = Depends(require("documents.convert")),
     db: Session = Depends(get_db),
 ):
     """
@@ -461,7 +470,7 @@ async def transcribe_audio(
     max_speakers: Optional[int] = Form(None, ge=1, le=20),
     request: Request = None,
     location: LocationFields = Depends(upload_location_form),
-    current_user: User = Depends(get_current_active_user),
+    current_user: User = Depends(require("audio.transcribe")),
     db: Session = Depends(get_db),
 ):
     """
@@ -826,7 +835,7 @@ async def convert_document(
     include_word_timestamps: Optional[bool] = Form(None),
     request: Request = None,
     location: LocationFields = Depends(upload_location_form),
-    current_user: User = Depends(get_current_active_user),
+    current_user: User = Depends(require("documents.convert")),
     db: Session = Depends(get_db),
 ):
     """
@@ -1140,7 +1149,7 @@ def _job_location_refs(db: Session, job: Optional[Job]) -> dict:
 async def get_job_status(
     job_id: str,
     current_user: User = Depends(get_current_active_user),
-    owned_job: Optional[Job] = Depends(get_owned_job),
+    owned_job: Optional[Job] = Depends(_job_read),
     db: Session = Depends(get_db),
     page_limit: Optional[int] = None,
     page_offset: int = 0,
@@ -1160,7 +1169,7 @@ async def get_job_status(
     """
     redis_client = get_redis_client()
 
-    # Ownership já validada em get_owned_job (MySQL como fonte da verdade)
+    # Ownership já validada em authorized(Job) (MySQL como fonte da verdade)
 
     # Get job status from Redis (real-time data)
     status_data = redis_client.get_job_status(job_id)
@@ -1372,7 +1381,7 @@ async def get_job_status(
 async def delete_job(
     job_id: str,
     current_user: User = Depends(get_current_active_user),
-    owned_job: Optional[Job] = Depends(get_owned_job),
+    owned_job: Optional[Job] = Depends(authorized(Job, "jobs.delete")),
     db: Session = Depends(get_db),
 ):
     """
@@ -1409,7 +1418,7 @@ async def delete_job(
     except Exception as e:
         logger.info(f"Elasticsearch not available: {e}")
 
-    # Ownership já validada em get_owned_job (MySQL como fonte da verdade)
+    # Ownership já validada em authorized(Job) (MySQL como fonte da verdade)
     status_data = redis_client.get_job_status(job_id)
 
     # Linha própria no MySQL (jobs filhos não são persistidos)
@@ -1533,7 +1542,7 @@ async def get_job_result(
                     "Sem este parâmetro vale o output_format escolhido no /transcribe.",
     ),
     current_user: User = Depends(get_current_active_user),
-    owned_job: Optional[Job] = Depends(get_owned_job),
+    owned_job: Optional[Job] = Depends(_job_read),
     db: Session = Depends(get_db),
 ):
     """
@@ -1557,7 +1566,7 @@ async def get_job_result(
     redis_client = get_redis_client()
     es_client = get_es_client()
 
-    # Ownership já validada em get_owned_job (MySQL como fonte da verdade)
+    # Ownership já validada em authorized(Job) (MySQL como fonte da verdade)
 
     # Live results require the exact durable row, including after cache expiry.
     # A cancelled/stale generation may have written external objects, but is
@@ -1699,7 +1708,7 @@ async def get_partial_transcript(
     job_id: str,
     since: int = Query(0, ge=0, description="Índice do primeiro segmento a retornar (o `next` da consulta anterior)"),
     current_user: User = Depends(get_current_active_user),
-    owned_job: Optional[Job] = Depends(get_owned_job),
+    owned_job: Optional[Job] = Depends(_job_read),
 ):
     """
     Texto de uma transcrição enquanto ela acontece
@@ -1733,7 +1742,7 @@ async def get_partial_transcript(
 async def get_job_pages(
     job_id: str,
     current_user: User = Depends(get_current_active_user),
-    owned_job: Optional[Job] = Depends(get_owned_job),
+    owned_job: Optional[Job] = Depends(_job_read),
     db: Session = Depends(get_db),
 ):
     """
@@ -1745,7 +1754,7 @@ async def get_job_pages(
     """
     redis_client = get_redis_client()
 
-    # Ownership já validada em get_owned_job (MySQL como fonte da verdade)
+    # Ownership já validada em authorized(Job) (MySQL como fonte da verdade)
 
     # Try to get pages from MySQL first
     db_pages = db.query(Page).filter(Page.job_id == job_id).order_by(Page.page_number).all()
@@ -1852,7 +1861,7 @@ async def get_page_status_by_number(
     job_id: str,
     page_number: int,
     current_user: User = Depends(get_current_active_user),
-    db_page: Optional[Page] = Depends(get_owned_page_or_none),
+    db_page: Optional[Page] = Depends(_page_read),
     db: Session = Depends(get_db),
 ):
     """
@@ -1878,7 +1887,7 @@ async def get_page_status_by_number(
     """
     redis_client = get_redis_client()
 
-    # Ownership já validada em get_owned_page_or_none -> get_owned_job
+    # Ownership já validada em owned_page -> authorized(Job) (spec 0014)
     # (MySQL como fonte da verdade). db_page vem da mesma dependência.
 
     if db_page:
@@ -1945,7 +1954,7 @@ async def get_page_result_by_number(
     job_id: str,
     page_number: int,
     current_user: User = Depends(get_current_active_user),
-    db_page: Optional[Page] = Depends(get_owned_page_or_none),
+    db_page: Optional[Page] = Depends(_page_read),
     db: Session = Depends(get_db),
 ):
     """
@@ -1975,7 +1984,7 @@ async def get_page_result_by_number(
     redis_client = get_redis_client()
     es_client = get_es_client()
 
-    # Ownership já validada em get_owned_page_or_none -> get_owned_job
+    # Ownership já validada em owned_page -> authorized(Job) (spec 0014)
     # (MySQL como fonte da verdade). db_page vem da mesma dependência.
 
     # Try to get page from Elasticsearch first
@@ -2107,7 +2116,7 @@ async def list_jobs(
     folder_id: Optional[str] = Query(
         None, description="Só jobs desta pasta, ou `root` para os jobs do projeto que não estão em pasta nenhuma "
                           "(`root` exige `project_id`)."),
-    current_user: User = Depends(get_current_active_user),
+    scope: Scope = Depends(visible(Job, "jobs.read")),
     db: Session = Depends(get_db),
 ):
     """
@@ -2145,7 +2154,8 @@ async def list_jobs(
     project_id = (project_id or "").strip() or None
     folder_id = (folder_id or "").strip() or None
 
-    query = db.query(Job).filter(Job.user_id == current_user.id)
+    current_user = scope.user
+    query = db.query(Job).filter(scope.predicate)
     # Location filters, ownership checked against MySQL (404 for unknown and foreign alike)
     project = owned_project_or_404(db, project_id, current_user) if project_id else None
     if folder_id == "root":
@@ -2233,7 +2243,7 @@ async def list_jobs(
 async def search_jobs(
     query: str,
     limit: int = 10,
-    current_user: User = Depends(get_current_active_user),
+    scope: Scope = Depends(visible(Job, "search.query")),
     db: Session = Depends(get_db),
 ):
     """
@@ -2260,7 +2270,8 @@ async def search_jobs(
         # Search in Elasticsearch, filtered by current user
         results = es_client.search_jobs(
             query=query,
-            user_id=current_user.id,
+            # Elasticsearch is not SQL: the scope's owner is passed as its filter.
+            user_id=scope.user.id,
             limit=limit
         )
 
@@ -2276,7 +2287,7 @@ async def search_jobs(
             if available(db):
                 published_live = dict(db.query(Job.id, LiveSession.generation)
                     .join(LiveSession, LiveSession.job_id == Job.id)
-                    .filter(Job.id.in_(live_ids), Job.user_id == current_user.id,
+                    .filter(Job.id.in_(live_ids), scope.predicate,
                             Job.status == DBJobStatus.COMPLETED, LiveSession.state == "completed").all())
 
         # Format results
@@ -2313,8 +2324,8 @@ async def retry_failed_page(
     job_id: str,
     page_number: int,
     current_user: User = Depends(get_current_active_user),
-    owned_job: Optional[Job] = Depends(get_owned_job),
-    db_page: Optional[Page] = Depends(get_owned_page_or_none),
+    owned_job: Optional[Job] = Depends(_job_retry),
+    db_page: Optional[Page] = Depends(_page_retry),
     db: Session = Depends(get_db),
 ):
     """
@@ -2340,7 +2351,7 @@ async def retry_failed_page(
     """
     redis_client = get_redis_client()
 
-    # Ownership já validada em get_owned_page_or_none -> get_owned_job
+    # Ownership já validada em owned_page -> authorized(Job) (spec 0014)
     # (MySQL como fonte da verdade). db_page vem da mesma dependência.
 
     # If page doesn't exist in MySQL, try to get it from Redis (backwards compatibility)
@@ -2506,7 +2517,7 @@ async def get_page_pdf(
     page_number: int,
     request: Request,
     current_user: User = Depends(get_current_active_user),
-    db_page: Optional[Page] = Depends(get_owned_page_or_none),
+    db_page: Optional[Page] = Depends(_page_read),
 ):
     """
     Devolve uma **URL pré-assinada de curta duração** para o PDF de uma página.
@@ -2547,7 +2558,7 @@ async def get_page_pdf(
     A query string faz parte da assinatura — acrescentar qualquer parâmetro
     (`?t=<timestamp>`, por exemplo) invalida a URL e gera 403 no MinIO.
     """
-    # Ownership já validada em get_owned_page_or_none -> get_owned_job
+    # Ownership já validada em owned_page -> authorized(Job) (spec 0014)
     # (MySQL como fonte da verdade).
     if not db_page:
         raise HTTPException(status_code=404, detail=f"Página {page_number} não encontrada")
