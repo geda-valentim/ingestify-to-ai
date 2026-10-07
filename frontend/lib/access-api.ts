@@ -3,7 +3,7 @@ import type {
   AccessInfo,
   ExecutionProfile,
   AccessPolicy,
-  Grant,
+  InstallationPrincipal,
   ResourceScope,
 } from "@/types/access";
 const base = "/admin/execution-profiles";
@@ -54,14 +54,6 @@ export const accessApi = {
       version: p.version,
       constraints,
     }),
-  grants: () => request<Grant[]>("/admin/access/grants"),
-  grant: (body: unknown) =>
-    request<Grant>("/admin/access/grants", "POST", body),
-  revoke: (g: Grant) =>
-    request<Grant>(`/admin/access/grants/${g.id}/revoke`, "POST", {
-      version: g.version,
-    }),
-  roles: () => request<Record<string, string[]>>("/admin/access/roles"),
   subjects: () =>
     request<{ id: string; username: string; email: string }[]>(
       "/admin/access/subjects",
@@ -83,4 +75,18 @@ export const accessApi = {
       consumers: body.consumers,
       qualified: body.qualified,
     }),
+  principals: () =>
+    request<InstallationPrincipal[]>("/admin/access/installation-principals"),
+  registerPrincipal: (id: string) =>
+    request<InstallationPrincipal>(
+      "/admin/access/installation-principals",
+      "POST",
+      { id },
+    ),
+  setPrincipal: (p: InstallationPrincipal, active: boolean) =>
+    request<InstallationPrincipal>(
+      `/admin/access/installation-principals/${encodeURIComponent(p.id)}`,
+      "PUT",
+      { version: p.version, active },
+    ),
 };
