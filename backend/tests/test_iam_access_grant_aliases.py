@@ -14,7 +14,7 @@ proves their contract did not move, against the behaviour **before 0018**:
   tree: the only change allowed is `deprecated: true` on each operation.
 
 The one intentional deviation (0018 §4.5, CA8) is listed in `DEVIATIONS`: a
-self-grant, accepted by 0009, is now 422 SELF_GRANT.
+self-grant, accepted by 0009 (201 in the capture), is now 422 SELF_GRANT.
 """
 
 import json
@@ -52,6 +52,9 @@ class _Normalizer:
 
 def _later(**delta) -> str:
     return (datetime.now(timezone.utc) + timedelta(**delta)).isoformat()
+
+
+SELF_GRANT = "self grant"
 
 
 def alias_scenarios(world, http, actor):  # noqa: F811
@@ -126,21 +129,9 @@ def alias_scenarios(world, http, actor):  # noqa: F811
         call("off: revoke", "bootstrap", "POST", revoke, {"version": 2})
     finally:
         settings.engine_access_enabled = True
+    # Last, so no row above depends on it: the one listed deviation (`DEVIATIONS`).
+    call(SELF_GRANT, "bootstrap", "POST", grants, body("bootstrap"))
     return out
-
-
-def self_grant(world, http, actor):  # noqa: F811
-    """The one deviation: bootstrap granting an engines role to themselves."""
-    with world() as db:
-        p = service.create_policy(db, C.PolicyCreate(name="Self", constraints=constraints()), "bootstrap")
-    actor["id"] = "bootstrap"
-    r = http.post(
-        "/admin/access/grants",
-        headers=HEADERS,
-        json={"user_id": "bootstrap", "role": "observer", "policy_revision_id": p["revisions"][0]["id"],
-              "expires_at": _later(minutes=30)},
-    )
-    return r.status_code, r.json()
 
 
 def _refs(node, found):
@@ -178,29 +169,34 @@ FIXTURES = Path(__file__).resolve().parent / "fixtures"
 PRE_0018_TRANSCRIPT = FIXTURES / "pre_0018_access_grants_transcript.json"
 PRE_0018_OPENAPI = FIXTURES / "pre_0018_access_grants_openapi.json"
 
-# 0018 §4.5 / CA8: the only behaviour of the aliases that changed, on purpose.
+# 0018 §4.5 / CA8: the only behaviour of the aliases that changed, on purpose — the
+# label of its row and the answer now. What it answered before is the capture's.
 DEVIATIONS = {
-    "self-grant of an engines role": (
-        (201, "the grant"),
-        (422, {"detail": {"code": "SELF_GRANT", "message": "SELF_GRANT"}}),
-    ),
+    SELF_GRANT: (422, json.dumps({"detail": {"code": "SELF_GRANT", "message": "SELF_GRANT"}}, separators=(",", ":"))),
 }
+
+
+def _pre_0018():
+    return json.loads(PRE_0018_TRANSCRIPT.read_text())
 
 
 def test_the_aliases_answer_byte_for_byte_as_before_0018(world, client):  # noqa: F811
     http, actor = client
-    expected = json.loads(PRE_0018_TRANSCRIPT.read_text())
+    expected = _pre_0018()
     got = alias_scenarios(world, http, actor)
     assert [row[0] for row in got] == [row[0] for row in expected]
     for (label, status, body), (_, old_status, old_body) in zip(got, expected):
-        assert (status, body) == (old_status, old_body), label
+        assert (status, body) == DEVIATIONS.get(label, (old_status, old_body)), label
 
 
-def test_a_self_grant_is_the_one_listed_deviation(world, client):  # noqa: F811
-    http, actor = client
-    (old_status, _), now = DEVIATIONS["self-grant of an engines role"]
-    assert old_status == 201
-    assert self_grant(world, http, actor) == now
+def test_a_self_grant_is_the_one_listed_deviation():
+    """Before 0018 the self-grant was accepted (201, the grant); every other row is unchanged."""
+    old = {label: (status, json.loads(body)) for label, status, body in _pre_0018()}
+    status, granted = old[SELF_GRANT]
+    assert status == 201
+    assert (granted["user_id"], granted["role"]) == ("bootstrap", "observer")
+    assert set(DEVIATIONS) == {SELF_GRANT}
+    assert DEVIATIONS[SELF_GRANT][0] != status
 
 
 def test_the_alias_openapi_is_the_pre_0018_one_marked_deprecated():

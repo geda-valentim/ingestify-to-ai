@@ -39,6 +39,7 @@ from api.iam_deps import (
     BindingAdmin,
     authenticated,
     binding_admin,
+    is_login_session,
     platform_view,
     request_decider,
     request_principal,
@@ -144,7 +145,11 @@ def list_bindings(
     """
     try:
         rows = bindings.list_all(
-            decider.db, admin.principal, include_inactive=include_inactive, decider=decider
+            decider.db,
+            admin.principal,
+            include_inactive=include_inactive,
+            decider=decider,
+            session=is_login_session(request),
         )
     except bindings.IamError as e:
         raise _iam_error(e)
