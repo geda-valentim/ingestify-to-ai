@@ -75,7 +75,7 @@ CATALOG = {
         ["bind_profile"],
     ),
     "TEST_CONNECTION_FIRST": (
-        "A conexão com o provedor ainda não foi verificada. Use “Testar” nesta engine; "
+        "A conexão com o provedor ainda não foi verificada. Use “Testar conexão” nesta engine; "
         "depois vincule um perfil de execução.",
         ["test_connection", "bind_profile"],
     ),
@@ -97,7 +97,8 @@ CATALOG = {
         ["enable_control"],
     ),
     "ACCESS_NOT_ENABLED": (
-        "Perfis de execução e escopos de acesso estão desligados nesta instalação.",
+        "Perfis de execução e escopos de acesso estão desligados nesta instalação "
+        "(IAM_MODE diferente de enforce).",
         ["enable_control"],
     ),
     "ACCESS_SCHEMA_NOT_READY": (
@@ -145,7 +146,7 @@ CATALOG = {
     "ENGINE_NOT_FOUND": ("Engine não encontrada (ou fora do seu escopo).", ["reload"]),
     # --- local host agent ---------------------------------------------------------
     "HOST_AGENT_NOT_READY": (
-        "O agente do host local{host} não responde{since}. " + _HOST_AGENT_HINT,
+        "O agente do host local{host} não responde (sem heartbeat recente){since}. " + _HOST_AGENT_HINT,
         ["check_host"],
     ),
     "HOST_IDENTITY_REQUIRED": (
@@ -442,6 +443,41 @@ CATALOG = {
     ),
     "ROOT_SETUP_TOKEN_INVALID": ("Token de configuração ausente ou inválido.", ["fix_input"]),
     "ROOT_IMMUTABLE": ("O usuário root não pode ser desativado nem perder o acesso de administrador.", []),
+    # --- default execution profiles at installation (spec 0020 seed report) ----
+    "BOOTSTRAP_ACTOR_REQUIRED": (
+        "Somente o root (ou outro admin de bootstrap ativo) pode semear os perfis de execução padrão.",
+        ["request_access"],
+    ),
+    "MODEL_NOT_APPROVED": (
+        "Este modelo não está aprovado no catálogo com a configuração atual da instalação; "
+        "nenhum perfil padrão é criado para ele.",
+        [],
+    ),
+    "ADAPTER_NOT_REGISTERED": (
+        "O adapter deste modelo não está registrado nesta instalação.",
+        [],
+    ),
+    "NO_REGISTERED_HOST": (
+        "Nenhum agente de host registrado: perfis locais precisam do host. Eles são criados e "
+        "vinculados no primeiro heartbeat do agente.",
+        ["register_host"],
+    ),
+    "PROVIDER_SETTINGS_REQUIRED": (
+        "O adapter exige parâmetros de provedor que a configuração atual não define.",
+        ["create_profile"],
+    ),
+    "BOUND_TO_LIBRARY_PROFILE": (
+        "A engine já usa um perfil da biblioteca nesta feature; o perfil padrão não é vinculado por cima.",
+        [],
+    ),
+    "RUNTIME_PROFILE_EXISTS": (
+        "A engine já tem perfil desejado{for_feature}; o vínculo automático não o substitui.",
+        [],
+    ),
+    "INVALID_SETTINGS": (
+        "A configuração atual da engine não forma um RuntimeSettings válido; revise o binding da feature.",
+        ["create_profile"],
+    ),
 }
 
 _CODE = re.compile(r"^([A-Z][A-Z0-9_]{3,})(?:\s*:\s*(.*))?$", re.S)
