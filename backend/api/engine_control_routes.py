@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import hmac
 import json
+import time
 from datetime import datetime
 from pathlib import Path
 from api.error_guidance import GuidedRoute
@@ -439,11 +440,28 @@ async def stream(
     )
 
 
+IDENTITIES_RETRY_SECONDS = 0.05
+
+
+def read_identities(path):
+    """
+    The host identities file. register_engine_host.py rewrites it in place (the API
+    bind-mounts the single file, so it cannot be renamed over); a read that lands
+    on that write can see partial JSON, so one decode error is retried after a
+    short pause before the request is refused.
+    """
+    try:
+        return json.loads(Path(path).read_text())
+    except json.JSONDecodeError:
+        time.sleep(IDENTITIES_RETRY_SECONDS)
+        return json.loads(Path(path).read_text())
+
+
 def host_identity(host_id: str, request: Request):
     enabled()
     path = get_settings().engine_host_identities_file
     try:
-        identities = json.loads(Path(path).read_text())
+        identities = read_identities(path)
         presented = request.headers.get("x-engine-host-token", "")
         expected = identities.get(host_id, "")
         if (
@@ -490,6 +508,7 @@ def host_heartbeat(
         (h.inventory or {}).get("manifest_hash") if h else None,
         body.inventory,
         now,
+        host_id=host_id,
     )
     h = h or ControlHost(id=host_id)
     h.inventory = body.inventory

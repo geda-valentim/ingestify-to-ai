@@ -251,16 +251,22 @@ def create_profile(db, body, actor, audit_extra=None):
     return view(db, p, actor, True)
 
 
-def revise(db, id, body, actor):
+def revise(db, id, body, actor, audit_extra=None):
     require_enabled()
     policy.epoch(db, True)
     p = get_profile(db, id, actor, "execution_profiles.update", True)
     _version(p, body.version)
     if p.status == "archived":
         raise control.ControlError("PROFILE_ARCHIVED")
-    add_revision(db, p, body, actor)
+    r = add_revision(db, p, body, actor)
     p.version += 1
-    policy.audit(db, actor, "execution_profile.revised", p.id)
+    policy.audit(
+        db,
+        actor,
+        "execution_profile.revised",
+        p.id,
+        {"revision_id": r.id, **audit_extra} if audit_extra else None,
+    )
     db.commit()
     return view(db, p, actor, True)
 
@@ -513,7 +519,8 @@ def revoke(db, id, version, actor):
     return grant_view(as_grant(bindings.revoke_engine(db, actor, id, version)))
 
 
-def set_attributes(db, engine, body, actor, audit_extra=None):
+def set_attributes(db, engine, body, actor, audit_extra=None, commit=True):
+    """Classify `engine`; with commit=False the caller commits (or rolls back) it"""
     authority = policy.epoch(db, True)
     bootstrap(db, actor)
     row = db.get(EngineAttributes, engine.id)
@@ -533,7 +540,10 @@ def set_attributes(db, engine, body, actor, audit_extra=None):
         engine.id,
         {"environment": body.environment, **(audit_extra or {})},
     )
-    db.commit()
+    if commit:
+        db.commit()
+    else:
+        db.flush()
     return dict(engine_id=engine.id, environment=row.environment, version=row.version)
 
 

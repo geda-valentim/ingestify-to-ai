@@ -12,6 +12,24 @@
 - **Mudança de comportamento:** engines vinculadas pela semeadura passam a "gerenciadas"
   (escritores legados de capacidade exigem operação), e engines sem atributos recebem o
   ambiente da instalação. Nada é aplicado, implantado ou reservado.
+- O perfil de engine semeado antes de poder ser vinculado é conferido com a configuração
+  atual da engine antes do vínculo: se só a semeadura mexeu nele, ganha revisão nova; se um
+  admin mexeu, `SEEDED_PROFILE_STALE`. Perfis locais apontam para o host que serve a
+  feature/GPU (`HOST_AMBIGUOUS` com mais de um); cooldown segue o `scaledown_window` da
+  engine; `ENVIRONMENT` desconhecido ⇒ `ENVIRONMENT_UNKNOWN` (antes contava como
+  production); a classificação da engine só é gravada junto com o vínculo.
+- O cadastro do root agenda a semeadura em background (a resposta não espera o lock do
+  epoch). Mudança de manifest no heartbeat re-semeia no máximo uma vez por minuto por host.
+- `register_engine_host.py` valida e prepara o JSON num arquivo temporário (fsync), guarda
+  `<arquivo>.bak` e reescreve o alvo no lugar (mesmo inode); arquivo novo nasce `0600`
+  com `O_EXCL` (`--identities-group 10001` o deixa `0640`). A API tenta de novo uma vez
+  quando lê um JSON parcial.
+- **Mudança visível ao cliente (API):** `POST /admin/engines/{id}/operation-plans` com capability
+  desabilitada responde `422 RUNTIME_PROFILE_REQUIRED` / `403 ACCESS_DENIED` (antes `503`);
+  cooldown sem perfil desejado responde `409 NOTHING_TO_COOL_DOWN`. Nas rotas de controle,
+  perfis/acesso e IAM, `detail.message` agora é sempre em português (catálogo único) e vem
+  com `next_steps`; `detail.code` não mudou. Ver
+  [execution-profiles](features/execution-profiles.md#corpo-de-erro).
 - Sem `IAM_MODE=enforce` a semeadura não faz nada (`ACCESS_NOT_ENABLED`). Ver
   [execution-profiles](features/execution-profiles.md#perfis-padrão-da-instalação-spec-0020).
 
