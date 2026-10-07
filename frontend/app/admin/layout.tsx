@@ -13,11 +13,13 @@ import {
   Server,
   SlidersHorizontal,
   Shield,
+  ShieldCheck,
 } from "lucide-react";
 import { authApi } from "@/lib/api";
 import { useAuthStore } from "@/lib/store/auth";
 import { loginUrl } from "@/lib/session";
 import { cn } from "@/lib/utils";
+import { canOpenAdminSection } from "@/lib/admin-nav";
 import { AppHeader } from "@/components/app-header";
 import { ForbiddenCard, LoadingCards } from "@/components/admin/compute-ui";
 
@@ -30,6 +32,11 @@ const TABS = [
     icon: SlidersHorizontal,
   },
   { href: "/admin/access", label: "Acesso", icon: Shield },
+  {
+    href: "/admin/platform-access",
+    label: "Acesso à plataforma",
+    icon: ShieldCheck,
+  },
   { href: "/admin/gpus", label: "GPUs", icon: MemoryStick },
   { href: "/admin/routing", label: "Routing", icon: Route },
   { href: "/admin/status", label: "Status", icon: Activity },
@@ -37,8 +44,9 @@ const TABS = [
 
 /**
  * The Compute area (spec 0003, slice 5): read-only views of engines, GPUs, routes and
- * the dispatcher. The guard here is cosmetic; every /admin endpoint checks
- * `require_admin` itself, and a 403 from any of them renders the same card.
+ * the dispatcher. Each tab needs its own permission from `/auth/me` (spec 0014
+ * §4.10, `lib/admin-nav.ts`). The guard here is cosmetic; every /admin endpoint
+ * authorizes itself, and a 403 from any of them renders the same card.
  */
 export default function AdminLayout({
   children,
@@ -72,26 +80,31 @@ export default function AdminLayout({
       (me.data.is_admin !== user?.is_admin ||
         JSON.stringify(me.data.permissions) !==
           JSON.stringify(user?.permissions) ||
-        me.data.engine_access_enabled !== user?.engine_access_enabled)
+        me.data.engine_access_enabled !== user?.engine_access_enabled ||
+        me.data.bootstrap !== user?.bootstrap)
     )
       setAuth(me.data, token);
-  }, [me.data, token, user?.is_admin, setAuth]);
+  }, [
+    me.data,
+    token,
+    user?.is_admin,
+    user?.permissions,
+    user?.engine_access_enabled,
+    user?.bootstrap,
+    setAuth,
+  ]);
 
   const isAdmin = me.data?.is_admin ?? user?.is_admin;
 
-  const permissions = me.data?.permissions ?? user?.permissions ?? [];
-  const canEnter = isAdmin || permissions.length > 0;
-  const visibleTabs = TABS.filter((t) => {
-    if (isAdmin) return true;
-    if (t.href === "/") return true;
-    if (t.href === "/admin/engines")
-      return permissions.includes("engines.read");
-    if (t.href === "/admin/execution-profiles")
-      return permissions.includes("execution_profiles.read");
-    if (t.href === "/admin/access")
-      return permissions.includes("access.grants.manage");
-    return false;
-  });
+  const viewer = {
+    is_admin: isAdmin,
+    permissions: me.data?.permissions ?? user?.permissions ?? [],
+  };
+  const visibleTabs = TABS.filter(
+    (t) => t.href === "/" || canOpenAdminSection(viewer, t.href),
+  );
+  // Only `engines.remote.use` (or nothing): no admin section to show.
+  const canEnter = visibleTabs.some((t) => t.href !== "/");
   const allowedPath =
     isAdmin ||
     visibleTabs.some(

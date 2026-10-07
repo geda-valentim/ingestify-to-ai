@@ -127,7 +127,9 @@ function ExplicitRouteBody({ route }: { route: ExplicitRoute }) {
             : `fail after ${formatSeconds(route.fail_after_seconds)}`}
         </Term>
         <Term label="Attempts per item">{route.max_attempts}</Term>
-        <Term label="Cloud engines usable by">{route.remote_allowed_for === "all" ? "every user" : "admins only"}</Term>
+        <Term label="Cloud engines usable by">
+          {route.remote_allowed_for === "all" ? "every user" : "Restrito (exige permissão de engine remota)"}
+        </Term>
         <Term label="Per-user limit per period">
           {route.user_period_limit_usd === null ? "none" : formatUsd(route.user_period_limit_usd)}
         </Term>
