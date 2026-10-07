@@ -1,0 +1,163 @@
+.header {
+  box-sizing: border-box;
+  height: 72px;
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  width: 100%;
+  padding: 0 clamp(16px, 5vw, 100px);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  background: #fffffff2;
+  color: #111;
+  border-bottom: 1px solid #e3e3e3;
+  backdrop-filter: blur(18px);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.header * {
+  box-sizing: border-box;
+}
+.header a {
+  text-decoration: none;
+}
+.header :is(a, button, summary):focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 5px;
+}
+.brand {
+  display: inline-flex;
+  flex-shrink: 0;
+}
+.controls,
+.desktop {
+  display: flex;
+  align-items: center;
+  gap: 26px;
+}
+.desktop a {
+  white-space: nowrap;
+}
+.desktop a[aria-current],
+.mobile nav a[aria-current] {
+  text-decoration: underline;
+  text-underline-offset: 5px;
+}
+.github {
+  display: inline-flex;
+}
+.account {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 8px 15px;
+  color: white;
+  background: #111;
+  border: 1px solid #111;
+  border-radius: 3px;
+  font-weight: 500;
+}
+.account:hover {
+  background: #333;
+}
+.motion button {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  background: transparent;
+  color: #666;
+  padding: 5px 0;
+  font-size: 10px;
+  cursor: pointer;
+}
+.motion button span {
+  border-bottom: 1px solid #ccc;
+}
+.motion button svg {
+  display: none;
+}
+.mobile {
+  display: none;
+}
+.mobile summary {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 9px 11px;
+  border: 1px solid #ddd;
+  border-radius: 3px;
+  cursor: pointer;
+  list-style: none;
+}
+.mobile summary::-webkit-details-marker {
+  display: none;
+}
+.mobile[open] summary {
+  background: #f3f3f3;
+}
+.mobile nav {
+  position: absolute;
+  top: 71px;
+  right: clamp(16px, 5vw, 100px);
+  width: min(280px, calc(100vw - 32px));
+  display: grid;
+  gap: 5px;
+  padding: 12px;
+  border: 1px solid #ddd;
+  border-radius: 0 0 5px 5px;
+  background: white;
+  box-shadow: 0 12px 26px #00000012;
+}
+.mobile nav a {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 11px 12px;
+  border-radius: 3px;
+}
+.mobile nav a:hover {
+  background: #f3f3f3;
+}
+.mobile nav .account {
+  margin-top: 5px;
+  color: white;
+}
+.mobile nav .account:hover {
+  background: #333;
+}
+@media (max-width: 999px) {
+  .desktop {
+    display: none;
+  }
+  .mobile {
+    display: block;
+  }
+  .controls {
+    gap: 14px;
+  }
+  .motion button {
+    padding: 9px;
+  }
+  .motion button span {
+    display: none;
+  }
+  .motion button svg {
+    display: block;
+  }
+}
+@media (max-width: 359px) {
+  .header {
+    gap: 8px;
+  }
+  .controls {
+    gap: 4px;
+  }
+  .mobile summary {
+    padding: 8px;
+  }
+}

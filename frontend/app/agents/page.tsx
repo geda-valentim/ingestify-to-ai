@@ -11,6 +11,7 @@ import {
   Layers,
 } from "lucide-react";
 import { Brand } from "@/components/brand";
+import { PublicHeader } from "@/components/public-header";
 import { GITHUB } from "@/components/landing/content";
 import { DOCS_ORIGIN } from "../docs/config";
 import { AgentWorkflow } from "./workflow";
@@ -104,35 +105,7 @@ export default function AgentsPage() {
       <a href="#agents-content" className={styles.skip}>
         Skip to content
       </a>
-      <header className={styles.header}>
-        <Link href="/" aria-label="Ingestify home">
-          <Brand />
-        </Link>
-        <nav aria-label="Main navigation">
-          <Link href="/" className={styles.desktopLink}>
-            Platform
-          </Link>
-          <Link
-            href="/agents"
-            aria-current="page"
-            className={styles.desktopLink}
-          >
-            For agents
-          </Link>
-          <Link href="/docs">Docs</Link>
-          <Link href="/business" className={styles.desktopLink}>Business</Link>
-          <a
-            href={GITHUB}
-            aria-label="Ingestify on GitHub"
-            className={styles.desktopLink}
-          >
-            <Github size={18} />
-          </a>
-          <Link href="/docs/authentication" className={styles.smallButton}>
-            Get started <ArrowUpRight size={14} />
-          </Link>
-        </nav>
-      </header>
+      <PublicHeader />
       <main id="agents-content">
         <section className={styles.hero}>
           <p className={styles.eyebrow}>
