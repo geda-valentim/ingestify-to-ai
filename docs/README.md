@@ -8,6 +8,16 @@ Legenda: **atual** = confere com o código · **parcial** = útil, mas com trech
 (sinalizados no próprio arquivo) · **histórico** = registro do passado, não use como
 referência · **planejado** = não implementado.
 
+## Uso da plataforma e planejamento comercial
+
+A documentação pública distingue **Usar a plataforma**, **Integrar pela API** e **Administrar**. Os guias de uso mostram os passos nas telas e apontam para os contratos técnicos correspondentes; as URLs anteriores dos tópicos de API continuam disponíveis. Comece em [PT](https://dev.ingestify.ai/pt/docs/platform-start) ou [EN](https://dev.ingestify.ai/docs/platform-start).
+
+| Documento | Estado | Conteúdo |
+| --- | --- | --- |
+| [product/unstructured-comparison.md](product/unstructured-comparison.md) | análise | Comparação com fontes oficiais, capacidades implementadas e oportunidades a validar. |
+| [product/commercial-strategy.md](product/commercial-strategy.md) | proposta | Públicos, piloto pago, modelo comercial, funcionalidades prioritárias e critérios de validação. |
+| [Ingestify for Business](https://dev.ingestify.ai/business) | apresentação do produto | Capacidades disponíveis, casos de uso e links para começar pela interface ou API. |
+
 ## Funcionalidades
 
 | Doc | Conteúdo |

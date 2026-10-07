@@ -180,6 +180,9 @@ export function LandingPage() {
           <Link href="/agents" className="landing-agents">
             Agents
           </Link>
+          <Link href="/business" className="landing-business">
+            Business
+          </Link>
           <Link href="/docs">Docs</Link>
           <a
             href={GITHUB}
@@ -359,6 +362,7 @@ export function LandingPage() {
           <Link href="/agents" className="landing-agents">
             Agents
           </Link>
+          <Link href="/business">Business</Link>
           <Link href="/docs">Docs</Link>
           <a href={GITHUB}>GitHub</a>
           <Link href="/login">Sign in</Link>
