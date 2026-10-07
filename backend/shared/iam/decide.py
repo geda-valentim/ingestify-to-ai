@@ -78,6 +78,17 @@ class Principal:
     user: Optional[User] = field(default=None, compare=False, repr=False)
 
 
+def is_bootstrap_admin(user, settings=None) -> bool:
+    """
+    The bootstrap rule itself (`users.is_admin` or ADMIN_USER_IDS), for the guards
+    that still decide by it outside this module: `api.admin_routes.require_admin`,
+    which only the 0009 engine routes use (0014 §2). Keeping it here means no API
+    module reads the admin flag on its own (CA2). The caller has already refused
+    an inactive user (`get_current_active_user`).
+    """
+    return is_effective_admin(user, settings)
+
+
 def principal_for_user(user: Optional[User], credential: str = "session") -> Optional[Principal]:
     """The principal of an authenticated user (the key's owner for an API key)."""
     if user is None or getattr(user, "id", None) is None:

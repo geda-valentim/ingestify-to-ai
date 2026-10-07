@@ -277,8 +277,13 @@ também em rotas `admins`, bootstrap incluído. O dispatcher (`worker-dispatch`)
 decidem essa permissão: precisam de `ADMIN_USER_IDS` e `IAM_MODE` iguais aos da `api` (o
 `docker-compose.yml` repassa ambos). Divergências de shadow vindas do dispatcher saem com
 `route=dispatcher`, no máximo uma a cada 10 min por usuário. O custo por tick (CA11) é medido
-em statements SQL nos testes (`tests/test_iam_remote_engine.py`: até 2 por usuário, nunca por
-item); o p95 em ms não é medido em CI.
+nos testes (`tests/test_iam_remote_engine.py`) em statements SQL (até 2 por usuário, nunca por
+item) e em tempo: com 1 000 itens em backlog, o p95 do tempo gasto em `_may_use_remote` por tick
+(o único trabalho que uma rota `admins` acrescenta a uma `all`) fica ≤ 5 ms (medido ~1 ms em
+SQLite). A revalidação no dispatcher e o teto CA10 **não dependem de `IAM_MODE`**: em `off` a
+decisão é o legado (`is_effective_admin` do dono), mas tomada a cada placement e não congelada no
+submit. Logo, "`off` = legado" vale para as decisões de rota da API; no dispatcher, `off` só
+desliga os bindings.
 
 Validação: motor sem binding para a feature, motor repetido, ou passo remoto com
 `remote_allowed_for=admins` sem passo local ⇒ 422; motor remoto não pronto (pausado, saúde ruim, sem

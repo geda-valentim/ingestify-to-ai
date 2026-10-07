@@ -1,6 +1,30 @@
 # Changelog - Hierarquia de Jobs Implementada
 
-> **Registro histórico (2025-10).** Não é mantido; para mudanças posteriores use `git log`. Observação: `workers/tasks_old.py`, citado abaixo, não existe (há um `workers/tasks.py.backup`).
+> **Registro histórico (2025-10).** Não é mantido; para mudanças posteriores use `git log`. Observação: `workers/tasks_old.py`, citado abaixo, não existe (há um `workers/tasks.py.backup`). Exceção: mudanças de comportamento intencionais que uma spec manda registrar aqui entram na seção abaixo.
+
+## 2026-10: Spec 0014 — IAM: núcleo de decisão e papéis de plataforma
+
+Ver [specs/0014](specs/0014-iam-nucleo-de-decisao-e-papeis-de-plataforma.md).
+
+- **`IAM_MODE`** (`off` | `shadow` | `enforce`, padrão `off`). Em `off` as rotas da API decidem
+  pela regra legada (`is_effective_admin`, dono do recurso) e os bindings ficam inertes; `shadow`
+  decide pelo legado e registra `iam_shadow_divergence` no log; `enforce` decide por
+  `shared/iam/decide.py`. Antes de `enforce`, rodar `scripts/iam_equivalence.py` contra o
+  snapshot (CA3): precisa sair com 0 divergências.
+- **Migration `a1c40014e7b2` (`iam_bindings`)**: aditiva, só `CREATE TABLE iam_bindings`
+  (marcador `0014_iam_bindings` em `app_migrations`). Nenhuma tabela da 0009 muda.
+- **Mudança intencional (CA10):** `user_period_limit_usd` vale também em rotas com
+  `remote_allowed_for=admins`, **bootstrap incluído**. Jobs de admins em rotas restritas passam a
+  receber recusa `user_cap` quando o teto da rota é atingido; antes gastavam sem teto.
+- **Mudança intencional (CA9):** o dispatcher decide `engines.remote.use` do dono a cada placement
+  remoto em rota `admins`, em vez de confiar só no `remote_allowed` gravado no submit. Rebaixar um
+  admin (ou revogar o binding) alcança páginas já enfileiradas: vão para o caminho local ou seguem
+  `on_no_engine`. Isso e o CA10 **não dependem de `IAM_MODE`**: em `off` o dispatcher usa a regra
+  legada, mas a cada placement.
+- `/auth/me` ganha `bootstrap` e `platform_roles`; `permissions` passa a incluir as permissões de
+  plataforma. Novas rotas `/iam/permissions`, `/iam/check` e `/admin/iam/bindings*`.
+- Na UI de roteamento, `remote_allowed_for=admins` aparece como "restricted (needs the remote engine
+  permission)".
 
 ## 2025-10-01: Job Hierarchy Architecture + CLI Tests
 
