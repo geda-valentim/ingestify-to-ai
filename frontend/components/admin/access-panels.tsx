@@ -18,11 +18,12 @@ import type {
   InstallationPrincipal,
   ResourceScope,
 } from "@/types/access";
+import { AdminError } from "@/components/admin/admin-error";
 
 /** busy/error around a write, then a refetch of what it changed. */
 function useWrite(refetch: () => Promise<unknown>) {
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<unknown>(null);
   async function perform(fn: () => Promise<unknown>): Promise<boolean> {
     setBusy(true);
     setError(null);
@@ -30,18 +31,15 @@ function useWrite(refetch: () => Promise<unknown>) {
       await fn();
       return true;
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Falha ao salvar");
+      setError(e);
       return false;
     } finally {
       await refetch();
       setBusy(false);
     }
   }
-  const alert = error ? (
-    <p role="alert" className="text-destructive">
-      {error}
-    </p>
-  ) : null;
+  const alert =
+    error != null ? <AdminError error={error} fallback="Falha ao salvar" /> : null;
   return { busy, perform, alert };
 }
 

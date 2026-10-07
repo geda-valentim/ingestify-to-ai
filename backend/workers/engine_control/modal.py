@@ -82,7 +82,7 @@ class ModalControlAdapter:
                     required += Decimal("0.03")
                 if req.max_usd < required:
                     raise ValueError(
-                        f"Warm window requires at least US$ {required:.4f} including margin"
+                        f"A janela de aquecimento exige um teto de pelo menos US$ {required:.4f} (com margem)"
                     )
             if req.type in ("scale", "warmup", "cooldown") and not (
                 engine.deployments or {}

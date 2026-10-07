@@ -1,3 +1,4 @@
+from api.error_guidance import GuidedRoute
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from shared.database import get_db
@@ -11,7 +12,7 @@ from api.engine_control_routes import invoke
 from api.iam_deps import engine_access
 
 # 0009 routes: decided by access_session + policy; engine_access only declares them (0014 CA1).
-router = APIRouter(prefix="/admin", tags=["Admin - Execution profiles and access"], dependencies=[Depends(engine_access())])
+router = APIRouter(prefix="/admin", tags=["Admin - Execution profiles and access"], dependencies=[Depends(engine_access())], route_class=GuidedRoute)
 
 
 def ready():

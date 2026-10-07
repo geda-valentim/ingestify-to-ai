@@ -16,6 +16,7 @@ import { computeApi } from "@/lib/api";
 import { engineControlApi } from "@/lib/engine-control-api";
 import type { ExecutionProfile, ExecutionRevision } from "@/types/access";
 import type { RuntimeProfile } from "@/types/engine-control";
+import { AdminError } from "@/components/admin/admin-error";
 export default function ExecutionProfilesPage() {
   const access = useQuery({ queryKey: ["access-me"], queryFn: accessApi.me });
   const list = useQuery({
@@ -52,7 +53,7 @@ export default function ExecutionProfilesPage() {
   const [form, setForm] = useState<RuntimeProfile>(defaultRuntime());
   const [warm, setWarm] = useState("");
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<unknown>(null);
   const [contextEngine, setContextEngine] = useState("");
   const [editing, setEditing] = useState(false);
   const engine = useQuery({
@@ -105,7 +106,7 @@ export default function ExecutionProfilesPage() {
       await list.refetch();
       if (selected) await detail.refetch();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Falha ao salvar");
+      setError(e);
     } finally {
       setBusy(false);
     }
@@ -148,10 +149,17 @@ export default function ExecutionProfilesPage() {
           as migrações 0009 e 0018. Consulte o runbook.
         </p>
       )}
-      {(error || list.error) && (
-        <p role="alert" className="text-destructive">
-          {error || String(list.error)}
-        </p>
+      {(error != null || list.error) && (
+        <AdminError
+          error={error ?? list.error}
+          fallback="Falha ao salvar"
+          actions={{
+            reload: () => {
+              setError(null);
+              list.refetch();
+            },
+          }}
+        />
       )}
       <div className="grid gap-6 lg:grid-cols-2">
         <Card>

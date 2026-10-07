@@ -10,6 +10,7 @@ import subprocess
 import tempfile
 import threading
 import time
+import urllib.error
 import urllib.request
 import urllib.parse
 
@@ -31,6 +32,39 @@ ACTIONS = {
     "cooldown",
     "apply_profile",
 }
+
+
+# What the operator should do for refusals that stop the agent (journalctl only).
+FAILURE_HINTS = {
+    "REGISTERED_MANIFEST_CHANGED": "compose files changed since registration; re-register the host "
+    "(docs/runbooks/engine-control-bootstrap.md, 'Re-registrar o host')",
+    "HOST_IDENTITY_REQUIRED": "the API does not know this host's token; check that "
+    "secrets/engine_host_identities.json is readable by the API container and re-register if needed",
+    "Registered images must be pinned by digest": "re-register after building the worker images",
+}
+
+
+def describe_failure(exc, secret=None):
+    """One log line for a failed cycle: type, code/message and a hint. Never the token."""
+    kind = type(exc).__name__
+    if isinstance(exc, urllib.error.HTTPError):
+        code = None
+        try:
+            body = json.loads(exc.read().decode("utf-8", "replace") or "null")
+            detail = body.get("detail") if isinstance(body, dict) else None
+            code = detail.get("code") if isinstance(detail, dict) else detail
+        except Exception:
+            pass
+        text = f"HTTP {exc.code}" + (f" {code}" if code else "")
+    elif isinstance(exc, urllib.error.URLError):
+        text = f"API unreachable ({exc.reason})"
+    else:
+        text = str(exc)
+    if secret:
+        text = text.replace(secret, "***")
+    text = " ".join(text.split())[:300]
+    hint = next((h for key, h in FAILURE_HINTS.items() if text.startswith(key) or f" {key}" in text), None)
+    return f"{kind}: {text}" + (f" — {hint}" if hint else "")
 
 
 class HostAgent:
@@ -407,7 +441,16 @@ class HostAgent:
                     )
                 self.active = None
             except Exception as exc:
-                print(f"Agent unavailable: {type(exc).__name__}", flush=True)
+                line = describe_failure(exc, self.config.get("machine_token"))
+                now = time.monotonic()
+                # Log each new reason at once, and repeat it once a minute while it lasts.
+                if line != getattr(self, "_last_failure", None) or now - getattr(self, "_last_failure_at", 0) >= 60:
+                    print(f"Agent unavailable: {line}", flush=True)
+                    self._last_failure, self._last_failure_at = line, now
+            else:
+                if getattr(self, "_last_failure", None):
+                    print("Agent recovered", flush=True)
+                    self._last_failure = None
             time.sleep(5)
 
 

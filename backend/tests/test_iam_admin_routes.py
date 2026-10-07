@@ -244,7 +244,8 @@ def test_a_platform_binding_does_not_open_the_0009_routes(people, client, who):
     user = getattr(people, who)
     # access_session reads only the 0009 grants.
     r = call(client, "GET", "/admin/access/me", user)
-    assert (r.status_code, r.json()["detail"]) == (403, {"code": "ACCESS_DENIED"})
+    assert (r.status_code, r.json()["detail"]["code"]) == (403, "ACCESS_DENIED")
+    assert r.json()["detail"]["next_steps"] == ["request_access"]
     # require_admin (0009 engine routes) is still the bootstrap rule.
     assert call(client, "GET", "/admin/gpus", user).status_code == 403
 
