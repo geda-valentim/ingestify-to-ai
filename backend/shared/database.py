@@ -13,6 +13,9 @@ engine = create_engine(
     settings.database_url,
     pool_pre_ping=True,  # Verify connections before using
     pool_recycle=3600,   # Recycle connections after 1 hour
+    pool_size=settings.db_pool_size,
+    max_overflow=settings.db_max_overflow,
+    pool_timeout=settings.db_pool_timeout,
     echo=settings.sql_echo,  # SQL_ECHO=true to debug (logs parameters, e.g. password hashes)
 )
 

@@ -2,6 +2,17 @@
 
 > **Registro histórico (2025-10).** Não é mantido; para mudanças posteriores use `git log`. Observação: `workers/tasks_old.py`, citado abaixo, não existe (há um `workers/tasks.py.backup`). Exceção: mudanças de comportamento intencionais que uma spec manda registrar aqui entram na seção abaixo.
 
+## 2026-10: Pool de conexões do banco esgotava sob carga (correção)
+
+- Rotas de imagem com `wait=true` (`/images/describe`, `/images/ocr`, `/images/analyze` e
+  `/images/faces`, inclusive `mode=full`) seguravam uma conexão do pool durante toda a
+  espera pelo Celery (até `VISION_REQUEST_TIMEOUT_SECONDS`). Uma rajada de chamadas
+  esgotava as 15 conexões da API e o resto do app travava esperando (`QueuePool limit ...
+  reached`). Agora a sessão é fechada antes da espera, e a análise completa/faces consulta
+  o job com sessões curtas fora do event loop.
+- Pool configurável por processo: `DB_POOL_SIZE` (20), `DB_MAX_OVERFLOW` (20),
+  `DB_POOL_TIMEOUT` (15 s). O MariaDB do dev foi para `max_connections=500`.
+
 ## 2026-10: Imagens da conversão de documentos (API 1.2.0)
 
 - `POST /upload` e `POST /convert` ganham `image_mode` (`none` padrão | `referenced`) e

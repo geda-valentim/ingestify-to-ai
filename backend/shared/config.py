@@ -245,6 +245,11 @@ class Settings(BaseSettings):
 
     # Database (MySQL)
     database_url: str = "mysql+pymysql://root:root@localhost/ingestify"
+    # SQLAlchemy pool per process (API, each worker). A connection is held for a whole
+    # request; long waits must release it (see api/image_routes.py _run_vision).
+    db_pool_size: int = 20
+    db_max_overflow: int = 20
+    db_pool_timeout: int = 15  # seconds a request waits for a free connection
 
     # Elasticsearch
     elasticsearch_url: str = "http://elasticsearch:9200"
