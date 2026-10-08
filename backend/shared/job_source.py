@@ -13,9 +13,12 @@ The source files of a job, and `purge_source`.
   bucket, what `GET /jobs/{id}/pages/{n}/pdf` serves) and their local copies in
   the work dir.
 
-Document conversion stores no extracted images/assets (the markdown export keeps
-image placeholders), so there is nothing else to delete. The results (markdown,
-per-page markdown, transcripts, Elasticsearch) are always kept.
+The image assets a conversion extracts (`image_mode=referenced`, `page_images`;
+shared/conversion_assets.py) are *outputs*, not source files: the purge never
+deletes them when the job settles (the client still has to download them), it
+schedules their deletion ASSET_RETENTION_SECONDS later (`schedule_expiry`, run by
+the periodic beat). `DELETE /jobs/{id}/source` deletes them at once. The other
+results (markdown, per-page markdown, transcripts, Elasticsearch) are always kept.
 
 `purge_source=true` deletes the source files once the job is settled for good:
 COMPLETED, or FAILED / PARTIAL after every automatic retry ran (never while a
@@ -281,6 +284,32 @@ def purge_due(db, job: Optional[Job], *, locked: bool = False) -> bool:
     return job.status in (JobStatus.FAILED, JobStatus.PARTIAL) and not has_pending_work(db, job, locked=locked)
 
 
+def _schedule_asset_expiry(job: Job) -> None:
+    from shared.conversion_assets import schedule_expiry
+
+    try:
+        schedule_expiry(job)
+    except Exception as e:  # noqa: BLE001 - never block the purge over it
+        logger.warning(f"[MAIN JOB {job.id}] Could not schedule the asset expiry: {e}")
+
+
+def _discard_unlisted_assets(job: Job, minio_factory: Callable) -> None:
+    """
+    A job that settled FAILED / PARTIAL never got a manifest (only a completed merge
+    writes one), so nothing can download the assets its completed pages stored;
+    with the source gone no page retry can complete it either: delete them now.
+    """
+    from shared.conversion_assets import asset_prefix, job_options, manifest_of, wants_assets
+
+    if job.status == JobStatus.COMPLETED or manifest_of(job) is not None or not wants_assets(job_options(job)):
+        return
+    try:
+        minio = minio_factory()
+        minio.delete_folder(minio.bucket_results, asset_prefix(job.id))
+    except Exception as e:  # noqa: BLE001 - DELETE /jobs/{id} removes them later
+        logger.warning(f"[MAIN JOB {job.id}] Could not delete the unlisted assets: {e}")
+
+
 def purge_source_if_requested(job_id: str, *, session_factory, minio_factory: Callable,
                               requested: bool = False) -> bool:
     """
@@ -303,6 +332,10 @@ def purge_source_if_requested(job_id: str, *, session_factory, minio_factory: Ca
             if not (requested or purge_requested(job)):
                 db.rollback()
                 return False
+            # Assets are kept for the client to download, then expire (committed
+            # with the delete below, which always commits)
+            _schedule_asset_expiry(job)
+            _discard_unlisted_assets(job, minio_factory)
             if delete_source(db, job, minio_factory):
                 logger.info(f"[MAIN JOB {job_id}] Source files purged (purge_source, job {job.status.value})")
             return True
@@ -363,12 +396,13 @@ def apply_purge_to_duplicate(db, job: Job, minio_factory: Callable) -> str:
         db.rollback()
         logger.error(f"[MAIN JOB {job_id}] Could not record purge_source on the duplicate: {e}")
         return DUPLICATE_SCHEDULED if source_available(job) else DUPLICATE_ALREADY_GONE
+    if not purge_due(db, job, locked=True):
+        db.commit()  # the option is recorded: the worker that settles the job purges
+        return DUPLICATE_SCHEDULED if source_available(job) else DUPLICATE_ALREADY_GONE
+    _schedule_asset_expiry(job)  # settled: its assets expire like the worker purge's
     if not source_available(job):
         db.commit()
         return DUPLICATE_ALREADY_GONE
-    if not purge_due(db, job, locked=True):
-        db.commit()  # the option is recorded: the worker that settles the job purges
-        return DUPLICATE_SCHEDULED
     try:
         delete_source(db, job, minio_factory)  # commits the option with the delete
     except Exception as e:  # noqa: BLE001 - never fail the request over the purge

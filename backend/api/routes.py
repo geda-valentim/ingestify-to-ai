@@ -1,6 +1,7 @@
 from starlette.responses import JSONResponse
 import json
 from shared.job_configuration import job_configuration
+from shared import conversion_assets
 from shared.job_source import (
     DUPLICATE_ALREADY_GONE,
     DUPLICATE_KEPT,
@@ -18,7 +19,7 @@ from shared.job_source import (
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Header, Body, Depends, Request, Query
 from fastapi.responses import Response, StreamingResponse
 from starlette.concurrency import run_in_threadpool
-from typing import Optional, List, Tuple
+from typing import Literal, Optional, List, Tuple
 from pathlib import Path
 import hashlib
 import os
@@ -115,6 +116,33 @@ PURGE_SOURCE_FORM_DESCRIPTION = (
 )
 
 
+IMAGE_MODE_FORM_DESCRIPTION = (
+    "Imagens do documento (PDF, DOCX...). `none` (padrão): como sempre, o markdown "
+    "traz `<!-- image -->` no lugar de cada figura e nenhuma imagem é guardada. "
+    "`referenced`: cada figura vira um PNG (`assets` em GET /jobs/{job_id}/result, "
+    "kind `picture`, com página, bbox, sha256 e tamanho) e o markdown a referencia: "
+    "`![Image](/jobs/{job_id}/assets/{name})`. Baixe com GET /jobs/{job_id}/assets/{name}. "
+    "Figuras menores que CONVERSION_ASSET_MIN_PX ou além dos limites do job "
+    "(CONVERSION_ASSET_MAX_COUNT, CONVERSION_ASSET_MAX_TOTAL_MB) ficam como placeholder "
+    "e são contadas em `assets_skipped`. Com purge_source=true as imagens ficam "
+    "ASSET_RETENTION_SECONDS (padrão 3600) depois do fim do job e então são apagadas"
+)
+PAGE_IMAGES_FORM_DESCRIPTION = (
+    "Se true (só PDF), cada página é renderizada como PNG (CONVERSION_PAGE_IMAGE_DPI, "
+    "padrão 150) e entra em `assets` com kind `page`; não aparece no markdown. "
+    "Funciona com ou sem image_mode. Mesmas regras de retenção de image_mode. Padrão false"
+)
+
+
+def _image_options(image_mode, page_images) -> Tuple[str, bool]:
+    """(image_mode, page_images) of a request; direct Python callers pass the Form() defaults."""
+    from fastapi.params import Body, Param
+
+    image_mode = None if isinstance(image_mode, (Param, Body)) else image_mode
+    page_images = False if isinstance(page_images, (Param, Body)) else page_images
+    return conversion_assets.normalize_options(image_mode, page_images)
+
+
 def _duplicate_response(db: Session, existing_job: Job, upload_location, message: str,
                         purge_source: bool) -> JobCreatedResponse:
     """
@@ -168,6 +196,8 @@ async def upload_and_convert(
         False,
         description=PURGE_SOURCE_FORM_DESCRIPTION,
     ),
+    image_mode: Literal["none", "referenced"] = Form("none", description=IMAGE_MODE_FORM_DESCRIPTION),
+    page_images: bool = Form(False, description=PAGE_IMAGES_FORM_DESCRIPTION),
     request: Request = None,
     location: LocationFields = Depends(upload_location_form),
     current_user: User = Depends(require("documents.convert")),
@@ -192,6 +222,31 @@ async def upload_and_convert(
     - `purge_source`: Se `true`, apaga os arquivos de origem (o arquivo enviado e os
       PDFs por página) quando o job termina — `completed`, ou `failed`/`partial` depois
       das tentativas automáticas — e fica só o resultado. Veja "Arquivos de origem".
+    - `image_mode`: `none` (padrão) ou `referenced` (figuras viram PNGs referenciados
+      no markdown). Veja "Imagens".
+    - `page_images`: `true` renderiza cada página do PDF como PNG. Veja "Imagens".
+
+    ## Imagens (`image_mode`, `page_images`)
+    - `image_mode=referenced`: cada figura encontrada pelo Docling vira um PNG e o
+      markdown troca o placeholder `<!-- image -->` por
+      `![Image](/jobs/{job_id}/assets/p0001-img01-<sha12>.png)` (caminho relativo na API).
+    - `page_images=true`: cada página do PDF vira um PNG (kind `page`), fora do markdown.
+    - `GET /jobs/{job_id}/result` traz `assets` (`name`, `kind`, `page`, `bbox`, `sha256`,
+      `mime`, `width`, `height`, `size_bytes`, `url`), em ordem de página, e
+      `assets_skipped` (figuras pequenas demais ou além dos limites do job).
+    - Baixe cada uma com `GET /jobs/{job_id}/assets/{name}` (mesma autenticação).
+    - PDF de várias páginas: as imagens de todas as páginas ficam no job principal.
+    - Com `purge_source=true` as imagens não são apagadas no fim do job: ficam
+      `ASSET_RETENTION_SECONDS` (padrão 1 h; `GET /jobs/{job_id}` informa
+      `assets_expire_at`) e então são apagadas; `DELETE /jobs/{job_id}/source` apaga na hora.
+    - O mesmo arquivo com outro `image_mode`/`page_images` é outro job (não é duplicata).
+
+    ```bash
+    curl -X POST http://localhost:8000/upload \\
+      -H "X-API-Key: your-api-key" \\
+      -F "file=@apostila.pdf" -F "project=Cursos" \\
+      -F "image_mode=referenced" -F "page_images=true" -F "purge_source=true"
+    ```
 
     ## Arquivos de origem (`purge_source`)
     - O que é apagado: o arquivo enviado (MinIO `uploads/...` e cópia local) e, num
@@ -245,8 +300,10 @@ async def upload_and_convert(
     filename = sanitize_upload_filename(file.filename)
 
     known_media = media_input_kind(filename, file.content_type)
+    image_mode, page_images = _image_options(image_mode, page_images)
+    image_options = conversion_assets.requested_options(image_mode, page_images)
     options, transcription_profile, transcription_profile_hash = transcription_admission(
-        settings, known_media=known_media, base_options={"docling_preset": docling_preset},
+        settings, known_media=known_media, base_options={"docling_preset": docling_preset, **image_options},
         language=language, diarize=diarize, min_speakers=min_speakers,
         max_speakers=max_speakers, include_word_timestamps=include_word_timestamps)
 
@@ -262,11 +319,13 @@ async def upload_and_convert(
         upload_location = resolve_upload_location(db, current_user, plan, _request_path(request))
 
         # Check if file already processed by this user in this project
-        operation_key = None if transcription_profile_hash else conversion_operation_key(docling_preset)
+        operation_key = None if transcription_profile_hash else conversion_operation_key(
+            docling_preset, image_mode, page_images)
         existing_job, reprocess_note = find_duplicate_job(
             db, current_user.id, file_checksum, upload_location,
             transcription_profile_hash=transcription_profile_hash,
-            purge_source=purge_source is True, operation_key=operation_key)
+            purge_source=purge_source is True, operation_key=operation_key,
+            assets_requested=bool(image_options))
 
         if existing_job:
             logger.info(f"Duplicate file detected! Returning existing job: {existing_job.id}")
@@ -324,6 +383,8 @@ async def upload_and_convert(
                 save_purge_option(db, db_job)
             if operation_key is not None:
                 save_operation_key(db, db_job, operation_key)
+            if known_media is not True:  # a document, or a source not known yet
+                conversion_assets.save_options(db, db_job, image_mode, page_images)
             db.commit()
             logger.info(f"Job {job_id} created in MySQL with name: {job_name} and checksum: {file_checksum}")
         except Exception as e:
@@ -939,6 +1000,8 @@ async def convert_document(
         False,
         description=PURGE_SOURCE_FORM_DESCRIPTION,
     ),
+    image_mode: Literal["none", "referenced"] = Form("none", description=IMAGE_MODE_FORM_DESCRIPTION),
+    page_images: bool = Form(False, description=PAGE_IMAGES_FORM_DESCRIPTION),
     request: Request = None,
     location: LocationFields = Depends(upload_location_form),
     current_user: User = Depends(require("documents.convert")),
@@ -987,6 +1050,13 @@ async def convert_document(
     regras de `/upload` (inclusive para arquivo repetido).
     Para apagar depois: `DELETE /jobs/{job_id}/source`
 
+    ## Imagens (`image_mode`, `page_images`)
+    `image_mode=referenced` guarda cada figura como PNG e o markdown passa a
+    referenciá-la (`![Image](/jobs/{job_id}/assets/{name})`); `page_images=true`
+    renderiza cada página do PDF. A lista sai em `assets` de
+    `GET /jobs/{job_id}/result` e cada imagem em `GET /jobs/{job_id}/assets/{name}`.
+    Mesmas regras de `/upload` (retenção com purge_source, deduplicação).
+
     ## Formatos suportados
     PDF, DOCX, DOC, HTML, PPTX, XLSX, RTF, ODT
 
@@ -1020,9 +1090,11 @@ async def convert_document(
     tag_list = parse_tags_or_422(tags)
 
     known_media = media_input_kind(file.filename, file.content_type) if file else None
+    image_mode, page_images = _image_options(image_mode, page_images)
+    image_options = conversion_assets.requested_options(image_mode, page_images)
     options, transcription_profile, transcription_profile_hash = transcription_admission(
-        settings, known_media=known_media, language=language, diarize=diarize,
-        min_speakers=min_speakers, max_speakers=max_speakers,
+        settings, known_media=known_media, base_options=image_options or None, language=language,
+        diarize=diarize, min_speakers=min_speakers, max_speakers=max_speakers,
         include_word_timestamps=include_word_timestamps)
 
     # The provider's own token, in its own header (S-01: the Ingestify JWT in
@@ -1063,7 +1135,9 @@ async def convert_document(
                 db, current_user.id, file_checksum, upload_location,
                 transcription_profile_hash=transcription_profile_hash,
                 purge_source=purge_source is True,
-                operation_key=None if transcription_profile_hash else conversion_operation_key(None))
+                operation_key=None if transcription_profile_hash else conversion_operation_key(
+                    None, image_mode, page_images),
+                assets_requested=bool(image_options))
 
             if existing_job:
                 logger.info(f"Duplicate file detected! Returning existing job: {existing_job.id}")
@@ -1129,7 +1203,9 @@ async def convert_document(
             if purge_source is True:
                 save_purge_option(db, db_job)
             if file_checksum and not transcription_profile_hash:
-                save_operation_key(db, db_job, conversion_operation_key(None))
+                save_operation_key(db, db_job, conversion_operation_key(None, image_mode, page_images))
+            if known_media is not True:  # a document, or a source not known yet
+                conversion_assets.save_options(db, db_job, image_mode, page_images)
             db.commit()
             checksum_info = f" and checksum: {file_checksum}" if file_checksum else ""
             logger.info(f"Job {job_id} created in MySQL with name: {job_name} (source_type: {source_type}){checksum_info}")
@@ -1370,6 +1446,10 @@ async def get_job_status(
         "source_deleted_at": source_deleted_at(db_job),
         "source_deletable": bool(db_job is not None and source_available(db_job)
                                  and not has_pending_work(db, db_job)),
+        # Image assets (image_mode / page_images): still downloadable, and when the
+        # beat deletes them (purge_source + ASSET_RETENTION_SECONDS), from the DB
+        "assets_available": conversion_assets.assets_available(db_job),
+        "assets_expire_at": conversion_assets.assets_expire_at(db_job),
         # Children have no row of their own: they inherit the MAIN job's location
         **_job_location_refs(db, owned_job),
     }
@@ -1631,6 +1711,14 @@ async def delete_job(
             db.rollback()
             logger.warning(f"Failed to delete the original of job {job_id}: {e}")
 
+    # Image assets of a document conversion (assets/{job_id}/ in the results bucket)
+    if db_job and db_job.source_type != "image":
+        try:
+            storage = get_minio_client()
+            storage.delete_folder(storage.bucket_results, conversion_assets.asset_prefix(job_id))
+        except Exception as e:
+            logger.warning(f"Failed to delete the image assets of job {job_id}: {e}")
+
     # Transcriptions: the stored transcript formats
     if db_job and db_job.source_type == "audio":
         try:
@@ -1738,9 +1826,16 @@ async def delete_job_source(
     Para apagar automaticamente quando o job terminar, envie `purge_source=true` em
     `/upload`, `/convert`, `/transcribe` ou em qualquer rota `/images/*`.
 
+    Conversão com imagens (`image_mode=referenced`, `page_images=true`): apaga também
+    as imagens extraídas e as páginas renderizadas (`assets_deleted: true`); depois
+    disso `GET /jobs/{job_id}/assets/{name}` responde 410 `SOURCE_PURGED`. Com
+    `purge_source=true` elas não somem no fim do job (ficam `ASSET_RETENTION_SECONDS`
+    para o cliente baixar); esta rota as apaga antes do prazo, mesmo que o original já
+    tenha sido apagado.
+
     ## Retorno
-    - 200: `{"job_id": "...", "source_deleted": true, "source_deleted_at": "..."}`
-    - 404: job inexistente, de outro usuário, ou sem arquivos de origem
+    - 200: `{"job_id": "...", "source_deleted": true, "source_deleted_at": "...", "assets_deleted": false}`
+    - 404: job inexistente, de outro usuário, ou sem arquivos de origem nem imagens
     - 409: `{"code": "JOB_STILL_PROCESSING"}`: o job ainda está na fila ou em processamento,
       espera um retry automático, ou tem página na fila/em processamento (retry de página)
     - 503: `{"code": "SOURCE_DELETE_FAILED"}`: o armazenamento recusou; o que não foi
@@ -1755,7 +1850,9 @@ async def delete_job_source(
         # Same row lock as the page retry and the worker purge: held from the check
         # below until delete_source's single commit, after every file is gone
         db_job = lock_job(db, job_id)
-    if db_job is None or not source_available(db_job):
+    has_source = db_job is not None and source_available(db_job)
+    has_assets = db_job is not None and conversion_assets.assets_available(db_job)
+    if not (has_source or has_assets):
         db.rollback()
         raise HTTPException(status_code=404, detail="Arquivo original não encontrado")
 
@@ -1766,15 +1863,21 @@ async def delete_job_source(
         raise HTTPException(status_code=409, detail=error_catalog.detail("JOB_STILL_PROCESSING"))
 
     try:
-        delete_source(db, db_job, get_minio_client)
-    except SourceDeleteError as e:
+        # The assets first, without committing: delete_source's single commit then
+        # records both, still under the row lock
+        assets_deleted = has_assets and conversion_assets.delete_assets(
+            db, db_job, get_minio_client, commit=not has_source)
+        if has_source:
+            delete_source(db, db_job, get_minio_client)
+    except (SourceDeleteError, conversion_assets.AssetDeleteError) as e:
         db.rollback()
         logger.error(f"Could not delete the original of job {job_id}: {e}")
         raise HTTPException(status_code=503, detail=error_catalog.detail("SOURCE_DELETE_FAILED"))
 
-    logger.info(f"Original file of job {job_id} deleted on request")
-    return SourceDeletedResponse(job_id=job_id, source_deleted=True,
-                                 source_deleted_at=source_deleted_at(db_job))
+    logger.info(f"Original file of job {job_id} deleted on request (assets: {bool(assets_deleted)})")
+    return SourceDeletedResponse(job_id=job_id, source_deleted=has_source,
+                                 source_deleted_at=source_deleted_at(db_job),
+                                 assets_deleted=bool(assets_deleted))
 
 
 @router.get("/jobs/{job_id}/result", summary="Resultado do job", response_model=JobResultResponse)
@@ -1922,6 +2025,11 @@ async def get_job_result(
     else:
         completed_at = datetime.utcnow()
 
+    # Image assets: the durable manifest of the MAIN job (Elasticsearch keeps only
+    # the markdown; a page job's Redis result carries its own page's assets)
+    if db_job is not None:
+        result_data = {**result_data, **conversion_assets.result_fields(db_job)}
+
     # Build response
     response_data = {
         "job_id": job_id,
@@ -1937,6 +2045,102 @@ async def get_job_result(
         response_data["parent_job_id"] = status_data.get("parent_job_id")
 
     return JobResultResponse(**response_data)
+
+
+ASSET_CHUNK_BYTES = 64 * 1024
+
+
+def _raise_if_assets_purged(job: Job) -> None:
+    """410 SOURCE_PURGED (cause ASSETS_PURGED): the job's image assets were deleted."""
+    deleted_at = getattr(job, "assets_deleted_at", None)
+    if deleted_at is None:
+        return
+    from shared import error_catalog
+
+    body = error_catalog.detail("SOURCE_PURGED", cause="ASSETS_PURGED", context={
+        "deleted_at": deleted_at.strftime("%d/%m/%Y %H:%M") + " UTC"})
+    body["assets_deleted_at"] = deleted_at.isoformat() + "Z"
+    raise HTTPException(status_code=410, detail=body)
+
+
+@router.get(
+    "/jobs/{job_id}/assets/{name}",
+    summary="Baixar imagem extraída ou página renderizada",
+    response_class=StreamingResponse,
+    responses={
+        200: {"content": {"image/png": {}}, "description": "O PNG"},
+        304: {"description": "If-None-Match igual ao ETag (sha256)"},
+        404: {"description": "Job inexistente, de outro usuário, ou nome que não está em `assets` do job"},
+        410: {"description": "`SOURCE_PURGED` (cause `ASSETS_PURGED`): as imagens já foram apagadas"},
+        503: {"description": "`ASSET_STORAGE_UNAVAILABLE`: armazenamento indisponível"},
+    },
+)
+async def get_job_asset(
+    job_id: str,
+    name: str,
+    request: Request,
+    owned_job: Optional[Job] = Depends(_job_read),
+):
+    """
+    Devolve o PNG de uma imagem extraída (`image_mode=referenced`, kind `picture`) ou
+    de uma página renderizada (`page_images=true`, kind `page`) de uma conversão.
+
+    - `name`: exatamente um dos nomes listados em `assets` de
+      `GET /jobs/{job_id}/result` (ex.: `p0001-img01-3f2a9c1b7d4e.png`). Qualquer
+      outro nome (inclusive caminhos) responde 404.
+    - `job_id`: sempre o job principal; num PDF de várias páginas as imagens de
+      todas as páginas ficam nele (a `url` de cada asset já aponta para cá).
+    - Mesma autenticação e permissão de `GET /jobs/{job_id}` (`jobs.read`); job de
+      outro usuário responde 404.
+    - Cabeçalhos: `Content-Type: image/png`, `ETag` = sha256 do PNG,
+      `Cache-Control: private`. `If-None-Match` com o mesmo ETag responde 304.
+    - Depois que as imagens são apagadas (`DELETE /jobs/{job_id}/source`, ou
+      `purge_source=true` + `ASSET_RETENTION_SECONDS`): 410 `SOURCE_PURGED`.
+
+    ```bash
+    curl -H "X-API-Key: ..." -o figura.png \\
+      http://localhost:8000/jobs/<job_id>/assets/p0001-img01-3f2a9c1b7d4e.png
+    ```
+    """
+    from shared import error_catalog
+
+    # Children (split / page / merge) are authorized by their parent but have no
+    # assets of their own: everything is served under the MAIN job
+    job = owned_job if (owned_job is not None and owned_job.id == job_id) else None
+    asset = conversion_assets.find_asset(job, name)
+    if asset is None:
+        raise HTTPException(status_code=404, detail=error_catalog.detail("ASSET_NOT_FOUND"))
+    _raise_if_assets_purged(job)
+
+    etag = f'"{asset["sha256"]}"'
+    headers = {"ETag": etag, "Cache-Control": "private, max-age=3600",
+               "X-Content-Type-Options": "nosniff"}
+    if etag in [tag.strip() for tag in (request.headers.get("if-none-match") or "").split(",")]:
+        return Response(status_code=304, headers=headers)
+
+    minio_client = get_minio_client()
+    object_name = conversion_assets.object_name(job_id, name)
+    try:
+        stream = await run_in_threadpool(minio_client.open_object, minio_client.bucket_results, object_name)
+    except Exception as e:  # noqa: BLE001
+        if getattr(e, "code", None) in ("NoSuchKey", "NoSuchObject") or isinstance(e, (KeyError, FileNotFoundError)):
+            raise HTTPException(status_code=404, detail=error_catalog.detail("ASSET_NOT_FOUND")) from None
+        logger.error(f"Could not read asset {name} of job {job_id}: {e}")
+        raise HTTPException(status_code=503, detail=error_catalog.detail("ASSET_STORAGE_UNAVAILABLE")) from None
+
+    def chunks():
+        try:
+            yield from stream.stream(ASSET_CHUNK_BYTES)
+        finally:
+            stream.close()
+            release = getattr(stream, "release_conn", None)
+            if release is not None:
+                release()
+
+    headers["Content-Length"] = str(asset.get("size_bytes") or "")
+    if not headers["Content-Length"]:
+        del headers["Content-Length"]
+    return StreamingResponse(chunks(), media_type=conversion_assets.ASSET_MIME, headers=headers)
 
 
 def _transcript_response(job_id: str, fmt: str, redis_client, generation=None, attempt_id=None) -> Response:

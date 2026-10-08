@@ -84,6 +84,22 @@ CATALOG = {
         "o processamento foi encerrado com falha. Envie o arquivo novamente.",
         ["retry"],
     ),
+    "ASSETS_PURGED": (
+        "As imagens extraídas deste job (figuras e páginas renderizadas) foram apagadas "
+        "em {deleted_at} (purge_source, depois do prazo de retenção, ou exclusão do "
+        "original). O markdown continua disponível; converta o arquivo de novo para "
+        "obter as imagens.",
+        [],
+    ),
+    "ASSET_NOT_FOUND": (
+        "Este job não tem uma imagem com esse nome. Os nomes válidos estão em `assets` "
+        "de GET /jobs/{{job_id}}/result (só depois que o job termina).",
+        [],
+    ),
+    "ASSET_STORAGE_UNAVAILABLE": (
+        "O armazenamento das imagens está indisponível agora. Tente novamente em instantes.",
+        ["retry"],
+    ),
     "SOURCE_DELETE_FAILED": (
         "Não foi possível apagar o arquivo original agora; ele foi mantido. "
         "Tente novamente em instantes.",

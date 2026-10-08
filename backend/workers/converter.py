@@ -45,6 +45,10 @@ class DoclingConverter:
             pipeline_options.do_ocr = enable_ocr  # Disable OCR for speed (digital PDFs only)
             pipeline_options.do_table_structure = enable_table_structure  # Disable if no tables
             pipeline_options.generate_picture_images = enable_images  # Disable image extraction for speed
+            if enable_images:
+                # Resolution of the picture crops (image_mode=referenced assets)
+                from shared.config import get_settings
+                pipeline_options.images_scale = float(get_settings().conversion_images_scale)
 
             # Pin the accelerator explicitly. Docling's own default is
             # device="auto", which resolves to cuda:0 whenever a GPU is visible
@@ -149,17 +153,21 @@ class DoclingConverter:
     def convert_to_markdown(
         self,
         file_path: Path,
-        options: Dict[str, Any] = None
+        options: Dict[str, Any] = None,
+        assets=None,
     ) -> Dict[str, Any]:
         """
         Convert document to markdown
 
         Args:
             file_path: Path to document file
-            options: Conversion options
+            options: Conversion options (`image_mode`, `page_images`: image assets)
+            assets: A workers.image_assets.AssetCollector when the job asked for
+                image assets; None keeps today's output exactly.
 
         Returns:
-            Dictionary with markdown content and metadata
+            Dictionary with markdown content and metadata (and `assets` /
+            `assets_skipped` when `assets` was given)
         """
         if options is None:
             options = {}
@@ -211,7 +219,11 @@ extracted using Docling.
             else:
                 # Use Docling for conversion
                 result = self.converter.convert(str(file_path))
-                markdown_content = result.document.export_to_markdown()
+                if assets is not None and options.get("image_mode") == "referenced":
+                    from workers.image_assets import extract_pictures
+                    markdown_content = extract_pictures(result.document, assets)
+                else:
+                    markdown_content = result.document.export_to_markdown()
 
                 logger.info(f"Conversion successful: {len(markdown_content)} characters")
 
@@ -225,10 +237,16 @@ extracted using Docling.
                 "author": None,
             }
 
-            return {
+            converted = {
                 "markdown": markdown_content,
                 "metadata": metadata,
             }
+            if assets is not None:
+                if options.get("page_images") is True and doc_format == "pdf":
+                    from workers.image_assets import render_pages
+                    render_pages(file_path, assets)
+                converted.update(assets.result_fields())
+            return converted
 
         except Exception as e:
             logger.error(f"Conversion failed: {e}", exc_info=True)
@@ -239,13 +257,15 @@ extracted using Docling.
 _converter: DoclingConverter = None
 
 
-def get_converter(preset: str = None) -> DoclingConverter:
+def get_converter(preset: str = None, picture_images: bool = False) -> DoclingConverter:
     """
     Get or create converter instance with settings from config or preset
 
     Args:
         preset: Optional preset name ('fast', 'balanced', 'quality')
                 If None, uses config defaults
+        picture_images: image_mode=referenced needs docling's picture crops
+                (generate_picture_images) whatever the preset says
 
     Returns:
         DoclingConverter instance
@@ -272,13 +292,14 @@ def get_converter(preset: str = None) -> DoclingConverter:
         enable_images = settings.docling_enable_images
         enable_table_structure = settings.docling_enable_table_structure
 
-    return _cached_converter(enable_ocr, enable_table_structure, enable_images)
+    return _cached_converter(enable_ocr, enable_table_structure, enable_images or picture_images)
 
 
 # One converter per option set and process: building one loads docling's layout
 # and table models (onto the GPU when DEVICE=cuda), so a fresh instance per task
 # reloaded the weights for every page. Two slots cover a preset plus the default
-# without letting every combination pile up in VRAM.
+# without letting every combination pile up in VRAM (image_mode=referenced on the
+# fast preset resolves to the balanced option set, not a new one).
 @lru_cache(maxsize=2)
 def _cached_converter(enable_ocr: bool, enable_table_structure: bool, enable_images: bool) -> DoclingConverter:
     return DoclingConverter(

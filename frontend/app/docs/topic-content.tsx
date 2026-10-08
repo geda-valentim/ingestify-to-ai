@@ -1184,6 +1184,14 @@ const MEDIA_COPY = {
         "purge_source",
         "Opcional, padrão false. true apaga os arquivos de origem quando o job termina; o resultado fica. Veja Arquivos de origem abaixo.",
       ],
+      [
+        "image_mode",
+        "Opcional: none (padrão; o Markdown mantém <!-- image -->) ou referenced (cada figura vira um PNG referenciado no Markdown). Veja Imagens extraídas abaixo.",
+      ],
+      [
+        "page_images",
+        "Opcional, padrão false. true renderiza cada página do PDF como PNG (fora do Markdown), com ou sem image_mode.",
+      ],
     ],
     presetsTitle: "Escolher velocidade e OCR",
     presetsHead: ["Preset", "OCR", "Imagens", "Tabelas", "Uso"],
@@ -1219,6 +1227,37 @@ const MEDIA_COPY = {
     ],
     sourceDelete:
       "Para apagar o original depois, sem esperar purge_source, use DELETE /jobs/{job_id}/source (exige a permissão de excluir o job). 200: {job_id, source_deleted: true, source_deleted_at}. 404: job inexistente, de outro usuário ou sem arquivos de origem. 409 JOB_STILL_PROCESSING: o job ou uma página ainda está na fila, em processamento ou aguardando nova tentativa (consulte source_deletable). 503 SOURCE_DELETE_FAILED: o armazenamento recusou; o que não foi apagado continua referenciado e chamar de novo termina. Funciona igual para transcrições e jobs de imagem.",
+    assetsTitle: "Imagens extraídas (image_mode, page_images)",
+    assetsIntro:
+      "Com image_mode=referenced, cada figura que o Docling encontra é guardada como PNG e o Markdown troca o placeholder por ![Image](/jobs/{job_id}/assets/{name}), um caminho relativo da API. Com page_images=true, cada página do PDF também vira um PNG. Todas aparecem em assets do /result, ordenadas por página (a página renderizada, depois as figuras na ordem do documento).",
+    assetsRows: [
+      [
+        "assets[]",
+        "name, kind (picture | page), page (1-based, absoluta), bbox (só picture: l, t, r, b em pontos, origem no topo), sha256, mime (image/png), width, height, size_bytes, url.",
+      ],
+      [
+        "assets_skipped",
+        "Contagem de figuras não guardadas: too_small (menor que CONVERSION_ASSET_MIN_PX, padrão 32 px), count_limit e size_limit (CONVERSION_ASSET_MAX_COUNT=500 e CONVERSION_ASSET_MAX_TOTAL_MB=200 por job), unavailable. Elas ficam como <!-- image --> no Markdown.",
+      ],
+      [
+        "Download",
+        "GET /jobs/{job_id}/assets/{name} com a mesma autenticação: image/png, ETag = sha256, Cache-Control private, 304 com If-None-Match. Só nomes listados em assets; outro nome responde 404 ASSET_NOT_FOUND.",
+      ],
+      [
+        "PDF de várias páginas",
+        "Cada página é convertida em paralelo e as imagens ficam no job principal: url sempre aponta para /jobs/{job_id_principal}/assets/...",
+      ],
+      [
+        "Retenção",
+        "Sem purge_source, as imagens duram o mesmo que o job (DELETE /jobs/{job_id} as apaga). Com purge_source=true elas não somem no fim do job: ficam ASSET_RETENTION_SECONDS (padrão 3600) para você baixar e então são apagadas; GET /jobs/{job_id} informa assets_available e assets_expire_at. DELETE /jobs/{job_id}/source as apaga na hora. Depois disso a rota responde 410 SOURCE_PURGED.",
+      ],
+      [
+        "Duplicatas",
+        "image_mode e page_images fazem parte da operação: o mesmo arquivo com outras opções de imagem gera outro job.",
+      ],
+    ],
+    assetsNote:
+      "Um fluxo típico: converter com image_mode=referenced, esperar completed, ler assets do /result, baixar cada url e enviar a /images/describe ou /images/ocr. Uma página que é só imagem (escaneada) nem sempre vira figura no Docling: use page_images=true para ter a página inteira.",
     example: "Exemplos de requisição",
     resultExample: "Exemplo ilustrativo de resultado",
     pagesIntro:
@@ -1323,6 +1362,14 @@ const MEDIA_COPY = {
         "purge_source",
         "Optional, default false. true deletes the source files when the job finishes; the result stays. See Source files below.",
       ],
+      [
+        "image_mode",
+        "Optional: none (default; the Markdown keeps <!-- image -->) or referenced (each picture becomes a PNG referenced from the Markdown). See Extracted images below.",
+      ],
+      [
+        "page_images",
+        "Optional, default false. true renders every PDF page to a PNG (not in the Markdown), with or without image_mode.",
+      ],
     ],
     presetsTitle: "Choosing speed and OCR",
     presetsHead: ["Preset", "OCR", "Images", "Tables", "Usage"],
@@ -1358,6 +1405,37 @@ const MEDIA_COPY = {
     ],
     sourceDelete:
       "To delete the original later, without purge_source, call DELETE /jobs/{job_id}/source (requires permission to delete the job). 200: {job_id, source_deleted: true, source_deleted_at}. 404: the job doesn't exist, belongs to another user or has no source files. 409 JOB_STILL_PROCESSING: the job or a page is still queued, processing or waiting for a retry (check source_deletable). 503 SOURCE_DELETE_FAILED: storage refused; whatever was not deleted stays referenced and calling again finishes it. Works the same for transcripts and image jobs.",
+    assetsTitle: "Extracted images (image_mode, page_images)",
+    assetsIntro:
+      "With image_mode=referenced, every picture Docling finds is stored as a PNG and the Markdown replaces the placeholder with ![Image](/jobs/{job_id}/assets/{name}), a relative API path. With page_images=true, every PDF page also becomes a PNG. All of them are listed in assets of /result, ordered by page (the page render, then the pictures in document order).",
+    assetsRows: [
+      [
+        "assets[]",
+        "name, kind (picture | page), page (1-based, absolute), bbox (picture only: l, t, r, b in points, top-left origin), sha256, mime (image/png), width, height, size_bytes, url.",
+      ],
+      [
+        "assets_skipped",
+        "Count of pictures not stored: too_small (under CONVERSION_ASSET_MIN_PX, default 32 px), count_limit and size_limit (CONVERSION_ASSET_MAX_COUNT=500 and CONVERSION_ASSET_MAX_TOTAL_MB=200 per job), unavailable. They stay as <!-- image --> in the Markdown.",
+      ],
+      [
+        "Download",
+        "GET /jobs/{job_id}/assets/{name} with the same authentication: image/png, ETag = sha256, Cache-Control private, 304 with If-None-Match. Only names listed in assets; any other name answers 404 ASSET_NOT_FOUND.",
+      ],
+      [
+        "Multi-page PDF",
+        "Pages are converted in parallel and the images belong to the main job: url always points to /jobs/{main_job_id}/assets/...",
+      ],
+      [
+        "Retention",
+        "Without purge_source, images live as long as the job (DELETE /jobs/{job_id} removes them). With purge_source=true they are not deleted when the job finishes: they stay ASSET_RETENTION_SECONDS (default 3600) for you to download, then they are deleted; GET /jobs/{job_id} shows assets_available and assets_expire_at. DELETE /jobs/{job_id}/source deletes them at once. Afterwards the route answers 410 SOURCE_PURGED.",
+      ],
+      [
+        "Duplicates",
+        "image_mode and page_images are part of the operation: the same file with other image options is another job.",
+      ],
+    ],
+    assetsNote:
+      "A typical flow: convert with image_mode=referenced, wait for completed, read assets from /result, download each url and send it to /images/describe or /images/ocr. A page that is only an image (scanned) is not always a Docling picture: use page_images=true to get the whole page.",
     example: "Request examples",
     resultExample: "Illustrative result example",
     pagesIntro:
@@ -1487,6 +1565,63 @@ function MediaSections({ lang, section }: { lang: Lang; section: string }) {
           <Endpoint method="DELETE" path="/jobs/{job_id}/source" />
           <P small>{t.sourceDelete}</P>
           {block(curl(`/jobs/${EXAMPLE_JOB_ID}/source`, [], "DELETE"))}
+          <Subheading>{t.assetsTitle}</Subheading>
+          <Endpoint method="GET" path="/jobs/{job_id}/assets/{name}" />
+          <P>{t.assetsIntro}</P>
+          <Table head={t.fields} rows={t.assetsRows} />
+          {block(
+            curl("/upload", [
+              `  -F "file=@${pt ? "apostila" : "handout"}.pdf"`,
+              `  -F "project=${project}"`,
+              '  -F "image_mode=referenced"',
+              '  -F "page_images=true"',
+              '  -F "purge_source=true"',
+            ]),
+          )}
+          {block(
+            JSON.stringify(
+              {
+                markdown: `## ${pt ? "Aula 1" : "Lesson 1"}\n\n![Image](/jobs/${EXAMPLE_JOB_ID}/assets/p0001-img01-3f2a9c1b7d4e.png)`,
+                assets: [
+                  {
+                    name: "p0001-page-9b1c0d2e3f4a.png",
+                    kind: "page",
+                    page: 1,
+                    bbox: null,
+                    sha256: "9b1c0d2e3f4a…",
+                    mime: "image/png",
+                    width: 1275,
+                    height: 1650,
+                    size_bytes: 182311,
+                    url: `/jobs/${EXAMPLE_JOB_ID}/assets/p0001-page-9b1c0d2e3f4a.png`,
+                  },
+                  {
+                    name: "p0001-img01-3f2a9c1b7d4e.png",
+                    kind: "picture",
+                    page: 1,
+                    bbox: { l: 99.8, t: 265.7, r: 400.0, b: 492.1, coord_origin: "TOPLEFT" },
+                    sha256: "3f2a9c1b7d4e…",
+                    mime: "image/png",
+                    width: 601,
+                    height: 453,
+                    size_bytes: 48213,
+                    url: `/jobs/${EXAMPLE_JOB_ID}/assets/p0001-img01-3f2a9c1b7d4e.png`,
+                  },
+                ],
+                assets_skipped: { too_small: 0, count_limit: 0, size_limit: 0, unavailable: 0 },
+              },
+              null,
+              2,
+            ),
+          )}
+          {block(
+            [
+              `curl "${API_URL}/jobs/${EXAMPLE_JOB_ID}/assets/p0001-img01-3f2a9c1b7d4e.png"`,
+              `  -H "X-API-Key: ${key}"`,
+              "  -o p0001-img01.png",
+            ].join(" \\\n"),
+          )}
+          <P small>{t.assetsNote}</P>
           <P>{t.docsResult}</P>
           {block(curl(`/jobs/${EXAMPLE_JOB_ID}/result`, [], "GET"))}
           <Subheading>{t.resultExample}</Subheading>

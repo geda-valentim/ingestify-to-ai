@@ -303,16 +303,24 @@ def resolve_upload_location(db: Session, user: User, plan: UploadPlan, path: str
 # Deduplication, scoped by project
 # ---------------------------------------------------------------------------
 
-def conversion_operation_key(docling_preset: Optional[str]) -> str:
+def conversion_operation_key(docling_preset: Optional[str], image_mode: Optional[str] = None,
+                             page_images: bool = False) -> str:
     """
     Dedup key of a document conversion: the operation and the options that change
     its result. The same file converted with another preset is another job; a
     vision job (describe / OCR / analyze) of the same bytes is never a duplicate.
+
+    `image_mode` / `page_images` (image assets) enter the key only when not the
+    default, so every key recorded before they existed (all `none` / false) is
+    still the key of a conversion without assets.
     """
     import hashlib
     import json
 
+    from shared.conversion_assets import normalize_options, requested_options
+
     payload = {"operation": "conversion", "docling_preset": docling_preset or None}
+    payload.update(requested_options(*normalize_options(image_mode, page_images)))
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
 
 
@@ -331,16 +339,20 @@ def _operation_key_of(job: Job) -> Optional[str]:
 def find_duplicate_job(db: Session, user_id: str, checksum: str, location: UploadLocation,
                        transcription_profile_hash: Optional[str] = None,
                        purge_source: bool = False,
-                       operation_key: Optional[str] = None) -> Tuple[Optional[Job], Optional[str]]:
+                       operation_key: Optional[str] = None,
+                       assets_requested: bool = False) -> Tuple[Optional[Job], Optional[str]]:
     """
     A MAIN job with the same checksum *and the same operation* in the same project,
     if any, that did not end failed (FAILED, or PARTIAL with failed pages: sending
     the file again is the new attempt).
 
     The operation: a transcription is identified by its profile hash; a document
-    conversion by `operation_key` (`conversion_operation_key`: the preset). Jobs of
-    another kind (images) never match. A job recorded before operation keys existed
-    matches any conversion of the same file, as it did then.
+    conversion by `operation_key` (`conversion_operation_key`: the preset and the
+    image-asset options). Jobs of another kind (images) never match. A job recorded
+    before operation keys existed matches any conversion of the same file without
+    image assets, as it did then. `assets_requested` (the request has
+    `image_mode=referenced` or `page_images=true`): such a request is never
+    answered by a keyless job, nor by one whose assets were already deleted.
 
     With `purge_source=false` (keep the original) a job whose original is already
     gone, or was asked to be deleted, is not reused: the file is processed again
@@ -371,11 +383,20 @@ def find_duplicate_job(db: Session, user_id: str, checksum: str, location: Uploa
         # A document conversion is never answered by a transcription of the same file
         base = base.filter(Job.transcription_profile_hash.is_(None))
 
+    plain = not assets_requested
+
     def same_operation(job: Job) -> bool:
         if operation_key is None:
             return True
         recorded = _operation_key_of(job)
-        return recorded is None or recorded == operation_key
+        if recorded is None:
+            # Recorded before operation keys: a conversion without image assets
+            return plain
+        if recorded != operation_key:
+            return False
+        # Image assets already deleted (purge / DELETE /jobs/{id}/source): the
+        # request would get dead asset URLs, so the file is processed again
+        return plain or getattr(job, "assets_deleted_at", None) is None
     candidates = [job for job in base.filter(Job.project_id == location.project_id)
                   .order_by(Job.created_at.desc()).all() if same_operation(job)]
     same = next((job for job in candidates if reusable_for(job, purge_source)), None)

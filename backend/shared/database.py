@@ -116,6 +116,10 @@ _ADDED_COLUMNS = {
         "purge_source": "BOOLEAN NULL",
         "source_deleted_at": "DATETIME NULL",
         "operation_key": "VARCHAR(64) NULL",
+        # alembic c3a70024e5b1: image assets of a document conversion
+        "assets_manifest": "JSON NULL",
+        "assets_expire_at": "DATETIME NULL",
+        "assets_deleted_at": "DATETIME NULL",
     },
     "engine_feature_state": {
         "workers_seen_at": "DATETIME(6) NULL",  # alembic 5d2e8f1a6c47 (spec 0003, slice 3b)

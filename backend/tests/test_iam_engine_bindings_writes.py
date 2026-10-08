@@ -406,10 +406,30 @@ def _environment(service):
     return env
 
 
+def _compose_files():
+    """
+    The repository's docker-compose*.yml: the git-tracked ones only, so a local,
+    untracked overlay (a tunnel or a dev override next to the checkout) never
+    decides this test. Without git (or outside a work tree, e.g. a container
+    that mounts the code but not the .git it points to): every file on disk.
+    """
+    import subprocess
+
+    try:
+        out = subprocess.run(["git", "-C", str(ROOT), "ls-files", "-z", "--", "docker-compose*.yml"],
+                             capture_output=True, check=True, timeout=30).stdout
+    except (OSError, subprocess.SubprocessError):
+        return sorted(ROOT.glob("docker-compose*.yml"))
+    names = [name for name in out.decode().split("\0") if name and "/" not in name]
+    if not names:  # an export without tracked files: what is on disk
+        return sorted(ROOT.glob("docker-compose*.yml"))
+    return sorted(ROOT / name for name in names)
+
+
 def test_compose_passes_iam_mode_wherever_engine_access_enabled_goes():
     yaml = pytest.importorskip("yaml")
     seen = set()
-    for path in sorted(ROOT.glob("docker-compose*.yml")):
+    for path in _compose_files():
         services = (yaml.safe_load(path.read_text()) or {}).get("services") or {}
         for name, service in services.items():
             env = _environment(service)

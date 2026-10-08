@@ -2,6 +2,34 @@
 
 > **Registro histórico (2025-10).** Não é mantido; para mudanças posteriores use `git log`. Observação: `workers/tasks_old.py`, citado abaixo, não existe (há um `workers/tasks.py.backup`). Exceção: mudanças de comportamento intencionais que uma spec manda registrar aqui entram na seção abaixo.
 
+## 2026-10: Imagens da conversão de documentos (API 1.2.0)
+
+- `POST /upload` e `POST /convert` ganham `image_mode` (`none` padrão | `referenced`) e
+  `page_images` (padrão `false`). `referenced` liga `generate_picture_images`, guarda cada
+  figura do Docling como PNG (`assets/{job_id}/p{pág:04d}-img{idx:02d}-{sha12}.png` no bucket
+  de resultados) e o Markdown a referencia (`![Image](/jobs/{job_id}/assets/{name})`, via
+  `ImageRefMode.REFERENCED`); `page_images` renderiza cada página do PDF (pypdfium2).
+  Com os padrões o Markdown é idêntico ao de antes.
+- `GET /jobs/{id}/result`: `result.assets[]` (`name`, `kind` `picture`|`page`, `page`,
+  `bbox`, `sha256`, `mime`, `width`, `height`, `size_bytes`, `url`), em ordem de página, e
+  `result.assets_skipped`. PDF dividido: cada página extrai com o número absoluto, o merge
+  concatena sob o job principal e aplica os limites do job.
+- Nova rota `GET /jobs/{job_id}/assets/{name}` (`jobs.read`): PNG em streaming, `ETag`
+  sha256, `Cache-Control: private`, `304`; só nomes do manifesto do job (`404
+  ASSET_NOT_FOUND`); `410 SOURCE_PURGED` (`cause: ASSETS_PURGED`) depois de apagadas.
+- `purge_source`: as imagens não são apagadas no fim do job; expiram
+  `ASSET_RETENTION_SECONDS` (3600) depois, pela task `workers.image_full_tasks.reconcile`.
+  `DELETE /jobs/{id}/source` as apaga na hora (`assets_deleted` na resposta) e
+  `DELETE /jobs/{id}` também. `GET /jobs/{id}` informa `assets_available`/`assets_expire_at`.
+- Dedup: as opções de imagem entram no `operation_key` (só quando não são o padrão).
+- Novas colunas `jobs.assets_manifest`, `assets_expire_at`, `assets_deleted_at` (alembic
+  `c3a70024e5b1`, também adicionadas no boot). Novas variáveis `CONVERSION_IMAGES_SCALE`,
+  `CONVERSION_PAGE_IMAGE_DPI`, `CONVERSION_ASSET_MIN_PX`, `CONVERSION_ASSET_MAX_COUNT`,
+  `CONVERSION_ASSET_MAX_TOTAL_MB`, `ASSET_RETENTION_SECONDS`.
+- `info.version` 1.1.0 → **1.2.0** (contrato cresceu de forma compatível).
+- Teste `test_compose_passes_iam_mode_wherever_engine_access_enabled_goes` considera só os
+  `docker-compose*.yml` versionados (overlays locais não rastreados não o quebram mais).
+
 ## 2026-10: OpenAPI/Swagger e portal de docs atualizados (API 1.1.0)
 
 Só documentação e metadados: nenhuma rota, status, campo ou esquema mudou

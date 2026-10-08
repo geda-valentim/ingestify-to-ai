@@ -99,6 +99,18 @@ class Settings(BaseSettings):
     # 5 worker replicas x concurrency 2 stop oversubscribing the CPU.
     docling_num_threads: int = 4
 
+    # Image assets of a document conversion (image_mode=referenced / page_images=true
+    # on /upload and /convert; shared/conversion_assets.py). Not DOCLING_-prefixed on
+    # purpose: docling's own BaseSettings reads that prefix.
+    conversion_images_scale: float = 2.0  # docling picture images: 1.0 = 72 DPI, 2.0 = 144 DPI
+    conversion_page_image_dpi: int = 150  # page renders (pypdfium2)
+    conversion_asset_min_px: int = 32  # pictures narrower or shorter than this are skipped
+    conversion_asset_max_count: int = 500  # per job, pictures + pages
+    conversion_asset_max_total_mb: int = 200  # per job, PNG bytes, pictures + pages
+    # With purge_source=true the assets outlive the job's settlement by this much,
+    # so the client can download them; then the periodic beat deletes them
+    asset_retention_seconds: int = 3600
+
     # Device / GPU
     # THE single device knob for the whole stack (Docling, Whisper, Florence-2).
     # Accepted: auto | cpu | cuda | cuda:N.

@@ -35,6 +35,7 @@ iniciar** se não conseguir verificar isso.
 | `ingestify-uploads` (`MINIO_BUCKET_UPLOADS`) | `uploads/{job_id}/{arquivo}` — original enviado em `/upload` ou `/convert` (só `source_type=file`) | API |
 | `ingestify-pages` (`MINIO_BUCKET_PAGES`) | `pages/{job_id}/page_NNNN.pdf` — cada página de um PDF dividido | `split_pdf_task` |
 | `ingestify-results` (`MINIO_BUCKET_RESULTS`) | `results/{job_id}/page_NNNN.md` — Markdown de cada página | `convert_page_task` |
+| `ingestify-results` (`MINIO_BUCKET_RESULTS`) | `assets/{job_id}/*.png` — imagens extraídas / páginas renderizadas (`image_mode`, `page_images`); com `purge_source`, apagadas `ASSET_RETENTION_SECONDS` depois do fim do job | `process_conversion`, `convert_page_task` |
 | `ingestify-audio` (`MINIO_BUCKET_AUDIO`) | mídia enviada a `/transcribe` e `transcripts/{job_id}/…` | API / worker de transcrição |
 | `ingestify-crawled` (`MINIO_BUCKET_CRAWLED`) | vazio — reservado ao crawler não implementado ([crawler.md](crawler.md)) | — |
 

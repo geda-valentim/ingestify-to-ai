@@ -340,12 +340,32 @@ def retry_image_purges(force=False):
     return retry_pending_image_purges(SessionLocal, get_minio_client)
 
 
+# Image assets of document conversions (purge_source + ASSET_RETENTION_SECONDS) are
+# deleted from the same beat, at most once a minute per process
+ASSET_EXPIRY_INTERVAL_SECONDS = 60
+_last_asset_expiry = None
+
+
+def expire_conversion_assets(force=False):
+    """Bounded, idempotent deletion of expired conversion assets (shared.conversion_assets)."""
+    global _last_asset_expiry
+    if not force and _last_asset_expiry is not None and time.monotonic() - _last_asset_expiry < ASSET_EXPIRY_INTERVAL_SECONDS:
+        return 0
+    _last_asset_expiry = time.monotonic()
+    from shared.conversion_assets import expire_due_assets
+    return expire_due_assets(SessionLocal, get_minio_client)
+
+
 @celery_app.task(name='workers.image_full_tasks.reconcile')
 def reconcile():
     try:
         retry_image_purges()
     except Exception:
         logger.warning('Image purge retry deferred')
+    try:
+        expire_conversion_assets()
+    except Exception:
+        logger.warning('Conversion asset expiry deferred')
     now = datetime.utcnow()
     storage = get_minio_client()
     with SessionLocal() as db:
