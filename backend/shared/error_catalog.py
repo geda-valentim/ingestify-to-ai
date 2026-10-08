@@ -75,9 +75,11 @@ CATALOG = {
         ["retry"],
     ),
     "SPLIT_FAILED": (
-        "Não foi possível dividir o PDF em páginas, nem depois das novas tentativas "
-        "automáticas. Envie o arquivo novamente.",
-        ["retry"],
+        "Não foi possível dividir o PDF em páginas, nem com qpdf nem com PyPDF2, depois "
+        "das novas tentativas automáticas. O arquivo provavelmente está corrompido ou "
+        "protegido por senha: reenviar o mesmo arquivo não resolve. Gere o PDF de novo "
+        "(por exemplo, \"imprimir como PDF\") e envie a nova versão.",
+        ["fix_input"],
     ),
     "RETRY_NOT_QUEUED": (
         "A nova tentativa automática não pôde ser agendada (fila indisponível), então "

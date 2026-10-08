@@ -8,6 +8,63 @@ from shared.minio_client import get_minio_client
 logger = logging.getLogger(__name__)
 
 
+
+# qpdf exits 3 when it finished the job but warned about the input (e.g. a damaged
+# cross-reference table it rebuilt): that is a success, not a failure. Treating it as
+# one failed real course PDFs on 2026-10-08. `--warning-exit-0` maps it to 0; the
+# warnings are still logged.
+QPDF = ["qpdf", "--warning-exit-0"]
+
+
+def _qpdf(args: List[str]) -> subprocess.CompletedProcess:
+    result = subprocess.run(QPDF + args, capture_output=True, text=True, check=True)
+    warnings = (getattr(result, "stderr", "") or "").strip()
+    if warnings:
+        logger.warning("qpdf warnings for %s: %s", args[0] if args else "?", warnings[:500])
+    return result
+
+
+def _pypdf_page_count(pdf_path: Path) -> int:
+    from PyPDF2 import PdfReader
+
+    return len(PdfReader(str(pdf_path), strict=False).pages)
+
+
+def count_pages(pdf_path: Path) -> int:
+    """Page count via qpdf, falling back to PyPDF2 when qpdf refuses the file."""
+    try:
+        return int(_qpdf(["--show-npages", str(pdf_path)]).stdout.strip())
+    except (subprocess.CalledProcessError, ValueError) as e:
+        stderr = getattr(e, "stderr", "") or str(e)
+        logger.warning("qpdf could not count pages of %s (%s); trying PyPDF2", pdf_path, stderr.strip()[:300])
+        try:
+            return _pypdf_page_count(pdf_path)
+        except Exception:
+            raise e  # neither could read it: report qpdf's error, the primary tool
+
+
+def extract_page(pdf_path: Path, page_number: int, page_path: Path) -> None:
+    """
+    Write page `page_number` (1-based) of `pdf_path` to `page_path`.
+
+    qpdf first (it drops unused objects, so pages stay small); PyPDF2 when qpdf
+    fails outright. Either way the output must open and hold exactly one page.
+    """
+    try:
+        _qpdf([str(pdf_path), "--pages", ".", f"{page_number}-{page_number}", "--", str(page_path)])
+    except subprocess.CalledProcessError as e:
+        logger.warning("qpdf could not extract page %s of %s (%s); trying PyPDF2",
+                       page_number, pdf_path, (e.stderr or "").strip()[:300])
+        from PyPDF2 import PdfReader, PdfWriter
+
+        writer = PdfWriter()
+        writer.add_page(PdfReader(str(pdf_path), strict=False).pages[page_number - 1])
+        with open(page_path, "wb") as out:
+            writer.write(out)
+    if not page_path.exists() or page_path.stat().st_size == 0 or _pypdf_page_count(page_path) != 1:
+        raise ValueError(f"PAGE_EXTRACTION_INVALID: página {page_number} não pôde ser extraída de {pdf_path.name}")
+
+
 class PDFSplitter:
     """Divide PDFs em páginas individuais para processamento paralelo"""
 
@@ -26,16 +83,7 @@ class PDFSplitter:
     def get_page_count(self, pdf_path: Path) -> int:
         """Retorna número de páginas do PDF"""
         try:
-            result = subprocess.run(
-                ['qpdf', '--show-npages', str(pdf_path)],
-                capture_output=True,
-                text=True,
-                check=True
-            )
-            return int(result.stdout.strip())
-        except subprocess.CalledProcessError as e:
-            logger.error(f"Erro ao contar páginas com qpdf: {e.stderr}")
-            raise
+            return count_pages(pdf_path)
         except Exception as e:
             logger.error(f"Erro ao contar páginas: {e}")
             raise
@@ -71,16 +119,7 @@ class PDFSplitter:
                 page_path = self.temp_dir / page_filename
 
                 # Usar qpdf para extrair página (remove objetos não utilizados)
-                try:
-                    subprocess.run(
-                        ['qpdf', str(pdf_path), '--pages', '.', f'{page_num}-{page_num}', '--', str(page_path)],
-                        capture_output=True,
-                        text=True,
-                        check=True
-                    )
-                except subprocess.CalledProcessError as e:
-                    logger.error(f"Erro ao extrair página {page_num} com qpdf: {e.stderr}")
-                    raise
+                extract_page(pdf_path, page_num, page_path)
 
                 # Upload para MinIO se habilitado
                 minio_path = None
@@ -139,16 +178,7 @@ class PDFSplitter:
             page_path = self.temp_dir / page_filename
 
             # Usar qpdf para extrair página (remove objetos não utilizados)
-            try:
-                subprocess.run(
-                    ['qpdf', str(pdf_path), '--pages', '.', f'{page_number}-{page_number}', '--', str(page_path)],
-                    capture_output=True,
-                    text=True,
-                    check=True
-                )
-            except subprocess.CalledProcessError as e:
-                logger.error(f"Erro ao extrair página {page_number} com qpdf: {e.stderr}")
-                raise
+            extract_page(pdf_path, page_number, page_path)
 
             # Upload para MinIO se habilitado
             minio_path = None
@@ -227,14 +257,7 @@ def should_split_pdf(file_path: Path, min_pages: int = 2) -> bool:
         return False
 
     try:
-        result = subprocess.run(
-            ['qpdf', '--show-npages', str(file_path)],
-            capture_output=True,
-            text=True,
-            check=True
-        )
-        page_count = int(result.stdout.strip())
-        return page_count >= min_pages
+        return count_pages(file_path) >= min_pages
     except Exception as e:
         logger.warning(f"Erro ao verificar PDF com qpdf: {e}")
         return False
