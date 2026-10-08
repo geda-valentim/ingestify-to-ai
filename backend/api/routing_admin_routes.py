@@ -83,7 +83,7 @@ def _lease_view(db: Session, now: datetime) -> Dict[str, Any]:
     }
 
 
-@router.get("/routing", summary="Feature routes and their backlog")
+@router.get("/routing", summary="Rotas por funcionalidade e backlog")
 async def list_routes(admin_user=Depends(ROUTING_READ), db: Session = Depends(get_db)) -> List[Dict[str, Any]]:
     now = datetime.utcnow()
     engines = {e.id: e for e in db.query(Engine)}
@@ -96,7 +96,7 @@ async def list_routes(admin_user=Depends(ROUTING_READ), db: Session = Depends(ge
     return views
 
 
-@router.put("/routing/{feature}", summary="Create or replace a feature's route")
+@router.put("/routing/{feature}", summary="Criar ou substituir a rota de uma funcionalidade")
 async def put_route(feature: str, body: RouteUpdate, request: Request,
                     admin_user=Depends(ROUTING_UPDATE), db: Session = Depends(get_db)) -> Dict[str, Any]:
     if body.remote_allowed_for == "all":
@@ -130,7 +130,7 @@ async def put_route(feature: str, body: RouteUpdate, request: Request,
     return view
 
 
-@router.delete("/routing/{feature}", status_code=202, summary="Remove a route (it drains back to today's path)")
+@router.delete("/routing/{feature}", status_code=202, summary="Remover rota (volta ao caminho padrão)")
 async def delete_route(feature: str, request: Request, admin_user=Depends(ROUTING_UPDATE),
                        db: Session = Depends(get_db)) -> Dict[str, Any]:
     try:
@@ -145,7 +145,7 @@ async def delete_route(feature: str, request: Request, admin_user=Depends(ROUTIN
     return view
 
 
-@router.get("/engines/status", summary="Dispatcher, in-flight work and backlog")
+@router.get("/engines/status", summary="Dispatcher, trabalho em andamento e backlog")
 async def engines_status(admin_user=Depends(ROUTING_READ), db: Session = Depends(get_db)) -> Dict[str, Any]:
     now = datetime.utcnow()
     live = _alive_by_feature()

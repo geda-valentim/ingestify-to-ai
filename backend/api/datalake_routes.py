@@ -51,7 +51,7 @@ def draft_connection(body: DiscoverConnection, user: User, db: Session):
         config=config, credentials_encrypted=seal(user.id, connection_id, credentials))
 
 
-@router.post("/discover")
+@router.post("/discover", summary="Descobrir conexão de datalake")
 def discover_connection(body: DiscoverConnection, user: User = Depends(require("datalakes.create")), db: Session = Depends(get_db)):
     """Read buckets with draft settings, without creating or updating a connection."""
     draft = draft_connection(body, user, db)
@@ -94,7 +94,7 @@ def validate_new_bucket(provider, bucket):
         raise HTTPException(422, "Nome inválido para o provedor. Use de 3 a 63 letras minúsculas, números e hífens, começando e terminando com letra ou número.")
 
 
-@router.post("/buckets", status_code=201)
+@router.post("/buckets", summary="Criar bucket", status_code=201)
 def create_bucket(body: CreateBucket, user: User = Depends(require("datalakes.create")), db: Session = Depends(get_db)):
     """Create storage now; saving the connection remains a separate operation."""
     draft = draft_connection(body, user, db)
@@ -170,7 +170,7 @@ class PartitionPreview(BaseModel):
         return validate_values(value)
 
 
-@router.post("/partition-preview")
+@router.post("/partition-preview", summary="Prévia do particionamento")
 def partition_preview(body: PartitionPreview, user: User = Depends(require("datalakes.create")), db: Session = Depends(get_db)):
     connection = connection_or_404(db, user, body.connection_id) if body.connection_id else None
     config = connection.config if connection else {}
@@ -184,14 +184,14 @@ def partition_preview(body: PartitionPreview, user: User = Depends(require("data
         raise HTTPException(422, str(exc)) from None
 
 
-@router.get("")
+@router.get("", summary="Listar conexões de datalake")
 def list_connections(scope: Scope = Depends(visible(DatalakeConnection, "datalakes.read")),
                      db: Session = Depends(get_db)):
     return {"connections": [public_connection(row) for row in db.query(DatalakeConnection)
                             .filter(scope.predicate).order_by(DatalakeConnection.name).all()]}
 
 
-@router.post("", status_code=201)
+@router.post("", summary="Criar conexão de datalake", status_code=201)
 def create_connection(body: ConnectionCreate, user: User = Depends(require("datalakes.create")), db: Session = Depends(get_db)):
     credentials = {key: value.get_secret_value() for key, value in body.credentials.items()}
     config = body.config.model_dump()
@@ -204,7 +204,7 @@ def create_connection(body: ConnectionCreate, user: User = Depends(require("data
     return public_connection(row)
 
 
-@router.patch("/{connection_id}")
+@router.patch("/{connection_id}", summary="Atualizar conexão de datalake")
 def update_connection(connection_id: str, body: ConnectionUpdate,
                       row: DatalakeConnection = Depends(authorized(DatalakeConnection, "datalakes.update")),
                       db: Session = Depends(get_db)):
@@ -224,7 +224,7 @@ def update_connection(connection_id: str, body: ConnectionUpdate,
     return public_connection(row)
 
 
-@router.delete("/{connection_id}", status_code=204)
+@router.delete("/{connection_id}", summary="Excluir conexão de datalake", status_code=204)
 def delete_connection(connection_id: str,
                       row: DatalakeConnection = Depends(authorized(DatalakeConnection, "datalakes.delete")),
                       db: Session = Depends(get_db)):
@@ -235,7 +235,7 @@ def delete_connection(connection_id: str,
     return Response(status_code=204)
 
 
-@router.get("/{connection_id}/buckets")
+@router.get("/{connection_id}/buckets", summary="Listar buckets da conexão")
 def list_buckets(connection_id: str,
                  row: DatalakeConnection = Depends(authorized(DatalakeConnection, "datalakes.read")),
                  db: Session = Depends(get_db)):
@@ -253,7 +253,7 @@ class TestConnection(BaseModel):
     bucket: Optional[str] = Field(None, max_length=255)
 
 
-@router.post("/{connection_id}/test")
+@router.post("/{connection_id}/test", summary="Testar conexão de datalake")
 def test_connection(connection_id: str, body: TestConnection,
                     row: DatalakeConnection = Depends(authorized(DatalakeConnection, "datalakes.use")),
                     db: Session = Depends(get_db)):
@@ -268,7 +268,7 @@ def test_connection(connection_id: str, body: TestConnection,
     return {"ok": True, "bucket": bucket}
 
 
-@router.get("/{connection_id}/objects")
+@router.get("/{connection_id}/objects", summary="Listar objetos da conexão")
 def list_objects(connection_id: str, bucket: str, prefix: str = "", limit: int = Query(100, ge=1, le=1000),
                  row: DatalakeConnection = Depends(authorized(DatalakeConnection, "datalakes.read")),
                  db: Session = Depends(get_db)):
@@ -345,12 +345,12 @@ def prepare_body_destination(db, user, choice):
 job_router = APIRouter(tags=["Datalakes"])
 
 
-@job_router.get("/jobs/{job_id}/datalake")
+@job_router.get("/jobs/{job_id}/datalake", summary="Estado da entrega no datalake")
 def get_delivery(job_id: str, owned_job=Depends(authorized(Job, "jobs.read")), db: Session = Depends(get_db)):
     return {"destination": service.export_ref(db, job_id)}
 
 
-@job_router.post("/jobs/{job_id}/datalake/retry", status_code=202)
+@job_router.post("/jobs/{job_id}/datalake/retry", summary="Refazer entrega no datalake", status_code=202)
 def retry_delivery(job_id: str, owned_job=Depends(authorized(Job, "datalake_exports.retry")),
                    db: Session = Depends(get_db)):
     if owned_job is None or owned_job.id != job_id or owned_job.status != JobStatus.COMPLETED:

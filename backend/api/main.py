@@ -21,6 +21,7 @@ from api.engine_control_routes import router as engine_control_router, host_rout
 from api.routing_admin_routes import router as routing_admin_router
 from api.projects_api import router as projects_router
 from api.iam_routes import router as iam_router
+from api.openapi_docs import API_DESCRIPTION, API_VERSION, OPENAPI_TAGS
 
 # Configure logging
 logging.basicConfig(
@@ -42,52 +43,9 @@ security_scheme_apikey = APIKeyHeader(name="X-API-Key")
 # Create FastAPI app
 app = FastAPI(
     title="Ingestify API",
-    description="""
-API assíncrona para conversão de documentos para Markdown usando Docling
-
-## Autenticação
-
-Esta API suporta dois métodos de autenticação:
-
-### 1. Bearer Token (JWT)
-1. Registre um usuário em `/auth/register`
-2. Faça login em `/auth/login` para obter o token
-3. Clique no botão **"Authorize"** (cadeado 🔒) no topo desta página
-4. Cole o token no campo "bearerAuth" (sem prefixo "Bearer")
-5. Clique em "Authorize"
-
-### 2. API Key
-1. Faça login para obter um token JWT
-2. Crie uma API Key em `/api-keys/`
-3. Clique no botão **"Authorize"** (cadeado 🔒)
-4. Cole a API Key no campo "apiKeyAuth"
-5. Clique em "Authorize"
-
-Após autorizar, todos os endpoints protegidos usarão automaticamente suas credenciais.
-
-Se um request trouxer **os dois** (Bearer e `X-API-Key`), vale o JWT.
-
-## Projetos e pastas
-
-Todo job pertence a um **projeto** (obrigatório) e, opcionalmente, a uma **pasta** do
-projeto (um nível). Os endpoints que criam jobs (`/upload`, `/convert`, `/transcribe`,
-`/images/*`) aceitam:
-
-- `project`: nome do projeto. É criado se não existir (*get-or-add*). Caixa, espaços e
-  acentos sobre letras latinas não contam: `Reunião` e ` reuniao ` são o mesmo projeto;
-- `project_id`: ID de um projeto existente (nunca cria);
-- `folder` / `folder_id`: a pasta dentro do projeto (o nome não pode ter `/`).
-
-Sem `project`/`project_id`, o job vai para o projeto **vinculado à API key** (veja
-`PATCH /api-keys/{key_id}`). Isso só vale para requests autenticados apenas pela key: com
-JWT, o vínculo é ignorado. Sem projeto no request e sem vínculo, a resposta é **422**.
-Um arquivo repetido só é reaproveitado dentro do mesmo projeto.
-
-```bash
-curl -H "X-API-Key: ..." -F "file=@aula.mp3" -F "project=Aulas" -F "folder=Setembro" .../transcribe
-```
-""",
-    version="1.0.0",
+    description=API_DESCRIPTION,
+    version=API_VERSION,
+    openapi_tags=OPENAPI_TAGS,
     docs_url="/docs",
     redoc_url="/redoc",
     swagger_ui_parameters={
@@ -111,6 +69,7 @@ def custom_openapi():
         version=app.version,
         description=app.description,
         routes=app.routes,
+        tags=app.openapi_tags,
     )
 
     # Replace default security scheme names with our custom names
@@ -119,13 +78,13 @@ def custom_openapi():
             "type": "http",
             "scheme": "bearer",
             "bearerFormat": "JWT",
-            "description": "JWT token obtido via /auth/login"
+            "description": "JWT de POST /auth/login (campo access_token). No Authorize, cole só o token, sem o prefixo Bearer. Obrigatório nas rotas x-access jwt/admin-session."
         },
         "apiKeyAuth": {
             "type": "apiKey",
             "in": "header",
             "name": "X-API-Key",
-            "description": "API Key criada via /api-keys/"
+            "description": "API key criada em POST /api-keys/, enviada no header X-API-Key. Não vale nas rotas que exigem sessão (x-access jwt/admin-session); com JWT junto, vale o JWT."
         }
     }
 
@@ -378,12 +337,12 @@ app.include_router(router)
 
 
 # Root endpoint
-@app.get("/")
+@app.get("/", summary="Identificação da API")
 async def root():
     """Root endpoint"""
     return {
         "name": "Ingestify API",
-        "version": "1.0.0",
+        "version": app.version,
         "status": "running",
         "timestamp": datetime.utcnow().isoformat(),
         "docs": "/docs",

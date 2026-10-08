@@ -74,12 +74,12 @@ class Connection(Closed):
     slug: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]{1,63}$")
 
 
-@router.get("/engine-control-adapters")
+@router.get("/engine-control-adapters", summary="Listar adaptadores de controle de engine")
 def adapters(user=Depends(access_session), db: Session = Depends(get_db)):
     return policy.visible_catalog(db, user.id, registry.descriptors(), "adapter")
 
 
-@router.post("/engines", status_code=201)
+@router.post("/engines", summary="Criar conexão de engine", status_code=201)
 def connection(
     body: Connection, user=Depends(require_admin_session), db: Session = Depends(get_db)
 ):
@@ -118,7 +118,7 @@ def connection(
     return {"id": e.id, "slug": e.slug}
 
 
-@router.get("/engines/{engine_id}/capabilities")
+@router.get("/engines/{engine_id}/capabilities", summary="Capacidades da engine")
 def caps(
     engine_id: str,
     feature: str | None = None,
@@ -168,12 +168,12 @@ def caps(
     return out
 
 
-@router.get("/model-profiles")
+@router.get("/model-profiles", summary="Listar perfis de modelo")
 def model_profiles(user=Depends(access_session), db: Session = Depends(get_db)):
     return policy.visible_catalog(db, user.id, catalog.profiles(), "model")
 
 
-@router.get("/engines/{engine_id}/runtime-profile")
+@router.get("/engines/{engine_id}/runtime-profile", summary="Ler perfil de runtime da engine")
 def get_profile(
     engine_id: str,
     feature: str = "transcription",
@@ -196,7 +196,7 @@ def get_profile(
     return service.profile_view(p)
 
 
-@router.put("/engines/{engine_id}/runtime-profile")
+@router.put("/engines/{engine_id}/runtime-profile", summary="Gravar perfil de runtime da engine")
 def put_profile(
     engine_id: str,
     body: ProfileUpdate,
@@ -215,7 +215,7 @@ def put_profile(
     )
 
 
-@router.get("/engines/{engine_id}/runtime-status")
+@router.get("/engines/{engine_id}/runtime-status", summary="Estado do runtime da engine")
 def status(engine_id: str, user=Depends(access_session), db: Session = Depends(get_db)):
     enabled()
     e = scoped_engine(db, engine_id, user.id)
@@ -257,7 +257,7 @@ def status(engine_id: str, user=Depends(access_session), db: Session = Depends(g
     return out
 
 
-@router.post("/engines/{engine_id}/operation-plans")
+@router.post("/engines/{engine_id}/operation-plans", summary="Planejar operação na engine")
 def plan(
     engine_id: str,
     body: PlanRequest,
@@ -274,7 +274,7 @@ def plan(
     )
 
 
-@router.post("/engines/{engine_id}/operations", status_code=202)
+@router.post("/engines/{engine_id}/operations", summary="Executar operação na engine", status_code=202)
 def execute(
     engine_id: str,
     body: Execute,
@@ -298,7 +298,7 @@ def execute(
     )
 
 
-@router.get("/engine-operations")
+@router.get("/engine-operations", summary="Histórico de operações de engine")
 def history(
     engine_id: str | None = None,
     limit: int = 50,
@@ -338,7 +338,7 @@ def history(
     }
 
 
-@router.get("/engine-operations/{operation_id}")
+@router.get("/engine-operations/{operation_id}", summary="Detalhar operação de engine")
 def snapshot(
     operation_id: str,
     user=Depends(access_session),
@@ -351,7 +351,7 @@ def snapshot(
     return operation_view(db, op, user.id)
 
 
-@router.get("/engine-operations/{operation_id}/events")
+@router.get("/engine-operations/{operation_id}/events", summary="Eventos da operação de engine")
 def events(
     operation_id: str,
     after: int = 0,
@@ -363,7 +363,7 @@ def events(
     return invoke(service.events, db, operation_id, max(after, 0))
 
 
-@router.post("/engine-operations/{operation_id}/cancel")
+@router.post("/engine-operations/{operation_id}/cancel", summary="Cancelar operação de engine")
 def cancel(
     operation_id: str,
     user=Depends(access_session),
@@ -373,7 +373,7 @@ def cancel(
     return invoke(service.request_cancel, db, operation_id, user.id)
 
 
-@router.get("/engine-operations/{operation_id}/stream")
+@router.get("/engine-operations/{operation_id}/stream", summary="Acompanhar operação de engine (SSE)")
 async def stream(
     operation_id: str,
     request: Request,
@@ -481,7 +481,7 @@ class HostHeartbeat(Closed):
     inventory: dict
 
 
-@host_router.post("/{host_id}/heartbeat")
+@host_router.post("/{host_id}/heartbeat", summary="Heartbeat do host de engine")
 def host_heartbeat(
     host_id: str,
     body: HostHeartbeat,
@@ -524,7 +524,7 @@ def host_heartbeat(
     return {"ok": True}
 
 
-@host_router.get("/{host_id}/next")
+@host_router.get("/{host_id}/next", summary="Próxima operação para o host")
 def host_next(host_id: str, request: Request, db: Session = Depends(get_db)):
     host_identity(host_id, request)
     for op in (
@@ -557,7 +557,7 @@ def host_next(host_id: str, request: Request, db: Session = Depends(get_db)):
     return None
 
 
-@host_router.get("/{host_id}/operations/{op_id}/check")
+@host_router.get("/{host_id}/operations/{op_id}/check", summary="Verificar se a operação ainda vale")
 def host_check(
     host_id: str,
     op_id: str,
@@ -582,7 +582,7 @@ class HostEvent(Closed):
     effect: bool = False
 
 
-@host_router.post("/{host_id}/operations/{op_id}/events")
+@host_router.post("/{host_id}/operations/{op_id}/events", summary="Enviar evento da operação")
 def host_event(
     host_id: str,
     op_id: str,
@@ -615,7 +615,7 @@ class HostResult(Closed):
     code: str | None = None
 
 
-@host_router.post("/{host_id}/operations/{op_id}/result")
+@host_router.post("/{host_id}/operations/{op_id}/result", summary="Enviar resultado da operação")
 def host_result(
     host_id: str,
     op_id: str,
@@ -635,7 +635,7 @@ def host_result(
     return {"ok": True}
 
 
-@router.post("/engine-operations/{operation_id}/recover", status_code=202)
+@router.post("/engine-operations/{operation_id}/recover", summary="Recuperar operação de engine", status_code=202)
 def recover(
     operation_id: str,
     user=Depends(access_session),

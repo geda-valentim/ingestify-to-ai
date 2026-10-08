@@ -553,7 +553,7 @@ def _resolve(kind: str, name: str, find) -> NameResolveResponse:
     "/projects/resolve",
     response_model=NameResolveResponse,
     response_model_exclude_unset=True,
-    summary="Um nome de projeto casa com um projeto existente?",
+    summary="Resolver nome de projeto",
 )
 async def resolve_project_name(
     name: str = Query(..., description="O texto digitado"),
@@ -578,7 +578,7 @@ async def resolve_project_name(
     "/projects/{project_id}/folders/resolve",
     response_model=NameResolveResponse,
     response_model_exclude_unset=True,
-    summary="Um nome de pasta casa com uma pasta existente do projeto?",
+    summary="Resolver nome de pasta do projeto",
 )
 async def resolve_folder_name(
     name: str = Query(..., description="O texto digitado"),

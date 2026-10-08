@@ -45,7 +45,7 @@ def _key_info(key: APIKey, project: Optional[Project]) -> APIKeyInfo:
     )
 
 
-@router.post("/", response_model=APIKeyResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/", summary="Criar API key", response_model=APIKeyResponse, status_code=status.HTTP_201_CREATED)
 async def create_api_key(
     key_data: APIKeyCreate,
     current_user: User = Depends(require("api_keys.manage")),
@@ -134,7 +134,7 @@ async def create_api_key(
     )
 
 
-@router.get("/", response_model=List[APIKeyInfo])
+@router.get("/", summary="Listar API keys", response_model=List[APIKeyInfo])
 async def list_api_keys(
     scope: Scope = Depends(visible(APIKey, "api_keys.read")),
     db: Session = Depends(get_db)
@@ -170,7 +170,7 @@ async def list_api_keys(
     return [_key_info(key, _bound_project(db, key, projects)) for key in keys]
 
 
-@router.patch("/{key_id}", response_model=APIKeyInfo)
+@router.patch("/{key_id}", summary="Vincular API key a um projeto", response_model=APIKeyInfo)
 async def update_api_key_project(
     key_id: UUID,
     body: APIKeyProjectUpdate,
@@ -197,7 +197,7 @@ async def update_api_key_project(
     return _key_info(key, project)
 
 
-@router.delete("/{key_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/{key_id}", summary="Revogar API key", status_code=status.HTTP_204_NO_CONTENT)
 async def revoke_api_key(
     key_id: UUID,
     key: APIKey = Depends(authorized(APIKey, "api_keys.manage")),

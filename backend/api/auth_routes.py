@@ -24,7 +24,7 @@ settings = get_settings()
 router = APIRouter()
 
 
-@router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/register", summary="Registrar usuário", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
 async def register(
     user_data: UserCreate,
     request: Request,
@@ -101,7 +101,7 @@ async def register(
     return UserResponse.for_user(new_user)
 
 
-@router.get("/setup", response_model=SetupStatus, summary="Installation setup state (public)")
+@router.get("/setup", response_model=SetupStatus, summary="Estado da instalação (root pendente)")
 def setup_status(db: Session = Depends(get_db)):
     """
     Whether this installation still needs its root user (spec 0019).
@@ -134,7 +134,7 @@ def _lockout_identity(db: Session, login: str) -> str:
     return f"user:{user.id}" if user else f"name:{normalized}"
 
 
-@router.post("/login", response_model=Token)
+@router.post("/login", summary="Fazer login", response_model=Token)
 async def login(
     request: Request,
     username: str = Form(...),
@@ -201,7 +201,7 @@ async def login(
     }
 
 
-@router.post("/refresh", response_model=Token)
+@router.post("/refresh", summary="Renovar token JWT", response_model=Token)
 async def refresh_token(
     bearer: HTTPAuthorizationCredentials = Depends(bearer_scheme),
     db: Session = Depends(get_db),
@@ -238,7 +238,7 @@ async def refresh_token(
     return {"access_token": access_token, "token_type": "bearer"}
 
 
-@router.get("/me", response_model=UserResponse)
+@router.get("/me", summary="Usuário autenticado", response_model=UserResponse)
 def get_current_user_info(
     request: Request,
     current_user: User = Depends(authenticated()),

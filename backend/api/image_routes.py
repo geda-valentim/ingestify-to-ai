@@ -1139,7 +1139,7 @@ async def vision_capabilities(
 FULL_ANALYSIS_NOT_FOUND = 'Full Analysis não encontrada'
 
 
-@router.post('/{job_id}/cancel', summary='Cancelar análise composta de imagem')
+@router.post('/{job_id}/cancel', summary="Cancelar análise composta de imagem")
 def cancel_full_image(
     job_id: str,
     # Owner only (spec 0014); missing and someone else's keep this route's own 404.

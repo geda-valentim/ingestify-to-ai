@@ -2,6 +2,38 @@
 
 > **Registro histórico (2025-10).** Não é mantido; para mudanças posteriores use `git log`. Observação: `workers/tasks_old.py`, citado abaixo, não existe (há um `workers/tasks.py.backup`). Exceção: mudanças de comportamento intencionais que uma spec manda registrar aqui entram na seção abaixo.
 
+## 2026-10: OpenAPI/Swagger e portal de docs atualizados (API 1.1.0)
+
+Só documentação e metadados: nenhuma rota, status, campo ou esquema mudou
+(`operationId`s e `components.schemas` idênticos).
+
+- `info.version` 1.0.0 → **1.1.0**. Primeira mudança desde 1.0.0: o contrato só cresceu
+  de forma compatível (projetos, IAM, `purge_source`, análise de imagem, live...), então
+  é um *minor*; pular para outro número inventaria versões que nunca existiram. `GET /`
+  passa a ecoar `app.version` em vez de um "1.0.0" fixo.
+- `info.description` reescrita: visão geral, autenticação (JWT × `X-API-Key`, root e
+  `GET /auth/setup`/`ROOT_SETUP_TOKEN`), permissões IAM, projetos, estados do job
+  (`pending`/`queued`/`processing`/`completed`/`partial`/`failed`/`cancelled`),
+  `purge_source` e `DELETE /jobs/{job_id}/source`, `Idempotency-Key` com tentativas,
+  formato do corpo de erro (`code`/`message`/`next_steps`/`cause`/`technical`) e limites
+  de taxa. Vive em `backend/api/openapi_docs.py`.
+- `tags` declaradas (`openapi_tags`) com descrição e ordem do Swagger; nova tag `Status`
+  para `GET /` (antes sem tag, no grupo "default") e `GET /health` (antes em Conversion).
+- Resumos (`summary`) de todas as 138 operações em português (121 alterados).
+- Descrições de `bearerAuth`/`apiKeyAuth` explicam o Authorize e quando a API key não vale.
+- `docs/api-reference.md` agrupa as operações na ordem das tags e mostra a descrição de cada uma.
+- Portal (`frontend/app/docs`): autenticação com root/`GET /auth/setup`; "Acompanhar o job"
+  com os sete estados (lidos do enum do snapshot) e os campos `source_*`; "PDF e
+  documentos", "Páginas de PDF", transcrição e os guias de imagem com `purge_source`,
+  `DELETE /jobs/{id}/source`, 410 `SOURCE_PURGED`/409 `SOURCE_NOT_AVAILABLE` e as
+  tentativas da `Idempotency-Key`; "Erros" com o corpo `code`/`message`/`next_steps`/
+  `cause`/`technical`; "Acesso RBAC e ABAC" vira "Acesso e permissões (IAM)" (mesmo slug
+  `engine-access`) com o modelo atual; "Configurações da plataforma" deixa de citar
+  `/auth/registration-settings` e `/admin/settings`, que não existem; link para o ReDoc
+  ao lado do Swagger e do OpenAPI JSON.
+- `tests/test_openapi_metadata.py`: toda operação tem tag declarada e resumo; Swagger e
+  ReDoc carregam atrás de `root_path=/api`.
+
 ## 2026-10: Raiz do repositório enxuta
 
 - Scripts de desenvolvimento movidos para `scripts/dev/`: `start.sh`, `rebuild.sh`, `infra.sh`,

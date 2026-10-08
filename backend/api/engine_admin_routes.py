@@ -92,7 +92,7 @@ def _capacity_error(e: CapacityError) -> HTTPException:
     return HTTPException(status_code=422, detail={"message": str(e), "vram": e.lines})
 
 
-@router.get("/engine-adapters", summary="Engine adapters, their GPUs and limits")
+@router.get("/engine-adapters", summary="Adaptadores de engine, GPUs e limites")
 async def list_engine_adapters(
     admin_user=Depends(access_session), db: Session = Depends(get_db)
 ) -> List[Dict[str, Any]]:
@@ -141,7 +141,7 @@ async def list_engine_adapters(
     return policy.visible_catalog(db, admin_user.id, views, "adapter")
 
 
-@router.get("/engines", summary="List engines")
+@router.get("/engines", summary="Listar engines")
 async def list_engines(
     admin_user=Depends(access_session), db: Session = Depends(get_db)
 ) -> List[Dict[str, Any]]:
@@ -157,14 +157,14 @@ async def list_engines(
     ]
 
 
-@router.get("/engines/{engine_id}", summary="One engine")
+@router.get("/engines/{engine_id}", summary="Detalhar engine")
 async def get_engine(
     engine_id: str, admin_user=Depends(access_session), db: Session = Depends(get_db)
 ) -> Dict[str, Any]:
     return _scoped_view(db, scoped_engine(db, engine_id, admin_user.id), admin_user.id)
 
 
-@router.get("/gpus", summary="Physical GPUs: declared vs detected, VRAM budgeted and used")
+@router.get("/gpus", summary="GPUs físicas: declaradas, detectadas e VRAM")
 async def list_gpus(admin_user=Depends(require_admin), db: Session = Depends(get_db)) -> Dict[str, Any]:
     local = db.query(Engine).filter(Engine.slug == "local").first()
     declared = [LocalGpu(**g) for g in ((local.config or {}).get("gpus") or [])] if local else []
@@ -230,7 +230,7 @@ class GpusUpdate(BaseModel):
     version: Optional[int] = None
 
 
-@router.put("/engines/{engine_id}/features/{feature}", summary="Set how a feature runs on an engine")
+@router.put("/engines/{engine_id}/features/{feature}", summary="Configurar funcionalidade em uma engine")
 async def put_engine_feature(engine_id: str, feature: str, body: BindingUpdate, request: Request,
                              admin_user=Depends(require_admin_session), db: Session = Depends(get_db)) -> Dict[str, Any]:
     engine = _engine_or_404(db, engine_id)
@@ -252,7 +252,7 @@ async def put_engine_feature(engine_id: str, feature: str, body: BindingUpdate, 
     return _view(db, engine)
 
 
-@router.delete("/engines/{engine_id}/features/{feature}", summary="Stop running a feature on an engine")
+@router.delete("/engines/{engine_id}/features/{feature}", summary="Remover funcionalidade de uma engine")
 async def delete_engine_feature(engine_id: str, feature: str, request: Request, version: Optional[int] = None,
                                 admin_user=Depends(require_admin_session), db: Session = Depends(get_db)) -> Dict[str, Any]:
     engine = _engine_or_404(db, engine_id)
@@ -267,7 +267,7 @@ async def delete_engine_feature(engine_id: str, feature: str, request: Request, 
     return _view(db, engine)
 
 
-@router.put("/engines/{engine_id}/gpus", summary="Declare the local engine's physical GPUs")
+@router.put("/engines/{engine_id}/gpus", summary="Declarar as GPUs físicas da engine local")
 async def put_engine_gpus(engine_id: str, body: GpusUpdate, request: Request,
                           admin_user=Depends(require_admin_session), db: Session = Depends(get_db)) -> Dict[str, Any]:
     engine = _engine_or_404(db, engine_id)
@@ -345,7 +345,7 @@ def _send_test(
         result.forget()
 
 
-@router.post("/engines/{engine_id}/test", summary="Test an engine's credentials and deployment (no GPU)")
+@router.post("/engines/{engine_id}/test", summary="Testar credenciais e implantação da engine (sem GPU)")
 async def test_engine(engine_id: str, request: Request, admin_user=Depends(require_admin_session),
                       db: Session = Depends(get_db)) -> Dict[str, Any]:
     engine = _engine_or_404(db, engine_id)
@@ -371,7 +371,7 @@ async def test_engine(engine_id: str, request: Request, admin_user=Depends(requi
     return {**report, "engine": _view(db, _engine_or_404(db, engine.id))}
 
 
-@router.post("/engines/{engine_id}/activate", summary="Let the dispatcher place work on an engine")
+@router.post("/engines/{engine_id}/activate", summary="Ativar engine no dispatcher")
 async def activate_engine(engine_id: str, request: Request, body: Optional[VersionBody] = None,
                           admin_user=Depends(require_admin_session), db: Session = Depends(get_db)) -> Dict[str, Any]:
     engine = _engine_or_404(db, engine_id)
@@ -387,7 +387,7 @@ async def activate_engine(engine_id: str, request: Request, body: Optional[Versi
     return _view(db, engine)
 
 
-@router.post("/engines/{engine_id}/pause", summary="Stop placing new work on an engine (work in flight finishes)")
+@router.post("/engines/{engine_id}/pause", summary="Pausar engine (o trabalho em andamento termina)")
 async def pause_engine(engine_id: str, request: Request, body: Optional[VersionBody] = None,
                        admin_user=Depends(require_admin_session), db: Session = Depends(get_db)) -> Dict[str, Any]:
     engine = _engine_or_404(db, engine_id)
@@ -400,7 +400,7 @@ async def pause_engine(engine_id: str, request: Request, body: Optional[VersionB
     return _view(db, engine)
 
 
-@router.post("/engines/{engine_id}/reset-health", summary="Forget an engine's recorded failures")
+@router.post("/engines/{engine_id}/reset-health", summary="Zerar falhas registradas da engine")
 async def reset_engine_health(engine_id: str, request: Request, admin_user=Depends(require_admin_session),
                               db: Session = Depends(get_db)) -> Dict[str, Any]:
     engine = _engine_or_404(db, engine_id)
@@ -408,7 +408,7 @@ async def reset_engine_health(engine_id: str, request: Request, admin_user=Depen
     return _view(db, engine)
 
 
-@router.put("/engines/{engine_id}/budget", summary="Set an engine's spending ceiling per period")
+@router.put("/engines/{engine_id}/budget", summary="Definir teto de gasto da engine por período")
 async def put_engine_budget(engine_id: str, body: BudgetUpdate, request: Request,
                             admin_user=Depends(require_admin_session), db: Session = Depends(get_db)) -> Dict[str, Any]:
     engine = _engine_or_404(db, engine_id)
@@ -424,7 +424,7 @@ async def put_engine_budget(engine_id: str, body: BudgetUpdate, request: Request
     return _view(db, engine)
 
 
-@router.put("/engines/{engine_id}/credentials", summary="Replace an engine's credentials (sealed, write-only)")
+@router.put("/engines/{engine_id}/credentials", summary="Substituir credenciais da engine (somente escrita)")
 async def put_engine_credentials(
     engine_id: str,
     body: CredentialsUpdate,
@@ -448,7 +448,7 @@ async def put_engine_credentials(
     return _scoped_view(db, engine, admin_user.id)
 
 
-@router.delete("/engines/{engine_id}/credentials", summary="Forget an engine's credentials")
+@router.delete("/engines/{engine_id}/credentials", summary="Apagar credenciais da engine")
 async def delete_engine_credentials(
     engine_id: str,
     body: CredentialsDelete,
@@ -472,7 +472,7 @@ async def delete_engine_credentials(
 # --- benchmarks, learned speed, spend and every account at once (slices 4b/4c) ----------------
 
 
-@router.get("/engines/{engine_id}/benchmarks", summary="Benchmark results (gpu x E) and the learned speed per key")
+@router.get("/engines/{engine_id}/benchmarks", summary="Benchmarks e velocidade aprendida da engine")
 async def engine_benchmarks(engine_id: str, feature: str = "transcription", limit: int = 50,
                             admin_user=Depends(require_admin), db: Session = Depends(get_db)) -> Dict[str, Any]:
     from shared.engines import speed
@@ -511,7 +511,7 @@ def _send_control(task: str, args: list, timeout: float) -> Any:
         result.forget()
 
 
-@router.post("/engines/{engine_id}/reconcile", summary="Read the provider's spend report for one engine now")
+@router.post("/engines/{engine_id}/reconcile", summary="Conciliar gasto da engine com o provedor")
 async def reconcile_engine(engine_id: str, request: Request, admin_user=Depends(require_admin_session),
                            db: Session = Depends(get_db)) -> Dict[str, Any]:
     engine = _engine_or_404(db, engine_id)
@@ -539,7 +539,7 @@ async def reconcile_engine(engine_id: str, request: Request, admin_user=Depends(
     return {"reconcile": out, "engine": _view(db, _engine_or_404(db, engine.id))}
 
 
-@router.post("/engines/test-all", summary="Test every remote engine's credentials and deployment, in turn (no GPU)")
+@router.post("/engines/test-all", summary="Testar todas as engines remotas (sem GPU)")
 async def test_all_engines(request: Request, admin_user=Depends(require_admin_session),
                            db: Session = Depends(get_db)) -> Dict[str, Any]:
     remote = [e for e in db.query(Engine).filter(Engine.adapter_type != "local") if e.credentials_sealed]

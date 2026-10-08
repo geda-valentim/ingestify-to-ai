@@ -82,11 +82,16 @@ def render_reference(schema):
         '## Índice', '']
     lines += table(['Método', 'Caminho', 'Autorização', 'Resumo'],
         [(method.upper(), f'`{path}`', ACCESS[op['x-access']], op.get('summary', '')) for path, method, op in entries])
-    groups = {}
+    tag_info = {tag['name']: tag.get('description', '') for tag in schema.get('tags', [])}
+    groups = {name: [] for name in tag_info}
     for path, method, op in entries:
         groups.setdefault((op.get('tags') or ['General'])[0], []).append((path, method, op))
     for tag, group in groups.items():
+        if not group:
+            continue
         lines += [f'## {tag}', '']
+        if tag_info.get(tag):
+            lines += [tag_info[tag], '']
         for path, method, op in group:
             lines += [f'### {method.upper()} {path}', '', op.get('summary', ''), '',
                       f"Autorização: **{ACCESS[op['x-access']]}**. Operation ID: `{op.get('operationId', '')}`.", '']

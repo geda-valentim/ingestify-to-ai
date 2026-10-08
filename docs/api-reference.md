@@ -2,7 +2,7 @@
 
 Gerado do OpenAPI da aplicação por `scripts/generate_api_docs.py`. Não edite este arquivo à mão.
 
-API `1.0.0`: **138 operações HTTP** e **1 WebSocket(s)**.
+API `1.1.0`: **138 operações HTTP** e **1 WebSocket(s)**.
 
 Base pública de desenvolvimento: `https://dev.ingestify.ai/api`. Os caminhos abaixo são relativos à base.
 
@@ -23,38 +23,38 @@ Guias de imagem: [PT](https://dev.ingestify.ai/pt/docs/images) / [EN](https://de
 
 | Método | Caminho | Autorização | Resumo |
 | --- | --- | --- | --- |
-| POST | `/auth/register` | Público | Register |
-| GET | `/auth/setup` | Público | Installation setup state (public) |
-| POST | `/auth/login` | Público | Login |
-| POST | `/auth/refresh` | JWT | Refresh Token |
-| GET | `/auth/me` | JWT ou API key | Get Current User Info |
-| GET | `/api-keys/` | JWT ou API key | List Api Keys |
-| POST | `/api-keys/` | JWT ou API key | Create Api Key |
-| PATCH | `/api-keys/{key_id}` | JWT ou API key | Update Api Key Project |
-| DELETE | `/api-keys/{key_id}` | JWT ou API key | Revoke Api Key |
-| GET | `/admin/stats` | Administrador (JWT ou API key) | Get system statistics |
-| GET | `/admin/jobs/stuck` | Administrador (JWT ou API key) | List stuck jobs |
-| POST | `/admin/jobs/recover-stuck` | Administrador (JWT ou API key) | Manually trigger stuck job recovery |
-| POST | `/admin/jobs/{job_id}/retry-all-failed` | Administrador (JWT ou API key) | Bulk retry all failed pages of a job |
-| POST | `/admin/cleanup` | Administrador (JWT ou API key) | Manually trigger cleanup of old jobs |
-| GET | `/admin/health/monitoring` | Administrador (JWT ou API key) | Check monitoring system health |
-| GET | `/admin/broker/unacked` | Administrador (JWT ou API key) | List unacknowledged broker messages |
-| POST | `/admin/broker/unacked/{delivery_tag}/requeue` | Administrador (JWT ou API key) | Requeue an orphaned broker message |
+| POST | `/auth/register` | Público | Registrar usuário |
+| GET | `/auth/setup` | Público | Estado da instalação (root pendente) |
+| POST | `/auth/login` | Público | Fazer login |
+| POST | `/auth/refresh` | JWT | Renovar token JWT |
+| GET | `/auth/me` | JWT ou API key | Usuário autenticado |
+| GET | `/api-keys/` | JWT ou API key | Listar API keys |
+| POST | `/api-keys/` | JWT ou API key | Criar API key |
+| PATCH | `/api-keys/{key_id}` | JWT ou API key | Vincular API key a um projeto |
+| DELETE | `/api-keys/{key_id}` | JWT ou API key | Revogar API key |
+| GET | `/admin/stats` | Administrador (JWT ou API key) | Estatísticas do sistema |
+| GET | `/admin/jobs/stuck` | Administrador (JWT ou API key) | Listar jobs travados |
+| POST | `/admin/jobs/recover-stuck` | Administrador (JWT ou API key) | Recuperar jobs travados |
+| POST | `/admin/jobs/{job_id}/retry-all-failed` | Administrador (JWT ou API key) | Refazer todas as páginas com falha de um job |
+| POST | `/admin/cleanup` | Administrador (JWT ou API key) | Limpar jobs antigos |
+| GET | `/admin/health/monitoring` | Administrador (JWT ou API key) | Saúde do monitoramento |
+| GET | `/admin/broker/unacked` | Administrador (JWT ou API key) | Listar mensagens não confirmadas do broker |
+| POST | `/admin/broker/unacked/{delivery_tag}/requeue` | Administrador (JWT ou API key) | Reenfileirar mensagem órfã do broker |
 | GET | `/images/faces/capabilities` | JWT ou API key | Modelos, parâmetros e prontidão da análise facial |
-| POST | `/images/faces` | JWT ou API key | Detectar rostos e analisar expressões em uma imagem base64 |
-| POST | `/images/faces/upload` | JWT ou API key | Upload de imagem para detecção facial e expressões |
-| POST | `/datalakes/discover` | JWT ou API key | Discover Connection |
-| POST | `/datalakes/buckets` | JWT ou API key | Create Bucket |
-| POST | `/datalakes/partition-preview` | JWT ou API key | Partition Preview |
-| GET | `/datalakes` | JWT ou API key | List Connections |
-| POST | `/datalakes` | JWT ou API key | Create Connection |
-| PATCH | `/datalakes/{connection_id}` | JWT ou API key | Update Connection |
-| DELETE | `/datalakes/{connection_id}` | JWT ou API key | Delete Connection |
-| GET | `/datalakes/{connection_id}/buckets` | JWT ou API key | List Buckets |
-| POST | `/datalakes/{connection_id}/test` | JWT ou API key | Test Connection |
-| GET | `/datalakes/{connection_id}/objects` | JWT ou API key | List Objects |
-| GET | `/jobs/{job_id}/datalake` | JWT ou API key | Get Delivery |
-| POST | `/jobs/{job_id}/datalake/retry` | JWT ou API key | Retry Delivery |
+| POST | `/images/faces` | JWT ou API key | Detectar rostos e expressões (JSON base64) |
+| POST | `/images/faces/upload` | JWT ou API key | Detectar rostos e expressões (multipart) |
+| POST | `/datalakes/discover` | JWT ou API key | Descobrir conexão de datalake |
+| POST | `/datalakes/buckets` | JWT ou API key | Criar bucket |
+| POST | `/datalakes/partition-preview` | JWT ou API key | Prévia do particionamento |
+| GET | `/datalakes` | JWT ou API key | Listar conexões de datalake |
+| POST | `/datalakes` | JWT ou API key | Criar conexão de datalake |
+| PATCH | `/datalakes/{connection_id}` | JWT ou API key | Atualizar conexão de datalake |
+| DELETE | `/datalakes/{connection_id}` | JWT ou API key | Excluir conexão de datalake |
+| GET | `/datalakes/{connection_id}/buckets` | JWT ou API key | Listar buckets da conexão |
+| POST | `/datalakes/{connection_id}/test` | JWT ou API key | Testar conexão de datalake |
+| GET | `/datalakes/{connection_id}/objects` | JWT ou API key | Listar objetos da conexão |
+| GET | `/jobs/{job_id}/datalake` | JWT ou API key | Estado da entrega no datalake |
+| POST | `/jobs/{job_id}/datalake/retry` | JWT ou API key | Refazer entrega no datalake |
 | POST | `/images/describe` | JWT ou API key | Descrever imagem (JSON base64) |
 | POST | `/images/analyze` | JWT ou API key | Executar tarefa de visão (JSON base64) |
 | POST | `/images/analyze/upload` | JWT ou API key | Executar tarefa de visão (multipart) |
@@ -65,108 +65,110 @@ Guias de imagem: [PT](https://dev.ingestify.ai/pt/docs/images) / [EN](https://de
 | POST | `/images/{job_id}/cancel` | JWT ou API key | Cancelar análise composta de imagem |
 | GET | `/tags` | JWT ou API key | Listar as tags do usuário |
 | PUT | `/jobs/{job_id}/tags` | JWT ou API key | Definir as tags de um job |
-| GET | `/admin/routing` | Administrador (JWT ou API key) | Feature routes and their backlog |
-| PUT | `/admin/routing/{feature}` | Administrador (somente JWT) | Create or replace a feature's route |
-| DELETE | `/admin/routing/{feature}` | Administrador (somente JWT) | Remove a route (it drains back to today's path) |
-| GET | `/admin/engines/status` | Administrador (JWT ou API key) | Dispatcher, in-flight work and backlog |
-| GET | `/admin/engine-adapters` | JWT | Engine adapters, their GPUs and limits |
-| GET | `/admin/engines` | JWT | List engines |
-| POST | `/admin/engines` | Administrador (somente JWT) | Connection |
-| GET | `/admin/engines/{engine_id}` | JWT | One engine |
-| GET | `/admin/gpus` | Administrador (JWT ou API key) | Physical GPUs: declared vs detected, VRAM budgeted and used |
-| PUT | `/admin/engines/{engine_id}/features/{feature}` | Administrador (somente JWT) | Set how a feature runs on an engine |
-| DELETE | `/admin/engines/{engine_id}/features/{feature}` | Administrador (somente JWT) | Stop running a feature on an engine |
-| PUT | `/admin/engines/{engine_id}/gpus` | Administrador (somente JWT) | Declare the local engine's physical GPUs |
-| POST | `/admin/engines/{engine_id}/test` | Administrador (somente JWT) | Test an engine's credentials and deployment (no GPU) |
-| POST | `/admin/engines/{engine_id}/activate` | Administrador (somente JWT) | Let the dispatcher place work on an engine |
-| POST | `/admin/engines/{engine_id}/pause` | Administrador (somente JWT) | Stop placing new work on an engine (work in flight finishes) |
-| POST | `/admin/engines/{engine_id}/reset-health` | Administrador (somente JWT) | Forget an engine's recorded failures |
-| PUT | `/admin/engines/{engine_id}/budget` | Administrador (somente JWT) | Set an engine's spending ceiling per period |
-| PUT | `/admin/engines/{engine_id}/credentials` | JWT | Replace an engine's credentials (sealed, write-only) |
-| DELETE | `/admin/engines/{engine_id}/credentials` | JWT | Forget an engine's credentials |
-| GET | `/admin/engines/{engine_id}/benchmarks` | Administrador (JWT ou API key) | Benchmark results (gpu x E) and the learned speed per key |
-| POST | `/admin/engines/{engine_id}/reconcile` | Administrador (somente JWT) | Read the provider's spend report for one engine now |
-| POST | `/admin/engines/test-all` | Administrador (somente JWT) | Test every remote engine's credentials and deployment, in turn (no GPU) |
-| GET | `/admin/access/me` | JWT | Me |
-| GET | `/admin/execution-profiles` | JWT | Profiles |
-| POST | `/admin/execution-profiles` | JWT | Create |
-| GET | `/admin/execution-profiles/{id}` | JWT | Detail |
-| PUT | `/admin/execution-profiles/{id}` | JWT | Metadata |
-| POST | `/admin/execution-profiles/{id}/revisions` | JWT | Revision |
-| POST | `/admin/execution-profiles/{id}/publish` | JWT | Publish |
-| POST | `/admin/execution-profiles/{id}/archive` | JWT | Archive |
-| POST | `/admin/engines/{id}/runtime-profile/bind` | JWT | Bind |
-| POST | `/admin/engines/{id}/runtime-profile/import` | JWT | Import Profile |
-| GET | `/admin/access/policies` | JWT | Policies |
-| POST | `/admin/access/policies` | JWT | Policy Create |
-| POST | `/admin/access/policies/{id}/revisions` | JWT | Policy Revise |
-| GET | `/admin/access/roles` | JWT | Roles |
-| GET | `/admin/access/subjects` | JWT | Subjects |
-| GET | `/admin/access/grants` | JWT | Grants |
-| POST | `/admin/access/grants` | JWT | Grant |
-| POST | `/admin/access/grants/{id}/revoke` | JWT | Revoke |
-| GET | `/admin/access/engine-attributes` | JWT | Attributes |
-| PUT | `/admin/access/engine-attributes/{id}` | JWT | Classify |
-| GET | `/admin/access/resources` | JWT | Resources |
-| PUT | `/admin/access/resources` | JWT | Qualify |
-| GET | `/admin/execution-profile-hosts` | JWT | Hosts |
-| GET | `/admin/access/installation-principals` | JWT | Principals |
-| POST | `/admin/access/installation-principals` | JWT | Principal Create |
-| PUT | `/admin/access/installation-principals/{id}` | JWT | Principal State |
-| PUT | `/admin/access/subjects/{id}/state` | JWT | Subject State |
-| GET | `/iam/permissions` | JWT ou API key | The permission catalog and the managed roles |
-| POST | `/iam/check` | JWT ou API key | Which platform permissions the caller holds |
-| GET | `/admin/iam/bindings` | Administrador (JWT ou API key) | Platform and engines bindings |
-| POST | `/admin/iam/bindings` | Administrador (somente JWT) | Grant a platform or engines role |
-| POST | `/admin/iam/bindings/{binding_id}/revoke` | Administrador (somente JWT) | Revoke a platform or engines binding |
-| GET | `/admin/engine-control-adapters` | JWT | Adapters |
-| GET | `/admin/engines/{engine_id}/capabilities` | JWT | Caps |
-| GET | `/admin/model-profiles` | JWT | Model Profiles |
-| GET | `/admin/engines/{engine_id}/runtime-profile` | JWT | Get Profile |
-| PUT | `/admin/engines/{engine_id}/runtime-profile` | Administrador (somente JWT) | Put Profile |
-| GET | `/admin/engines/{engine_id}/runtime-status` | JWT | Status |
-| POST | `/admin/engines/{engine_id}/operation-plans` | JWT | Plan |
-| POST | `/admin/engines/{engine_id}/operations` | JWT | Execute |
-| GET | `/admin/engine-operations` | JWT | History |
-| GET | `/admin/engine-operations/{operation_id}` | JWT | Snapshot |
-| GET | `/admin/engine-operations/{operation_id}/events` | JWT | Events |
-| POST | `/admin/engine-operations/{operation_id}/cancel` | JWT | Cancel |
-| GET | `/admin/engine-operations/{operation_id}/stream` | JWT | Stream |
-| POST | `/admin/engine-operations/{operation_id}/recover` | JWT | Recover |
-| POST | `/internal/engine-hosts/{host_id}/heartbeat` | X-Engine-Host-Token do host | Host Heartbeat |
-| GET | `/internal/engine-hosts/{host_id}/next` | X-Engine-Host-Token do host | Host Next |
-| GET | `/internal/engine-hosts/{host_id}/operations/{op_id}/check` | X-Engine-Host-Token do host | Host Check |
-| POST | `/internal/engine-hosts/{host_id}/operations/{op_id}/events` | X-Engine-Host-Token do host | Host Event |
-| POST | `/internal/engine-hosts/{host_id}/operations/{op_id}/result` | X-Engine-Host-Token do host | Host Result |
+| GET | `/admin/routing` | Administrador (JWT ou API key) | Rotas por funcionalidade e backlog |
+| PUT | `/admin/routing/{feature}` | Administrador (somente JWT) | Criar ou substituir a rota de uma funcionalidade |
+| DELETE | `/admin/routing/{feature}` | Administrador (somente JWT) | Remover rota (volta ao caminho padrão) |
+| GET | `/admin/engines/status` | Administrador (JWT ou API key) | Dispatcher, trabalho em andamento e backlog |
+| GET | `/admin/engine-adapters` | JWT | Adaptadores de engine, GPUs e limites |
+| GET | `/admin/engines` | JWT | Listar engines |
+| POST | `/admin/engines` | Administrador (somente JWT) | Criar conexão de engine |
+| GET | `/admin/engines/{engine_id}` | JWT | Detalhar engine |
+| GET | `/admin/gpus` | Administrador (JWT ou API key) | GPUs físicas: declaradas, detectadas e VRAM |
+| PUT | `/admin/engines/{engine_id}/features/{feature}` | Administrador (somente JWT) | Configurar funcionalidade em uma engine |
+| DELETE | `/admin/engines/{engine_id}/features/{feature}` | Administrador (somente JWT) | Remover funcionalidade de uma engine |
+| PUT | `/admin/engines/{engine_id}/gpus` | Administrador (somente JWT) | Declarar as GPUs físicas da engine local |
+| POST | `/admin/engines/{engine_id}/test` | Administrador (somente JWT) | Testar credenciais e implantação da engine (sem GPU) |
+| POST | `/admin/engines/{engine_id}/activate` | Administrador (somente JWT) | Ativar engine no dispatcher |
+| POST | `/admin/engines/{engine_id}/pause` | Administrador (somente JWT) | Pausar engine (o trabalho em andamento termina) |
+| POST | `/admin/engines/{engine_id}/reset-health` | Administrador (somente JWT) | Zerar falhas registradas da engine |
+| PUT | `/admin/engines/{engine_id}/budget` | Administrador (somente JWT) | Definir teto de gasto da engine por período |
+| PUT | `/admin/engines/{engine_id}/credentials` | JWT | Substituir credenciais da engine (somente escrita) |
+| DELETE | `/admin/engines/{engine_id}/credentials` | JWT | Apagar credenciais da engine |
+| GET | `/admin/engines/{engine_id}/benchmarks` | Administrador (JWT ou API key) | Benchmarks e velocidade aprendida da engine |
+| POST | `/admin/engines/{engine_id}/reconcile` | Administrador (somente JWT) | Conciliar gasto da engine com o provedor |
+| POST | `/admin/engines/test-all` | Administrador (somente JWT) | Testar todas as engines remotas (sem GPU) |
+| GET | `/admin/access/me` | JWT | Meu acesso às engines |
+| GET | `/admin/execution-profiles` | JWT | Listar perfis de execução |
+| POST | `/admin/execution-profiles` | JWT | Criar perfil de execução |
+| GET | `/admin/execution-profiles/{id}` | JWT | Detalhar perfil de execução |
+| PUT | `/admin/execution-profiles/{id}` | JWT | Atualizar metadados do perfil de execução |
+| POST | `/admin/execution-profiles/{id}/revisions` | JWT | Criar revisão do perfil de execução |
+| POST | `/admin/execution-profiles/{id}/publish` | JWT | Publicar revisão do perfil de execução |
+| POST | `/admin/execution-profiles/{id}/archive` | JWT | Arquivar perfil de execução |
+| POST | `/admin/engines/{id}/runtime-profile/bind` | JWT | Vincular perfil publicado ao runtime da engine |
+| POST | `/admin/engines/{id}/runtime-profile/import` | JWT | Importar perfil do runtime da engine |
+| GET | `/admin/access/policies` | JWT | Listar políticas de acesso |
+| POST | `/admin/access/policies` | JWT | Criar política de acesso |
+| POST | `/admin/access/policies/{id}/revisions` | JWT | Revisar política de acesso |
+| GET | `/admin/access/roles` | JWT | Listar papéis de engines |
+| GET | `/admin/access/subjects` | JWT | Listar sujeitos de acesso |
+| GET | `/admin/access/grants` | JWT | Listar concessões de engines |
+| POST | `/admin/access/grants` | JWT | Conceder papel de engines |
+| POST | `/admin/access/grants/{id}/revoke` | JWT | Revogar concessão de engines |
+| GET | `/admin/access/engine-attributes` | JWT | Listar atributos de ambiente das engines |
+| PUT | `/admin/access/engine-attributes/{id}` | JWT | Classificar ambiente da engine |
+| GET | `/admin/access/resources` | JWT | Listar recursos qualificados |
+| PUT | `/admin/access/resources` | JWT | Qualificar recurso |
+| GET | `/admin/execution-profile-hosts` | JWT | Listar hosts de perfis de execução |
+| GET | `/admin/access/installation-principals` | JWT | Listar principais da instalação |
+| POST | `/admin/access/installation-principals` | JWT | Criar principal da instalação |
+| PUT | `/admin/access/installation-principals/{id}` | JWT | Alterar estado de principal da instalação |
+| PUT | `/admin/access/subjects/{id}/state` | JWT | Alterar estado de sujeito de acesso |
+| GET | `/iam/permissions` | JWT ou API key | Catálogo de permissões e papéis gerenciados |
+| POST | `/iam/check` | JWT ou API key | Verificar permissões de plataforma do chamador |
+| GET | `/admin/iam/bindings` | Administrador (JWT ou API key) | Listar vínculos de plataforma e de engines |
+| POST | `/admin/iam/bindings` | Administrador (somente JWT) | Conceder papel de plataforma ou de engines |
+| POST | `/admin/iam/bindings/{binding_id}/revoke` | Administrador (somente JWT) | Revogar vínculo de plataforma ou de engines |
+| GET | `/admin/engine-control-adapters` | JWT | Listar adaptadores de controle de engine |
+| GET | `/admin/engines/{engine_id}/capabilities` | JWT | Capacidades da engine |
+| GET | `/admin/model-profiles` | JWT | Listar perfis de modelo |
+| GET | `/admin/engines/{engine_id}/runtime-profile` | JWT | Ler perfil de runtime da engine |
+| PUT | `/admin/engines/{engine_id}/runtime-profile` | Administrador (somente JWT) | Gravar perfil de runtime da engine |
+| GET | `/admin/engines/{engine_id}/runtime-status` | JWT | Estado do runtime da engine |
+| POST | `/admin/engines/{engine_id}/operation-plans` | JWT | Planejar operação na engine |
+| POST | `/admin/engines/{engine_id}/operations` | JWT | Executar operação na engine |
+| GET | `/admin/engine-operations` | JWT | Histórico de operações de engine |
+| GET | `/admin/engine-operations/{operation_id}` | JWT | Detalhar operação de engine |
+| GET | `/admin/engine-operations/{operation_id}/events` | JWT | Eventos da operação de engine |
+| POST | `/admin/engine-operations/{operation_id}/cancel` | JWT | Cancelar operação de engine |
+| GET | `/admin/engine-operations/{operation_id}/stream` | JWT | Acompanhar operação de engine (SSE) |
+| POST | `/admin/engine-operations/{operation_id}/recover` | JWT | Recuperar operação de engine |
+| POST | `/internal/engine-hosts/{host_id}/heartbeat` | X-Engine-Host-Token do host | Heartbeat do host de engine |
+| GET | `/internal/engine-hosts/{host_id}/next` | X-Engine-Host-Token do host | Próxima operação para o host |
+| GET | `/internal/engine-hosts/{host_id}/operations/{op_id}/check` | X-Engine-Host-Token do host | Verificar se a operação ainda vale |
+| POST | `/internal/engine-hosts/{host_id}/operations/{op_id}/events` | X-Engine-Host-Token do host | Enviar evento da operação |
+| POST | `/internal/engine-hosts/{host_id}/operations/{op_id}/result` | X-Engine-Host-Token do host | Enviar resultado da operação |
 | GET | `/projects` | JWT ou API key | Listar projetos com contagens |
-| GET | `/projects/resolve` | JWT ou API key | Um nome de projeto casa com um projeto existente? |
-| GET | `/projects/{project_id}/folders/resolve` | JWT ou API key | Um nome de pasta casa com uma pasta existente do projeto? |
-| POST | `/transcribe/live/sessions` | JWT ou API key | Create Session |
-| GET | `/transcribe/live/sessions/{job_id}` | JWT ou API key | Session Status |
-| DELETE | `/transcribe/live/sessions/{job_id}` | JWT ou API key | Cancel Session |
-| POST | `/upload` | JWT ou API key | Upload e converter arquivo |
+| GET | `/projects/resolve` | JWT ou API key | Resolver nome de projeto |
+| GET | `/projects/{project_id}/folders/resolve` | JWT ou API key | Resolver nome de pasta do projeto |
+| POST | `/transcribe/live/sessions` | JWT ou API key | Criar sessão de transcrição ao vivo |
+| GET | `/transcribe/live/sessions/{job_id}` | JWT ou API key | Estado da sessão ao vivo |
+| DELETE | `/transcribe/live/sessions/{job_id}` | JWT ou API key | Cancelar sessão ao vivo |
+| POST | `/upload` | JWT ou API key | Enviar e converter arquivo |
 | POST | `/transcribe` | JWT ou API key | Transcrever áudio ou vídeo (STT, legendas VTT/SRT) |
-| POST | `/convert` | JWT ou API key | Convert Document |
-| GET | `/jobs/{job_id}` | JWT ou API key | Get Job Status |
-| DELETE | `/jobs/{job_id}` | JWT ou API key | Deletar job |
+| POST | `/convert` | JWT ou API key | Converter documento (arquivo, URL, Drive ou Dropbox) |
+| GET | `/jobs/{job_id}` | JWT ou API key | Estado do job |
+| DELETE | `/jobs/{job_id}` | JWT ou API key | Excluir job |
 | DELETE | `/jobs/{job_id}/source` | JWT ou API key | Apagar o arquivo original do job |
-| GET | `/jobs/{job_id}/result` | JWT ou API key | Get Job Result |
-| GET | `/jobs/{job_id}/transcript/partial` | JWT ou API key | Get Partial Transcript |
-| GET | `/jobs/{job_id}/pages` | JWT ou API key | Get Job Pages |
-| GET | `/jobs/{job_id}/pages/{page_number}/status` | JWT ou API key | Status de página específica por número |
-| GET | `/jobs/{job_id}/pages/{page_number}/result` | JWT ou API key | Resultado de página específica por número |
+| GET | `/jobs/{job_id}/result` | JWT ou API key | Resultado do job |
+| GET | `/jobs/{job_id}/transcript/partial` | JWT ou API key | Transcrição parcial em andamento |
+| GET | `/jobs/{job_id}/pages` | JWT ou API key | Listar páginas do job |
+| GET | `/jobs/{job_id}/pages/{page_number}/status` | JWT ou API key | Estado de uma página |
+| GET | `/jobs/{job_id}/pages/{page_number}/result` | JWT ou API key | Resultado de uma página |
 | GET | `/jobs` | JWT ou API key | Listar jobs do usuário |
 | GET | `/search` | JWT ou API key | Buscar jobs por conteúdo |
-| POST | `/jobs/{job_id}/pages/{page_number}/retry` | JWT ou API key | Retry de página que falhou |
+| POST | `/jobs/{job_id}/pages/{page_number}/retry` | JWT ou API key | Refazer página com falha |
 | GET | `/jobs/{job_id}/pages/{page_number}/pdf` | JWT ou API key | URL temporária do PDF de uma página |
-| GET | `/health` | Público | Health Check |
-| GET | `/` | Público | Root |
+| GET | `/health` | Público | Verificar saúde da API |
+| GET | `/` | Público | Identificação da API |
 
 ## Authentication
 
+Registro, login, renovação do JWT, usuário atual e o estado de primeira instalação (root).
+
 ### POST /auth/register
 
-Register
+Registrar usuário
 
 Autorização: **Público**. Operation ID: `register_auth_register_post`.
 
@@ -212,7 +214,7 @@ Respostas declaradas:
 
 ### GET /auth/setup
 
-Installation setup state (public)
+Estado da instalação (root pendente)
 
 Autorização: **Público**. Operation ID: `setup_status_auth_setup_get`.
 
@@ -232,7 +234,7 @@ Respostas declaradas:
 
 ### POST /auth/login
 
-Login
+Fazer login
 
 Autorização: **Público**. Operation ID: `login_auth_login_post`.
 
@@ -278,7 +280,7 @@ Respostas declaradas:
 
 ### POST /auth/refresh
 
-Refresh Token
+Renovar token JWT
 
 Autorização: **JWT**. Operation ID: `refresh_token_auth_refresh_post`.
 
@@ -301,7 +303,7 @@ Respostas declaradas:
 
 ### GET /auth/me
 
-Get Current User Info
+Usuário autenticado
 
 Autorização: **JWT ou API key**. Operation ID: `get_current_user_info_auth_me_get`.
 
@@ -332,269 +334,452 @@ Respostas declaradas:
 | --- | --- | --- | --- |
 | 200 | application/json | [UserResponse](#model-userresponse) | Successful Response |
 
-## API Keys
+## Projects
 
-### GET /api-keys/
+Projetos e pastas que organizam os jobs; resolução de nomes para *get-or-add*.
 
-List Api Keys
+### GET /projects
 
-Autorização: **JWT ou API key**. Operation ID: `list_api_keys_api_keys__get`.
+Listar projetos com contagens
 
-List all API keys for the authenticated user
+Autorização: **JWT ou API key**. Operation ID: `list_projects_projects_get`.
 
-## Returns:
-Array of API key info (without the actual key):
-```json
-[
-  {
-    "id": "uuid",
-    "name": "Production Server",
-    "last_used_at": "2025-10-02T12:00:00",
-    "expires_at": "2025-11-01T00:00:00",
-    "is_active": true,
-    "created_at": "2025-10-02T00:00:00"
-  }
-]
-```
+Os projetos do usuário, com contagens de jobs MAIN, os mais recentes primeiro
+(`last_job_at` desc, depois nome). `?include=folders` traz as pastas de cada
+projeto, com contagem.
 
-## Note:
-The actual API key is NOT returned (for security).
-It's only shown once during creation.
+As contagens vêm de um único `GROUP BY project_id, folder_id, status`.
 
-## Errors:
-- 401: Not authenticated
+Parâmetros:
+
+| Nome | Local | Obrigatório | Tipo | Padrões/limites | Descrição |
+| --- | --- | --- | --- | --- | --- |
+| `include` | query | não | string / null |  | `folders` inclui as pastas de cada projeto |
 
 Respostas declaradas:
 
 | Status | Content-Type | Esquema | Descrição |
 | --- | --- | --- | --- |
-| 200 | application/json | array de [APIKeyInfo](#model-apikeyinfo) | Successful Response |
+| 200 | application/json | [ProjectListResponse](#model-projectlistresponse) | Successful Response |
+| 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
 
-### POST /api-keys/
+### GET /projects/resolve
 
-Create Api Key
+Resolver nome de projeto
 
-Autorização: **JWT ou API key**. Operation ID: `create_api_key_api_keys__post`.
+Autorização: **JWT ou API key**. Operation ID: `resolve_project_name_projects_resolve_get`.
 
-Create a new API key for the authenticated user
+Diz, sem criar nada, se `name` é um projeto existente (pela regra de
+normalização do backend: `reuniao` casa com "Reunião") ou se seria criado.
 
-## Request Body:
-```json
-{
-  "name": "Production Server",
-  "expires_in_days": 30,  // optional, null = never expires
-  "project": "Transcrições automáticas"  // optional: name (get-or-add) or "project_id"
-}
+`{"valid": true, "match": {"id", "name"}}`, `{"valid": true, "match": null}`
+ou `{"valid": false, "error": "..."}`. Sempre 200.
+
+Parâmetros:
+
+| Nome | Local | Obrigatório | Tipo | Padrões/limites | Descrição |
+| --- | --- | --- | --- | --- | --- |
+| `name` | query | sim | string |  | O texto digitado |
+
+Respostas declaradas:
+
+| Status | Content-Type | Esquema | Descrição |
+| --- | --- | --- | --- |
+| 200 | application/json | [NameResolveResponse](#model-nameresolveresponse) | Successful Response |
+| 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
+
+### GET /projects/{project_id}/folders/resolve
+
+Resolver nome de pasta do projeto
+
+Autorização: **JWT ou API key**. Operation ID: `resolve_folder_name_projects__project_id__folders_resolve_get`.
+
+Igual a `GET /projects/resolve`, para uma pasta do projeto. Projeto alheio: 404.
+
+Parâmetros:
+
+| Nome | Local | Obrigatório | Tipo | Padrões/limites | Descrição |
+| --- | --- | --- | --- | --- | --- |
+| `project_id` | path | sim | string |  |  |
+| `name` | query | sim | string |  | O texto digitado |
+
+Respostas declaradas:
+
+| Status | Content-Type | Esquema | Descrição |
+| --- | --- | --- | --- |
+| 200 | application/json | [NameResolveResponse](#model-nameresolveresponse) | Successful Response |
+| 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
+
+## Conversion
+
+Criar jobs (upload, conversão por URL/Drive/Dropbox, transcrição), acompanhar estado, páginas e resultado, buscar, excluir jobs e apagar os arquivos de origem.
+
+### POST /upload
+
+Enviar e converter arquivo
+
+Autorização: **JWT ou API key**. Operation ID: `upload_and_convert_upload_post`.
+
+Upload direto de arquivo para conversão
+
+Este endpoint é dedicado exclusivamente para upload de arquivos.
+Use os outros endpoints para converter de URL, Google Drive ou Dropbox.
+
+## Parâmetros:
+- `file`: Arquivo para upload
+- `name`: Nome de identificação opcional (se não fornecido, usa o nome do arquivo)
+- `docling_preset`: Quality/speed preset (apenas para PDFs):
+  - **fast** (padrão): Conversão rápida, apenas texto (~35s/MB)
+    - OCR: Desligado | Images: Desligadas | Tables: Ligadas
+  - **balanced**: Velocidade moderada, extrai imagens (~70-105s/MB)
+    - OCR: Desligado | Images: Ligadas | Tables: Ligadas
+  - **quality**: Máxima qualidade, inclui OCR para documentos escaneados (~350s/MB)
+    - OCR: Ligado | Images: Ligadas | Tables: Ligadas
+- `purge_source`: Se `true`, apaga os arquivos de origem (o arquivo enviado e os
+  PDFs por página) quando o job termina — `completed`, ou `failed`/`partial` depois
+  das tentativas automáticas — e fica só o resultado. Veja "Arquivos de origem".
+
+## Arquivos de origem (`purge_source`)
+- O que é apagado: o arquivo enviado (MinIO `uploads/...` e cópia local) e, num
+  PDF de várias páginas, os PDFs por página (`/jobs/{job_id}/pages/{n}/pdf`
+  passa a responder 410 `SOURCE_PURGED`). O markdown (inteiro e por página) fica.
+- Quando: ao terminar `completed`, ou `failed`/`partial` depois de esgotados os
+  retries automáticos; nunca enquanto houver retry ou página na fila. Depois
+  disso o retry manual de página responde 409 `SOURCE_NOT_AVAILABLE`.
+- `GET /jobs/{job_id}` informa `source_available`, `source_deleted_at` e
+  `source_deletable`. Para apagar depois: `DELETE /jobs/{job_id}/source`.
+- Arquivo repetido no mesmo projeto: com `purge_source=true` a resposta traz o
+  job existente com `duplicate: true` e ele passa a apagar a origem (na hora, se
+  já terminou; `source_available` diz o resultado). Com `false`, um job existente
+  cuja origem foi (ou será) apagada não é reaproveitado: um job novo é criado.
+
+```bash
+curl -X POST http://localhost:8000/upload \
+  -H "X-API-Key: your-api-key" \
+  -F "file=@contrato.pdf" \
+  -F "project=Cliente X" \
+  -F "purge_source=true"
 ```
 
-Uploads made with a key bound to a project, that do not name a project,
-go to that project. A request that also sends a JWT is a JWT request and
-does not use the binding.
+## Formatos suportados
+PDF, DOCX, DOC, HTML, PPTX, XLSX, RTF, ODT
 
-## Returns:
-```json
-{
-  "id": "uuid",
-  "name": "Production Server",
-  "api_key": "doc2md_sk_...",  // ONLY SHOWN ONCE!
-  "expires_at": "2025-11-01T00:00:00",
-  "created_at": "2025-10-02T00:00:00"
-}
+## Retorno
+Retorna imediatamente um `job_id` para consultar o progresso via `/jobs/{job_id}`,
+e onde o job ficou (`project`, `folder`)
+
+## Exemplos:
+```bash
+# Fast mode (default)
+curl -X POST http://localhost:8000/upload       -H "X-API-Key: your-api-key"       -F "file=@documento.pdf"       -F "project=Cliente X"
+
+# Quality mode with OCR
+curl -X POST http://localhost:8000/upload       -H "X-API-Key: your-api-key"       -F "file=@documento_escaneado.pdf"       -F "docling_preset=quality"
 ```
-
-## Important:
-- The `api_key` is shown ONLY ONCE during creation
-- Save it immediately - you won't be able to see it again
-- Use it in requests with header: `X-API-Key: doc2md_sk_...`
-
-## Errors:
-- 401: Not authenticated
 
 Corpo obrigatório: sim.
 
-Content-Type: `application/json`. Esquema: [APIKeyCreate](#model-apikeycreate).
+Content-Type: `multipart/form-data`. Esquema: [Body_upload_and_convert_upload_post](#model-body_upload_and_convert_upload_post).
 
 | Campo | Obrigatório | Tipo | Padrões/limites | Descrição |
 | --- | --- | --- | --- | --- |
-| `name` | sim | string | minLength=1; maxLength=100 |  |
-| `expires_in_days` | não | integer / null |  |  |
-| `project` | não | string / null |  | Projeto vinculado, por nome (criado se não existir). Exclusivo com project_id. |
-| `project_id` | não | string / null |  | Projeto vinculado, por ID. Exclusivo com project. |
+| `file` | sim | string (binary) |  | Arquivo para conversão (PDF, DOCX, HTML, etc.) |
+| `name` | não | string / null |  | Nome de identificação (opcional, padrão: nome do arquivo) |
+| `tags` | não | string / null |  | Tags separadas por vírgula (ex.: 'cliente-x, reunião'). Viram minúsculas; até 20 tags de até 50 caracteres. Enviar um arquivo repetido adiciona as tags ao job existente. |
+| `docling_preset` | não | string / null | default="fast" | Quality/speed preset for PDF conversion: 'fast' (~35s/MB, text-only), 'balanced' (~70-105s/MB, with images), 'quality' (~350s/MB, with OCR) |
+| `diarize` | não | boolean / null |  | Identificar falantes; omitido usa o padrão do provider |
+| `min_speakers` | não | integer / null |  |  |
+| `max_speakers` | não | integer / null |  |  |
+| `language` | não | string / null |  | Idioma para áudio/vídeo; omitido detecta automaticamente |
+| `include_word_timestamps` | não | boolean / null |  |  |
+| `purge_source` | não | boolean | default=false | Se true, apaga os arquivos de origem do job — o arquivo enviado (MinIO e cópia local) e, num PDF dividido, os PDFs por página — quando o job termina: `completed`, ou `failed`/`partial` depois de esgotadas as tentativas automáticas (nunca enquanto houver retry ou página na fila). O resultado (markdown, markdown por página) fica. Depois disso o retry manual de página não é mais possível. GET /jobs/{job_id} informa `source_available` e `source_deleted_at`. Arquivo repetido no mesmo projeto: com true o job existente é devolvido (`duplicate: true`) e passa a apagar a origem (na hora, se já terminou); com false um job existente cuja origem foi (ou será) apagada não é reaproveitado e um job novo é criado. Padrão false (mantém). Para apagar depois: DELETE /jobs/{job_id}/source |
+| `project` | não | string / null |  | Nome do projeto (obrigatório, a menos que a API key esteja vinculada a um projeto). É criado se não existir; grafias equivalentes ('Reunião', ' reuniao ') são o mesmo projeto. |
+| `project_id` | não | string / null |  | ID de um projeto existente (alternativa a 'project'; nunca cria). |
+| `folder` | não | string / null |  | Nome da pasta dentro do projeto (opcional; criada se não existir; sem '/'). |
+| `folder_id` | não | string / null |  | ID de uma pasta existente do projeto (alternativa a 'folder'). |
 
 Respostas declaradas:
 
 | Status | Content-Type | Esquema | Descrição |
 | --- | --- | --- | --- |
-| 201 | application/json | [APIKeyResponse](#model-apikeyresponse) | Successful Response |
+| 200 | application/json | [JobCreatedResponse](#model-jobcreatedresponse) | Successful Response |
 | 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
 
-### PATCH /api-keys/{key_id}
+### POST /transcribe
 
-Update Api Key Project
+Transcrever áudio ou vídeo (STT, legendas VTT/SRT)
 
-Autorização: **JWT ou API key**. Operation ID: `update_api_key_project_api_keys__key_id__patch`.
+Autorização: **JWT ou API key**. Operation ID: `transcribe_audio_transcribe_post`.
 
-Bind the key to a project, or unbind it (`{"project_id": null}`)
+Transcrever áudio ou vídeo para texto usando Whisper (STT)
 
-Uploads made with this key that name no project go to the bound project.
-A key without a project must send `project` on every upload (422 otherwise).
-Re-binding changes where new uploads go; a file already processed in another
-project is processed again in the new one.
+Aceita áudio ou vídeo (só a faixa de áudio do vídeo é transcrita).
+O job entra na fila própria de transcrição (`ingestify-audio`), consumida por
+workers dedicados, e não disputa vaga com a conversão de documentos.
 
-## Errors:
-- 404: API key or project not found (or not yours)
+## Autenticação
+Obrigatória: header `X-API-Key: <chave>` ou `Authorization: Bearer <token JWT>`.
+Sem ele a resposta é 401.
 
-Parâmetros:
+Todos os formatos são gerados: Markdown, legendas WebVTT e SRT, texto puro e
+JSON com segmentos. Escolha o formato em `GET /jobs/{job_id}/result?format=vtt`
+(ou defina o padrão com `output_format`).
 
-| Nome | Local | Obrigatório | Tipo | Padrões/limites | Descrição |
-| --- | --- | --- | --- | --- | --- |
-| `key_id` | path | sim | string (uuid) |  |  |
+## Parâmetros:
+- `file`: Arquivo de áudio ou vídeo para transcrição
+- `name`: Nome de identificação opcional
+- `tags`: Tags do job, separadas por vírgula (ex: `focus,aula`)
+- `language`: Código de idioma ISO 639-1 (ex: 'en', 'pt', 'es'). Auto-detecta se não fornecido
+- `include_timestamps`: Adicionar marcadores de tempo [MM:SS] na transcrição
+- `include_word_timestamps`: Adicionar timestamps em cada palavra (mais detalhado)
+- `output_format`: Formato padrão do resultado (`markdown`, `vtt`, `srt`, `txt`, `json`)
+- `purge_source`: Se `true`, apaga o arquivo enviado (disco e MinIO) quando o job
+  termina (com sucesso, ou com falha depois das tentativas automáticas); ficam só
+  as transcrições. `GET /jobs/{job_id}` informa `source_deleted_at`. `DELETE /jobs/{job_id}` também
+  apaga o arquivo de origem e as transcrições
+
+## Projeto
+Todo job pertence a um projeto: envie `project` (nome; criado se não existir) ou
+`project_id`, e opcionalmente `folder`/`folder_id`. Uma API key vinculada a um
+projeto dispensa o campo. Sem projeto: 422.
+
+## Arquivo repetido
+Reenviar um arquivo idêntico (mesmo SHA-256) que já tem job **não falho** no mesmo
+projeto devolve esse job em vez de criar outro: as tags novas são somadas às dele e o
+`output_format` enviado passa a ser o padrão do resultado. Se o job anterior
+falhou, o reenvio cria um job novo; é assim que se tenta de novo.
+
+## Formatos suportados
+- Áudio: MP3, WAV, M4A, FLAC, OGG, OPUS, WEBM, WMA, AAC
+- Vídeo: MP4, M4V, MKV, MOV, AVI, WEBM, WMV, FLV, MPEG, TS, 3GP
+
+## Limite de tamanho
+- Áudio: até 50MB (MAX_AUDIO_FILE_SIZE_MB)
+- Vídeo: até 500MB (MAX_VIDEO_FILE_SIZE_MB)
+
+## Tempo limite
+Definido pelo worker de transcrição (`TRANSCRIPTION_TIMEOUT_SECONDS`, padrão 3h),
+independente do `CONVERSION_TIMEOUT_SECONDS` dos documentos. Um job que estoura o
+tempo falha sem novas tentativas automáticas.
+
+## Retorno
+Retorna imediatamente um `job_id` para consultar o progresso via `/jobs/{job_id}`
+
+## Erros
+- 401: sem autenticação
+- 413: arquivo acima do limite
+- 422: formato não suportado, `output_format` inválido ou `tags` inválidas
+- 503: transcrição desabilitada ou workers indisponíveis
+
+## Exemplos:
+```bash
+curl -X POST http://localhost:8080/transcribe \
+  -H "X-API-Key: $INGESTIFY_API_KEY" \
+  -F "file=@meeting.mp3" \
+  -F "project=Reuniões" \
+  -F "language=pt" \
+  -F "include_timestamps=true"
+```
+
+Vídeo com legenda SRT como padrão, tags e descarte do arquivo ao terminar:
+```bash
+curl -X POST http://localhost:8080/transcribe \
+  -H "Authorization: Bearer $TOKEN" \
+  -F "file=@aula.mp4" \
+  -F "language=pt" \
+  -F "output_format=srt" \
+  -F "tags=focus,aula" \
+  -F "purge_source=true"
+```
+
+## Resultado
+Consulte o status em `/jobs/{job_id}` até `completed` e busque o resultado:
+- `GET /jobs/{job_id}/result`: JSON com markdown e metadados (idioma, duração, device)
+- `GET /jobs/{job_id}/result?format=vtt`: legenda WebVTT (`text/vtt`)
+- `?format=srt`, `?format=txt`, `?format=json`: SRT, texto puro, segmentos
 
 Corpo obrigatório: sim.
 
-Content-Type: `application/json`. Esquema: [APIKeyProjectUpdate](#model-apikeyprojectupdate).
+Content-Type: `multipart/form-data`. Esquema: [Body_transcribe_audio_transcribe_post](#model-body_transcribe_audio_transcribe_post).
 
 | Campo | Obrigatório | Tipo | Padrões/limites | Descrição |
 | --- | --- | --- | --- | --- |
-| `project_id` | sim | string / null |  | Projeto para onde vão os uploads desta key que não dizem o projeto; null desvincula. |
+| `file` | sim | string (binary) |  | Arquivo de áudio (MP3, WAV, M4A, FLAC, OGG...) ou vídeo (MP4, MKV, MOV, WEBM, AVI...) |
+| `name` | não | string / null |  | Nome de identificação (opcional, padrão: nome do arquivo) |
+| `tags` | não | string / null |  | Tags separadas por vírgula (ex.: 'cliente-x, reunião'). Viram minúsculas; até 20 tags de até 50 caracteres. Enviar um arquivo repetido adiciona as tags ao job existente. |
+| `language` | não | string / null |  | Código do idioma (ex: 'en', 'pt'). Auto-detectar se não fornecido |
+| `include_timestamps` | não | boolean | default=true | Incluir marcadores de tempo na transcrição |
+| `include_word_timestamps` | não | boolean | default=false | Incluir timestamps em nível de palavra (mais detalhado) |
+| `output_format` | não | string | default="markdown" | Formato padrão do resultado em /jobs/{job_id}/result: markdown, vtt, srt, txt ou json |
+| `purge_source` | não | boolean | default=false | Apagar o áudio/vídeo enviado quando a transcrição terminar (com sucesso, ou com falha depois das tentativas automáticas); guarda só o texto |
+| `diarize` | não | boolean / null |  | Identificar falantes; omitido usa o padrão do provider |
+| `min_speakers` | não | integer / null |  |  |
+| `max_speakers` | não | integer / null |  |  |
+| `project` | não | string / null |  | Nome do projeto (obrigatório, a menos que a API key esteja vinculada a um projeto). É criado se não existir; grafias equivalentes ('Reunião', ' reuniao ') são o mesmo projeto. |
+| `project_id` | não | string / null |  | ID de um projeto existente (alternativa a 'project'; nunca cria). |
+| `folder` | não | string / null |  | Nome da pasta dentro do projeto (opcional; criada se não existir; sem '/'). |
+| `folder_id` | não | string / null |  | ID de uma pasta existente do projeto (alternativa a 'folder'). |
 
 Respostas declaradas:
 
 | Status | Content-Type | Esquema | Descrição |
 | --- | --- | --- | --- |
-| 200 | application/json | [APIKeyInfo](#model-apikeyinfo) | Successful Response |
+| 200 | application/json | [JobCreatedResponse](#model-jobcreatedresponse) | Successful Response |
 | 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
 
-### DELETE /api-keys/{key_id}
+### POST /convert
 
-Revoke Api Key
+Converter documento (arquivo, URL, Drive ou Dropbox)
 
-Autorização: **JWT ou API key**. Operation ID: `revoke_api_key_api_keys__key_id__delete`.
+Autorização: **JWT ou API key**. Operation ID: `convert_document_convert_post`.
 
-Revoke (delete) an API key
+Conversão de documentos para Markdown
 
-## Path Parameters:
-- `key_id`: UUID of the API key to revoke
+## Opções de uso:
 
-## Returns:
-204 No Content on success
+### 1. Upload de arquivo (multipart/form-data)
+- `source_type`: "file"
+- `file`: Selecione o arquivo para upload
+- `source`: Deixe vazio
 
-## Errors:
-- 401: Not authenticated
-- 404: API key not found or doesn't belong to user
+### 2. URL pública
+- `source_type`: "url"
+- `source`: "https://example.com/document.pdf"
+- `file`: Deixe vazio
+
+### 3. Google Drive
+- `source_type`: "gdrive"
+- `source`: "1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms" (file ID)
+- header `X-Source-Token`: "ya29.a0AfH6SMB..." (OAuth2 token do Google)
+- `file`: Deixe vazio
+
+### 4. Dropbox
+- `source_type`: "dropbox"
+- `source`: "/documents/report.pdf" (path do arquivo)
+- header `X-Source-Token`: "sl.B1a2c3..." (access token do Dropbox)
+
+O header `Authorization` autentica no Ingestify e nunca é repassado ao
+provedor nem colocado na mensagem do Celery (S-01).
+- `file`: Deixe vazio
+
+## Projeto (obrigatório) e pasta
+`project` (nome; criado se não existir) ou `project_id`, e opcionalmente
+`folder`/`folder_id`. Uma API key vinculada a um projeto dispensa o campo
+(só sem JWT). Sem projeto: 422. Um arquivo repetido só é reaproveitado
+dentro do mesmo projeto.
+
+## Arquivos de origem (`purge_source`)
+Com `purge_source=true` os arquivos de origem (o enviado, ou o baixado da URL,
+e os PDFs por página) são apagados quando o job termina: `completed`, ou
+`failed`/`partial` depois das tentativas automáticas. O resultado fica. Mesmas
+regras de `/upload` (inclusive para arquivo repetido).
+Para apagar depois: `DELETE /jobs/{job_id}/source`
+
+## Formatos suportados
+PDF, DOCX, DOC, HTML, PPTX, XLSX, RTF, ODT
+
+## Retorno
+Retorna imediatamente um `job_id` para consultar o progresso via `/jobs/{job_id}`
 
 Parâmetros:
 
 | Nome | Local | Obrigatório | Tipo | Padrões/limites | Descrição |
 | --- | --- | --- | --- | --- | --- |
-| `key_id` | path | sim | string (uuid) |  |  |
+| `authorization` | header | não | string / null |  | Autenticação do Ingestify ('Bearer {jwt}'). Nunca é repassada a provedores externos. |
+| `X-Source-Token` | header | não | string / null |  | Token OAuth/acesso do provedor (obrigatório para gdrive e dropbox). Não vai na mensagem do Celery: o worker o lê de uma chave Redis com TTL e a apaga após o download. |
+
+Corpo obrigatório: sim.
+
+Content-Type: `multipart/form-data`. Esquema: [Body_convert_document_convert_post](#model-body_convert_document_convert_post).
+
+| Campo | Obrigatório | Tipo | Padrões/limites | Descrição |
+| --- | --- | --- | --- | --- |
+| `source_type` | sim | string |  | Tipo de fonte: 'file' (upload), 'url' (URL pública), 'gdrive' (Google Drive), 'dropbox' (Dropbox) |
+| `source` | não | string / null |  | URL, file_id (Google Drive) ou path (Dropbox). Deixe vazio para upload de arquivo |
+| `file` | não | string (binary) / null |  | Arquivo para upload direto (use quando source_type='file') |
+| `name` | não | string / null |  | Nome de identificação opcional (padrão: nome do arquivo ou URL) |
+| `tags` | não | string / null |  | Tags separadas por vírgula (ex.: 'cliente-x, reunião'). Viram minúsculas; até 20 tags de até 50 caracteres. Enviar um arquivo repetido adiciona as tags ao job existente. |
+| `diarize` | não | boolean / null |  | Identificar falantes; omitido usa o padrão do provider |
+| `min_speakers` | não | integer / null |  |  |
+| `max_speakers` | não | integer / null |  |  |
+| `language` | não | string / null |  | Idioma para áudio/vídeo; omitido detecta automaticamente |
+| `include_word_timestamps` | não | boolean / null |  |  |
+| `purge_source` | não | boolean | default=false | Se true, apaga os arquivos de origem do job — o arquivo enviado (MinIO e cópia local) e, num PDF dividido, os PDFs por página — quando o job termina: `completed`, ou `failed`/`partial` depois de esgotadas as tentativas automáticas (nunca enquanto houver retry ou página na fila). O resultado (markdown, markdown por página) fica. Depois disso o retry manual de página não é mais possível. GET /jobs/{job_id} informa `source_available` e `source_deleted_at`. Arquivo repetido no mesmo projeto: com true o job existente é devolvido (`duplicate: true`) e passa a apagar a origem (na hora, se já terminou); com false um job existente cuja origem foi (ou será) apagada não é reaproveitado e um job novo é criado. Padrão false (mantém). Para apagar depois: DELETE /jobs/{job_id}/source |
+| `project` | não | string / null |  | Nome do projeto (obrigatório, a menos que a API key esteja vinculada a um projeto). É criado se não existir; grafias equivalentes ('Reunião', ' reuniao ') são o mesmo projeto. |
+| `project_id` | não | string / null |  | ID de um projeto existente (alternativa a 'project'; nunca cria). |
+| `folder` | não | string / null |  | Nome da pasta dentro do projeto (opcional; criada se não existir; sem '/'). |
+| `folder_id` | não | string / null |  | ID de uma pasta existente do projeto (alternativa a 'folder'). |
 
 Respostas declaradas:
 
 | Status | Content-Type | Esquema | Descrição |
 | --- | --- | --- | --- |
-| 204 | — | objeto livre | Successful Response |
+| 200 | application/json | [JobCreatedResponse](#model-jobcreatedresponse) | Successful Response |
 | 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
 
-## Admin & Monitoring
+### GET /jobs/{job_id}
 
-### GET /admin/stats
+Estado do job
 
-Get system statistics
+Autorização: **JWT ou API key**. Operation ID: `get_job_status_jobs__job_id__get`.
 
-Autorização: **Administrador (JWT ou API key)**. Operation ID: `get_stats_admin_stats_get`.
+Consultar status de qualquer tipo de job (main, split, page, merge)
 
-Get comprehensive system statistics for monitoring dashboard
+## Pagination for pages list:
+- `page_limit`: Maximum number of pages to return (default: all pages)
+- `page_offset`: Number of pages to skip (default: 0)
 
-Returns counts of jobs/pages by status, stuck jobs, etc.
-Useful for building admin dashboards and monitoring tools.
+Example: GET /jobs/{job_id}?page_limit=50&page_offset=0
 
-Respostas declaradas:
-
-| Status | Content-Type | Esquema | Descrição |
-| --- | --- | --- | --- |
-| 200 | application/json | object | Successful Response |
-
-### GET /admin/jobs/stuck
-
-List stuck jobs
-
-Autorização: **Administrador (JWT ou API key)**. Operation ID: `list_stuck_jobs_admin_jobs_stuck_get`.
-
-List all jobs currently stuck in processing state
-
-Args:
-    threshold_minutes: Override default threshold (from config if not specified)
-    limit: Maximum number of jobs to return
-
-Returns:
-    List of stuck jobs with details
+## Permissões:
+- Apenas o dono do job (verificado no MySQL) pode consultá-lo.
+  Jobs de outros usuários retornam 404.
 
 Parâmetros:
 
 | Nome | Local | Obrigatório | Tipo | Padrões/limites | Descrição |
 | --- | --- | --- | --- | --- | --- |
-| `threshold_minutes` | query | não | integer |  |  |
-| `limit` | query | não | integer | default=100 |  |
+| `job_id` | path | sim | string |  |  |
+| `page_limit` | query | não | integer / null |  |  |
+| `page_offset` | query | não | integer | default=0 |  |
 
 Respostas declaradas:
 
 | Status | Content-Type | Esquema | Descrição |
 | --- | --- | --- | --- |
-| 200 | application/json | object | Successful Response |
+| 200 | application/json | [JobStatusResponse](#model-jobstatusresponse) | Successful Response |
 | 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
 
-### POST /admin/jobs/recover-stuck
+### DELETE /jobs/{job_id}
 
-Manually trigger stuck job recovery
+Excluir job
 
-Autorização: **Administrador (JWT ou API key)**. Operation ID: `recover_stuck_jobs_admin_jobs_recover_stuck_post`.
+Autorização: **JWT ou API key**. Operation ID: `delete_job_jobs__job_id__delete`.
 
-Manually trigger the stuck job detection and recovery process
+Deletar job e todos os seus dados associados
 
-This runs the same logic as the periodic monitoring task,
-but can be triggered on-demand by administrators.
+Remove completamente um job do sistema, incluindo:
+- Metadados do MySQL (job e pages)
+- Conteúdo do Elasticsearch (markdown)
+- Status temporário do Redis
+- O arquivo original (documento, áudio ou vídeo) no MinIO e as cópias locais
+- Para transcrições: as transcrições guardadas no MinIO
 
-Args:
-    threshold_minutes: Override default threshold (from config if not specified)
+**Atenção:** Esta operação é irreversível!
 
-Returns:
-    Number of jobs/pages marked as failed
+## Para jobs MAIN com páginas:
+- Deleta o job principal
+- Deleta todos os jobs filhos (split, pages, merge)
+- Deleta todos os registros de páginas
+- Remove todo o conteúdo markdown
 
-Parâmetros:
+## Permissões:
+- Apenas o dono do job (verificado no MySQL) pode deletá-lo
 
-| Nome | Local | Obrigatório | Tipo | Padrões/limites | Descrição |
-| --- | --- | --- | --- | --- | --- |
-| `threshold_minutes` | query | não | integer |  |  |
-
-Respostas declaradas:
-
-| Status | Content-Type | Esquema | Descrição |
-| --- | --- | --- | --- |
-| 200 | application/json | object | Successful Response |
-| 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
-
-### POST /admin/jobs/{job_id}/retry-all-failed
-
-Bulk retry all failed pages of a job
-
-Autorização: **Administrador (JWT ou API key)**. Operation ID: `retry_all_failed_pages_admin_jobs__job_id__retry_all_failed_post`.
-
-Retry all failed pages of a specific job
-
-Requeues every FAILED page still under the retry limit
-(`MONITORING_MAX_RETRY_COUNT`), exactly like the per-page retry
-(`POST /jobs/{job_id}/pages/{n}/retry`): the original PDF is located first,
-then the pages become pending and the job processing, under the job's row
-lock (the same lock the source purge takes).
-
-Returns:
-    Number of pages queued for retry
-
-Errors:
-    404: job not found
-    409 `SOURCE_NOT_AVAILABLE`: the original was deleted (purge_source /
-    DELETE /jobs/{id}/source); nothing was changed
+## Retorno:
+- 200: Job deletado com sucesso
+- 404: Job não encontrado (também retornado quando o job pertence a outro
+  usuário, para não expor a existência do recurso)
 
 Parâmetros:
 
@@ -606,99 +791,409 @@ Respostas declaradas:
 
 | Status | Content-Type | Esquema | Descrição |
 | --- | --- | --- | --- |
-| 200 | application/json | object | Successful Response |
+| 200 | application/json | objeto livre | Successful Response |
 | 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
 
-### POST /admin/cleanup
+### DELETE /jobs/{job_id}/source
 
-Manually trigger cleanup of old jobs
+Apagar o arquivo original do job
 
-Autorização: **Administrador (JWT ou API key)**. Operation ID: `trigger_cleanup_admin_cleanup_post`.
+Autorização: **JWT ou API key**. Operation ID: `delete_job_source_jobs__job_id__source_delete`.
 
-Manually trigger cleanup of old completed/failed jobs from Redis
+Apaga os arquivos de origem de um job — o arquivo enviado (documento, áudio
+ou vídeo) e os PDFs por página de um PDF dividido — mantendo o job e o
+resultado (markdown, markdown por página, transcrições).
 
-Args:
-    days_old: Override default days threshold (from config if not specified)
+Remove os objetos no MinIO (`uploads/...` ou `audio/...`, e `pages/{job_id}/`)
+e as cópias locais, e grava quando isso aconteceu. Depois disso
+`GET /jobs/{job_id}` responde `source_available: false` e `source_deleted_at`,
+`GET /jobs/{job_id}/pages/{n}/pdf` responde 410 `SOURCE_PURGED` e o retry de
+página responde 409 `SOURCE_NOT_AVAILABLE`.
 
-Returns:
-    Number of jobs cleaned up
+Job de imagem (`/images/*`): apaga toda cópia guardada da imagem original — a
+cópia local de processamento, o original e a prévia normalizada da análise
+completa/facial (`images/{job_id}/source` e `images/{job_id}/preview/` no bucket
+de resultados) e a imagem embutida no resultado guardado (`image.image_base64`
+passa a null); o resultado da inferência fica.
+
+Para apagar automaticamente quando o job terminar, envie `purge_source=true` em
+`/upload`, `/convert`, `/transcribe` ou em qualquer rota `/images/*`.
+
+## Retorno
+- 200: `{"job_id": "...", "source_deleted": true, "source_deleted_at": "..."}`
+- 404: job inexistente, de outro usuário, ou sem arquivos de origem
+- 409: `{"code": "JOB_STILL_PROCESSING"}`: o job ainda está na fila ou em processamento,
+  espera um retry automático, ou tem página na fila/em processamento (retry de página)
+- 503: `{"code": "SOURCE_DELETE_FAILED"}`: o armazenamento recusou; o que não foi
+  apagado continua referenciado (chamar de novo termina)
 
 Parâmetros:
 
 | Nome | Local | Obrigatório | Tipo | Padrões/limites | Descrição |
 | --- | --- | --- | --- | --- | --- |
-| `days_old` | query | não | integer |  |  |
+| `job_id` | path | sim | string |  |  |
 
 Respostas declaradas:
 
 | Status | Content-Type | Esquema | Descrição |
 | --- | --- | --- | --- |
-| 200 | application/json | object | Successful Response |
+| 200 | application/json | [SourceDeletedResponse](#model-sourcedeletedresponse) | Successful Response |
 | 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
 
-### GET /admin/health/monitoring
+### GET /jobs/{job_id}/result
 
-Check monitoring system health
+Resultado do job
 
-Autorização: **Administrador (JWT ou API key)**. Operation ID: `monitoring_health_admin_health_monitoring_get`.
+Autorização: **JWT ou API key**. Operation ID: `get_job_result_jobs__job_id__result_get`.
 
-Check if the monitoring system (Celery Beat) is functioning
+Recuperar resultado de qualquer tipo de job (main ou page individual)
 
-Returns information about scheduled tasks and their last run times
+## Permissões:
+- Apenas o dono do job (verificado no MySQL) pode acessar o resultado.
+  Jobs de outros usuários retornam 404.
 
-Respostas declaradas:
-
-| Status | Content-Type | Esquema | Descrição |
-| --- | --- | --- | --- |
-| 200 | application/json | object | Successful Response |
-
-### GET /admin/broker/unacked
-
-List unacknowledged broker messages
-
-Autorização: **Administrador (JWT ou API key)**. Operation ID: `list_broker_unacked_admin_broker_unacked_get`.
-
-Messages the Celery broker holds as delivered but not yet acknowledged.
-
-Each one is either a task running now or one whose worker died - the latter only
-returns to its queue after CELERY_VISIBILITY_TIMEOUT_SECONDS (hours). `orphans` is
-the latest check by workers.monitoring.check_broker_unacked: messages no live
-worker held on two consecutive checks. Requeue one with
-POST /admin/broker/unacked/{delivery_tag}/requeue.
-
-Respostas declaradas:
-
-| Status | Content-Type | Esquema | Descrição |
-| --- | --- | --- | --- |
-| 200 | application/json | object | Successful Response |
-
-### POST /admin/broker/unacked/{delivery_tag}/requeue
-
-Requeue an orphaned broker message
-
-Autorização: **Administrador (JWT ou API key)**. Operation ID: `requeue_broker_unacked_admin_broker_unacked__delivery_tag__requeue_post`.
-
-Put an orphaned message back at the head of its queue, so its task runs again now
-instead of after the visibility timeout.
-
-Refused (409) unless the latest monitoring check flagged it as orphaned AND no
-worker reports holding it right now - otherwise a task still running would run
-twice.
+Para jobs de transcrição (/transcribe), `?format=vtt|srt|txt|json` retorna o
+arquivo no formato pedido (ex.: legenda WebVTT com `Content-Type: text/vtt`).
 
 Parâmetros:
 
 | Nome | Local | Obrigatório | Tipo | Padrões/limites | Descrição |
 | --- | --- | --- | --- | --- | --- |
-| `delivery_tag` | path | sim | string |  |  |
+| `job_id` | path | sim | string |  |  |
+| `format` | query | não | string / null |  | Para transcrições: markdown (JSON padrão), vtt, srt, txt ou json. Sem este parâmetro vale o output_format escolhido no /transcribe. |
 
 Respostas declaradas:
 
 | Status | Content-Type | Esquema | Descrição |
 | --- | --- | --- | --- |
-| 200 | application/json | object | Successful Response |
+| 200 | application/json | [JobResultResponse](#model-jobresultresponse) | Successful Response |
+| 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
+| 202 | — | objeto livre | Análise composta em andamento; consulte poll_url/result_url. |
+
+### GET /jobs/{job_id}/transcript/partial
+
+Transcrição parcial em andamento
+
+Autorização: **JWT ou API key**. Operation ID: `get_partial_transcript_jobs__job_id__transcript_partial_get`.
+
+Texto de uma transcrição enquanto ela acontece
+
+Retorna os segmentos já transcritos a partir de `since`, e em `next` o valor de
+`since` para a próxima consulta - assim cada consulta traz só o texto novo.
+Só o provider faster-whisper transcreve em segmentos; com os providers da OpenAI
+a lista fica vazia até o fim. Quando o job termina a lista também fica vazia:
+o texto completo passa a estar em `GET /jobs/{job_id}/result`.
+
+## Permissões:
+- Apenas o dono do job (verificado no MySQL) pode consultá-lo.
+  Jobs de outros usuários retornam 404.
+
+Parâmetros:
+
+| Nome | Local | Obrigatório | Tipo | Padrões/limites | Descrição |
+| --- | --- | --- | --- | --- | --- |
+| `job_id` | path | sim | string |  |  |
+| `since` | query | não | integer | default=0; minimum=0 | Índice do primeiro segmento a retornar (o `next` da consulta anterior) |
+
+Respostas declaradas:
+
+| Status | Content-Type | Esquema | Descrição |
+| --- | --- | --- | --- |
+| 200 | application/json | [PartialTranscriptResponse](#model-partialtranscriptresponse) | Successful Response |
+| 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
+
+### GET /jobs/{job_id}/pages
+
+Listar páginas do job
+
+Autorização: **JWT ou API key**. Operation ID: `get_job_pages_jobs__job_id__pages_get`.
+
+Obter progresso detalhado por página com job_id de cada página (para PDFs)
+
+## Permissões:
+- Apenas o dono do job (verificado no MySQL) pode consultar as páginas.
+  Jobs de outros usuários retornam 404.
+
+Parâmetros:
+
+| Nome | Local | Obrigatório | Tipo | Padrões/limites | Descrição |
+| --- | --- | --- | --- | --- | --- |
+| `job_id` | path | sim | string |  |  |
+
+Respostas declaradas:
+
+| Status | Content-Type | Esquema | Descrição |
+| --- | --- | --- | --- |
+| 200 | application/json | [JobPagesResponse](#model-jobpagesresponse) | Successful Response |
+| 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
+
+### GET /jobs/{job_id}/pages/{page_number}/status
+
+Estado de uma página
+
+Autorização: **JWT ou API key**. Operation ID: `get_page_status_by_number_jobs__job_id__pages__page_number__status_get`.
+
+Consulta o status de uma página específica usando o número da página
+
+## Parâmetros:
+- `job_id`: ID do job principal
+- `page_number`: Número da página (1, 2, 3, ...)
+
+## Retorno:
+Status da página específica
+
+## Exemplo:
+```
+GET /jobs/550e8400-e29b-41d4-a716-446655440000/pages/5/status
+```
+
+Retorna o status da página 5 do job especificado.
+
+## Permissões:
+- Apenas o dono do job (verificado no MySQL) pode consultar a página.
+  Jobs de outros usuários retornam 404.
+
+Parâmetros:
+
+| Nome | Local | Obrigatório | Tipo | Padrões/limites | Descrição |
+| --- | --- | --- | --- | --- | --- |
+| `job_id` | path | sim | string |  |  |
+| `page_number` | path | sim | integer |  |  |
+
+Respostas declaradas:
+
+| Status | Content-Type | Esquema | Descrição |
+| --- | --- | --- | --- |
+| 200 | application/json | objeto livre | Successful Response |
+| 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
+
+### GET /jobs/{job_id}/pages/{page_number}/result
+
+Resultado de uma página
+
+Autorização: **JWT ou API key**. Operation ID: `get_page_result_by_number_jobs__job_id__pages__page_number__result_get`.
+
+Recupera o resultado (markdown) de uma página específica usando o número da página
+
+## Parâmetros:
+- `job_id`: ID do job principal
+- `page_number`: Número da página (1, 2, 3, ...)
+
+## Retorno:
+Markdown da página específica
+
+## Exemplo:
+```
+GET /jobs/550e8400-e29b-41d4-a716-446655440000/pages/5/result
+```
+
+Retorna o markdown da página 5 do job especificado.
+
+## Vantagem:
+Não precisa conhecer o `page_job_id` - basta usar o job principal + número da página!
+
+## Permissões:
+- Apenas o dono do job (verificado no MySQL) pode acessar o resultado.
+  Jobs de outros usuários retornam 404.
+
+Parâmetros:
+
+| Nome | Local | Obrigatório | Tipo | Padrões/limites | Descrição |
+| --- | --- | --- | --- | --- | --- |
+| `job_id` | path | sim | string |  |  |
+| `page_number` | path | sim | integer |  |  |
+
+Respostas declaradas:
+
+| Status | Content-Type | Esquema | Descrição |
+| --- | --- | --- | --- |
+| 200 | application/json | objeto livre | Successful Response |
+| 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
+
+### GET /jobs
+
+Listar jobs do usuário
+
+Autorização: **JWT ou API key**. Operation ID: `list_jobs_jobs_get`.
+
+Lista os jobs do usuário autenticado, do mais recente para o mais antigo.
+
+A lista vem do MySQL (fonte da verdade); o Redis só complementa o status e
+o progresso ao vivo dos jobs em andamento.
+
+## Parâmetros:
+- `limit`: Máximo de jobs (padrão: 50, máximo: 100)
+- `offset`: Quantos pular (paginação)
+- `status`: queued, processing, completed, failed ou cancelled
+- `tag`: Filtra por tag; `?tag=a&tag=b` exige as duas
+- `q`: Texto no nome do job ou do arquivo
+- `kind`: `document`, `transcription` ou `image`
+- `project_id`: só jobs do projeto (projeto alheio: 404)
+- `folder_id`: só jobs da pasta (pasta alheia: 404), ou `root` com `project_id`
+  para os jobs sem pasta. Sem `project_id`, o projeto é o da pasta.
+- `job_type`: `main` (padrão) ou `all`
+
+## Retorno:
+`{total, limit, offset, jobs, counts}`. `total` é o total filtrado antes da
+paginação; `counts` traz quantos jobs há em cada status com os demais
+filtros aplicados (para montar os filtros da interface). Cada job traz
+`project: {id, name}` e `folder: {id, name} | null`.
+
+Parâmetros:
+
+| Nome | Local | Obrigatório | Tipo | Padrões/limites | Descrição |
+| --- | --- | --- | --- | --- | --- |
+| `limit` | query | não | integer | default=50 |  |
+| `offset` | query | não | integer | default=0 |  |
+| `status` | query | não | string / null |  |  |
+| `job_type` | query | não | string | default="main" |  |
+| `tag` | query | não | array de string / null |  | Só jobs com esta tag. Repita para exigir várias (E). |
+| `q` | query | não | string / null |  | Busca no nome e no nome do arquivo (não no conteúdo; para isso use /search). |
+| `kind` | query | não | string / null |  | document, transcription ou image |
+| `project_id` | query | não | string / null |  | Só jobs deste projeto. |
+| `folder_id` | query | não | string / null |  | Só jobs desta pasta, ou `root` para os jobs do projeto que não estão em pasta nenhuma (`root` exige `project_id`). |
+
+Respostas declaradas:
+
+| Status | Content-Type | Esquema | Descrição |
+| --- | --- | --- | --- |
+| 200 | application/json | objeto livre | Successful Response |
+| 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
+
+### GET /search
+
+Buscar jobs por conteúdo
+
+Autorização: **JWT ou API key**. Operation ID: `search_jobs_search_get`.
+
+Buscar jobs por conteúdo do markdown usando Elasticsearch
+
+## Parâmetros:
+- `query`: Texto a buscar no conteúdo dos documentos
+- `limit`: Número máximo de resultados (padrão: 10, máximo: 100)
+
+## Retorno:
+Lista de jobs que contêm o texto buscado no conteúdo convertido
+
+## Exemplos:
+- `/search?query=relatório financeiro` - Busca jobs contendo "relatório financeiro"
+- `/search?query=invoice&limit=20` - Busca jobs contendo "invoice", até 20 resultados
+
+Parâmetros:
+
+| Nome | Local | Obrigatório | Tipo | Padrões/limites | Descrição |
+| --- | --- | --- | --- | --- | --- |
+| `query` | query | sim | string |  |  |
+| `limit` | query | não | integer | default=10 |  |
+
+Respostas declaradas:
+
+| Status | Content-Type | Esquema | Descrição |
+| --- | --- | --- | --- |
+| 200 | application/json | objeto livre | Successful Response |
+| 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
+
+### POST /jobs/{job_id}/pages/{page_number}/retry
+
+Refazer página com falha
+
+Autorização: **JWT ou API key**. Operation ID: `retry_failed_page_jobs__job_id__pages__page_number__retry_post`.
+
+Tenta reprocessar uma página que falhou
+
+## Parâmetros:
+- `job_id`: ID do job principal
+- `page_number`: Número da página que falhou
+
+## Retorno:
+Novo job_id da página em retry
+
+## Exemplo:
+```
+POST /jobs/550e8400-e29b-41d4-a716-446655440000/pages/5/retry
+```
+
+Reprocessa a página 5 do job especificado.
+
+## Permissões:
+- Apenas o dono do job (verificado no MySQL) pode reprocessar a página.
+  Jobs de outros usuários retornam 404.
+
+Parâmetros:
+
+| Nome | Local | Obrigatório | Tipo | Padrões/limites | Descrição |
+| --- | --- | --- | --- | --- | --- |
+| `job_id` | path | sim | string |  |  |
+| `page_number` | path | sim | integer |  |  |
+
+Respostas declaradas:
+
+| Status | Content-Type | Esquema | Descrição |
+| --- | --- | --- | --- |
+| 200 | application/json | objeto livre | Successful Response |
+| 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
+
+### GET /jobs/{job_id}/pages/{page_number}/pdf
+
+URL temporária do PDF de uma página
+
+Autorização: **JWT ou API key**. Operation ID: `get_page_pdf_jobs__job_id__pages__page_number__pdf_get`.
+
+Devolve uma **URL pré-assinada de curta duração** para o PDF de uma página.
+
+## Autenticação
+Obrigatória. Só o dono do job (verificado no MySQL) recebe a URL; jobs de
+outros usuários retornam 404, igual aos demais endpoints de job.
+
+Este endpoint já foi público e redirecionava (307) para uma URL pública do
+MinIO — quem tivesse um UUID de job lia o PDF de qualquer usuário. Agora o
+bucket é privado e o acesso é sempre por URL assinada com TTL curto.
+
+## Parâmetros:
+- `job_id`: ID do job principal
+- `page_number`: Número da página (1-indexed)
+
+## Retorno (JSON, não é mais um redirect):
+```json
+{
+  "job_id": "550e8400-e29b-41d4-a716-446655440000",
+  "page_number": 5,
+  "url": "http://127.0.0.1:9000/ingestify-pages/pages/<job_id>/page_0005.pdf?X-Amz-...",
+  "expires_in": 900,
+  "expires_at": "2026-08-26T12:15:00+00:00"
+}
+```
+
+- `url`: URL assinada, para ser buscada **diretamente** pelo navegador. Não
+  aceita header `Authorization` (e não precisa dele).
+- `expires_in`: validade em segundos a partir de agora.
+- `expires_at`: instante de expiração em UTC (ISO-8601). O cliente deve
+  pedir uma URL nova depois disso em vez de reutilizar a antiga.
+
+Um redirect não serviria: o header `Authorization` do chamador não sobrevive
+ao salto para o MinIO, e o cliente precisa saber quando a URL expira.
+
+## Atenção
+A query string faz parte da assinatura — acrescentar qualquer parâmetro
+(`?t=<timestamp>`, por exemplo) invalida a URL e gera 403 no MinIO.
+
+Parâmetros:
+
+| Nome | Local | Obrigatório | Tipo | Padrões/limites | Descrição |
+| --- | --- | --- | --- | --- | --- |
+| `job_id` | path | sim | string |  |  |
+| `page_number` | path | sim | integer |  |  |
+
+Respostas declaradas:
+
+| Status | Content-Type | Esquema | Descrição |
+| --- | --- | --- | --- |
+| 200 | application/json | objeto livre | Successful Response |
 | 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
 
 ## Vision
+
+Análise de imagens: descrição, OCR, tarefas de visão, Full Analysis e detecção facial; capacidades e cancelamento.
 
 ### GET /images/faces/capabilities
 
@@ -714,7 +1209,7 @@ Respostas declaradas:
 
 ### POST /images/faces
 
-Detectar rostos e analisar expressões em uma imagem base64
+Detectar rostos e expressões (JSON base64)
 
 Autorização: **JWT ou API key**. Operation ID: `analyze_images_faces_post`.
 
@@ -755,7 +1250,7 @@ Respostas declaradas:
 
 ### POST /images/faces/upload
 
-Upload de imagem para detecção facial e expressões
+Detectar rostos e expressões (multipart)
 
 Autorização: **JWT ou API key**. Operation ID: `upload_images_faces_upload_post`.
 
@@ -1109,120 +1604,32 @@ Respostas declaradas:
 | 200 | application/json | objeto livre | Successful Response |
 | 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
 
-## Datalakes
+## Live transcription
 
-### POST /datalakes/discover
+Sessões de transcrição ao vivo: criar (ticket do WebSocket), consultar e cancelar.
 
-Discover Connection
+### POST /transcribe/live/sessions
 
-Autorização: **JWT ou API key**. Operation ID: `discover_connection_datalakes_discover_post`.
+Criar sessão de transcrição ao vivo
 
-Read buckets with draft settings, without creating or updating a connection.
-
-Corpo obrigatório: sim.
-
-Content-Type: `application/json`. Esquema: [DiscoverConnection](#model-discoverconnection).
-
-| Campo | Obrigatório | Tipo | Padrões/limites | Descrição |
-| --- | --- | --- | --- | --- |
-| `provider` | sim | string | enum=["s3", "minio", "gcs", "azure"] |  |
-| `config` | não | [ConnectionConfig](#model-connectionconfig) |  |  |
-| `credentials` | não | object / null |  |  |
-| `connection_id` | não | string / null |  |  |
-| `bucket` | não | string / null |  |  |
-
-Respostas declaradas:
-
-| Status | Content-Type | Esquema | Descrição |
-| --- | --- | --- | --- |
-| 200 | application/json | objeto livre | Successful Response |
-| 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
-
-### POST /datalakes/buckets
-
-Create Bucket
-
-Autorização: **JWT ou API key**. Operation ID: `create_bucket_datalakes_buckets_post`.
-
-Create storage now; saving the connection remains a separate operation.
+Autorização: **JWT ou API key**. Operation ID: `create_session_transcribe_live_sessions_post`.
 
 Corpo obrigatório: sim.
 
-Content-Type: `application/json`. Esquema: [CreateBucket](#model-createbucket).
+Content-Type: `application/json`. Esquema: [CreateSession](#model-createsession).
 
 | Campo | Obrigatório | Tipo | Padrões/limites | Descrição |
 | --- | --- | --- | --- | --- |
-| `provider` | sim | string | enum=["s3", "minio", "gcs", "azure"] |  |
-| `config` | não | [ConnectionConfig](#model-connectionconfig) |  |  |
-| `credentials` | não | object / null |  |  |
-| `connection_id` | não | string / null |  |  |
-| `bucket` | sim | string | minLength=3; maxLength=222 |  |
-| `location` | não | string / null |  |  |
-
-Respostas declaradas:
-
-| Status | Content-Type | Esquema | Descrição |
-| --- | --- | --- | --- |
-| 201 | application/json | objeto livre | Successful Response |
-| 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
-
-### POST /datalakes/partition-preview
-
-Partition Preview
-
-Autorização: **JWT ou API key**. Operation ID: `partition_preview_datalakes_partition_preview_post`.
-
-Corpo obrigatório: sim.
-
-Content-Type: `application/json`. Esquema: [PartitionPreview](#model-partitionpreview).
-
-| Campo | Obrigatório | Tipo | Padrões/limites | Descrição |
-| --- | --- | --- | --- | --- |
-| `connection_id` | não | string / null |  |  |
-| `partitioning` | não | [PartitionStrategy](#model-partitionstrategy) / null |  |  |
-| `partition_values` | não | object | additionalProperties={"type": "string"} |  |
-| `prefix` | não | string | default=""; maxLength=700 |  |
-| `created_at` | não | string (date-time) / null |  |  |
+| `project` | não | string / null |  |  |
 | `project_id` | não | string / null |  |  |
+| `folder` | não | string / null |  |  |
 | `folder_id` | não | string / null |  |  |
-| `source_type` | não | string / null |  |  |
-
-Respostas declaradas:
-
-| Status | Content-Type | Esquema | Descrição |
-| --- | --- | --- | --- |
-| 200 | application/json | objeto livre | Successful Response |
-| 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
-
-### GET /datalakes
-
-List Connections
-
-Autorização: **JWT ou API key**. Operation ID: `list_connections_datalakes_get`.
-
-Respostas declaradas:
-
-| Status | Content-Type | Esquema | Descrição |
-| --- | --- | --- | --- |
-| 200 | application/json | objeto livre | Successful Response |
-
-### POST /datalakes
-
-Create Connection
-
-Autorização: **JWT ou API key**. Operation ID: `create_connection_datalakes_post`.
-
-Corpo obrigatório: sim.
-
-Content-Type: `application/json`. Esquema: [ConnectionCreate](#model-connectioncreate).
-
-| Campo | Obrigatório | Tipo | Padrões/limites | Descrição |
-| --- | --- | --- | --- | --- |
-| `name` | sim | string | minLength=1; maxLength=150 |  |
-| `provider` | sim | string | enum=["s3", "minio", "gcs", "azure"] |  |
-| `config` | não | [ConnectionConfig](#model-connectionconfig) |  |  |
-| `credentials` | sim | object | additionalProperties={"type": "string", "format": "password", "writeOnly": true} |  |
-| `enabled` | não | boolean | default=true |  |
+| `name` | não | string | default="Transcrição ao vivo"; minLength=1; maxLength=1000 |  |
+| `tags` | não | array de string |  |  |
+| `language` | não | string | default="pt"; const="pt" |  |
+| `audio` | não | [AudioFormat](#model-audioformat) |  |  |
+| `protocol` | não | integer | default=1; enum=[1, 2] |  |
+| `diarize` | não | boolean | default=false |  |
 
 Respostas declaradas:
 
@@ -1231,128 +1638,11 @@ Respostas declaradas:
 | 201 | application/json | objeto livre | Successful Response |
 | 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
 
-### PATCH /datalakes/{connection_id}
+### GET /transcribe/live/sessions/{job_id}
 
-Update Connection
+Estado da sessão ao vivo
 
-Autorização: **JWT ou API key**. Operation ID: `update_connection_datalakes__connection_id__patch`.
-
-Parâmetros:
-
-| Nome | Local | Obrigatório | Tipo | Padrões/limites | Descrição |
-| --- | --- | --- | --- | --- | --- |
-| `connection_id` | path | sim | string |  |  |
-
-Corpo obrigatório: sim.
-
-Content-Type: `application/json`. Esquema: [ConnectionUpdate](#model-connectionupdate).
-
-| Campo | Obrigatório | Tipo | Padrões/limites | Descrição |
-| --- | --- | --- | --- | --- |
-| `name` | não | string / null |  |  |
-| `config` | não | [ConnectionConfig](#model-connectionconfig) / null |  |  |
-| `credentials` | não | object / null |  |  |
-| `enabled` | não | boolean / null |  |  |
-
-Respostas declaradas:
-
-| Status | Content-Type | Esquema | Descrição |
-| --- | --- | --- | --- |
-| 200 | application/json | objeto livre | Successful Response |
-| 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
-
-### DELETE /datalakes/{connection_id}
-
-Delete Connection
-
-Autorização: **JWT ou API key**. Operation ID: `delete_connection_datalakes__connection_id__delete`.
-
-Parâmetros:
-
-| Nome | Local | Obrigatório | Tipo | Padrões/limites | Descrição |
-| --- | --- | --- | --- | --- | --- |
-| `connection_id` | path | sim | string |  |  |
-
-Respostas declaradas:
-
-| Status | Content-Type | Esquema | Descrição |
-| --- | --- | --- | --- |
-| 204 | — | objeto livre | Successful Response |
-| 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
-
-### GET /datalakes/{connection_id}/buckets
-
-List Buckets
-
-Autorização: **JWT ou API key**. Operation ID: `list_buckets_datalakes__connection_id__buckets_get`.
-
-Parâmetros:
-
-| Nome | Local | Obrigatório | Tipo | Padrões/limites | Descrição |
-| --- | --- | --- | --- | --- | --- |
-| `connection_id` | path | sim | string |  |  |
-
-Respostas declaradas:
-
-| Status | Content-Type | Esquema | Descrição |
-| --- | --- | --- | --- |
-| 200 | application/json | objeto livre | Successful Response |
-| 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
-
-### POST /datalakes/{connection_id}/test
-
-Test Connection
-
-Autorização: **JWT ou API key**. Operation ID: `test_connection_datalakes__connection_id__test_post`.
-
-Parâmetros:
-
-| Nome | Local | Obrigatório | Tipo | Padrões/limites | Descrição |
-| --- | --- | --- | --- | --- | --- |
-| `connection_id` | path | sim | string |  |  |
-
-Corpo obrigatório: sim.
-
-Content-Type: `application/json`. Esquema: [TestConnection](#model-testconnection).
-
-| Campo | Obrigatório | Tipo | Padrões/limites | Descrição |
-| --- | --- | --- | --- | --- |
-| `bucket` | não | string / null |  |  |
-
-Respostas declaradas:
-
-| Status | Content-Type | Esquema | Descrição |
-| --- | --- | --- | --- |
-| 200 | application/json | objeto livre | Successful Response |
-| 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
-
-### GET /datalakes/{connection_id}/objects
-
-List Objects
-
-Autorização: **JWT ou API key**. Operation ID: `list_objects_datalakes__connection_id__objects_get`.
-
-Parâmetros:
-
-| Nome | Local | Obrigatório | Tipo | Padrões/limites | Descrição |
-| --- | --- | --- | --- | --- | --- |
-| `connection_id` | path | sim | string |  |  |
-| `bucket` | query | sim | string |  |  |
-| `prefix` | query | não | string | default="" |  |
-| `limit` | query | não | integer | default=100; minimum=1; maximum=1000 |  |
-
-Respostas declaradas:
-
-| Status | Content-Type | Esquema | Descrição |
-| --- | --- | --- | --- |
-| 200 | application/json | objeto livre | Successful Response |
-| 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
-
-### GET /jobs/{job_id}/datalake
-
-Get Delivery
-
-Autorização: **JWT ou API key**. Operation ID: `get_delivery_jobs__job_id__datalake_get`.
+Autorização: **JWT ou API key**. Operation ID: `session_status_transcribe_live_sessions__job_id__get`.
 
 Parâmetros:
 
@@ -1367,11 +1657,11 @@ Respostas declaradas:
 | 200 | application/json | objeto livre | Successful Response |
 | 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
 
-### POST /jobs/{job_id}/datalake/retry
+### DELETE /transcribe/live/sessions/{job_id}
 
-Retry Delivery
+Cancelar sessão ao vivo
 
-Autorização: **JWT ou API key**. Operation ID: `retry_delivery_jobs__job_id__datalake_retry_post`.
+Autorização: **JWT ou API key**. Operation ID: `cancel_session_transcribe_live_sessions__job_id__delete`.
 
 Parâmetros:
 
@@ -1383,10 +1673,12 @@ Respostas declaradas:
 
 | Status | Content-Type | Esquema | Descrição |
 | --- | --- | --- | --- |
-| 202 | application/json | objeto livre | Successful Response |
+| 200 | application/json | objeto livre | Successful Response |
 | 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
 
 ## Tags
+
+Tags do usuário e tags de cada job.
 
 ### GET /tags
 
@@ -1436,11 +1728,777 @@ Respostas declaradas:
 | 200 | application/json | [JobTagsResponse](#model-jobtagsresponse) | Successful Response |
 | 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
 
+## Datalakes
+
+Conexões S3/MinIO de destino, buckets, prévia de particionamento e entrega do resultado de um job.
+
+### POST /datalakes/discover
+
+Descobrir conexão de datalake
+
+Autorização: **JWT ou API key**. Operation ID: `discover_connection_datalakes_discover_post`.
+
+Read buckets with draft settings, without creating or updating a connection.
+
+Corpo obrigatório: sim.
+
+Content-Type: `application/json`. Esquema: [DiscoverConnection](#model-discoverconnection).
+
+| Campo | Obrigatório | Tipo | Padrões/limites | Descrição |
+| --- | --- | --- | --- | --- |
+| `provider` | sim | string | enum=["s3", "minio", "gcs", "azure"] |  |
+| `config` | não | [ConnectionConfig](#model-connectionconfig) |  |  |
+| `credentials` | não | object / null |  |  |
+| `connection_id` | não | string / null |  |  |
+| `bucket` | não | string / null |  |  |
+
+Respostas declaradas:
+
+| Status | Content-Type | Esquema | Descrição |
+| --- | --- | --- | --- |
+| 200 | application/json | objeto livre | Successful Response |
+| 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
+
+### POST /datalakes/buckets
+
+Criar bucket
+
+Autorização: **JWT ou API key**. Operation ID: `create_bucket_datalakes_buckets_post`.
+
+Create storage now; saving the connection remains a separate operation.
+
+Corpo obrigatório: sim.
+
+Content-Type: `application/json`. Esquema: [CreateBucket](#model-createbucket).
+
+| Campo | Obrigatório | Tipo | Padrões/limites | Descrição |
+| --- | --- | --- | --- | --- |
+| `provider` | sim | string | enum=["s3", "minio", "gcs", "azure"] |  |
+| `config` | não | [ConnectionConfig](#model-connectionconfig) |  |  |
+| `credentials` | não | object / null |  |  |
+| `connection_id` | não | string / null |  |  |
+| `bucket` | sim | string | minLength=3; maxLength=222 |  |
+| `location` | não | string / null |  |  |
+
+Respostas declaradas:
+
+| Status | Content-Type | Esquema | Descrição |
+| --- | --- | --- | --- |
+| 201 | application/json | objeto livre | Successful Response |
+| 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
+
+### POST /datalakes/partition-preview
+
+Prévia do particionamento
+
+Autorização: **JWT ou API key**. Operation ID: `partition_preview_datalakes_partition_preview_post`.
+
+Corpo obrigatório: sim.
+
+Content-Type: `application/json`. Esquema: [PartitionPreview](#model-partitionpreview).
+
+| Campo | Obrigatório | Tipo | Padrões/limites | Descrição |
+| --- | --- | --- | --- | --- |
+| `connection_id` | não | string / null |  |  |
+| `partitioning` | não | [PartitionStrategy](#model-partitionstrategy) / null |  |  |
+| `partition_values` | não | object | additionalProperties={"type": "string"} |  |
+| `prefix` | não | string | default=""; maxLength=700 |  |
+| `created_at` | não | string (date-time) / null |  |  |
+| `project_id` | não | string / null |  |  |
+| `folder_id` | não | string / null |  |  |
+| `source_type` | não | string / null |  |  |
+
+Respostas declaradas:
+
+| Status | Content-Type | Esquema | Descrição |
+| --- | --- | --- | --- |
+| 200 | application/json | objeto livre | Successful Response |
+| 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
+
+### GET /datalakes
+
+Listar conexões de datalake
+
+Autorização: **JWT ou API key**. Operation ID: `list_connections_datalakes_get`.
+
+Respostas declaradas:
+
+| Status | Content-Type | Esquema | Descrição |
+| --- | --- | --- | --- |
+| 200 | application/json | objeto livre | Successful Response |
+
+### POST /datalakes
+
+Criar conexão de datalake
+
+Autorização: **JWT ou API key**. Operation ID: `create_connection_datalakes_post`.
+
+Corpo obrigatório: sim.
+
+Content-Type: `application/json`. Esquema: [ConnectionCreate](#model-connectioncreate).
+
+| Campo | Obrigatório | Tipo | Padrões/limites | Descrição |
+| --- | --- | --- | --- | --- |
+| `name` | sim | string | minLength=1; maxLength=150 |  |
+| `provider` | sim | string | enum=["s3", "minio", "gcs", "azure"] |  |
+| `config` | não | [ConnectionConfig](#model-connectionconfig) |  |  |
+| `credentials` | sim | object | additionalProperties={"type": "string", "format": "password", "writeOnly": true} |  |
+| `enabled` | não | boolean | default=true |  |
+
+Respostas declaradas:
+
+| Status | Content-Type | Esquema | Descrição |
+| --- | --- | --- | --- |
+| 201 | application/json | objeto livre | Successful Response |
+| 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
+
+### PATCH /datalakes/{connection_id}
+
+Atualizar conexão de datalake
+
+Autorização: **JWT ou API key**. Operation ID: `update_connection_datalakes__connection_id__patch`.
+
+Parâmetros:
+
+| Nome | Local | Obrigatório | Tipo | Padrões/limites | Descrição |
+| --- | --- | --- | --- | --- | --- |
+| `connection_id` | path | sim | string |  |  |
+
+Corpo obrigatório: sim.
+
+Content-Type: `application/json`. Esquema: [ConnectionUpdate](#model-connectionupdate).
+
+| Campo | Obrigatório | Tipo | Padrões/limites | Descrição |
+| --- | --- | --- | --- | --- |
+| `name` | não | string / null |  |  |
+| `config` | não | [ConnectionConfig](#model-connectionconfig) / null |  |  |
+| `credentials` | não | object / null |  |  |
+| `enabled` | não | boolean / null |  |  |
+
+Respostas declaradas:
+
+| Status | Content-Type | Esquema | Descrição |
+| --- | --- | --- | --- |
+| 200 | application/json | objeto livre | Successful Response |
+| 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
+
+### DELETE /datalakes/{connection_id}
+
+Excluir conexão de datalake
+
+Autorização: **JWT ou API key**. Operation ID: `delete_connection_datalakes__connection_id__delete`.
+
+Parâmetros:
+
+| Nome | Local | Obrigatório | Tipo | Padrões/limites | Descrição |
+| --- | --- | --- | --- | --- | --- |
+| `connection_id` | path | sim | string |  |  |
+
+Respostas declaradas:
+
+| Status | Content-Type | Esquema | Descrição |
+| --- | --- | --- | --- |
+| 204 | — | objeto livre | Successful Response |
+| 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
+
+### GET /datalakes/{connection_id}/buckets
+
+Listar buckets da conexão
+
+Autorização: **JWT ou API key**. Operation ID: `list_buckets_datalakes__connection_id__buckets_get`.
+
+Parâmetros:
+
+| Nome | Local | Obrigatório | Tipo | Padrões/limites | Descrição |
+| --- | --- | --- | --- | --- | --- |
+| `connection_id` | path | sim | string |  |  |
+
+Respostas declaradas:
+
+| Status | Content-Type | Esquema | Descrição |
+| --- | --- | --- | --- |
+| 200 | application/json | objeto livre | Successful Response |
+| 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
+
+### POST /datalakes/{connection_id}/test
+
+Testar conexão de datalake
+
+Autorização: **JWT ou API key**. Operation ID: `test_connection_datalakes__connection_id__test_post`.
+
+Parâmetros:
+
+| Nome | Local | Obrigatório | Tipo | Padrões/limites | Descrição |
+| --- | --- | --- | --- | --- | --- |
+| `connection_id` | path | sim | string |  |  |
+
+Corpo obrigatório: sim.
+
+Content-Type: `application/json`. Esquema: [TestConnection](#model-testconnection).
+
+| Campo | Obrigatório | Tipo | Padrões/limites | Descrição |
+| --- | --- | --- | --- | --- |
+| `bucket` | não | string / null |  |  |
+
+Respostas declaradas:
+
+| Status | Content-Type | Esquema | Descrição |
+| --- | --- | --- | --- |
+| 200 | application/json | objeto livre | Successful Response |
+| 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
+
+### GET /datalakes/{connection_id}/objects
+
+Listar objetos da conexão
+
+Autorização: **JWT ou API key**. Operation ID: `list_objects_datalakes__connection_id__objects_get`.
+
+Parâmetros:
+
+| Nome | Local | Obrigatório | Tipo | Padrões/limites | Descrição |
+| --- | --- | --- | --- | --- | --- |
+| `connection_id` | path | sim | string |  |  |
+| `bucket` | query | sim | string |  |  |
+| `prefix` | query | não | string | default="" |  |
+| `limit` | query | não | integer | default=100; minimum=1; maximum=1000 |  |
+
+Respostas declaradas:
+
+| Status | Content-Type | Esquema | Descrição |
+| --- | --- | --- | --- |
+| 200 | application/json | objeto livre | Successful Response |
+| 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
+
+### GET /jobs/{job_id}/datalake
+
+Estado da entrega no datalake
+
+Autorização: **JWT ou API key**. Operation ID: `get_delivery_jobs__job_id__datalake_get`.
+
+Parâmetros:
+
+| Nome | Local | Obrigatório | Tipo | Padrões/limites | Descrição |
+| --- | --- | --- | --- | --- | --- |
+| `job_id` | path | sim | string |  |  |
+
+Respostas declaradas:
+
+| Status | Content-Type | Esquema | Descrição |
+| --- | --- | --- | --- |
+| 200 | application/json | objeto livre | Successful Response |
+| 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
+
+### POST /jobs/{job_id}/datalake/retry
+
+Refazer entrega no datalake
+
+Autorização: **JWT ou API key**. Operation ID: `retry_delivery_jobs__job_id__datalake_retry_post`.
+
+Parâmetros:
+
+| Nome | Local | Obrigatório | Tipo | Padrões/limites | Descrição |
+| --- | --- | --- | --- | --- | --- |
+| `job_id` | path | sim | string |  |  |
+
+Respostas declaradas:
+
+| Status | Content-Type | Esquema | Descrição |
+| --- | --- | --- | --- |
+| 202 | application/json | objeto livre | Successful Response |
+| 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
+
+## API Keys
+
+Criar, listar, vincular a um projeto e revogar API keys (requer JWT).
+
+### GET /api-keys/
+
+Listar API keys
+
+Autorização: **JWT ou API key**. Operation ID: `list_api_keys_api_keys__get`.
+
+List all API keys for the authenticated user
+
+## Returns:
+Array of API key info (without the actual key):
+```json
+[
+  {
+    "id": "uuid",
+    "name": "Production Server",
+    "last_used_at": "2025-10-02T12:00:00",
+    "expires_at": "2025-11-01T00:00:00",
+    "is_active": true,
+    "created_at": "2025-10-02T00:00:00"
+  }
+]
+```
+
+## Note:
+The actual API key is NOT returned (for security).
+It's only shown once during creation.
+
+## Errors:
+- 401: Not authenticated
+
+Respostas declaradas:
+
+| Status | Content-Type | Esquema | Descrição |
+| --- | --- | --- | --- |
+| 200 | application/json | array de [APIKeyInfo](#model-apikeyinfo) | Successful Response |
+
+### POST /api-keys/
+
+Criar API key
+
+Autorização: **JWT ou API key**. Operation ID: `create_api_key_api_keys__post`.
+
+Create a new API key for the authenticated user
+
+## Request Body:
+```json
+{
+  "name": "Production Server",
+  "expires_in_days": 30,  // optional, null = never expires
+  "project": "Transcrições automáticas"  // optional: name (get-or-add) or "project_id"
+}
+```
+
+Uploads made with a key bound to a project, that do not name a project,
+go to that project. A request that also sends a JWT is a JWT request and
+does not use the binding.
+
+## Returns:
+```json
+{
+  "id": "uuid",
+  "name": "Production Server",
+  "api_key": "doc2md_sk_...",  // ONLY SHOWN ONCE!
+  "expires_at": "2025-11-01T00:00:00",
+  "created_at": "2025-10-02T00:00:00"
+}
+```
+
+## Important:
+- The `api_key` is shown ONLY ONCE during creation
+- Save it immediately - you won't be able to see it again
+- Use it in requests with header: `X-API-Key: doc2md_sk_...`
+
+## Errors:
+- 401: Not authenticated
+
+Corpo obrigatório: sim.
+
+Content-Type: `application/json`. Esquema: [APIKeyCreate](#model-apikeycreate).
+
+| Campo | Obrigatório | Tipo | Padrões/limites | Descrição |
+| --- | --- | --- | --- | --- |
+| `name` | sim | string | minLength=1; maxLength=100 |  |
+| `expires_in_days` | não | integer / null |  |  |
+| `project` | não | string / null |  | Projeto vinculado, por nome (criado se não existir). Exclusivo com project_id. |
+| `project_id` | não | string / null |  | Projeto vinculado, por ID. Exclusivo com project. |
+
+Respostas declaradas:
+
+| Status | Content-Type | Esquema | Descrição |
+| --- | --- | --- | --- |
+| 201 | application/json | [APIKeyResponse](#model-apikeyresponse) | Successful Response |
+| 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
+
+### PATCH /api-keys/{key_id}
+
+Vincular API key a um projeto
+
+Autorização: **JWT ou API key**. Operation ID: `update_api_key_project_api_keys__key_id__patch`.
+
+Bind the key to a project, or unbind it (`{"project_id": null}`)
+
+Uploads made with this key that name no project go to the bound project.
+A key without a project must send `project` on every upload (422 otherwise).
+Re-binding changes where new uploads go; a file already processed in another
+project is processed again in the new one.
+
+## Errors:
+- 404: API key or project not found (or not yours)
+
+Parâmetros:
+
+| Nome | Local | Obrigatório | Tipo | Padrões/limites | Descrição |
+| --- | --- | --- | --- | --- | --- |
+| `key_id` | path | sim | string (uuid) |  |  |
+
+Corpo obrigatório: sim.
+
+Content-Type: `application/json`. Esquema: [APIKeyProjectUpdate](#model-apikeyprojectupdate).
+
+| Campo | Obrigatório | Tipo | Padrões/limites | Descrição |
+| --- | --- | --- | --- | --- |
+| `project_id` | sim | string / null |  | Projeto para onde vão os uploads desta key que não dizem o projeto; null desvincula. |
+
+Respostas declaradas:
+
+| Status | Content-Type | Esquema | Descrição |
+| --- | --- | --- | --- |
+| 200 | application/json | [APIKeyInfo](#model-apikeyinfo) | Successful Response |
+| 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
+
+### DELETE /api-keys/{key_id}
+
+Revogar API key
+
+Autorização: **JWT ou API key**. Operation ID: `revoke_api_key_api_keys__key_id__delete`.
+
+Revoke (delete) an API key
+
+## Path Parameters:
+- `key_id`: UUID of the API key to revoke
+
+## Returns:
+204 No Content on success
+
+## Errors:
+- 401: Not authenticated
+- 404: API key not found or doesn't belong to user
+
+Parâmetros:
+
+| Nome | Local | Obrigatório | Tipo | Padrões/limites | Descrição |
+| --- | --- | --- | --- | --- | --- |
+| `key_id` | path | sim | string (uuid) |  |  |
+
+Respostas declaradas:
+
+| Status | Content-Type | Esquema | Descrição |
+| --- | --- | --- | --- |
+| 204 | — | objeto livre | Successful Response |
+| 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
+
+## IAM
+
+Catálogo de permissões, verificação das permissões do chamador e vínculos (bindings) de papéis de plataforma e de engines.
+
+### GET /iam/permissions
+
+Catálogo de permissões e papéis gerenciados
+
+Autorização: **JWT ou API key**. Operation ID: `list_permissions_iam_permissions_get`.
+
+Respostas declaradas:
+
+| Status | Content-Type | Esquema | Descrição |
+| --- | --- | --- | --- |
+| 200 | application/json | objeto livre | Successful Response |
+
+### POST /iam/check
+
+Verificar permissões de plataforma do chamador
+
+Autorização: **JWT ou API key**. Operation ID: `check_permissions_iam_check_post`.
+
+Answers for the caller only, as IAM_MODE decides it, and never audits (asking
+is not exercising). Only platform/IAM permissions in this slice: a data or 0009
+engine permission, or a name outside the catalog, is a 422.
+
+Corpo obrigatório: sim.
+
+Content-Type: `application/json`. Esquema: array de [PermissionCheck](#model-permissioncheck).
+
+Respostas declaradas:
+
+| Status | Content-Type | Esquema | Descrição |
+| --- | --- | --- | --- |
+| 200 | application/json | array de [PermissionCheckResult](#model-permissioncheckresult) | Successful Response |
+| 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
+
+### GET /admin/iam/bindings
+
+Listar vínculos de plataforma e de engines
+
+Autorização: **Administrador (JWT ou API key)**. Operation ID: `list_bindings_admin_iam_bindings_get`.
+
+Filtered per row: platform bindings for `iam.bindings.read` (as IAM_MODE
+decides it); engines bindings the caller's 0009 delegation covers (bootstrap
+sees them all), with `engine_access_enabled`. Newest first.
+
+Parâmetros:
+
+| Nome | Local | Obrigatório | Tipo | Padrões/limites | Descrição |
+| --- | --- | --- | --- | --- | --- |
+| `include_inactive` | query | não | boolean | default=false |  |
+
+Respostas declaradas:
+
+| Status | Content-Type | Esquema | Descrição |
+| --- | --- | --- | --- |
+| 200 | application/json | objeto livre | Successful Response |
+| 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
+
+### POST /admin/iam/bindings
+
+Conceder papel de plataforma ou de engines
+
+Autorização: **Administrador (somente JWT)**. Operation ID: `grant_binding_admin_iam_bindings_post`.
+
+Corpo obrigatório: sim.
+
+Content-Type: `application/json`. Esquema: [BindingCreate](#model-bindingcreate).
+
+| Campo | Obrigatório | Tipo | Padrões/limites | Descrição |
+| --- | --- | --- | --- | --- |
+| `subject_type` | não | string | default="user" |  |
+| `subject_id` | sim | string |  |  |
+| `role` | sim | string |  |  |
+| `expires_at` | não | string / null |  |  |
+| `permissions` | não | array de string / null |  |  |
+| `condition_ref` | não | string / null |  |  |
+| `delegation` | não | [Delegation](#model-delegation) / null |  |  |
+| `parent_id` | não | string / null |  |  |
+
+Respostas declaradas:
+
+| Status | Content-Type | Esquema | Descrição |
+| --- | --- | --- | --- |
+| 201 | application/json | objeto livre | Successful Response |
+| 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
+
+### POST /admin/iam/bindings/{binding_id}/revoke
+
+Revogar vínculo de plataforma ou de engines
+
+Autorização: **Administrador (somente JWT)**. Operation ID: `revoke_binding_admin_iam_bindings__binding_id__revoke_post`.
+
+Parâmetros:
+
+| Nome | Local | Obrigatório | Tipo | Padrões/limites | Descrição |
+| --- | --- | --- | --- | --- | --- |
+| `binding_id` | path | sim | string |  |  |
+
+Corpo obrigatório: sim.
+
+Content-Type: `application/json`. Esquema: [BindingRevoke](#model-bindingrevoke).
+
+| Campo | Obrigatório | Tipo | Padrões/limites | Descrição |
+| --- | --- | --- | --- | --- |
+| `version` | sim | integer |  |  |
+
+Respostas declaradas:
+
+| Status | Content-Type | Esquema | Descrição |
+| --- | --- | --- | --- |
+| 200 | application/json | objeto livre | Successful Response |
+| 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
+
+## Admin & Monitoring
+
+Administração da plataforma: estatísticas, jobs travados, retry em massa, limpeza e saúde do broker e do monitoramento.
+
+### GET /admin/stats
+
+Estatísticas do sistema
+
+Autorização: **Administrador (JWT ou API key)**. Operation ID: `get_stats_admin_stats_get`.
+
+Get comprehensive system statistics for monitoring dashboard
+
+Returns counts of jobs/pages by status, stuck jobs, etc.
+Useful for building admin dashboards and monitoring tools.
+
+Respostas declaradas:
+
+| Status | Content-Type | Esquema | Descrição |
+| --- | --- | --- | --- |
+| 200 | application/json | object | Successful Response |
+
+### GET /admin/jobs/stuck
+
+Listar jobs travados
+
+Autorização: **Administrador (JWT ou API key)**. Operation ID: `list_stuck_jobs_admin_jobs_stuck_get`.
+
+List all jobs currently stuck in processing state
+
+Args:
+    threshold_minutes: Override default threshold (from config if not specified)
+    limit: Maximum number of jobs to return
+
+Returns:
+    List of stuck jobs with details
+
+Parâmetros:
+
+| Nome | Local | Obrigatório | Tipo | Padrões/limites | Descrição |
+| --- | --- | --- | --- | --- | --- |
+| `threshold_minutes` | query | não | integer |  |  |
+| `limit` | query | não | integer | default=100 |  |
+
+Respostas declaradas:
+
+| Status | Content-Type | Esquema | Descrição |
+| --- | --- | --- | --- |
+| 200 | application/json | object | Successful Response |
+| 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
+
+### POST /admin/jobs/recover-stuck
+
+Recuperar jobs travados
+
+Autorização: **Administrador (JWT ou API key)**. Operation ID: `recover_stuck_jobs_admin_jobs_recover_stuck_post`.
+
+Manually trigger the stuck job detection and recovery process
+
+This runs the same logic as the periodic monitoring task,
+but can be triggered on-demand by administrators.
+
+Args:
+    threshold_minutes: Override default threshold (from config if not specified)
+
+Returns:
+    Number of jobs/pages marked as failed
+
+Parâmetros:
+
+| Nome | Local | Obrigatório | Tipo | Padrões/limites | Descrição |
+| --- | --- | --- | --- | --- | --- |
+| `threshold_minutes` | query | não | integer |  |  |
+
+Respostas declaradas:
+
+| Status | Content-Type | Esquema | Descrição |
+| --- | --- | --- | --- |
+| 200 | application/json | object | Successful Response |
+| 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
+
+### POST /admin/jobs/{job_id}/retry-all-failed
+
+Refazer todas as páginas com falha de um job
+
+Autorização: **Administrador (JWT ou API key)**. Operation ID: `retry_all_failed_pages_admin_jobs__job_id__retry_all_failed_post`.
+
+Retry all failed pages of a specific job
+
+Requeues every FAILED page still under the retry limit
+(`MONITORING_MAX_RETRY_COUNT`), exactly like the per-page retry
+(`POST /jobs/{job_id}/pages/{n}/retry`): the original PDF is located first,
+then the pages become pending and the job processing, under the job's row
+lock (the same lock the source purge takes).
+
+Returns:
+    Number of pages queued for retry
+
+Errors:
+    404: job not found
+    409 `SOURCE_NOT_AVAILABLE`: the original was deleted (purge_source /
+    DELETE /jobs/{id}/source); nothing was changed
+
+Parâmetros:
+
+| Nome | Local | Obrigatório | Tipo | Padrões/limites | Descrição |
+| --- | --- | --- | --- | --- | --- |
+| `job_id` | path | sim | string |  |  |
+
+Respostas declaradas:
+
+| Status | Content-Type | Esquema | Descrição |
+| --- | --- | --- | --- |
+| 200 | application/json | object | Successful Response |
+| 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
+
+### POST /admin/cleanup
+
+Limpar jobs antigos
+
+Autorização: **Administrador (JWT ou API key)**. Operation ID: `trigger_cleanup_admin_cleanup_post`.
+
+Manually trigger cleanup of old completed/failed jobs from Redis
+
+Args:
+    days_old: Override default days threshold (from config if not specified)
+
+Returns:
+    Number of jobs cleaned up
+
+Parâmetros:
+
+| Nome | Local | Obrigatório | Tipo | Padrões/limites | Descrição |
+| --- | --- | --- | --- | --- | --- |
+| `days_old` | query | não | integer |  |  |
+
+Respostas declaradas:
+
+| Status | Content-Type | Esquema | Descrição |
+| --- | --- | --- | --- |
+| 200 | application/json | object | Successful Response |
+| 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
+
+### GET /admin/health/monitoring
+
+Saúde do monitoramento
+
+Autorização: **Administrador (JWT ou API key)**. Operation ID: `monitoring_health_admin_health_monitoring_get`.
+
+Check if the monitoring system (Celery Beat) is functioning
+
+Returns information about scheduled tasks and their last run times
+
+Respostas declaradas:
+
+| Status | Content-Type | Esquema | Descrição |
+| --- | --- | --- | --- |
+| 200 | application/json | object | Successful Response |
+
+### GET /admin/broker/unacked
+
+Listar mensagens não confirmadas do broker
+
+Autorização: **Administrador (JWT ou API key)**. Operation ID: `list_broker_unacked_admin_broker_unacked_get`.
+
+Messages the Celery broker holds as delivered but not yet acknowledged.
+
+Each one is either a task running now or one whose worker died - the latter only
+returns to its queue after CELERY_VISIBILITY_TIMEOUT_SECONDS (hours). `orphans` is
+the latest check by workers.monitoring.check_broker_unacked: messages no live
+worker held on two consecutive checks. Requeue one with
+POST /admin/broker/unacked/{delivery_tag}/requeue.
+
+Respostas declaradas:
+
+| Status | Content-Type | Esquema | Descrição |
+| --- | --- | --- | --- |
+| 200 | application/json | object | Successful Response |
+
+### POST /admin/broker/unacked/{delivery_tag}/requeue
+
+Reenfileirar mensagem órfã do broker
+
+Autorização: **Administrador (JWT ou API key)**. Operation ID: `requeue_broker_unacked_admin_broker_unacked__delivery_tag__requeue_post`.
+
+Put an orphaned message back at the head of its queue, so its task runs again now
+instead of after the visibility timeout.
+
+Refused (409) unless the latest monitoring check flagged it as orphaned AND no
+worker reports holding it right now - otherwise a task still running would run
+twice.
+
+Parâmetros:
+
+| Nome | Local | Obrigatório | Tipo | Padrões/limites | Descrição |
+| --- | --- | --- | --- | --- | --- |
+| `delivery_tag` | path | sim | string |  |  |
+
+Respostas declaradas:
+
+| Status | Content-Type | Esquema | Descrição |
+| --- | --- | --- | --- |
+| 200 | application/json | object | Successful Response |
+| 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
+
 ## Admin - Engines
+
+Engines de processamento: cadastro, funcionalidades, GPUs, orçamento, credenciais, testes, benchmarks e rotas por funcionalidade.
 
 ### GET /admin/routing
 
-Feature routes and their backlog
+Rotas por funcionalidade e backlog
 
 Autorização: **Administrador (JWT ou API key)**. Operation ID: `list_routes_admin_routing_get`.
 
@@ -1452,7 +2510,7 @@ Respostas declaradas:
 
 ### PUT /admin/routing/{feature}
 
-Create or replace a feature's route
+Criar ou substituir a rota de uma funcionalidade
 
 Autorização: **Administrador (somente JWT)**. Operation ID: `put_route_admin_routing__feature__put`.
 
@@ -1489,7 +2547,7 @@ Respostas declaradas:
 
 ### DELETE /admin/routing/{feature}
 
-Remove a route (it drains back to today's path)
+Remover rota (volta ao caminho padrão)
 
 Autorização: **Administrador (somente JWT)**. Operation ID: `delete_route_admin_routing__feature__delete`.
 
@@ -1508,7 +2566,7 @@ Respostas declaradas:
 
 ### GET /admin/engines/status
 
-Dispatcher, in-flight work and backlog
+Dispatcher, trabalho em andamento e backlog
 
 Autorização: **Administrador (JWT ou API key)**. Operation ID: `engines_status_admin_engines_status_get`.
 
@@ -1520,7 +2578,7 @@ Respostas declaradas:
 
 ### GET /admin/engine-adapters
 
-Engine adapters, their GPUs and limits
+Adaptadores de engine, GPUs e limites
 
 Autorização: **JWT**. Operation ID: `list_engine_adapters_admin_engine_adapters_get`.
 
@@ -1532,7 +2590,7 @@ Respostas declaradas:
 
 ### GET /admin/engines
 
-List engines
+Listar engines
 
 Autorização: **JWT**. Operation ID: `list_engines_admin_engines_get`.
 
@@ -1544,7 +2602,7 @@ Respostas declaradas:
 
 ### GET /admin/engines/{engine_id}
 
-One engine
+Detalhar engine
 
 Autorização: **JWT**. Operation ID: `get_engine_admin_engines__engine_id__get`.
 
@@ -1563,7 +2621,7 @@ Respostas declaradas:
 
 ### GET /admin/gpus
 
-Physical GPUs: declared vs detected, VRAM budgeted and used
+GPUs físicas: declaradas, detectadas e VRAM
 
 Autorização: **Administrador (JWT ou API key)**. Operation ID: `list_gpus_admin_gpus_get`.
 
@@ -1575,7 +2633,7 @@ Respostas declaradas:
 
 ### PUT /admin/engines/{engine_id}/features/{feature}
 
-Set how a feature runs on an engine
+Configurar funcionalidade em uma engine
 
 Autorização: **Administrador (somente JWT)**. Operation ID: `put_engine_feature_admin_engines__engine_id__features__feature__put`.
 
@@ -1609,7 +2667,7 @@ Respostas declaradas:
 
 ### DELETE /admin/engines/{engine_id}/features/{feature}
 
-Stop running a feature on an engine
+Remover funcionalidade de uma engine
 
 Autorização: **Administrador (somente JWT)**. Operation ID: `delete_engine_feature_admin_engines__engine_id__features__feature__delete`.
 
@@ -1630,7 +2688,7 @@ Respostas declaradas:
 
 ### PUT /admin/engines/{engine_id}/gpus
 
-Declare the local engine's physical GPUs
+Declarar as GPUs físicas da engine local
 
 Autorização: **Administrador (somente JWT)**. Operation ID: `put_engine_gpus_admin_engines__engine_id__gpus_put`.
 
@@ -1658,7 +2716,7 @@ Respostas declaradas:
 
 ### POST /admin/engines/{engine_id}/test
 
-Test an engine's credentials and deployment (no GPU)
+Testar credenciais e implantação da engine (sem GPU)
 
 Autorização: **Administrador (somente JWT)**. Operation ID: `test_engine_admin_engines__engine_id__test_post`.
 
@@ -1677,7 +2735,7 @@ Respostas declaradas:
 
 ### POST /admin/engines/{engine_id}/activate
 
-Let the dispatcher place work on an engine
+Ativar engine no dispatcher
 
 Autorização: **Administrador (somente JWT)**. Operation ID: `activate_engine_admin_engines__engine_id__activate_post`.
 
@@ -1700,7 +2758,7 @@ Respostas declaradas:
 
 ### POST /admin/engines/{engine_id}/pause
 
-Stop placing new work on an engine (work in flight finishes)
+Pausar engine (o trabalho em andamento termina)
 
 Autorização: **Administrador (somente JWT)**. Operation ID: `pause_engine_admin_engines__engine_id__pause_post`.
 
@@ -1723,7 +2781,7 @@ Respostas declaradas:
 
 ### POST /admin/engines/{engine_id}/reset-health
 
-Forget an engine's recorded failures
+Zerar falhas registradas da engine
 
 Autorização: **Administrador (somente JWT)**. Operation ID: `reset_engine_health_admin_engines__engine_id__reset_health_post`.
 
@@ -1742,7 +2800,7 @@ Respostas declaradas:
 
 ### PUT /admin/engines/{engine_id}/budget
 
-Set an engine's spending ceiling per period
+Definir teto de gasto da engine por período
 
 Autorização: **Administrador (somente JWT)**. Operation ID: `put_engine_budget_admin_engines__engine_id__budget_put`.
 
@@ -1774,7 +2832,7 @@ Respostas declaradas:
 
 ### PUT /admin/engines/{engine_id}/credentials
 
-Replace an engine's credentials (sealed, write-only)
+Substituir credenciais da engine (somente escrita)
 
 Autorização: **JWT**. Operation ID: `put_engine_credentials_admin_engines__engine_id__credentials_put`.
 
@@ -1803,7 +2861,7 @@ Respostas declaradas:
 
 ### DELETE /admin/engines/{engine_id}/credentials
 
-Forget an engine's credentials
+Apagar credenciais da engine
 
 Autorização: **JWT**. Operation ID: `delete_engine_credentials_admin_engines__engine_id__credentials_delete`.
 
@@ -1831,7 +2889,7 @@ Respostas declaradas:
 
 ### GET /admin/engines/{engine_id}/benchmarks
 
-Benchmark results (gpu x E) and the learned speed per key
+Benchmarks e velocidade aprendida da engine
 
 Autorização: **Administrador (JWT ou API key)**. Operation ID: `engine_benchmarks_admin_engines__engine_id__benchmarks_get`.
 
@@ -1852,7 +2910,7 @@ Respostas declaradas:
 
 ### POST /admin/engines/{engine_id}/reconcile
 
-Read the provider's spend report for one engine now
+Conciliar gasto da engine com o provedor
 
 Autorização: **Administrador (somente JWT)**. Operation ID: `reconcile_engine_admin_engines__engine_id__reconcile_post`.
 
@@ -1871,7 +2929,7 @@ Respostas declaradas:
 
 ### POST /admin/engines/test-all
 
-Test every remote engine's credentials and deployment, in turn (no GPU)
+Testar todas as engines remotas (sem GPU)
 
 Autorização: **Administrador (somente JWT)**. Operation ID: `test_all_engines_admin_engines_test_all_post`.
 
@@ -1883,9 +2941,11 @@ Respostas declaradas:
 
 ## Admin - Engine control
 
+Controle de runtime das engines: adaptadores, capacidades, perfis de runtime, planos e operações (com eventos e stream SSE).
+
 ### POST /admin/engines
 
-Connection
+Criar conexão de engine
 
 Autorização: **Administrador (somente JWT)**. Operation ID: `connection_admin_engines_post`.
 
@@ -1908,7 +2968,7 @@ Respostas declaradas:
 
 ### GET /admin/engine-control-adapters
 
-Adapters
+Listar adaptadores de controle de engine
 
 Autorização: **JWT**. Operation ID: `adapters_admin_engine_control_adapters_get`.
 
@@ -1920,7 +2980,7 @@ Respostas declaradas:
 
 ### GET /admin/engines/{engine_id}/capabilities
 
-Caps
+Capacidades da engine
 
 Autorização: **JWT**. Operation ID: `caps_admin_engines__engine_id__capabilities_get`.
 
@@ -1940,7 +3000,7 @@ Respostas declaradas:
 
 ### GET /admin/model-profiles
 
-Model Profiles
+Listar perfis de modelo
 
 Autorização: **JWT**. Operation ID: `model_profiles_admin_model_profiles_get`.
 
@@ -1952,7 +3012,7 @@ Respostas declaradas:
 
 ### GET /admin/engines/{engine_id}/runtime-profile
 
-Get Profile
+Ler perfil de runtime da engine
 
 Autorização: **JWT**. Operation ID: `get_profile_admin_engines__engine_id__runtime_profile_get`.
 
@@ -1972,7 +3032,7 @@ Respostas declaradas:
 
 ### PUT /admin/engines/{engine_id}/runtime-profile
 
-Put Profile
+Gravar perfil de runtime da engine
 
 Autorização: **Administrador (somente JWT)**. Operation ID: `put_profile_admin_engines__engine_id__runtime_profile_put`.
 
@@ -2001,7 +3061,7 @@ Respostas declaradas:
 
 ### GET /admin/engines/{engine_id}/runtime-status
 
-Status
+Estado do runtime da engine
 
 Autorização: **JWT**. Operation ID: `status_admin_engines__engine_id__runtime_status_get`.
 
@@ -2020,7 +3080,7 @@ Respostas declaradas:
 
 ### POST /admin/engines/{engine_id}/operation-plans
 
-Plan
+Planejar operação na engine
 
 Autorização: **JWT**. Operation ID: `plan_admin_engines__engine_id__operation_plans_post`.
 
@@ -2052,7 +3112,7 @@ Respostas declaradas:
 
 ### POST /admin/engines/{engine_id}/operations
 
-Execute
+Executar operação na engine
 
 Autorização: **JWT**. Operation ID: `execute_admin_engines__engine_id__operations_post`.
 
@@ -2082,7 +3142,7 @@ Respostas declaradas:
 
 ### GET /admin/engine-operations
 
-History
+Histórico de operações de engine
 
 Autorização: **JWT**. Operation ID: `history_admin_engine_operations_get`.
 
@@ -2103,7 +3163,7 @@ Respostas declaradas:
 
 ### GET /admin/engine-operations/{operation_id}
 
-Snapshot
+Detalhar operação de engine
 
 Autorização: **JWT**. Operation ID: `snapshot_admin_engine_operations__operation_id__get`.
 
@@ -2122,7 +3182,7 @@ Respostas declaradas:
 
 ### GET /admin/engine-operations/{operation_id}/events
 
-Events
+Eventos da operação de engine
 
 Autorização: **JWT**. Operation ID: `events_admin_engine_operations__operation_id__events_get`.
 
@@ -2142,7 +3202,7 @@ Respostas declaradas:
 
 ### POST /admin/engine-operations/{operation_id}/cancel
 
-Cancel
+Cancelar operação de engine
 
 Autorização: **JWT**. Operation ID: `cancel_admin_engine_operations__operation_id__cancel_post`.
 
@@ -2161,7 +3221,7 @@ Respostas declaradas:
 
 ### GET /admin/engine-operations/{operation_id}/stream
 
-Stream
+Acompanhar operação de engine (SSE)
 
 Autorização: **JWT**. Operation ID: `stream_admin_engine_operations__operation_id__stream_get`.
 
@@ -2181,7 +3241,7 @@ Respostas declaradas:
 
 ### POST /admin/engine-operations/{operation_id}/recover
 
-Recover
+Recuperar operação de engine
 
 Autorização: **JWT**. Operation ID: `recover_admin_engine_operations__operation_id__recover_post`.
 
@@ -2200,9 +3260,11 @@ Respostas declaradas:
 
 ## Admin - Execution profiles and access
 
+Perfis de execução (revisões, publicação, vínculo) e acesso às engines: políticas, papéis, concessões, atributos de ambiente e principais.
+
 ### GET /admin/access/me
 
-Me
+Meu acesso às engines
 
 Autorização: **JWT**. Operation ID: `me_admin_access_me_get`.
 
@@ -2214,7 +3276,7 @@ Respostas declaradas:
 
 ### GET /admin/execution-profiles
 
-Profiles
+Listar perfis de execução
 
 Autorização: **JWT**. Operation ID: `profiles_admin_execution_profiles_get`.
 
@@ -2226,7 +3288,7 @@ Respostas declaradas:
 
 ### POST /admin/execution-profiles
 
-Create
+Criar perfil de execução
 
 Autorização: **JWT**. Operation ID: `create_admin_execution_profiles_post`.
 
@@ -2253,7 +3315,7 @@ Respostas declaradas:
 
 ### GET /admin/execution-profiles/{id}
 
-Detail
+Detalhar perfil de execução
 
 Autorização: **JWT**. Operation ID: `detail_admin_execution_profiles__id__get`.
 
@@ -2272,7 +3334,7 @@ Respostas declaradas:
 
 ### PUT /admin/execution-profiles/{id}
 
-Metadata
+Atualizar metadados do perfil de execução
 
 Autorização: **JWT**. Operation ID: `metadata_admin_execution_profiles__id__put`.
 
@@ -2301,7 +3363,7 @@ Respostas declaradas:
 
 ### POST /admin/execution-profiles/{id}/revisions
 
-Revision
+Criar revisão do perfil de execução
 
 Autorização: **JWT**. Operation ID: `revision_admin_execution_profiles__id__revisions_post`.
 
@@ -2330,7 +3392,7 @@ Respostas declaradas:
 
 ### POST /admin/execution-profiles/{id}/publish
 
-Publish
+Publicar revisão do perfil de execução
 
 Autorização: **JWT**. Operation ID: `publish_admin_execution_profiles__id__publish_post`.
 
@@ -2358,7 +3420,7 @@ Respostas declaradas:
 
 ### POST /admin/execution-profiles/{id}/archive
 
-Archive
+Arquivar perfil de execução
 
 Autorização: **JWT**. Operation ID: `archive_admin_execution_profiles__id__archive_post`.
 
@@ -2385,7 +3447,7 @@ Respostas declaradas:
 
 ### POST /admin/engines/{id}/runtime-profile/bind
 
-Bind
+Vincular perfil publicado ao runtime da engine
 
 Autorização: **JWT**. Operation ID: `bind_admin_engines__id__runtime_profile_bind_post`.
 
@@ -2414,7 +3476,7 @@ Respostas declaradas:
 
 ### POST /admin/engines/{id}/runtime-profile/import
 
-Import Profile
+Importar perfil do runtime da engine
 
 Autorização: **JWT**. Operation ID: `import_profile_admin_engines__id__runtime_profile_import_post`.
 
@@ -2447,7 +3509,7 @@ Respostas declaradas:
 
 ### GET /admin/access/policies
 
-Policies
+Listar políticas de acesso
 
 Autorização: **JWT**. Operation ID: `policies_admin_access_policies_get`.
 
@@ -2459,7 +3521,7 @@ Respostas declaradas:
 
 ### POST /admin/access/policies
 
-Policy Create
+Criar política de acesso
 
 Autorização: **JWT**. Operation ID: `policy_create_admin_access_policies_post`.
 
@@ -2481,7 +3543,7 @@ Respostas declaradas:
 
 ### POST /admin/access/policies/{id}/revisions
 
-Policy Revise
+Revisar política de acesso
 
 Autorização: **JWT**. Operation ID: `policy_revise_admin_access_policies__id__revisions_post`.
 
@@ -2509,7 +3571,7 @@ Respostas declaradas:
 
 ### GET /admin/access/roles
 
-Roles
+Listar papéis de engines
 
 Autorização: **JWT**. Operation ID: `roles_admin_access_roles_get`.
 
@@ -2521,7 +3583,7 @@ Respostas declaradas:
 
 ### GET /admin/access/subjects
 
-Subjects
+Listar sujeitos de acesso
 
 Autorização: **JWT**. Operation ID: `subjects_admin_access_subjects_get`.
 
@@ -2533,7 +3595,7 @@ Respostas declaradas:
 
 ### GET /admin/access/grants
 
-Grants
+Listar concessões de engines
 
 Autorização: **JWT**. Operation ID: `grants_admin_access_grants_get`.
 
@@ -2547,7 +3609,7 @@ Respostas declaradas:
 
 ### POST /admin/access/grants
 
-Grant
+Conceder papel de engines
 
 Autorização: **JWT**. Operation ID: `grant_admin_access_grants_post`.
 
@@ -2575,7 +3637,7 @@ Respostas declaradas:
 
 ### POST /admin/access/grants/{id}/revoke
 
-Revoke
+Revogar concessão de engines
 
 Autorização: **JWT**. Operation ID: `revoke_admin_access_grants__id__revoke_post`.
 
@@ -2604,7 +3666,7 @@ Respostas declaradas:
 
 ### GET /admin/access/engine-attributes
 
-Attributes
+Listar atributos de ambiente das engines
 
 Autorização: **JWT**. Operation ID: `attributes_admin_access_engine_attributes_get`.
 
@@ -2616,7 +3678,7 @@ Respostas declaradas:
 
 ### PUT /admin/access/engine-attributes/{id}
 
-Classify
+Classificar ambiente da engine
 
 Autorização: **JWT**. Operation ID: `classify_admin_access_engine_attributes__id__put`.
 
@@ -2644,7 +3706,7 @@ Respostas declaradas:
 
 ### GET /admin/access/resources
 
-Resources
+Listar recursos qualificados
 
 Autorização: **JWT**. Operation ID: `resources_admin_access_resources_get`.
 
@@ -2656,7 +3718,7 @@ Respostas declaradas:
 
 ### PUT /admin/access/resources
 
-Qualify
+Qualificar recurso
 
 Autorização: **JWT**. Operation ID: `qualify_admin_access_resources_put`.
 
@@ -2680,7 +3742,7 @@ Respostas declaradas:
 
 ### GET /admin/execution-profile-hosts
 
-Hosts
+Listar hosts de perfis de execução
 
 Autorização: **JWT**. Operation ID: `hosts_admin_execution_profile_hosts_get`.
 
@@ -2692,7 +3754,7 @@ Respostas declaradas:
 
 ### GET /admin/access/installation-principals
 
-Principals
+Listar principais da instalação
 
 Autorização: **JWT**. Operation ID: `principals_admin_access_installation_principals_get`.
 
@@ -2704,7 +3766,7 @@ Respostas declaradas:
 
 ### POST /admin/access/installation-principals
 
-Principal Create
+Criar principal da instalação
 
 Autorização: **JWT**. Operation ID: `principal_create_admin_access_installation_principals_post`.
 
@@ -2725,7 +3787,7 @@ Respostas declaradas:
 
 ### PUT /admin/access/installation-principals/{id}
 
-Principal State
+Alterar estado de principal da instalação
 
 Autorização: **JWT**. Operation ID: `principal_state_admin_access_installation_principals__id__put`.
 
@@ -2753,7 +3815,7 @@ Respostas declaradas:
 
 ### PUT /admin/access/subjects/{id}/state
 
-Subject State
+Alterar estado de sujeito de acesso
 
 Autorização: **JWT**. Operation ID: `subject_state_admin_access_subjects__id__state_put`.
 
@@ -2781,124 +3843,13 @@ Respostas declaradas:
 | 200 | application/json | objeto livre | Successful Response |
 | 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
 
-## IAM
-
-### GET /iam/permissions
-
-The permission catalog and the managed roles
-
-Autorização: **JWT ou API key**. Operation ID: `list_permissions_iam_permissions_get`.
-
-Respostas declaradas:
-
-| Status | Content-Type | Esquema | Descrição |
-| --- | --- | --- | --- |
-| 200 | application/json | objeto livre | Successful Response |
-
-### POST /iam/check
-
-Which platform permissions the caller holds
-
-Autorização: **JWT ou API key**. Operation ID: `check_permissions_iam_check_post`.
-
-Answers for the caller only, as IAM_MODE decides it, and never audits (asking
-is not exercising). Only platform/IAM permissions in this slice: a data or 0009
-engine permission, or a name outside the catalog, is a 422.
-
-Corpo obrigatório: sim.
-
-Content-Type: `application/json`. Esquema: array de [PermissionCheck](#model-permissioncheck).
-
-Respostas declaradas:
-
-| Status | Content-Type | Esquema | Descrição |
-| --- | --- | --- | --- |
-| 200 | application/json | array de [PermissionCheckResult](#model-permissioncheckresult) | Successful Response |
-| 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
-
-### GET /admin/iam/bindings
-
-Platform and engines bindings
-
-Autorização: **Administrador (JWT ou API key)**. Operation ID: `list_bindings_admin_iam_bindings_get`.
-
-Filtered per row: platform bindings for `iam.bindings.read` (as IAM_MODE
-decides it); engines bindings the caller's 0009 delegation covers (bootstrap
-sees them all), with `engine_access_enabled`. Newest first.
-
-Parâmetros:
-
-| Nome | Local | Obrigatório | Tipo | Padrões/limites | Descrição |
-| --- | --- | --- | --- | --- | --- |
-| `include_inactive` | query | não | boolean | default=false |  |
-
-Respostas declaradas:
-
-| Status | Content-Type | Esquema | Descrição |
-| --- | --- | --- | --- |
-| 200 | application/json | objeto livre | Successful Response |
-| 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
-
-### POST /admin/iam/bindings
-
-Grant a platform or engines role
-
-Autorização: **Administrador (somente JWT)**. Operation ID: `grant_binding_admin_iam_bindings_post`.
-
-Corpo obrigatório: sim.
-
-Content-Type: `application/json`. Esquema: [BindingCreate](#model-bindingcreate).
-
-| Campo | Obrigatório | Tipo | Padrões/limites | Descrição |
-| --- | --- | --- | --- | --- |
-| `subject_type` | não | string | default="user" |  |
-| `subject_id` | sim | string |  |  |
-| `role` | sim | string |  |  |
-| `expires_at` | não | string / null |  |  |
-| `permissions` | não | array de string / null |  |  |
-| `condition_ref` | não | string / null |  |  |
-| `delegation` | não | [Delegation](#model-delegation) / null |  |  |
-| `parent_id` | não | string / null |  |  |
-
-Respostas declaradas:
-
-| Status | Content-Type | Esquema | Descrição |
-| --- | --- | --- | --- |
-| 201 | application/json | objeto livre | Successful Response |
-| 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
-
-### POST /admin/iam/bindings/{binding_id}/revoke
-
-Revoke a platform or engines binding
-
-Autorização: **Administrador (somente JWT)**. Operation ID: `revoke_binding_admin_iam_bindings__binding_id__revoke_post`.
-
-Parâmetros:
-
-| Nome | Local | Obrigatório | Tipo | Padrões/limites | Descrição |
-| --- | --- | --- | --- | --- | --- |
-| `binding_id` | path | sim | string |  |  |
-
-Corpo obrigatório: sim.
-
-Content-Type: `application/json`. Esquema: [BindingRevoke](#model-bindingrevoke).
-
-| Campo | Obrigatório | Tipo | Padrões/limites | Descrição |
-| --- | --- | --- | --- | --- |
-| `version` | sim | integer |  |  |
-
-Respostas declaradas:
-
-| Status | Content-Type | Esquema | Descrição |
-| --- | --- | --- | --- |
-| 200 | application/json | objeto livre | Successful Response |
-| 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
-
 ## Engine hosts
+
+Rotas internas de máquina para o agente de host das engines (`X-Engine-Host-Token`); não são para usuários.
 
 ### POST /internal/engine-hosts/{host_id}/heartbeat
 
-Host Heartbeat
+Heartbeat do host de engine
 
 Autorização: **X-Engine-Host-Token do host**. Operation ID: `host_heartbeat_internal_engine_hosts__host_id__heartbeat_post`.
 
@@ -2925,7 +3876,7 @@ Respostas declaradas:
 
 ### GET /internal/engine-hosts/{host_id}/next
 
-Host Next
+Próxima operação para o host
 
 Autorização: **X-Engine-Host-Token do host**. Operation ID: `host_next_internal_engine_hosts__host_id__next_get`.
 
@@ -2944,7 +3895,7 @@ Respostas declaradas:
 
 ### GET /internal/engine-hosts/{host_id}/operations/{op_id}/check
 
-Host Check
+Verificar se a operação ainda vale
 
 Autorização: **X-Engine-Host-Token do host**. Operation ID: `host_check_internal_engine_hosts__host_id__operations__op_id__check_get`.
 
@@ -2965,7 +3916,7 @@ Respostas declaradas:
 
 ### POST /internal/engine-hosts/{host_id}/operations/{op_id}/events
 
-Host Event
+Enviar evento da operação
 
 Autorização: **X-Engine-Host-Token do host**. Operation ID: `host_event_internal_engine_hosts__host_id__operations__op_id__events_post`.
 
@@ -2996,7 +3947,7 @@ Respostas declaradas:
 
 ### POST /internal/engine-hosts/{host_id}/operations/{op_id}/result
 
-Host Result
+Enviar resultado da operação
 
 Autorização: **X-Engine-Host-Token do host**. Operation ID: `host_result_internal_engine_hosts__host_id__operations__op_id__result_post`.
 
@@ -3025,932 +3976,13 @@ Respostas declaradas:
 | 200 | application/json | objeto livre | Successful Response |
 | 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
 
-## Projects
+## Status
 
-### GET /projects
-
-Listar projetos com contagens
-
-Autorização: **JWT ou API key**. Operation ID: `list_projects_projects_get`.
-
-Os projetos do usuário, com contagens de jobs MAIN, os mais recentes primeiro
-(`last_job_at` desc, depois nome). `?include=folders` traz as pastas de cada
-projeto, com contagem.
-
-As contagens vêm de um único `GROUP BY project_id, folder_id, status`.
-
-Parâmetros:
-
-| Nome | Local | Obrigatório | Tipo | Padrões/limites | Descrição |
-| --- | --- | --- | --- | --- | --- |
-| `include` | query | não | string / null |  | `folders` inclui as pastas de cada projeto |
-
-Respostas declaradas:
-
-| Status | Content-Type | Esquema | Descrição |
-| --- | --- | --- | --- |
-| 200 | application/json | [ProjectListResponse](#model-projectlistresponse) | Successful Response |
-| 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
-
-### GET /projects/resolve
-
-Um nome de projeto casa com um projeto existente?
-
-Autorização: **JWT ou API key**. Operation ID: `resolve_project_name_projects_resolve_get`.
-
-Diz, sem criar nada, se `name` é um projeto existente (pela regra de
-normalização do backend: `reuniao` casa com "Reunião") ou se seria criado.
-
-`{"valid": true, "match": {"id", "name"}}`, `{"valid": true, "match": null}`
-ou `{"valid": false, "error": "..."}`. Sempre 200.
-
-Parâmetros:
-
-| Nome | Local | Obrigatório | Tipo | Padrões/limites | Descrição |
-| --- | --- | --- | --- | --- | --- |
-| `name` | query | sim | string |  | O texto digitado |
-
-Respostas declaradas:
-
-| Status | Content-Type | Esquema | Descrição |
-| --- | --- | --- | --- |
-| 200 | application/json | [NameResolveResponse](#model-nameresolveresponse) | Successful Response |
-| 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
-
-### GET /projects/{project_id}/folders/resolve
-
-Um nome de pasta casa com uma pasta existente do projeto?
-
-Autorização: **JWT ou API key**. Operation ID: `resolve_folder_name_projects__project_id__folders_resolve_get`.
-
-Igual a `GET /projects/resolve`, para uma pasta do projeto. Projeto alheio: 404.
-
-Parâmetros:
-
-| Nome | Local | Obrigatório | Tipo | Padrões/limites | Descrição |
-| --- | --- | --- | --- | --- | --- |
-| `project_id` | path | sim | string |  |  |
-| `name` | query | sim | string |  | O texto digitado |
-
-Respostas declaradas:
-
-| Status | Content-Type | Esquema | Descrição |
-| --- | --- | --- | --- |
-| 200 | application/json | [NameResolveResponse](#model-nameresolveresponse) | Successful Response |
-| 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
-
-## Live transcription
-
-### POST /transcribe/live/sessions
-
-Create Session
-
-Autorização: **JWT ou API key**. Operation ID: `create_session_transcribe_live_sessions_post`.
-
-Corpo obrigatório: sim.
-
-Content-Type: `application/json`. Esquema: [CreateSession](#model-createsession).
-
-| Campo | Obrigatório | Tipo | Padrões/limites | Descrição |
-| --- | --- | --- | --- | --- |
-| `project` | não | string / null |  |  |
-| `project_id` | não | string / null |  |  |
-| `folder` | não | string / null |  |  |
-| `folder_id` | não | string / null |  |  |
-| `name` | não | string | default="Transcrição ao vivo"; minLength=1; maxLength=1000 |  |
-| `tags` | não | array de string |  |  |
-| `language` | não | string | default="pt"; const="pt" |  |
-| `audio` | não | [AudioFormat](#model-audioformat) |  |  |
-| `protocol` | não | integer | default=1; enum=[1, 2] |  |
-| `diarize` | não | boolean | default=false |  |
-
-Respostas declaradas:
-
-| Status | Content-Type | Esquema | Descrição |
-| --- | --- | --- | --- |
-| 201 | application/json | objeto livre | Successful Response |
-| 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
-
-### GET /transcribe/live/sessions/{job_id}
-
-Session Status
-
-Autorização: **JWT ou API key**. Operation ID: `session_status_transcribe_live_sessions__job_id__get`.
-
-Parâmetros:
-
-| Nome | Local | Obrigatório | Tipo | Padrões/limites | Descrição |
-| --- | --- | --- | --- | --- | --- |
-| `job_id` | path | sim | string |  |  |
-
-Respostas declaradas:
-
-| Status | Content-Type | Esquema | Descrição |
-| --- | --- | --- | --- |
-| 200 | application/json | objeto livre | Successful Response |
-| 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
-
-### DELETE /transcribe/live/sessions/{job_id}
-
-Cancel Session
-
-Autorização: **JWT ou API key**. Operation ID: `cancel_session_transcribe_live_sessions__job_id__delete`.
-
-Parâmetros:
-
-| Nome | Local | Obrigatório | Tipo | Padrões/limites | Descrição |
-| --- | --- | --- | --- | --- | --- |
-| `job_id` | path | sim | string |  |  |
-
-Respostas declaradas:
-
-| Status | Content-Type | Esquema | Descrição |
-| --- | --- | --- | --- |
-| 200 | application/json | objeto livre | Successful Response |
-| 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
-
-## Conversion
-
-### POST /upload
-
-Upload e converter arquivo
-
-Autorização: **JWT ou API key**. Operation ID: `upload_and_convert_upload_post`.
-
-Upload direto de arquivo para conversão
-
-Este endpoint é dedicado exclusivamente para upload de arquivos.
-Use os outros endpoints para converter de URL, Google Drive ou Dropbox.
-
-## Parâmetros:
-- `file`: Arquivo para upload
-- `name`: Nome de identificação opcional (se não fornecido, usa o nome do arquivo)
-- `docling_preset`: Quality/speed preset (apenas para PDFs):
-  - **fast** (padrão): Conversão rápida, apenas texto (~35s/MB)
-    - OCR: Desligado | Images: Desligadas | Tables: Ligadas
-  - **balanced**: Velocidade moderada, extrai imagens (~70-105s/MB)
-    - OCR: Desligado | Images: Ligadas | Tables: Ligadas
-  - **quality**: Máxima qualidade, inclui OCR para documentos escaneados (~350s/MB)
-    - OCR: Ligado | Images: Ligadas | Tables: Ligadas
-- `purge_source`: Se `true`, apaga os arquivos de origem (o arquivo enviado e os
-  PDFs por página) quando o job termina — `completed`, ou `failed`/`partial` depois
-  das tentativas automáticas — e fica só o resultado. Veja "Arquivos de origem".
-
-## Arquivos de origem (`purge_source`)
-- O que é apagado: o arquivo enviado (MinIO `uploads/...` e cópia local) e, num
-  PDF de várias páginas, os PDFs por página (`/jobs/{job_id}/pages/{n}/pdf`
-  passa a responder 410 `SOURCE_PURGED`). O markdown (inteiro e por página) fica.
-- Quando: ao terminar `completed`, ou `failed`/`partial` depois de esgotados os
-  retries automáticos; nunca enquanto houver retry ou página na fila. Depois
-  disso o retry manual de página responde 409 `SOURCE_NOT_AVAILABLE`.
-- `GET /jobs/{job_id}` informa `source_available`, `source_deleted_at` e
-  `source_deletable`. Para apagar depois: `DELETE /jobs/{job_id}/source`.
-- Arquivo repetido no mesmo projeto: com `purge_source=true` a resposta traz o
-  job existente com `duplicate: true` e ele passa a apagar a origem (na hora, se
-  já terminou; `source_available` diz o resultado). Com `false`, um job existente
-  cuja origem foi (ou será) apagada não é reaproveitado: um job novo é criado.
-
-```bash
-curl -X POST http://localhost:8000/upload \
-  -H "X-API-Key: your-api-key" \
-  -F "file=@contrato.pdf" \
-  -F "project=Cliente X" \
-  -F "purge_source=true"
-```
-
-## Formatos suportados
-PDF, DOCX, DOC, HTML, PPTX, XLSX, RTF, ODT
-
-## Retorno
-Retorna imediatamente um `job_id` para consultar o progresso via `/jobs/{job_id}`,
-e onde o job ficou (`project`, `folder`)
-
-## Exemplos:
-```bash
-# Fast mode (default)
-curl -X POST http://localhost:8000/upload       -H "X-API-Key: your-api-key"       -F "file=@documento.pdf"       -F "project=Cliente X"
-
-# Quality mode with OCR
-curl -X POST http://localhost:8000/upload       -H "X-API-Key: your-api-key"       -F "file=@documento_escaneado.pdf"       -F "docling_preset=quality"
-```
-
-Corpo obrigatório: sim.
-
-Content-Type: `multipart/form-data`. Esquema: [Body_upload_and_convert_upload_post](#model-body_upload_and_convert_upload_post).
-
-| Campo | Obrigatório | Tipo | Padrões/limites | Descrição |
-| --- | --- | --- | --- | --- |
-| `file` | sim | string (binary) |  | Arquivo para conversão (PDF, DOCX, HTML, etc.) |
-| `name` | não | string / null |  | Nome de identificação (opcional, padrão: nome do arquivo) |
-| `tags` | não | string / null |  | Tags separadas por vírgula (ex.: 'cliente-x, reunião'). Viram minúsculas; até 20 tags de até 50 caracteres. Enviar um arquivo repetido adiciona as tags ao job existente. |
-| `docling_preset` | não | string / null | default="fast" | Quality/speed preset for PDF conversion: 'fast' (~35s/MB, text-only), 'balanced' (~70-105s/MB, with images), 'quality' (~350s/MB, with OCR) |
-| `diarize` | não | boolean / null |  | Identificar falantes; omitido usa o padrão do provider |
-| `min_speakers` | não | integer / null |  |  |
-| `max_speakers` | não | integer / null |  |  |
-| `language` | não | string / null |  | Idioma para áudio/vídeo; omitido detecta automaticamente |
-| `include_word_timestamps` | não | boolean / null |  |  |
-| `purge_source` | não | boolean | default=false | Se true, apaga os arquivos de origem do job — o arquivo enviado (MinIO e cópia local) e, num PDF dividido, os PDFs por página — quando o job termina: `completed`, ou `failed`/`partial` depois de esgotadas as tentativas automáticas (nunca enquanto houver retry ou página na fila). O resultado (markdown, markdown por página) fica. Depois disso o retry manual de página não é mais possível. GET /jobs/{job_id} informa `source_available` e `source_deleted_at`. Arquivo repetido no mesmo projeto: com true o job existente é devolvido (`duplicate: true`) e passa a apagar a origem (na hora, se já terminou); com false um job existente cuja origem foi (ou será) apagada não é reaproveitado e um job novo é criado. Padrão false (mantém). Para apagar depois: DELETE /jobs/{job_id}/source |
-| `project` | não | string / null |  | Nome do projeto (obrigatório, a menos que a API key esteja vinculada a um projeto). É criado se não existir; grafias equivalentes ('Reunião', ' reuniao ') são o mesmo projeto. |
-| `project_id` | não | string / null |  | ID de um projeto existente (alternativa a 'project'; nunca cria). |
-| `folder` | não | string / null |  | Nome da pasta dentro do projeto (opcional; criada se não existir; sem '/'). |
-| `folder_id` | não | string / null |  | ID de uma pasta existente do projeto (alternativa a 'folder'). |
-
-Respostas declaradas:
-
-| Status | Content-Type | Esquema | Descrição |
-| --- | --- | --- | --- |
-| 200 | application/json | [JobCreatedResponse](#model-jobcreatedresponse) | Successful Response |
-| 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
-
-### POST /transcribe
-
-Transcrever áudio ou vídeo (STT, legendas VTT/SRT)
-
-Autorização: **JWT ou API key**. Operation ID: `transcribe_audio_transcribe_post`.
-
-Transcrever áudio ou vídeo para texto usando Whisper (STT)
-
-Aceita áudio ou vídeo (só a faixa de áudio do vídeo é transcrita).
-O job entra na fila própria de transcrição (`ingestify-audio`), consumida por
-workers dedicados, e não disputa vaga com a conversão de documentos.
-
-## Autenticação
-Obrigatória: header `X-API-Key: <chave>` ou `Authorization: Bearer <token JWT>`.
-Sem ele a resposta é 401.
-
-Todos os formatos são gerados: Markdown, legendas WebVTT e SRT, texto puro e
-JSON com segmentos. Escolha o formato em `GET /jobs/{job_id}/result?format=vtt`
-(ou defina o padrão com `output_format`).
-
-## Parâmetros:
-- `file`: Arquivo de áudio ou vídeo para transcrição
-- `name`: Nome de identificação opcional
-- `tags`: Tags do job, separadas por vírgula (ex: `focus,aula`)
-- `language`: Código de idioma ISO 639-1 (ex: 'en', 'pt', 'es'). Auto-detecta se não fornecido
-- `include_timestamps`: Adicionar marcadores de tempo [MM:SS] na transcrição
-- `include_word_timestamps`: Adicionar timestamps em cada palavra (mais detalhado)
-- `output_format`: Formato padrão do resultado (`markdown`, `vtt`, `srt`, `txt`, `json`)
-- `purge_source`: Se `true`, apaga o arquivo enviado (disco e MinIO) quando o job
-  termina (com sucesso, ou com falha depois das tentativas automáticas); ficam só
-  as transcrições. `GET /jobs/{job_id}` informa `source_deleted_at`. `DELETE /jobs/{job_id}` também
-  apaga o arquivo de origem e as transcrições
-
-## Projeto
-Todo job pertence a um projeto: envie `project` (nome; criado se não existir) ou
-`project_id`, e opcionalmente `folder`/`folder_id`. Uma API key vinculada a um
-projeto dispensa o campo. Sem projeto: 422.
-
-## Arquivo repetido
-Reenviar um arquivo idêntico (mesmo SHA-256) que já tem job **não falho** no mesmo
-projeto devolve esse job em vez de criar outro: as tags novas são somadas às dele e o
-`output_format` enviado passa a ser o padrão do resultado. Se o job anterior
-falhou, o reenvio cria um job novo; é assim que se tenta de novo.
-
-## Formatos suportados
-- Áudio: MP3, WAV, M4A, FLAC, OGG, OPUS, WEBM, WMA, AAC
-- Vídeo: MP4, M4V, MKV, MOV, AVI, WEBM, WMV, FLV, MPEG, TS, 3GP
-
-## Limite de tamanho
-- Áudio: até 50MB (MAX_AUDIO_FILE_SIZE_MB)
-- Vídeo: até 500MB (MAX_VIDEO_FILE_SIZE_MB)
-
-## Tempo limite
-Definido pelo worker de transcrição (`TRANSCRIPTION_TIMEOUT_SECONDS`, padrão 3h),
-independente do `CONVERSION_TIMEOUT_SECONDS` dos documentos. Um job que estoura o
-tempo falha sem novas tentativas automáticas.
-
-## Retorno
-Retorna imediatamente um `job_id` para consultar o progresso via `/jobs/{job_id}`
-
-## Erros
-- 401: sem autenticação
-- 413: arquivo acima do limite
-- 422: formato não suportado, `output_format` inválido ou `tags` inválidas
-- 503: transcrição desabilitada ou workers indisponíveis
-
-## Exemplos:
-```bash
-curl -X POST http://localhost:8080/transcribe \
-  -H "X-API-Key: $INGESTIFY_API_KEY" \
-  -F "file=@meeting.mp3" \
-  -F "project=Reuniões" \
-  -F "language=pt" \
-  -F "include_timestamps=true"
-```
-
-Vídeo com legenda SRT como padrão, tags e descarte do arquivo ao terminar:
-```bash
-curl -X POST http://localhost:8080/transcribe \
-  -H "Authorization: Bearer $TOKEN" \
-  -F "file=@aula.mp4" \
-  -F "language=pt" \
-  -F "output_format=srt" \
-  -F "tags=focus,aula" \
-  -F "purge_source=true"
-```
-
-## Resultado
-Consulte o status em `/jobs/{job_id}` até `completed` e busque o resultado:
-- `GET /jobs/{job_id}/result`: JSON com markdown e metadados (idioma, duração, device)
-- `GET /jobs/{job_id}/result?format=vtt`: legenda WebVTT (`text/vtt`)
-- `?format=srt`, `?format=txt`, `?format=json`: SRT, texto puro, segmentos
-
-Corpo obrigatório: sim.
-
-Content-Type: `multipart/form-data`. Esquema: [Body_transcribe_audio_transcribe_post](#model-body_transcribe_audio_transcribe_post).
-
-| Campo | Obrigatório | Tipo | Padrões/limites | Descrição |
-| --- | --- | --- | --- | --- |
-| `file` | sim | string (binary) |  | Arquivo de áudio (MP3, WAV, M4A, FLAC, OGG...) ou vídeo (MP4, MKV, MOV, WEBM, AVI...) |
-| `name` | não | string / null |  | Nome de identificação (opcional, padrão: nome do arquivo) |
-| `tags` | não | string / null |  | Tags separadas por vírgula (ex.: 'cliente-x, reunião'). Viram minúsculas; até 20 tags de até 50 caracteres. Enviar um arquivo repetido adiciona as tags ao job existente. |
-| `language` | não | string / null |  | Código do idioma (ex: 'en', 'pt'). Auto-detectar se não fornecido |
-| `include_timestamps` | não | boolean | default=true | Incluir marcadores de tempo na transcrição |
-| `include_word_timestamps` | não | boolean | default=false | Incluir timestamps em nível de palavra (mais detalhado) |
-| `output_format` | não | string | default="markdown" | Formato padrão do resultado em /jobs/{job_id}/result: markdown, vtt, srt, txt ou json |
-| `purge_source` | não | boolean | default=false | Apagar o áudio/vídeo enviado quando a transcrição terminar (com sucesso, ou com falha depois das tentativas automáticas); guarda só o texto |
-| `diarize` | não | boolean / null |  | Identificar falantes; omitido usa o padrão do provider |
-| `min_speakers` | não | integer / null |  |  |
-| `max_speakers` | não | integer / null |  |  |
-| `project` | não | string / null |  | Nome do projeto (obrigatório, a menos que a API key esteja vinculada a um projeto). É criado se não existir; grafias equivalentes ('Reunião', ' reuniao ') são o mesmo projeto. |
-| `project_id` | não | string / null |  | ID de um projeto existente (alternativa a 'project'; nunca cria). |
-| `folder` | não | string / null |  | Nome da pasta dentro do projeto (opcional; criada se não existir; sem '/'). |
-| `folder_id` | não | string / null |  | ID de uma pasta existente do projeto (alternativa a 'folder'). |
-
-Respostas declaradas:
-
-| Status | Content-Type | Esquema | Descrição |
-| --- | --- | --- | --- |
-| 200 | application/json | [JobCreatedResponse](#model-jobcreatedresponse) | Successful Response |
-| 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
-
-### POST /convert
-
-Convert Document
-
-Autorização: **JWT ou API key**. Operation ID: `convert_document_convert_post`.
-
-Conversão de documentos para Markdown
-
-## Opções de uso:
-
-### 1. Upload de arquivo (multipart/form-data)
-- `source_type`: "file"
-- `file`: Selecione o arquivo para upload
-- `source`: Deixe vazio
-
-### 2. URL pública
-- `source_type`: "url"
-- `source`: "https://example.com/document.pdf"
-- `file`: Deixe vazio
-
-### 3. Google Drive
-- `source_type`: "gdrive"
-- `source`: "1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms" (file ID)
-- header `X-Source-Token`: "ya29.a0AfH6SMB..." (OAuth2 token do Google)
-- `file`: Deixe vazio
-
-### 4. Dropbox
-- `source_type`: "dropbox"
-- `source`: "/documents/report.pdf" (path do arquivo)
-- header `X-Source-Token`: "sl.B1a2c3..." (access token do Dropbox)
-
-O header `Authorization` autentica no Ingestify e nunca é repassado ao
-provedor nem colocado na mensagem do Celery (S-01).
-- `file`: Deixe vazio
-
-## Projeto (obrigatório) e pasta
-`project` (nome; criado se não existir) ou `project_id`, e opcionalmente
-`folder`/`folder_id`. Uma API key vinculada a um projeto dispensa o campo
-(só sem JWT). Sem projeto: 422. Um arquivo repetido só é reaproveitado
-dentro do mesmo projeto.
-
-## Arquivos de origem (`purge_source`)
-Com `purge_source=true` os arquivos de origem (o enviado, ou o baixado da URL,
-e os PDFs por página) são apagados quando o job termina: `completed`, ou
-`failed`/`partial` depois das tentativas automáticas. O resultado fica. Mesmas
-regras de `/upload` (inclusive para arquivo repetido).
-Para apagar depois: `DELETE /jobs/{job_id}/source`
-
-## Formatos suportados
-PDF, DOCX, DOC, HTML, PPTX, XLSX, RTF, ODT
-
-## Retorno
-Retorna imediatamente um `job_id` para consultar o progresso via `/jobs/{job_id}`
-
-Parâmetros:
-
-| Nome | Local | Obrigatório | Tipo | Padrões/limites | Descrição |
-| --- | --- | --- | --- | --- | --- |
-| `authorization` | header | não | string / null |  | Autenticação do Ingestify ('Bearer {jwt}'). Nunca é repassada a provedores externos. |
-| `X-Source-Token` | header | não | string / null |  | Token OAuth/acesso do provedor (obrigatório para gdrive e dropbox). Não vai na mensagem do Celery: o worker o lê de uma chave Redis com TTL e a apaga após o download. |
-
-Corpo obrigatório: sim.
-
-Content-Type: `multipart/form-data`. Esquema: [Body_convert_document_convert_post](#model-body_convert_document_convert_post).
-
-| Campo | Obrigatório | Tipo | Padrões/limites | Descrição |
-| --- | --- | --- | --- | --- |
-| `source_type` | sim | string |  | Tipo de fonte: 'file' (upload), 'url' (URL pública), 'gdrive' (Google Drive), 'dropbox' (Dropbox) |
-| `source` | não | string / null |  | URL, file_id (Google Drive) ou path (Dropbox). Deixe vazio para upload de arquivo |
-| `file` | não | string (binary) / null |  | Arquivo para upload direto (use quando source_type='file') |
-| `name` | não | string / null |  | Nome de identificação opcional (padrão: nome do arquivo ou URL) |
-| `tags` | não | string / null |  | Tags separadas por vírgula (ex.: 'cliente-x, reunião'). Viram minúsculas; até 20 tags de até 50 caracteres. Enviar um arquivo repetido adiciona as tags ao job existente. |
-| `diarize` | não | boolean / null |  | Identificar falantes; omitido usa o padrão do provider |
-| `min_speakers` | não | integer / null |  |  |
-| `max_speakers` | não | integer / null |  |  |
-| `language` | não | string / null |  | Idioma para áudio/vídeo; omitido detecta automaticamente |
-| `include_word_timestamps` | não | boolean / null |  |  |
-| `purge_source` | não | boolean | default=false | Se true, apaga os arquivos de origem do job — o arquivo enviado (MinIO e cópia local) e, num PDF dividido, os PDFs por página — quando o job termina: `completed`, ou `failed`/`partial` depois de esgotadas as tentativas automáticas (nunca enquanto houver retry ou página na fila). O resultado (markdown, markdown por página) fica. Depois disso o retry manual de página não é mais possível. GET /jobs/{job_id} informa `source_available` e `source_deleted_at`. Arquivo repetido no mesmo projeto: com true o job existente é devolvido (`duplicate: true`) e passa a apagar a origem (na hora, se já terminou); com false um job existente cuja origem foi (ou será) apagada não é reaproveitado e um job novo é criado. Padrão false (mantém). Para apagar depois: DELETE /jobs/{job_id}/source |
-| `project` | não | string / null |  | Nome do projeto (obrigatório, a menos que a API key esteja vinculada a um projeto). É criado se não existir; grafias equivalentes ('Reunião', ' reuniao ') são o mesmo projeto. |
-| `project_id` | não | string / null |  | ID de um projeto existente (alternativa a 'project'; nunca cria). |
-| `folder` | não | string / null |  | Nome da pasta dentro do projeto (opcional; criada se não existir; sem '/'). |
-| `folder_id` | não | string / null |  | ID de uma pasta existente do projeto (alternativa a 'folder'). |
-
-Respostas declaradas:
-
-| Status | Content-Type | Esquema | Descrição |
-| --- | --- | --- | --- |
-| 200 | application/json | [JobCreatedResponse](#model-jobcreatedresponse) | Successful Response |
-| 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
-
-### GET /jobs/{job_id}
-
-Get Job Status
-
-Autorização: **JWT ou API key**. Operation ID: `get_job_status_jobs__job_id__get`.
-
-Consultar status de qualquer tipo de job (main, split, page, merge)
-
-## Pagination for pages list:
-- `page_limit`: Maximum number of pages to return (default: all pages)
-- `page_offset`: Number of pages to skip (default: 0)
-
-Example: GET /jobs/{job_id}?page_limit=50&page_offset=0
-
-## Permissões:
-- Apenas o dono do job (verificado no MySQL) pode consultá-lo.
-  Jobs de outros usuários retornam 404.
-
-Parâmetros:
-
-| Nome | Local | Obrigatório | Tipo | Padrões/limites | Descrição |
-| --- | --- | --- | --- | --- | --- |
-| `job_id` | path | sim | string |  |  |
-| `page_limit` | query | não | integer / null |  |  |
-| `page_offset` | query | não | integer | default=0 |  |
-
-Respostas declaradas:
-
-| Status | Content-Type | Esquema | Descrição |
-| --- | --- | --- | --- |
-| 200 | application/json | [JobStatusResponse](#model-jobstatusresponse) | Successful Response |
-| 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
-
-### DELETE /jobs/{job_id}
-
-Deletar job
-
-Autorização: **JWT ou API key**. Operation ID: `delete_job_jobs__job_id__delete`.
-
-Deletar job e todos os seus dados associados
-
-Remove completamente um job do sistema, incluindo:
-- Metadados do MySQL (job e pages)
-- Conteúdo do Elasticsearch (markdown)
-- Status temporário do Redis
-- O arquivo original (documento, áudio ou vídeo) no MinIO e as cópias locais
-- Para transcrições: as transcrições guardadas no MinIO
-
-**Atenção:** Esta operação é irreversível!
-
-## Para jobs MAIN com páginas:
-- Deleta o job principal
-- Deleta todos os jobs filhos (split, pages, merge)
-- Deleta todos os registros de páginas
-- Remove todo o conteúdo markdown
-
-## Permissões:
-- Apenas o dono do job (verificado no MySQL) pode deletá-lo
-
-## Retorno:
-- 200: Job deletado com sucesso
-- 404: Job não encontrado (também retornado quando o job pertence a outro
-  usuário, para não expor a existência do recurso)
-
-Parâmetros:
-
-| Nome | Local | Obrigatório | Tipo | Padrões/limites | Descrição |
-| --- | --- | --- | --- | --- | --- |
-| `job_id` | path | sim | string |  |  |
-
-Respostas declaradas:
-
-| Status | Content-Type | Esquema | Descrição |
-| --- | --- | --- | --- |
-| 200 | application/json | objeto livre | Successful Response |
-| 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
-
-### DELETE /jobs/{job_id}/source
-
-Apagar o arquivo original do job
-
-Autorização: **JWT ou API key**. Operation ID: `delete_job_source_jobs__job_id__source_delete`.
-
-Apaga os arquivos de origem de um job — o arquivo enviado (documento, áudio
-ou vídeo) e os PDFs por página de um PDF dividido — mantendo o job e o
-resultado (markdown, markdown por página, transcrições).
-
-Remove os objetos no MinIO (`uploads/...` ou `audio/...`, e `pages/{job_id}/`)
-e as cópias locais, e grava quando isso aconteceu. Depois disso
-`GET /jobs/{job_id}` responde `source_available: false` e `source_deleted_at`,
-`GET /jobs/{job_id}/pages/{n}/pdf` responde 410 `SOURCE_PURGED` e o retry de
-página responde 409 `SOURCE_NOT_AVAILABLE`.
-
-Job de imagem (`/images/*`): apaga toda cópia guardada da imagem original — a
-cópia local de processamento, o original e a prévia normalizada da análise
-completa/facial (`images/{job_id}/source` e `images/{job_id}/preview/` no bucket
-de resultados) e a imagem embutida no resultado guardado (`image.image_base64`
-passa a null); o resultado da inferência fica.
-
-Para apagar automaticamente quando o job terminar, envie `purge_source=true` em
-`/upload`, `/convert`, `/transcribe` ou em qualquer rota `/images/*`.
-
-## Retorno
-- 200: `{"job_id": "...", "source_deleted": true, "source_deleted_at": "..."}`
-- 404: job inexistente, de outro usuário, ou sem arquivos de origem
-- 409: `{"code": "JOB_STILL_PROCESSING"}`: o job ainda está na fila ou em processamento,
-  espera um retry automático, ou tem página na fila/em processamento (retry de página)
-- 503: `{"code": "SOURCE_DELETE_FAILED"}`: o armazenamento recusou; o que não foi
-  apagado continua referenciado (chamar de novo termina)
-
-Parâmetros:
-
-| Nome | Local | Obrigatório | Tipo | Padrões/limites | Descrição |
-| --- | --- | --- | --- | --- | --- |
-| `job_id` | path | sim | string |  |  |
-
-Respostas declaradas:
-
-| Status | Content-Type | Esquema | Descrição |
-| --- | --- | --- | --- |
-| 200 | application/json | [SourceDeletedResponse](#model-sourcedeletedresponse) | Successful Response |
-| 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
-
-### GET /jobs/{job_id}/result
-
-Get Job Result
-
-Autorização: **JWT ou API key**. Operation ID: `get_job_result_jobs__job_id__result_get`.
-
-Recuperar resultado de qualquer tipo de job (main ou page individual)
-
-## Permissões:
-- Apenas o dono do job (verificado no MySQL) pode acessar o resultado.
-  Jobs de outros usuários retornam 404.
-
-Para jobs de transcrição (/transcribe), `?format=vtt|srt|txt|json` retorna o
-arquivo no formato pedido (ex.: legenda WebVTT com `Content-Type: text/vtt`).
-
-Parâmetros:
-
-| Nome | Local | Obrigatório | Tipo | Padrões/limites | Descrição |
-| --- | --- | --- | --- | --- | --- |
-| `job_id` | path | sim | string |  |  |
-| `format` | query | não | string / null |  | Para transcrições: markdown (JSON padrão), vtt, srt, txt ou json. Sem este parâmetro vale o output_format escolhido no /transcribe. |
-
-Respostas declaradas:
-
-| Status | Content-Type | Esquema | Descrição |
-| --- | --- | --- | --- |
-| 200 | application/json | [JobResultResponse](#model-jobresultresponse) | Successful Response |
-| 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
-| 202 | — | objeto livre | Análise composta em andamento; consulte poll_url/result_url. |
-
-### GET /jobs/{job_id}/transcript/partial
-
-Get Partial Transcript
-
-Autorização: **JWT ou API key**. Operation ID: `get_partial_transcript_jobs__job_id__transcript_partial_get`.
-
-Texto de uma transcrição enquanto ela acontece
-
-Retorna os segmentos já transcritos a partir de `since`, e em `next` o valor de
-`since` para a próxima consulta - assim cada consulta traz só o texto novo.
-Só o provider faster-whisper transcreve em segmentos; com os providers da OpenAI
-a lista fica vazia até o fim. Quando o job termina a lista também fica vazia:
-o texto completo passa a estar em `GET /jobs/{job_id}/result`.
-
-## Permissões:
-- Apenas o dono do job (verificado no MySQL) pode consultá-lo.
-  Jobs de outros usuários retornam 404.
-
-Parâmetros:
-
-| Nome | Local | Obrigatório | Tipo | Padrões/limites | Descrição |
-| --- | --- | --- | --- | --- | --- |
-| `job_id` | path | sim | string |  |  |
-| `since` | query | não | integer | default=0; minimum=0 | Índice do primeiro segmento a retornar (o `next` da consulta anterior) |
-
-Respostas declaradas:
-
-| Status | Content-Type | Esquema | Descrição |
-| --- | --- | --- | --- |
-| 200 | application/json | [PartialTranscriptResponse](#model-partialtranscriptresponse) | Successful Response |
-| 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
-
-### GET /jobs/{job_id}/pages
-
-Get Job Pages
-
-Autorização: **JWT ou API key**. Operation ID: `get_job_pages_jobs__job_id__pages_get`.
-
-Obter progresso detalhado por página com job_id de cada página (para PDFs)
-
-## Permissões:
-- Apenas o dono do job (verificado no MySQL) pode consultar as páginas.
-  Jobs de outros usuários retornam 404.
-
-Parâmetros:
-
-| Nome | Local | Obrigatório | Tipo | Padrões/limites | Descrição |
-| --- | --- | --- | --- | --- | --- |
-| `job_id` | path | sim | string |  |  |
-
-Respostas declaradas:
-
-| Status | Content-Type | Esquema | Descrição |
-| --- | --- | --- | --- |
-| 200 | application/json | [JobPagesResponse](#model-jobpagesresponse) | Successful Response |
-| 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
-
-### GET /jobs/{job_id}/pages/{page_number}/status
-
-Status de página específica por número
-
-Autorização: **JWT ou API key**. Operation ID: `get_page_status_by_number_jobs__job_id__pages__page_number__status_get`.
-
-Consulta o status de uma página específica usando o número da página
-
-## Parâmetros:
-- `job_id`: ID do job principal
-- `page_number`: Número da página (1, 2, 3, ...)
-
-## Retorno:
-Status da página específica
-
-## Exemplo:
-```
-GET /jobs/550e8400-e29b-41d4-a716-446655440000/pages/5/status
-```
-
-Retorna o status da página 5 do job especificado.
-
-## Permissões:
-- Apenas o dono do job (verificado no MySQL) pode consultar a página.
-  Jobs de outros usuários retornam 404.
-
-Parâmetros:
-
-| Nome | Local | Obrigatório | Tipo | Padrões/limites | Descrição |
-| --- | --- | --- | --- | --- | --- |
-| `job_id` | path | sim | string |  |  |
-| `page_number` | path | sim | integer |  |  |
-
-Respostas declaradas:
-
-| Status | Content-Type | Esquema | Descrição |
-| --- | --- | --- | --- |
-| 200 | application/json | objeto livre | Successful Response |
-| 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
-
-### GET /jobs/{job_id}/pages/{page_number}/result
-
-Resultado de página específica por número
-
-Autorização: **JWT ou API key**. Operation ID: `get_page_result_by_number_jobs__job_id__pages__page_number__result_get`.
-
-Recupera o resultado (markdown) de uma página específica usando o número da página
-
-## Parâmetros:
-- `job_id`: ID do job principal
-- `page_number`: Número da página (1, 2, 3, ...)
-
-## Retorno:
-Markdown da página específica
-
-## Exemplo:
-```
-GET /jobs/550e8400-e29b-41d4-a716-446655440000/pages/5/result
-```
-
-Retorna o markdown da página 5 do job especificado.
-
-## Vantagem:
-Não precisa conhecer o `page_job_id` - basta usar o job principal + número da página!
-
-## Permissões:
-- Apenas o dono do job (verificado no MySQL) pode acessar o resultado.
-  Jobs de outros usuários retornam 404.
-
-Parâmetros:
-
-| Nome | Local | Obrigatório | Tipo | Padrões/limites | Descrição |
-| --- | --- | --- | --- | --- | --- |
-| `job_id` | path | sim | string |  |  |
-| `page_number` | path | sim | integer |  |  |
-
-Respostas declaradas:
-
-| Status | Content-Type | Esquema | Descrição |
-| --- | --- | --- | --- |
-| 200 | application/json | objeto livre | Successful Response |
-| 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
-
-### GET /jobs
-
-Listar jobs do usuário
-
-Autorização: **JWT ou API key**. Operation ID: `list_jobs_jobs_get`.
-
-Lista os jobs do usuário autenticado, do mais recente para o mais antigo.
-
-A lista vem do MySQL (fonte da verdade); o Redis só complementa o status e
-o progresso ao vivo dos jobs em andamento.
-
-## Parâmetros:
-- `limit`: Máximo de jobs (padrão: 50, máximo: 100)
-- `offset`: Quantos pular (paginação)
-- `status`: queued, processing, completed, failed ou cancelled
-- `tag`: Filtra por tag; `?tag=a&tag=b` exige as duas
-- `q`: Texto no nome do job ou do arquivo
-- `kind`: `document`, `transcription` ou `image`
-- `project_id`: só jobs do projeto (projeto alheio: 404)
-- `folder_id`: só jobs da pasta (pasta alheia: 404), ou `root` com `project_id`
-  para os jobs sem pasta. Sem `project_id`, o projeto é o da pasta.
-- `job_type`: `main` (padrão) ou `all`
-
-## Retorno:
-`{total, limit, offset, jobs, counts}`. `total` é o total filtrado antes da
-paginação; `counts` traz quantos jobs há em cada status com os demais
-filtros aplicados (para montar os filtros da interface). Cada job traz
-`project: {id, name}` e `folder: {id, name} | null`.
-
-Parâmetros:
-
-| Nome | Local | Obrigatório | Tipo | Padrões/limites | Descrição |
-| --- | --- | --- | --- | --- | --- |
-| `limit` | query | não | integer | default=50 |  |
-| `offset` | query | não | integer | default=0 |  |
-| `status` | query | não | string / null |  |  |
-| `job_type` | query | não | string | default="main" |  |
-| `tag` | query | não | array de string / null |  | Só jobs com esta tag. Repita para exigir várias (E). |
-| `q` | query | não | string / null |  | Busca no nome e no nome do arquivo (não no conteúdo; para isso use /search). |
-| `kind` | query | não | string / null |  | document, transcription ou image |
-| `project_id` | query | não | string / null |  | Só jobs deste projeto. |
-| `folder_id` | query | não | string / null |  | Só jobs desta pasta, ou `root` para os jobs do projeto que não estão em pasta nenhuma (`root` exige `project_id`). |
-
-Respostas declaradas:
-
-| Status | Content-Type | Esquema | Descrição |
-| --- | --- | --- | --- |
-| 200 | application/json | objeto livre | Successful Response |
-| 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
-
-### GET /search
-
-Buscar jobs por conteúdo
-
-Autorização: **JWT ou API key**. Operation ID: `search_jobs_search_get`.
-
-Buscar jobs por conteúdo do markdown usando Elasticsearch
-
-## Parâmetros:
-- `query`: Texto a buscar no conteúdo dos documentos
-- `limit`: Número máximo de resultados (padrão: 10, máximo: 100)
-
-## Retorno:
-Lista de jobs que contêm o texto buscado no conteúdo convertido
-
-## Exemplos:
-- `/search?query=relatório financeiro` - Busca jobs contendo "relatório financeiro"
-- `/search?query=invoice&limit=20` - Busca jobs contendo "invoice", até 20 resultados
-
-Parâmetros:
-
-| Nome | Local | Obrigatório | Tipo | Padrões/limites | Descrição |
-| --- | --- | --- | --- | --- | --- |
-| `query` | query | sim | string |  |  |
-| `limit` | query | não | integer | default=10 |  |
-
-Respostas declaradas:
-
-| Status | Content-Type | Esquema | Descrição |
-| --- | --- | --- | --- |
-| 200 | application/json | objeto livre | Successful Response |
-| 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
-
-### POST /jobs/{job_id}/pages/{page_number}/retry
-
-Retry de página que falhou
-
-Autorização: **JWT ou API key**. Operation ID: `retry_failed_page_jobs__job_id__pages__page_number__retry_post`.
-
-Tenta reprocessar uma página que falhou
-
-## Parâmetros:
-- `job_id`: ID do job principal
-- `page_number`: Número da página que falhou
-
-## Retorno:
-Novo job_id da página em retry
-
-## Exemplo:
-```
-POST /jobs/550e8400-e29b-41d4-a716-446655440000/pages/5/retry
-```
-
-Reprocessa a página 5 do job especificado.
-
-## Permissões:
-- Apenas o dono do job (verificado no MySQL) pode reprocessar a página.
-  Jobs de outros usuários retornam 404.
-
-Parâmetros:
-
-| Nome | Local | Obrigatório | Tipo | Padrões/limites | Descrição |
-| --- | --- | --- | --- | --- | --- |
-| `job_id` | path | sim | string |  |  |
-| `page_number` | path | sim | integer |  |  |
-
-Respostas declaradas:
-
-| Status | Content-Type | Esquema | Descrição |
-| --- | --- | --- | --- |
-| 200 | application/json | objeto livre | Successful Response |
-| 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
-
-### GET /jobs/{job_id}/pages/{page_number}/pdf
-
-URL temporária do PDF de uma página
-
-Autorização: **JWT ou API key**. Operation ID: `get_page_pdf_jobs__job_id__pages__page_number__pdf_get`.
-
-Devolve uma **URL pré-assinada de curta duração** para o PDF de uma página.
-
-## Autenticação
-Obrigatória. Só o dono do job (verificado no MySQL) recebe a URL; jobs de
-outros usuários retornam 404, igual aos demais endpoints de job.
-
-Este endpoint já foi público e redirecionava (307) para uma URL pública do
-MinIO — quem tivesse um UUID de job lia o PDF de qualquer usuário. Agora o
-bucket é privado e o acesso é sempre por URL assinada com TTL curto.
-
-## Parâmetros:
-- `job_id`: ID do job principal
-- `page_number`: Número da página (1-indexed)
-
-## Retorno (JSON, não é mais um redirect):
-```json
-{
-  "job_id": "550e8400-e29b-41d4-a716-446655440000",
-  "page_number": 5,
-  "url": "http://127.0.0.1:9000/ingestify-pages/pages/<job_id>/page_0005.pdf?X-Amz-...",
-  "expires_in": 900,
-  "expires_at": "2026-08-26T12:15:00+00:00"
-}
-```
-
-- `url`: URL assinada, para ser buscada **diretamente** pelo navegador. Não
-  aceita header `Authorization` (e não precisa dele).
-- `expires_in`: validade em segundos a partir de agora.
-- `expires_at`: instante de expiração em UTC (ISO-8601). O cliente deve
-  pedir uma URL nova depois disso em vez de reutilizar a antiga.
-
-Um redirect não serviria: o header `Authorization` do chamador não sobrevive
-ao salto para o MinIO, e o cliente precisa saber quando a URL expira.
-
-## Atenção
-A query string faz parte da assinatura — acrescentar qualquer parâmetro
-(`?t=<timestamp>`, por exemplo) invalida a URL e gera 403 no MinIO.
-
-Parâmetros:
-
-| Nome | Local | Obrigatório | Tipo | Padrões/limites | Descrição |
-| --- | --- | --- | --- | --- | --- |
-| `job_id` | path | sim | string |  |  |
-| `page_number` | path | sim | integer |  |  |
-
-Respostas declaradas:
-
-| Status | Content-Type | Esquema | Descrição |
-| --- | --- | --- | --- |
-| 200 | application/json | objeto livre | Successful Response |
-| 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
+Identificação e saúde da API (públicas).
 
 ### GET /health
 
-Health Check
+Verificar saúde da API
 
 Autorização: **Público**. Operation ID: `health_check_health_get`.
 
@@ -3962,11 +3994,9 @@ Respostas declaradas:
 | --- | --- | --- | --- |
 | 200 | application/json | [HealthCheckResponse](#model-healthcheckresponse) | Successful Response |
 
-## General
-
 ### GET /
 
-Root
+Identificação da API
 
 Autorização: **Público**. Operation ID: `root__get`.
 

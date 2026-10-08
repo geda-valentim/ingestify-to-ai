@@ -229,7 +229,13 @@ def test_the_alias_openapi_is_the_pre_0018_one_marked_deprecated():
         for operation in operations.values():
             assert "deprecated" not in operation
             operation["deprecated"] = True
-    assert alias_openapi() == expected
+    actual = alias_openapi()
+    # `summary` is only the Swagger label, translated to Portuguese with every other
+    # operation (API 1.1.0); every contract field must still be the capture's.
+    for path, operations in expected["paths"].items():
+        for method, operation in operations.items():
+            operation["summary"] = actual["paths"][path][method]["summary"]
+    assert actual == expected
 
 
 def test_the_aliases_neither_list_nor_revoke_platform_bindings(world, client):  # noqa: F811

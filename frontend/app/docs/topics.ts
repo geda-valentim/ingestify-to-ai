@@ -225,7 +225,10 @@ export const DOCS_TOPICS: {
     slug: "engine-access",
     anchor: "engine-access",
     group: "administration",
-    title: { pt: "Acesso RBAC e ABAC", en: "RBAC and ABAC access" },
+    title: {
+      pt: "Acesso e permissões (IAM)",
+      en: "Access and permissions (IAM)",
+    },
   },
 ];
 

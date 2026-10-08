@@ -78,7 +78,7 @@ def unavailable(code):
     raise HTTPException(503, detail={'code': code}, headers={'Retry-After': '5'})
 
 
-@router.post('', status_code=201)
+@router.post('', summary="Criar sessão de transcrição ao vivo", status_code=201)
 def create_session(body: CreateSession, request: Request, response: Response,
                    user: User = Depends(require('live.sessions.create')), db: Session = Depends(get_db)):
     settings = get_settings()
@@ -134,7 +134,7 @@ def create_session(body: CreateSession, request: Request, response: Response,
         unavailable(exc.code if isinstance(exc, LiveError) else 'LIVE_NOT_READY')
 
 
-@router.get('/{job_id}')
+@router.get('/{job_id}', summary="Estado da sessão ao vivo")
 def session_status(job_id: str, owned_job: Job = Depends(authorized(Job, 'jobs.read')),
                    db: Session = Depends(get_db)):
     live = live_owned(job_id, owned_job, db)
@@ -143,7 +143,7 @@ def session_status(job_id: str, owned_job: Job = Depends(authorized(Job, 'jobs.r
             'error_code': live.error_code, 'ended_at': live.ended_at}
 
 
-@router.delete('/{job_id}')
+@router.delete('/{job_id}', summary="Cancelar sessão ao vivo")
 def cancel_session(job_id: str, owned_job: Job = Depends(authorized(Job, 'jobs.cancel')),
                    db: Session = Depends(get_db)):
     live_owned(job_id, owned_job, db)

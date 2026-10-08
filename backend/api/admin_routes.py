@@ -61,7 +61,7 @@ def require_admin(current_user=Depends(get_current_active_user)):
     return current_user
 
 
-@router.get("/stats", summary="Get system statistics")
+@router.get("/stats", summary="Estatísticas do sistema")
 async def get_stats(admin_user=Depends(require("platform.stats.read"))) -> Dict[str, Any]:
     """
     Get comprehensive system statistics for monitoring dashboard
@@ -101,7 +101,7 @@ async def get_stats(admin_user=Depends(require("platform.stats.read"))) -> Dict[
         raise HTTPException(status_code=500, detail="Failed to fetch stats")
 
 
-@router.get("/jobs/stuck", summary="List stuck jobs")
+@router.get("/jobs/stuck", summary="Listar jobs travados")
 async def list_stuck_jobs(
     threshold_minutes: int = None,
     limit: int = 100,
@@ -158,7 +158,7 @@ async def list_stuck_jobs(
         raise HTTPException(status_code=500, detail="Failed to list stuck jobs")
 
 
-@router.post("/jobs/recover-stuck", summary="Manually trigger stuck job recovery")
+@router.post("/jobs/recover-stuck", summary="Recuperar jobs travados")
 async def recover_stuck_jobs(
     threshold_minutes: int = None,
     admin_user=Depends(require("platform.jobs.recover"))
@@ -203,7 +203,7 @@ async def recover_stuck_jobs(
         raise HTTPException(status_code=500, detail="Failed to recover stuck jobs")
 
 
-@router.post("/jobs/{job_id}/retry-all-failed", summary="Bulk retry all failed pages of a job")
+@router.post("/jobs/{job_id}/retry-all-failed", summary="Refazer todas as páginas com falha de um job")
 async def retry_all_failed_pages(
     job_id: str,
     admin_user=Depends(require("platform.jobs.recover")),
@@ -295,7 +295,7 @@ async def retry_all_failed_pages(
         raise HTTPException(status_code=500, detail="Failed to retry pages")
 
 
-@router.post("/cleanup", summary="Manually trigger cleanup of old jobs")
+@router.post("/cleanup", summary="Limpar jobs antigos")
 async def trigger_cleanup(
     days_old: int = None,
     admin_user=Depends(require("platform.jobs.cleanup"))
@@ -337,7 +337,7 @@ async def trigger_cleanup(
         raise HTTPException(status_code=500, detail="Failed to cleanup")
 
 
-@router.get("/health/monitoring", summary="Check monitoring system health")
+@router.get("/health/monitoring", summary="Saúde do monitoramento")
 async def monitoring_health(admin_user=Depends(require("platform.monitoring.read"))) -> Dict[str, Any]:
     """
     Check if the monitoring system (Celery Beat) is functioning
@@ -376,7 +376,7 @@ async def monitoring_health(admin_user=Depends(require("platform.monitoring.read
         raise HTTPException(status_code=500, detail="Failed to check health")
 
 
-@router.get("/broker/unacked", summary="List unacknowledged broker messages")
+@router.get("/broker/unacked", summary="Listar mensagens não confirmadas do broker")
 async def list_broker_unacked(admin_user=Depends(require("platform.monitoring.read"))) -> Dict[str, Any]:
     """
     Messages the Celery broker holds as delivered but not yet acknowledged.
@@ -399,7 +399,7 @@ async def list_broker_unacked(admin_user=Depends(require("platform.monitoring.re
     }
 
 
-@router.post("/broker/unacked/{delivery_tag}/requeue", summary="Requeue an orphaned broker message")
+@router.post("/broker/unacked/{delivery_tag}/requeue", summary="Reenfileirar mensagem órfã do broker")
 async def requeue_broker_unacked(delivery_tag: str, admin_user=Depends(require("platform.broker.requeue"))) -> Dict[str, Any]:
     """
     Put an orphaned message back at the head of its queue, so its task runs again now
