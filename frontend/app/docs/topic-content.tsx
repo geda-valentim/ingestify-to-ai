@@ -7,6 +7,31 @@ import { CodeBlock, CodeExamples } from "./code-block";
 import { Badge } from "@/components/ui/badge";
 
 import type { DocsLang as Lang } from "./topics";
+import openapi from "@/docs/doc2md_openapi.json";
+
+// Field names and types come from the published OpenAPI snapshot, so these
+// tables follow the contract; a renamed field fails the static build here.
+type SchemaProp = {
+  type?: string;
+  format?: string;
+  anyOf?: { type?: string; format?: string }[];
+};
+const SCHEMAS = openapi.components.schemas as unknown as Record<
+  string,
+  { properties?: Record<string, SchemaProp>; enum?: string[] }
+>;
+const JOB_STATUSES = SCHEMAS.JobStatus.enum ?? [];
+
+function schemaRows(schema: string, notes: Record<string, string>) {
+  return Object.entries(notes).map(([field, note]) => {
+    const prop = SCHEMAS[schema]?.properties?.[field];
+    if (!prop) throw new Error(`${schema}.${field} is not in the OpenAPI schema`);
+    const type = (prop.anyOf ?? [prop])
+      .map((part) => part.format ?? part.type ?? "object")
+      .join(" | ");
+    return [<C key="f">{field}</C>, <C key="t">{type}</C>, note];
+  });
+}
 
 // Real responses, captured from a run of the transcription flow on this stack.
 const EXAMPLE_JOB_ID = "7186e44b-3098-4590-9b5f-a29e9991e4e7";
@@ -388,10 +413,27 @@ const COPY = {
       ],
     ],
     authNote: (
-      <P small>
-        Sem credencial válida a API responde <C>401</C>. Cada usuário só enxerga
-        os próprios jobs: um <C>job_id</C> de outra pessoa responde <C>404</C>.
-      </P>
+      <>
+        <P small>
+          Sem credencial válida a API responde <C>401</C>. Cada usuário só
+          enxerga os próprios jobs: um <C>job_id</C> de outra pessoa responde{" "}
+          <C>404</C>. Com os dois headers no mesmo request, vale o JWT. Rotas que
+          exigem sessão de administrador recusam API key. No Swagger (
+          <A href={`${API_URL}/docs`}>{API_URL}/docs</A>), o botão{" "}
+          <strong>Authorize</strong> aceita <C>bearerAuth</C> (o token, sem o
+          prefixo <C>Bearer</C>) e <C>apiKeyAuth</C> (a chave).
+        </P>
+        <P small>
+          Instalação nova: <C>GET /auth/setup</C> (público) informa{" "}
+          <C>root_exists</C>, <C>root_pending</C> e{" "}
+          <C>setup_token_required</C>. Enquanto não há nenhum usuário, o primeiro
+          cadastro em <C>POST /auth/register</C> vira o usuário{" "}
+          <strong>root</strong> da instalação; se <C>ROOT_SETUP_TOKEN</C>{" "}
+          estiver configurado (sempre, em produção), envie-o em{" "}
+          <C>setup_token</C>. Permissões administrativas são descritas em{" "}
+          <A href="/pt/docs/engine-access">Acesso e permissões (IAM)</A>.
+        </P>
+      </>
     ),
     projectsIntro: (
       <P>
@@ -549,6 +591,15 @@ const COPY = {
         </span>,
       ],
       [
+        <C key="ps">purge_source</C>,
+        "booleano",
+        <C key="v">false</C>,
+        <span key="d">
+          <C>true</C> apaga o áudio/vídeo enviado (disco e MinIO) quando o job
+          termina; as transcrições ficam. Depois: <C>DELETE /jobs/&#123;job_id&#125;/source</C>.
+        </span>,
+      ],
+      [
         <C key="o">output_format</C>,
         "texto",
         <C key="v">markdown</C>,
@@ -590,10 +641,13 @@ const COPY = {
     ),
     statusIntro: (
       <P>
-        Consulte a cada poucos segundos até <C>status</C> ser <C>completed</C>{" "}
-        ou <C>failed</C>. Os estados possíveis são <C>queued</C>,{" "}
-        <C>processing</C>, <C>completed</C> e <C>failed</C>; <C>progress</C> vai
-        de 0 a 100 e, se falhar, <C>error</C> explica o motivo.
+        Consulte a cada poucos segundos até <C>status</C> ser terminal. Os
+        estados são <C>pending</C> (interno, antes da fila; também enquanto uma
+        nova tentativa automática aguarda), <C>queued</C>, <C>processing</C> e
+        os terminais <C>completed</C>, <C>partial</C> (há resultado, com
+        lacunas: páginas de PDF que falharam ou etapas incompletas de uma
+        análise de imagem), <C>failed</C> e <C>cancelled</C>.{" "}
+        <C>progress</C> vai de 0 a 100 e <C>error</C> explica falhas e lacunas.
       </P>
     ),
     statusFields: (
@@ -658,7 +712,17 @@ const COPY = {
     ),
     errorsIntro: (
       <P>
-        Erros vêm como JSON com o campo <C>detail</C> explicando o problema.
+        Erros vêm como JSON com o campo <C>detail</C>. Ele pode ser um texto,
+        a lista de validação do <C>422</C> ou um objeto com <C>code</C>. Para
+        códigos conhecidos (jobs, arquivos de origem, engines, perfis, acesso,
+        IAM e root), o objeto também traz a orientação em português:{" "}
+        <C>message</C> (o que aconteceu), <C>next_steps</C> (próximos passos,
+        de um vocabulário fechado como <C>retry</C>, <C>request_access</C> ou{" "}
+        <C>bind_profile</C>), <C>cause</C> (o bloqueio interno, quando um
+        código genérico embrulha outro) e <C>technical</C> (o texto técnico
+        original, sem segredos). O <C>code</C> nunca muda: trate o erro por
+        ele. Uma exceção não tratada responde <C>500</C> com{" "}
+        <C>{'{"error": {"code": "INTERNAL_ERROR", "message": "..."}}'}</C>.
       </P>
     ),
     errorsHead: ["Status", "Quando"],
@@ -666,13 +730,23 @@ const COPY = {
       "401": "Sem credencial, chave inválida ou token expirado.",
       "400":
         "Arquivo vazio; ou, em /result, o job ainda está em processamento.",
+      "403":
+        "Sem permissão para a rota administrativa; API key numa rota que exige sessão; ROOT_SETUP_TOKEN_REQUIRED/ROOT_SETUP_TOKEN_INVALID no cadastro do root.",
       "404":
-        "Job, projeto ou pasta inexistente ou de outro usuário, ou formato pedido indisponível (ex.: ?format=vtt num job de documento).",
+        "Job, projeto ou pasta inexistente ou de outro usuário, formato pedido indisponível (ex.: ?format=vtt num job de documento), ou arquivo original inexistente em DELETE /jobs/{job_id}/source.",
+      "409":
+        "JOB_STILL_PROCESSING ao apagar o original de um job ainda na fila; SOURCE_NOT_AVAILABLE no retry de uma página cujo original foi apagado; Idempotency-Key reutilizada com outro payload.",
+      "410":
+        "SOURCE_PURGED: o PDF de página foi apagado (purge_source ou DELETE /jobs/{job_id}/source; traz source_deleted_at); ou job excluído de uma Idempotency-Key.",
       "413": "Arquivo acima do limite de tamanho.",
       "422":
         "Formato de arquivo não suportado, output_format/format inválido, upload sem projeto, ou nome de projeto/pasta inválido.",
+      "429": "Limite de tentativas: login por IP e por conta, ou cadastros por IP.",
       "500": "Em /result: o job falhou (o motivo vem em detail).",
-      "503": "Transcrição desabilitada no servidor ou workers indisponíveis.",
+      "503":
+        "Transcrição/visão desabilitada, workers indisponíveis, ou SOURCE_DELETE_FAILED (o armazenamento recusou; chame de novo).",
+      "504":
+        "VISION_TIMEOUT com wait=true: o job continua; consulte poll_url.",
     },
   },
 
@@ -731,10 +805,27 @@ const COPY = {
       ],
     ],
     authNote: (
-      <P small>
-        Without valid credentials the API answers <C>401</C>. Users only see
-        their own jobs: another person&apos;s <C>job_id</C> answers <C>404</C>.
-      </P>
+      <>
+        <P small>
+          Without valid credentials the API answers <C>401</C>. Users only see
+          their own jobs: another person&apos;s <C>job_id</C> answers{" "}
+          <C>404</C>. When a request carries both headers, the JWT wins. Routes
+          that require an administrator session reject API keys. In Swagger (
+          <A href={`${API_URL}/docs`}>{API_URL}/docs</A>), the{" "}
+          <strong>Authorize</strong> button takes <C>bearerAuth</C> (the token,
+          without the <C>Bearer</C> prefix) and <C>apiKeyAuth</C> (the key).
+        </P>
+        <P small>
+          New installation: <C>GET /auth/setup</C> (public) returns{" "}
+          <C>root_exists</C>, <C>root_pending</C> and{" "}
+          <C>setup_token_required</C>. While there are no users at all, the
+          first <C>POST /auth/register</C> becomes the installation&apos;s{" "}
+          <strong>root</strong> user; if <C>ROOT_SETUP_TOKEN</C> is configured
+          (always, in production), send it as <C>setup_token</C>.
+          Administrative permissions are described in{" "}
+          <A href="/docs/engine-access">Access and permissions (IAM)</A>.
+        </P>
+      </>
     ),
     projectsIntro: (
       <P>
@@ -894,6 +985,15 @@ const COPY = {
         </span>,
       ],
       [
+        <C key="ps">purge_source</C>,
+        "boolean",
+        <C key="v">false</C>,
+        <span key="d">
+          <C>true</C> deletes the uploaded audio/video (disk and MinIO) when the
+          job finishes; transcripts stay. Later: <C>DELETE /jobs/&#123;job_id&#125;/source</C>.
+        </span>,
+      ],
+      [
         <C key="o">output_format</C>,
         "string",
         <C key="v">markdown</C>,
@@ -935,10 +1035,13 @@ const COPY = {
     ),
     statusIntro: (
       <P>
-        Poll every few seconds until <C>status</C> is <C>completed</C> or{" "}
-        <C>failed</C>. The possible states are <C>queued</C>, <C>processing</C>,{" "}
-        <C>completed</C> and <C>failed</C>; <C>progress</C> goes from 0 to 100
-        and, on failure, <C>error</C> explains why.
+        Poll every few seconds until <C>status</C> is terminal. The states are{" "}
+        <C>pending</C> (internal, before queueing; also while an automatic
+        retry waits), <C>queued</C>, <C>processing</C> and the terminal{" "}
+        <C>completed</C>, <C>partial</C> (a result exists, with gaps: failed
+        PDF pages or incomplete image-analysis steps), <C>failed</C> and{" "}
+        <C>cancelled</C>. <C>progress</C> goes from 0 to 100 and <C>error</C>{" "}
+        explains failures and gaps.
       </P>
     ),
     statusFields: (
@@ -1000,20 +1103,41 @@ const COPY = {
     ),
     errorsIntro: (
       <P>
-        Errors are JSON, with a <C>detail</C> field describing the problem.
+        Errors are JSON with a <C>detail</C> field. It may be a string, the{" "}
+        <C>422</C> validation list or an object with a <C>code</C>. For known
+        codes (jobs, source files, engines, profiles, access, IAM and root),
+        the object also carries guidance in Portuguese: <C>message</C> (what
+        happened), <C>next_steps</C> (next steps from a closed vocabulary such
+        as <C>retry</C>, <C>request_access</C> or <C>bind_profile</C>),{" "}
+        <C>cause</C> (the inner gate when a generic code wraps another) and{" "}
+        <C>technical</C> (the original technical text, without secrets). The{" "}
+        <C>code</C> never changes: handle errors by it. An unhandled exception
+        answers <C>500</C> with{" "}
+        <C>{'{"error": {"code": "INTERNAL_ERROR", "message": "..."}}'}</C>.
       </P>
     ),
     errorsHead: ["Status", "When"],
     errors: {
       "401": "No credentials, invalid key or expired token.",
       "400": "Empty file; or, on /result, the job is still processing.",
+      "403":
+        "No permission for an administrative route; an API key on a session-only route; ROOT_SETUP_TOKEN_REQUIRED/ROOT_SETUP_TOKEN_INVALID when registering root.",
       "404":
-        "Job, project or folder doesn't exist or belongs to another user, or the requested format isn't available (e.g. ?format=vtt on a document job).",
+        "Job, project or folder doesn't exist or belongs to another user, the requested format isn't available (e.g. ?format=vtt on a document job), or there is no original file on DELETE /jobs/{job_id}/source.",
+      "409":
+        "JOB_STILL_PROCESSING when deleting the original of a job still queued; SOURCE_NOT_AVAILABLE when retrying a page whose original was deleted; an Idempotency-Key reused with another payload.",
+      "410":
+        "SOURCE_PURGED: the page PDF was deleted (purge_source or DELETE /jobs/{job_id}/source; carries source_deleted_at); or the job of an Idempotency-Key was deleted.",
       "413": "File above the size limit.",
       "422":
         "Unsupported file type, invalid output_format/format, an upload with no project, or an invalid project/folder name.",
+      "429":
+        "Rate limit: logins per IP and per account, or registrations per IP.",
       "500": "On /result: the job failed (the reason is in detail).",
-      "503": "Transcription disabled on the server, or no workers available.",
+      "503":
+        "Transcription/vision disabled, no workers available, or SOURCE_DELETE_FAILED (storage refused; call again).",
+      "504":
+        "VISION_TIMEOUT with wait=true: the job keeps running; poll poll_url.",
     },
   },
 };
@@ -1056,6 +1180,10 @@ const MEDIA_COPY = {
         "X-Source-Token",
         "Header obrigatório para gdrive e dropbox: token do provedor, separado da autenticação do Ingestify.",
       ],
+      [
+        "purge_source",
+        "Opcional, padrão false. true apaga os arquivos de origem quando o job termina; o resultado fica. Veja Arquivos de origem abaixo.",
+      ],
     ],
     presetsTitle: "Escolher velocidade e OCR",
     presetsHead: ["Preset", "OCR", "Imagens", "Tabelas", "Uso"],
@@ -1070,6 +1198,27 @@ const MEDIA_COPY = {
       "O mesmo arquivo no mesmo projeto reaproveita um job que não esteja failed e adiciona as tags. A pasta do job existente é preservada; trocar o preset no reenvio não força outra conversão. Um arquivo em outro projeto é processado novamente.",
     docsResult:
       "Consulte /jobs/{job_id} a cada poucos segundos e leia result.markdown de /jobs/{job_id}/result quando completed. Documentos não geram VTT/SRT. /result retorna 400 enquanto o job processa, 500 se falhou e 404 se o status/resultado expirou.",
+    sourceTitle: "Arquivos de origem (purge_source)",
+    sourceRows: [
+      [
+        "O que é apagado",
+        "O arquivo enviado (ou o baixado da fonte externa no /convert; o áudio/vídeo no /transcribe), no MinIO e a cópia local, e, num PDF de várias páginas, os PDFs por página. O Markdown (inteiro e por página) e as transcrições ficam.",
+      ],
+      [
+        "Quando",
+        "Ao terminar completed, ou failed/partial depois de esgotadas as tentativas automáticas; nunca enquanto houver retry ou página na fila.",
+      ],
+      [
+        "Arquivo repetido",
+        "Com purge_source=true, o job existente do mesmo projeto volta com duplicate: true e passa a apagar a origem (na hora, se já terminou). Com false, um job cuja origem foi (ou será) apagada não é reaproveitado: um job novo é criado.",
+      ],
+      [
+        "Depois",
+        "GET /jobs/{job_id} traz source_available=false e source_deleted_at. GET /jobs/{id}/pages/{n}/pdf responde 410 SOURCE_PURGED e o retry de página, 409 SOURCE_NOT_AVAILABLE.",
+      ],
+    ],
+    sourceDelete:
+      "Para apagar o original depois, sem esperar purge_source, use DELETE /jobs/{job_id}/source (exige a permissão de excluir o job). 200: {job_id, source_deleted: true, source_deleted_at}. 404: job inexistente, de outro usuário ou sem arquivos de origem. 409 JOB_STILL_PROCESSING: o job ou uma página ainda está na fila, em processamento ou aguardando nova tentativa (consulte source_deletable). 503 SOURCE_DELETE_FAILED: o armazenamento recusou; o que não foi apagado continua referenciado e chamar de novo termina. Funciona igual para transcrições e jobs de imagem.",
     example: "Exemplos de requisição",
     resultExample: "Exemplo ilustrativo de resultado",
     pagesIntro:
@@ -1095,7 +1244,7 @@ const MEDIA_COPY = {
       ],
     ],
     pagesNote:
-      "Antes do split, /pages pode responder 404; durante a criação, pages[] pode estar incompleto e job_id pode ser null. Consulte novamente. Páginas failed bloqueiam o merge até serem recuperadas. Todos os endpoints exigem autenticação e verificam o dono.",
+      "Antes do split, /pages pode responder 404; durante a criação, pages[] pode estar incompleto e job_id pode ser null. Consulte novamente. Páginas failed bloqueiam o merge: quando todas as páginas terminam e alguma falhou de vez, o job principal fica partial (as convertidas continuam em /pages/{n}/result) e um retry de página o reabre; o merge conclui o job quando todas estão completed. Depois de purge_source ou DELETE /jobs/{job_id}/source, /pages/{n}/pdf responde 410 SOURCE_PURGED (com source_deleted_at) e o retry responde 409 SOURCE_NOT_AVAILABLE. Todos os endpoints exigem autenticação e verificam o dono.",
     pdfNote:
       "Abra a url assinada diretamente, sem Authorization ou X-API-Key. Ela vale por 15 minutos; peça outra quando expirar e preserve toda a query string. Não acrescente parâmetros à URL.",
     engineNote:
@@ -1170,6 +1319,10 @@ const MEDIA_COPY = {
         "X-Source-Token",
         "Required header for gdrive and dropbox: the provider token, separate from Ingestify authentication.",
       ],
+      [
+        "purge_source",
+        "Optional, default false. true deletes the source files when the job finishes; the result stays. See Source files below.",
+      ],
     ],
     presetsTitle: "Choosing speed and OCR",
     presetsHead: ["Preset", "OCR", "Images", "Tables", "Usage"],
@@ -1184,6 +1337,27 @@ const MEDIA_COPY = {
       "The same file in the same project reuses a job that is not failed and adds the supplied tags. The existing job's folder is preserved; changing the preset on re-upload does not force conversion. Uploading to another project processes the file again.",
     docsResult:
       "Poll /jobs/{job_id} every few seconds and read result.markdown from /jobs/{job_id}/result once completed. Documents do not produce VTT/SRT. /result returns 400 while processing, 500 on failure and 404 if the status/result has expired.",
+    sourceTitle: "Source files (purge_source)",
+    sourceRows: [
+      [
+        "What is deleted",
+        "The uploaded file (or the one downloaded from the external source on /convert; the audio/video on /transcribe), in MinIO and the local copy, and, for a multi-page PDF, the per-page PDFs. The Markdown (whole and per page) and transcripts stay.",
+      ],
+      [
+        "When",
+        "When the job ends completed, or failed/partial after every automatic retry ran; never while a retry or a page is still queued.",
+      ],
+      [
+        "Repeated file",
+        "With purge_source=true, the existing job in the same project comes back with duplicate: true and starts deleting its source (right away if it already finished). With false, a job whose source was (or will be) deleted is not reused: a new job is created.",
+      ],
+      [
+        "Afterwards",
+        "GET /jobs/{job_id} shows source_available=false and source_deleted_at. GET /jobs/{id}/pages/{n}/pdf answers 410 SOURCE_PURGED and a page retry, 409 SOURCE_NOT_AVAILABLE.",
+      ],
+    ],
+    sourceDelete:
+      "To delete the original later, without purge_source, call DELETE /jobs/{job_id}/source (requires permission to delete the job). 200: {job_id, source_deleted: true, source_deleted_at}. 404: the job doesn't exist, belongs to another user or has no source files. 409 JOB_STILL_PROCESSING: the job or a page is still queued, processing or waiting for a retry (check source_deletable). 503 SOURCE_DELETE_FAILED: storage refused; whatever was not deleted stays referenced and calling again finishes it. Works the same for transcripts and image jobs.",
     example: "Request examples",
     resultExample: "Illustrative result example",
     pagesIntro:
@@ -1209,7 +1383,7 @@ const MEDIA_COPY = {
       ],
     ],
     pagesNote:
-      "Before splitting, /pages may return 404; during creation, pages[] may be incomplete and job_id may be null. Poll again. Failed pages block the merge until recovered. Every endpoint requires authentication and checks ownership.",
+      "Before splitting, /pages may return 404; during creation, pages[] may be incomplete and job_id may be null. Poll again. Failed pages block the merge: once every page has finished and some failed for good, the main job becomes partial (converted pages stay at /pages/{n}/result) and a page retry reopens it; the merge completes the job once every page is completed. After purge_source or DELETE /jobs/{job_id}/source, /pages/{n}/pdf answers 410 SOURCE_PURGED (with source_deleted_at) and a retry answers 409 SOURCE_NOT_AVAILABLE. Every endpoint requires authentication and checks ownership.",
     pdfNote:
       "Open the signed url directly, without Authorization or X-API-Key. It lasts 15 minutes; request another after it expires and preserve its entire query string. Do not add URL parameters.",
     engineNote:
@@ -1301,6 +1475,18 @@ function MediaSections({ lang, section }: { lang: Lang; section: string }) {
             ]),
           )}
           <P small>{t.docsDuplicate}</P>
+          <Subheading>{t.sourceTitle}</Subheading>
+          <Table head={t.fields} rows={t.sourceRows} />
+          {block(
+            curl("/upload", [
+              `  -F "file=@${pt ? "contrato" : "contract"}.pdf"`,
+              `  -F "project=${project}"`,
+              '  -F "purge_source=true"',
+            ]),
+          )}
+          <Endpoint method="DELETE" path="/jobs/{job_id}/source" />
+          <P small>{t.sourceDelete}</P>
+          {block(curl(`/jobs/${EXAMPLE_JOB_ID}/source`, [], "DELETE"))}
           <P>{t.docsResult}</P>
           {block(curl(`/jobs/${EXAMPLE_JOB_ID}/result`, [], "GET"))}
           <Subheading>{t.resultExample}</Subheading>
@@ -1774,77 +1960,89 @@ curl --fail "${API_URL}/admin/gpus" \\
 
 function PlatformSettingsDocs({ lang }: { lang: Lang }) {
   const pt = lang === "pt";
+  const copy = COPY[lang].copy;
   return (
     <Section
       id="platform-settings"
       title={pt ? "Configurações da plataforma" : "Platform settings"}
     >
       <P>
-        {pt ? (
-          <>
-            Em <A href="/admin/settings">Admin → Settings → Allow signups</A>,
-            um administrador pode liberar ou fechar novos cadastros. A alteração
-            é salva imediatamente e permanece após reiniciar a plataforma.
-          </>
-        ) : (
-          <>
-            Under <A href="/admin/settings">Admin → Settings → Allow signups</A>
-            , an administrator can enable or disable new registrations. Changes
-            are saved immediately and persist across restarts.
-          </>
-        )}
+        {pt
+          ? "As configurações da instalação vêm de variáveis de ambiente lidas na inicialização da API (backend/shared/config.py). Esta versão não tem endpoint para alterá-las em tempo de execução; o acesso administrativo é concedido por papéis em Admin → Acesso."
+          : "Installation settings come from environment variables read when the API starts (backend/shared/config.py). This version has no endpoint to change them at runtime; administrative access is granted with roles under Admin → Access."}
       </P>
       <Subheading>
-        {pt ? "Controle de cadastro" : "Registration control"}
+        {pt ? "Primeira instalação e usuário root" : "First install and root user"}
       </Subheading>
-      <Endpoint method="GET" path="/auth/registration-settings" />
+      <Endpoint method="GET" path="/auth/setup" />
       <P>
         {pt
-          ? "Consulta pública da disponibilidade de cadastro, sem autenticação e sem cache HTTP. Apenas essa política é exposta."
-          : "Public registration availability, without authentication or HTTP caching. Only this policy is exposed."}
+          ? "Consulta pública, usada pela tela de cadastro. root_pending é true só numa instalação nova (nenhum usuário): o próximo cadastro vira o root, o administrador de bootstrap que não pode ser desativado nem perder o acesso de administrador (ROOT_IMMUTABLE). setup_token_required indica se esse cadastro precisa de ROOT_SETUP_TOKEN: sempre em produção e, fora dela, quando a variável está definida."
+          : "Public call used by the registration screen. root_pending is true only on a brand-new installation (no users): the next registration becomes root, the bootstrap administrator that cannot be deactivated or lose administrator access (ROOT_IMMUTABLE). setup_token_required says whether that registration needs ROOT_SETUP_TOKEN: always in production and, elsewhere, when the variable is set."}
       </P>
       <CodeBlock
-        code={'{"signup_enabled": true}'}
-        copyLabel={COPY[lang].copy}
+        code={'{"root_exists": false, "root_pending": true, "setup_token_required": true}'}
+        copyLabel={copy}
       />
-      <Endpoint method="GET" path="/admin/settings" />
-      <Endpoint method="PATCH" path="/admin/settings" />
-      <P>
-        {pt
-          ? "A leitura e a alteração das configurações exigem uma sessão de administrador. Envie false para fechar ou true para reabrir; somente booleanos JSON são aceitos, e campos desconhecidos são recusados."
-          : "Reading and updating settings requires an administrator session. Send false to close registration or true to reopen it; only JSON booleans are accepted, and unknown fields are rejected."}
-      </P>
       <CodeBlock
-        code={`curl -X PATCH "${API_URL}/admin/settings" \\
-  -H "Authorization: Bearer <admin-token>" \\
+        code={`curl -X POST "${API_URL}/auth/register" \\
   -H "Content-Type: application/json" \\
-  --data '{"signup_enabled": false}'`}
-        copyLabel={COPY[lang].copy}
+  --data '{"email": "admin@example.com", "username": "admin", "password": "${pt ? "SenhaForte123" : "StrongPass123"}", "setup_token": "ROOT_SETUP_TOKEN"}'`}
+        copyLabel={copy}
       />
-      <Subheading>
-        {pt ? "Quando o cadastro está fechado" : "When registration is closed"}
-      </Subheading>
-      <P>
-        {pt ? (
-          <>
-            O endpoint <C>POST /auth/register</C> retorna <C>403</C>, inclusive
-            em chamadas diretas ou feitas por um administrador. O login oculta o
-            link de cadastro, e a página de registro informa que o cadastro está
-            fechado. Login, sessões e contas existentes continuam funcionando.
-          </>
-        ) : (
-          <>
-            The <C>POST /auth/register</C> endpoint returns <C>403</C>,
-            including direct calls or calls by administrators. Login hides the
-            registration link, and the registration page shows that registration
-            is closed. Login, sessions and existing accounts keep working.
-          </>
-        )}
-      </P>
       <P small>
         {pt
-          ? "O padrão de uma instalação sem configuração é cadastro habilitado. As páginas atualizam a política ao abrir, ao recuperar foco e a cada 30 segundos; a API verifica a configuração atual em cada tentativa de cadastro. Se a consulta falhar, o formulário não é liberado."
-          : "An installation without a saved policy defaults to registration enabled. Pages refresh the policy on load, on focus and every 30 seconds; the API checks the current setting on every registration attempt. If the policy request fails, the form is not enabled."}
+          ? "Sem o token (ou com outro), o cadastro do root responde 403 ROOT_SETUP_TOKEN_REQUIRED ou ROOT_SETUP_TOKEN_INVALID. setup_token é ignorado depois que o root existe. Uma instalação que já tinha usuários antes do root continua com cadastros comuns; o operador designa o root no servidor com scripts/make_admin.py --email ... --root."
+          : "Without the token (or with another one), root registration answers 403 ROOT_SETUP_TOKEN_REQUIRED or ROOT_SETUP_TOKEN_INVALID. setup_token is ignored once root exists. An installation that had users before root keeps plain registrations; the operator designates root on the server with scripts/make_admin.py --email ... --root."}
+      </P>
+      <Subheading>{pt ? "Variáveis principais" : "Key variables"}</Subheading>
+      <Table
+        head={pt ? ["Variável", "Efeito"] : ["Variable", "Effect"]}
+        rows={[
+          [
+            <C key="v">ROOT_SETUP_TOKEN</C>,
+            pt
+              ? "Token exigido para criar o root (obrigatório em produção)."
+              : "Token required to create root (mandatory in production).",
+          ],
+          [
+            <C key="v">IAM_MODE</C>,
+            pt
+              ? "off (padrão): vale a regra legada (administrador efetivo e dono do recurso) e os bindings ficam inertes. shadow: a regra legada responde e divergências com os bindings vão para o log. enforce: os bindings decidem; também liga o acesso delegado a engines."
+              : "off (default): the legacy rule applies (effective administrator and resource owner) and bindings are inert. shadow: the legacy rule answers and divergences from the bindings are logged. enforce: bindings decide; it also turns on delegated engine access.",
+          ],
+          [
+            <C key="v">ADMIN_USER_IDS</C>,
+            pt
+              ? "IDs tratados como administradores de bootstrap, além de users.is_admin."
+              : "IDs treated as bootstrap administrators, in addition to users.is_admin.",
+          ],
+          [
+            <C key="v">RATE_LIMIT_PER_MINUTE / LOGIN_MAX_FAILED_ATTEMPTS / LOGIN_LOCKOUT_SECONDS / REGISTER_LIMIT_PER_HOUR</C>,
+            pt
+              ? "Logins por IP por minuto (10), falhas por conta antes do bloqueio temporário (5, por 900 s) e cadastros por IP por hora (5). Excedeu: 429."
+              : "Logins per IP per minute (10), failures per account before a temporary lockout (5, for 900 s) and registrations per IP per hour (5). Exceeded: 429.",
+          ],
+          [
+            <C key="v">MAX_FILE_SIZE_MB / RESULT_TTL_SECONDS</C>,
+            pt
+              ? "Limite de upload (50 MB) e tempo do cache de resultados no Redis."
+              : "Upload limit (50 MB) and Redis result cache time.",
+          ],
+        ]}
+      />
+      <P small>
+        {pt ? (
+          <>
+            Papéis e permissões:{" "}
+            <A href="/pt/docs/engine-access">Acesso e permissões (IAM)</A>.
+          </>
+        ) : (
+          <>
+            Roles and permissions:{" "}
+            <A href="/docs/engine-access">Access and permissions (IAM)</A>.
+          </>
+        )}
       </P>
     </Section>
   );
@@ -2038,6 +2236,54 @@ export function TopicContent({ topic, lang }: { topic: string; lang: Lang }) {
           {block(code.curlStatus)}
           {block(RESPONSES.status)}
           {t.statusFields}
+          <P small>
+            {lang === "pt" ? "Enum JobStatus no contrato: " : "JobStatus enum in the contract: "}
+            {JOB_STATUSES.map((status, i) => (
+              <span key={status}>
+                {i > 0 && ", "}
+                <C>{status}</C>
+              </span>
+            ))}
+            .
+          </P>
+          <Subheading>
+            {lang === "pt" ? "Arquivo original" : "Original file"}
+          </Subheading>
+          <Table
+            head={
+              lang === "pt"
+                ? ["Campo", "Tipo", "Significado"]
+                : ["Field", "Type", "Meaning"]
+            }
+            rows={schemaRows(
+              "JobStatusResponse",
+              lang === "pt"
+                ? {
+                    source_available:
+                      "O original (arquivo enviado e PDFs das páginas) ainda existe. false depois de purge_source ou DELETE /jobs/{job_id}/source, e sempre em jobs filhos.",
+                    source_deleted_at:
+                      "Quando os arquivos de origem foram apagados (UTC); null se não foram.",
+                    source_deletable:
+                      "DELETE /jobs/{job_id}/source pode rodar agora: há arquivo e nada na fila (nem o job, nem retry automático, nem página pendente).",
+                  }
+                : {
+                    source_available:
+                      "The original (uploaded file and page PDFs) still exists. false after purge_source or DELETE /jobs/{job_id}/source, and always on child jobs.",
+                    source_deleted_at:
+                      "When the source files were deleted (UTC); null if they were not.",
+                    source_deletable:
+                      "DELETE /jobs/{job_id}/source can run now: there is a file and nothing queued (neither the job, an automatic retry nor a pending page).",
+                  },
+            )}
+          />
+          <P small>
+            {lang === "pt"
+              ? "Apagar o original nunca apaga o resultado. Veja purge_source e DELETE /jobs/{job_id}/source em PDF e documentos."
+              : "Deleting the original never deletes the result. See purge_source and DELETE /jobs/{job_id}/source under PDF and documents."}{" "}
+            <A href={lang === "pt" ? "/pt/docs/documents" : "/docs/documents"}>
+              {COPY[lang].sections.documents}
+            </A>
+          </P>
           {t.statusNote}
         </Section>
       );
@@ -2058,6 +2304,11 @@ export function TopicContent({ topic, lang }: { topic: string; lang: Lang }) {
         <Section id="transcribe-result" title={t.sections.result}>
           <Endpoint method="GET" path="/jobs/{job_id}/result?format=…" />
           {t.resultIntro}
+          <P small>
+            {lang === "pt"
+              ? "/result responde 400 enquanto o job está queued/processing e 500 se ele falhou. Full Analysis e análise facial respondem 202 enquanto rodam e entregam o relatório em partial e podem entregar um relatório de diagnóstico em failed e cancelled. Num PDF partial (páginas que falharam), o Markdown unificado só existe depois que todas as páginas concluem: leia as convertidas em /jobs/{job_id}/pages/{n}/result. purge_source e DELETE /jobs/{job_id}/source não apagam o resultado."
+              : "/result answers 400 while the job is queued/processing and 500 if it failed. Full Analysis and face analysis answer 202 while running and deliver the report for partial runs and may provide a diagnostic report for failed and cancelled ones. For a partial PDF (failed pages), the merged Markdown only exists once every page completes: read converted pages from /jobs/{job_id}/pages/{n}/result. purge_source and DELETE /jobs/{job_id}/source never delete the result."}
+          </P>
           {block(code.curlResult)}
 
           <Table

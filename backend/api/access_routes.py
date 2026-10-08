@@ -19,32 +19,32 @@ def ready():
     invoke(service.require_enabled)
 
 
-@router.get("/access/me")
+@router.get("/access/me", summary="Meu acesso às engines")
 def me(user=Depends(access_session), db: Session = Depends(get_db)):
     return policy.navigation(db, user)
 
 
-@router.get("/execution-profiles")
+@router.get("/execution-profiles", summary="Listar perfis de execução")
 def profiles(user=Depends(access_session), db: Session = Depends(get_db)):
     ready()
     return invoke(service.list_profiles, db, user.id)
 
 
-@router.post("/execution-profiles", status_code=201)
+@router.post("/execution-profiles", summary="Criar perfil de execução", status_code=201)
 def create(
     body: C.ProfileCreate, user=Depends(access_session), db: Session = Depends(get_db)
 ):
     return invoke(service.create_profile, db, body, user.id)
 
 
-@router.get("/execution-profiles/{id}")
+@router.get("/execution-profiles/{id}", summary="Detalhar perfil de execução")
 def detail(id: str, user=Depends(access_session), db: Session = Depends(get_db)):
     ready()
     p = invoke(service.get_profile, db, id, user.id)
     return service.view(db, p, user.id, True)
 
 
-@router.put("/execution-profiles/{id}")
+@router.put("/execution-profiles/{id}", summary="Atualizar metadados do perfil de execução")
 def metadata(
     id: str,
     body: C.MetadataUpdate,
@@ -55,7 +55,7 @@ def metadata(
     return invoke(service.metadata, db, id, body, user.id)
 
 
-@router.post("/execution-profiles/{id}/revisions", status_code=201)
+@router.post("/execution-profiles/{id}/revisions", summary="Criar revisão do perfil de execução", status_code=201)
 def revision(
     id: str,
     body: C.RevisionCreate,
@@ -65,7 +65,7 @@ def revision(
     return invoke(service.revise, db, id, body, user.id)
 
 
-@router.post("/execution-profiles/{id}/publish")
+@router.post("/execution-profiles/{id}/publish", summary="Publicar revisão do perfil de execução")
 def publish(
     id: str,
     body: C.Publish,
@@ -76,7 +76,7 @@ def publish(
     return invoke(service.publish, db, id, body, user.id)
 
 
-@router.post("/execution-profiles/{id}/archive")
+@router.post("/execution-profiles/{id}/archive", summary="Arquivar perfil de execução")
 def archive(
     id: str,
     body: C.Version,
@@ -87,7 +87,7 @@ def archive(
     return invoke(service.archive, db, id, body.version, user.id)
 
 
-@router.post("/engines/{id}/runtime-profile/bind")
+@router.post("/engines/{id}/runtime-profile/bind", summary="Vincular perfil publicado ao runtime da engine")
 def bind(
     id: str, body: C.Bind, user=Depends(access_session), db: Session = Depends(get_db)
 ):
@@ -95,7 +95,7 @@ def bind(
     return invoke(service.bind, db, e, body, user.id)
 
 
-@router.post("/engines/{id}/runtime-profile/import", status_code=201)
+@router.post("/engines/{id}/runtime-profile/import", summary="Importar perfil do runtime da engine", status_code=201)
 def import_profile(
     id: str,
     body: C.ProfileCreate,
@@ -127,20 +127,20 @@ def import_profile(
     return invoke(service.create_profile, db, body, user.id)
 
 
-@router.get("/access/policies")
+@router.get("/access/policies", summary="Listar políticas de acesso")
 def policies(user=Depends(access_session), db: Session = Depends(get_db)):
     ready()
     return invoke(service.list_policies, db, user.id)
 
 
-@router.post("/access/policies", status_code=201)
+@router.post("/access/policies", summary="Criar política de acesso", status_code=201)
 def policy_create(
     body: C.PolicyCreate, user=Depends(access_session), db: Session = Depends(get_db)
 ):
     return invoke(service.create_policy, db, body, user.id)
 
 
-@router.post("/access/policies/{id}/revisions", status_code=201)
+@router.post("/access/policies/{id}/revisions", summary="Revisar política de acesso", status_code=201)
 def policy_revise(
     id: str,
     body: C.PolicyUpdate,
@@ -151,14 +151,14 @@ def policy_revise(
     return invoke(service.revise_policy, db, id, body, user.id)
 
 
-@router.get("/access/roles")
+@router.get("/access/roles", summary="Listar papéis de engines")
 def roles(user=Depends(access_session), db: Session = Depends(get_db)):
     ready()
     invoke(policy.authorize, db, user.id, "access.grants.manage")
     return {k: sorted(v) for k, v in policy.ROLES.items()}
 
 
-@router.get("/access/subjects")
+@router.get("/access/subjects", summary="Listar sujeitos de acesso")
 def subjects(user=Depends(access_session), db: Session = Depends(get_db)):
     # Subject directory is bootstrap-only. Delegated admins address subjects by explicit ID.
     ready()
@@ -171,20 +171,20 @@ def subjects(user=Depends(access_session), db: Session = Depends(get_db)):
 
 # Deprecated aliases (spec 0018 §4.5, CA8): the engines family of
 # /admin/iam/bindings, with the 0009 contract unchanged (tests/test_iam_access_grant_aliases.py).
-@router.get("/access/grants", deprecated=True)
+@router.get("/access/grants", summary="Listar concessões de engines", deprecated=True)
 def grants(user=Depends(access_session), db: Session = Depends(get_db)):
     ready()
     return invoke(service.list_grants, db, user.id)
 
 
-@router.post("/access/grants", status_code=201, deprecated=True)
+@router.post("/access/grants", summary="Conceder papel de engines", status_code=201, deprecated=True)
 def grant(
     body: C.GrantCreate, user=Depends(access_session), db: Session = Depends(get_db)
 ):
     return invoke(service.create_grant, db, body, user.id)
 
 
-@router.post("/access/grants/{id}/revoke", deprecated=True)
+@router.post("/access/grants/{id}/revoke", summary="Revogar concessão de engines", deprecated=True)
 def revoke(
     id: str,
     body: C.Version,
@@ -195,7 +195,7 @@ def revoke(
     return invoke(service.revoke, db, id, body.version, user.id)
 
 
-@router.get("/access/engine-attributes")
+@router.get("/access/engine-attributes", summary="Listar atributos de ambiente das engines")
 def attributes(user=Depends(access_session), db: Session = Depends(get_db)):
     ready()
     invoke(service.bootstrap, db, user.id)
@@ -205,7 +205,7 @@ def attributes(user=Depends(access_session), db: Session = Depends(get_db)):
     ]
 
 
-@router.put("/access/engine-attributes/{id}")
+@router.put("/access/engine-attributes/{id}", summary="Classificar ambiente da engine")
 def classify(
     id: str,
     body: C.AttributesUpdate,
@@ -218,7 +218,7 @@ def classify(
     return invoke(service.set_attributes, db, e, body, user.id)
 
 
-@router.get("/access/resources")
+@router.get("/access/resources", summary="Listar recursos qualificados")
 def resources(user=Depends(access_session), db: Session = Depends(get_db)):
     ready()
     invoke(service.bootstrap, db, user.id)
@@ -237,7 +237,7 @@ def resources(user=Depends(access_session), db: Session = Depends(get_db)):
     return rows
 
 
-@router.put("/access/resources")
+@router.put("/access/resources", summary="Qualificar recurso")
 def qualify(
     body: C.ScopeUpdate, user=Depends(access_session), db: Session = Depends(get_db)
 ):
@@ -245,7 +245,7 @@ def qualify(
     return invoke(service.set_scope, db, body, user.id)
 
 
-@router.get("/execution-profile-hosts")
+@router.get("/execution-profile-hosts", summary="Listar hosts de perfis de execução")
 def hosts(user=Depends(access_session), db: Session = Depends(get_db)):
     from shared.engine_control.models import ControlHost
 
@@ -260,7 +260,7 @@ def hosts(user=Depends(access_session), db: Session = Depends(get_db)):
     )
 
 
-@router.get("/access/installation-principals")
+@router.get("/access/installation-principals", summary="Listar principais da instalação")
 def principals(user=Depends(access_session), db: Session = Depends(get_db)):
     ready()
     invoke(service.bootstrap, db, user.id)
@@ -272,7 +272,7 @@ def principals(user=Depends(access_session), db: Session = Depends(get_db)):
     ]
 
 
-@router.post("/access/installation-principals", status_code=201)
+@router.post("/access/installation-principals", summary="Criar principal da instalação", status_code=201)
 def principal_create(
     body: C.PrincipalCreate, user=Depends(access_session), db: Session = Depends(get_db)
 ):
@@ -291,7 +291,7 @@ def principal_create(
     return dict(id=p.id, active=p.active, version=p.version, purpose=p.purpose)
 
 
-@router.put("/access/installation-principals/{id}")
+@router.put("/access/installation-principals/{id}", summary="Alterar estado de principal da instalação")
 def principal_state(
     id: str,
     body: C.PrincipalState,
@@ -321,7 +321,7 @@ def principal_state(
     return dict(id=p.id, active=p.active, version=p.version, purpose=p.purpose)
 
 
-@router.put("/access/subjects/{id}/state")
+@router.put("/access/subjects/{id}/state", summary="Alterar estado de sujeito de acesso")
 def subject_state(
     id: str,
     body: C.SubjectState,

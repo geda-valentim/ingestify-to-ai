@@ -323,7 +323,7 @@ class TestPublishedOpenApiDocumentIsFresh:
     `frontend/docs/doc2md_openapi.json` is a *generated* artifact, and it had
     silently fallen ten operations behind the app - including `DELETE
     /jobs/{job_id}` and the page-retry route, i.e. two of the routes these P0s
-    were about. `info.version` is pinned at "1.0.0" on both sides, so it signals
+    were about. `info.version` was pinned at "1.0.0" for a long time, so it signalled
     nothing; without something mechanical, drift is invisible.
 
     This is the one place a whole-schema comparison earns its keep: the file is

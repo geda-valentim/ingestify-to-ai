@@ -78,6 +78,14 @@ export function DocsBrowser({
       >
         Swagger ↗
       </a>
+      <a
+        href={`${API_URL}/redoc`}
+        target="_blank"
+        rel="noreferrer"
+        className="block px-3 text-primary underline underline-offset-4"
+      >
+        ReDoc ↗
+      </a>
     </nav>
   );
 

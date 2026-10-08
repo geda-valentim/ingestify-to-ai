@@ -39,13 +39,13 @@ def require_faces(mode):
     return capabilities
 
 
-@router.get('/capabilities', summary='Modelos, parâmetros e prontidão da análise facial')
+@router.get('/capabilities', summary="Modelos, parâmetros e prontidão da análise facial")
 def capabilities(user: User = Depends(require("images.analyze"))):
     return face_capabilities()
 
 
 @router.post('', response_model=FaceAnalyzeResponse | ImageFullQueuedResponse, status_code=202,
-             summary='Detectar rostos e analisar expressões em uma imagem base64')
+             summary="Detectar rostos e expressões (JSON base64)")
 async def analyze(request: FaceAnalyzeRequest, http_request: Request,
                   user: User = Depends(require("images.analyze")), db: Session = Depends(get_db),
                   idempotency_key: str = Header(..., min_length=1, max_length=128)):
@@ -57,7 +57,7 @@ async def analyze(request: FaceAnalyzeRequest, http_request: Request,
 
 
 @router.post('/upload', response_model=FaceAnalyzeResponse | ImageFullQueuedResponse, status_code=202,
-             summary='Upload de imagem para detecção facial e expressões')
+             summary="Detectar rostos e expressões (multipart)")
 async def upload(http_request: Request, file: UploadFile = File(...), face_options: str | None = Form(None),
                  wait: bool = Form(False), project: str | None = Form(None), project_id: str | None = Form(None),
                  folder: str | None = Form(None), folder_id: str | None = Form(None), tags: str | None = Form(None),

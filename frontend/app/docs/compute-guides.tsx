@@ -1210,18 +1210,66 @@ print(desired)  # Desired snapshot only; review an operation plan to apply it.`,
     related: ["engine-operations", "engine-access", "engines"],
   },
   "engine-access": {
-    title: x("Acesso a engines: RBAC e ABAC", "Engine access: RBAC and ABAC"),
+    title: x("Acesso e permissões (IAM)", "Access and permissions (IAM)"),
     intro: x(
-      "RBAC define a ação concedida por um papel. ABAC limita essa ação a engines, perfis, recursos e valores autorizados. A decisão consulta a autoridade SQL atual; possuir um job ou projeto não concede permissão para controlar o worker compartilhado.",
-      "RBAC defines the action granted by a role. ABAC limits that action to authorized engines, profiles, resources and values. Decisions read current SQL authority; owning a job or project does not grant permission to control a shared worker.",
+      "Todo acesso administrativo é um binding IAM: um papel concedido a um usuário, com validade UTC de no máximo 365 dias. Há duas famílias de papéis que não se enxergam: plataforma (administração entre usuários) e engines (os papéis da spec 0009, agora guardados como bindings IAM com uma revisão de política como condição). Dados do próprio usuário (jobs, projetos, API keys) são decididos pela posse, nunca por binding; possuir um job ou projeto não concede controle do worker compartilhado.",
+      "All administrative access is an IAM binding: a role granted to a user with a UTC expiry of at most 365 days. There are two role families that never see each other: platform (cross-user administration) and engines (the spec 0009 roles, now stored as IAM bindings with a policy revision as their condition). A user's own data (jobs, projects, API keys) is decided by ownership, never by a binding; owning a job or project does not grant control of the shared worker.",
     ),
     parts: [
       {
-        title: x("Requisitos e papéis", "Requirements and roles"),
+        title: x("Root, bootstrap e Admin → Acesso", "Root, bootstrap and Admin → Access"),
         paragraphs: [
           x(
-            "Admin → Acesso (/admin/access) reúne, numa só tela, os bindings de plataforma e de engines; a parte de engines usa sessão JWT, schema migrado e IAM_MODE=enforce (ou ENGINE_ACCESS_ENABLED=true). Bootstrap é o admin efetivo ativo (is_admin ou ADMIN_USER_IDS); mantém acesso de emergência e gerencia atributos confiáveis. Usuários delegados precisam de bindings de engines válidos e não se tornam admin global. Ninguém concede papel a si mesmo.",
-            "Admin → Access (/admin/access) holds platform and engine bindings on one screen; the engine part uses a JWT session, migrated schema and IAM_MODE=enforce (or ENGINE_ACCESS_ENABLED=true). Bootstrap is the active effective admin (is_admin or ADMIN_USER_IDS); it retains emergency access and manages trusted attributes. Delegated users need valid engine bindings and do not become global admins. Nobody grants a role to themselves.",
+            "Root: numa instalação nova (GET /auth/setup com root_pending=true), o primeiro cadastro vira o root, com ROOT_SETUP_TOKEN quando exigido (sempre em produção). O root é administrador de bootstrap e não pode ser desativado nem perder o acesso de administrador (409 ROOT_IMMUTABLE). Instalações antigas designam o root com scripts/make_admin.py --root.",
+            "Root: on a new installation (GET /auth/setup with root_pending=true), the first registration becomes root, with ROOT_SETUP_TOKEN when required (always in production). Root is a bootstrap administrator and cannot be deactivated or lose administrator access (409 ROOT_IMMUTABLE). Older installations designate root with scripts/make_admin.py --root.",
+          ),
+          x(
+            "Bootstrap é o administrador efetivo ativo (users.is_admin ou ADMIN_USER_IDS): equivale a platform_admin, nunca é representado por um binding e mantém acesso de emergência. Os bindings só decidem com IAM_MODE=enforce; em off valem a regra legada (bootstrap e posse) e, em shadow, a regra legada responde e divergências vão para o log.",
+            "Bootstrap is the active effective administrator (users.is_admin or ADMIN_USER_IDS): it equals platform_admin, is never represented by a binding and keeps emergency access. Bindings only decide with IAM_MODE=enforce; in off the legacy rule (bootstrap and ownership) applies and, in shadow, the legacy rule answers and divergences are logged.",
+          ),
+          x(
+            "Admin → Acesso (/admin/access) é a única tela de concessões: a aba Concessões lista e concede bindings das duas famílias por /admin/iam/bindings; Políticas, Atributos de engine, Recursos e Principais de instalação cuidam das condições de engines. O antigo /admin/platform-access redireciona para lá. Papel de plataforma é concedido com iam.bindings.manage; papel de engines com access.grants.manage dentro do envelope de delegação. Ninguém concede papel a si mesmo. GET /iam/permissions publica o catálogo e POST /iam/check diz quais permissões o chamador tem.",
+            "Admin → Access (/admin/access) is the single grants screen: the Grants tab lists and grants bindings of both families through /admin/iam/bindings; Policies, Engine attributes, Resources and Installation principals manage engine conditions. The former /admin/platform-access redirects there. A platform role is granted with iam.bindings.manage; an engines role with access.grants.manage within the delegation envelope. Nobody grants a role to themselves. GET /iam/permissions publishes the catalog and POST /iam/check reports which permissions the caller holds.",
+          ),
+        ],
+        head: [x("Papel de plataforma", "Platform role"), x("Concede", "Grants")],
+        rows: [
+          [
+            x("platform_admin", "platform_admin"),
+            x(
+              "Todas as permissões platform.* e iam.*, mais engines.remote.use. É o papel equivalente ao bootstrap.",
+              "Every platform.* and iam.* permission, plus engines.remote.use. Equivalent to bootstrap.",
+            ),
+          ],
+          [
+            x("platform_operator", "platform_operator"),
+            x(
+              "platform.stats.read, platform.jobs.read, platform.jobs.recover, platform.monitoring.read, platform.broker.requeue e platform.routing.read: recupera trabalho travado e acompanha a plataforma, sem mudar configuração.",
+              "platform.stats.read, platform.jobs.read, platform.jobs.recover, platform.monitoring.read, platform.broker.requeue and platform.routing.read: recovers stuck work and watches the platform without changing settings.",
+            ),
+          ],
+          [
+            x("platform_auditor", "platform_auditor"),
+            x(
+              "Somente leitura: todo platform.*.read e iam.bindings.read.",
+              "Read-only: every platform.*.read and iam.bindings.read.",
+            ),
+          ],
+          [
+            x("remote_engine_user", "remote_engine_user"),
+            x(
+              "engines.remote.use: permite que o trabalho do usuário seja colocado em engines remotas (pagas).",
+              "engines.remote.use: lets the user's work be placed on remote (paid) engines.",
+            ),
+          ],
+        ],
+      },
+      {
+        title: x("Papéis de engines", "Engines roles"),
+        paragraphs: [
+          x(
+            "Os seis papéis da spec 0009 continuam com a mesma semântica, mas são guardados como bindings IAM da família engines: subject usuário, permissions materializadas (um subconjunto do papel) e condition_ref apontando uma revisão de política. Exigem sessão JWT, schema migrado e IAM_MODE=enforce (ENGINE_ACCESS_ENABLED é um alias depreciado que ainda prevalece quando definido). Usuários delegados não se tornam administradores globais.",
+            "The six spec 0009 roles keep their semantics but are stored as IAM bindings of the engines family: a user subject, materialized permissions (a subset of the role) and condition_ref pointing to a policy revision. They require a JWT session, the migrated schema and IAM_MODE=enforce (ENGINE_ACCESS_ENABLED is a deprecated alias that still wins when set). Delegated users do not become global administrators.",
           ),
         ],
         head: [

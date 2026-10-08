@@ -598,8 +598,8 @@ const guides: Record<string, Guide> = {
     ),
     requirements: [
       t(
-        "Uma conta com permissão administrativa. As telas e operações de Compute exigem acesso compatível; possuir uma API key de usuário não concede administração.",
-        "An account with administrative permission. Compute screens and operations require appropriate access; possessing a user API key does not grant administration.",
+        "Uma conta com permissão administrativa: o root (primeiro cadastro de uma instalação nova; veja GET /auth/setup), outro administrador de bootstrap ou um papel concedido em Admin → Acesso. Cada seção do Admin aparece só com a permissão correspondente; possuir uma API key de usuário não concede administração.",
+        "An account with administrative permission: root (the first registration of a new installation; see GET /auth/setup), another bootstrap administrator or a role granted under Admin → Access. Each Admin section appears only with the matching permission; possessing a user API key does not grant administration.",
       ),
       t(
         "Conheça a infraestrutura local e as contas externas configuradas. Engines locais e Modal têm capacidades diferentes; cadastrar uma conta não habilita todas as features.",
@@ -627,8 +627,8 @@ const guides: Record<string, Guide> = {
             "In /admin/routing, check destinations by feature. In /admin/gpus, check GPU/capacity. A configured route only executes when its engine and workers meet the requirements.",
           ),
           t(
-            "Em /admin/access, revise papéis, políticas e restrições aplicáveis. Use as configurações da plataforma para disponibilizar features opcionais somente quando seus runtimes estiverem prontos.",
-            "In /admin/access, review applicable roles, policies and constraints. Use platform settings to make optional features available only when their runtimes are ready.",
+            "Em /admin/access (Admin → Acesso), conceda papéis de plataforma (platform_admin, platform_operator, platform_auditor, remote_engine_user) e de engines, revise políticas e restrições. As configurações da plataforma (variáveis de ambiente como IAM_MODE e ROOT_SETUP_TOKEN) definem quando os bindings decidem.",
+            "In /admin/access (Admin → Access), grant platform roles (platform_admin, platform_operator, platform_auditor, remote_engine_user) and engines roles, and review policies and constraints. Platform settings (environment variables such as IAM_MODE and ROOT_SETUP_TOKEN) define when bindings decide.",
           ),
           t(
             "Faça um processamento pequeno de cada operação necessária e confira resultado e entrega. Para operações de engine, revise planos e confirmações do guia específico antes de aplicar mudanças.",
@@ -647,8 +647,8 @@ const guides: Record<string, Guide> = {
         "Jobs remain queued: inspect health, workers, capacity, budget and feature routing. A paused engine or lack of capacity is not fixed by a user resubmitting files.",
       ),
       t(
-        "Operação recusada: confira papel/permissão, política ABAC e requisitos do plano. Não interprete um adapter configurável como suporte ativo a qualquer operação.",
-        "Operation denied: check the role/permission, ABAC policy and plan requirements. Do not interpret a configurable adapter as active support for every operation.",
+        "Operação recusada: leia code, message e next_steps do erro e confira papel/permissão, política de engines e requisitos do plano. Não interprete um adapter configurável como suporte ativo a qualquer operação.",
+        "Operation denied: read the error code, message and next_steps, then check the role/permission, engines policy and plan requirements. Do not interpret a configurable adapter as active support for every operation.",
       ),
     ],
     actions: [

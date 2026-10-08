@@ -99,13 +99,13 @@ def _iam_error(e: bindings.IamError) -> HTTPException:
     return HTTPException(status_code=e.status, detail={"code": e.code, "message": e.detail})
 
 
-@router.get("/iam/permissions", summary="The permission catalog and the managed roles")
+@router.get("/iam/permissions", summary="Catálogo de permissões e papéis gerenciados")
 async def list_permissions(user: User = Depends(authenticated())):
     # `mode` lets the UI say that bindings are inert until IAM_MODE=enforce (§4.11).
     return {**catalog.describe(), "mode": get_settings().iam_mode}
 
 
-@router.post("/iam/check", response_model=List[PermissionCheckResult], summary="Which platform permissions the caller holds")
+@router.post("/iam/check", response_model=List[PermissionCheckResult], summary="Verificar permissões de plataforma do chamador")
 def check_permissions(
     body: List[PermissionCheck],
     request: Request,
@@ -132,7 +132,7 @@ def check_permissions(
     return [PermissionCheckResult(permission=c.permission, allowed=c.permission in held) for c in body]
 
 
-@router.get("/admin/iam/bindings", summary="Platform and engines bindings")
+@router.get("/admin/iam/bindings", summary="Listar vínculos de plataforma e de engines")
 def list_bindings(
     request: Request,
     include_inactive: bool = False,
@@ -157,7 +157,7 @@ def list_bindings(
     return {"bindings": rows}
 
 
-@router.post("/admin/iam/bindings", status_code=201, summary="Grant a platform or engines role")
+@router.post("/admin/iam/bindings", status_code=201, summary="Conceder papel de plataforma ou de engines")
 def grant_binding(
     body: BindingCreate,
     request: Request,
@@ -185,7 +185,7 @@ def grant_binding(
     return bindings.view_any(decider.db, b, decider.now())
 
 
-@router.post("/admin/iam/bindings/{binding_id}/revoke", summary="Revoke a platform or engines binding")
+@router.post("/admin/iam/bindings/{binding_id}/revoke", summary="Revogar vínculo de plataforma ou de engines")
 def revoke_binding(
     binding_id: str,
     body: BindingRevoke,

@@ -150,7 +150,7 @@ def _request_path(request) -> str:
     return getattr(url, "path", "") or ""
 
 
-@router.post("/upload", response_model=JobCreatedResponse, summary="Upload e converter arquivo")
+@router.post("/upload", response_model=JobCreatedResponse, summary="Enviar e converter arquivo")
 async def upload_and_convert(
     file: UploadFile = File(..., description="Arquivo para conversão (PDF, DOCX, HTML, etc.)"),
     name: Optional[str] = Form(None, description="Nome de identificação (opcional, padrão: nome do arquivo)"),
@@ -899,7 +899,7 @@ async def transcribe_audio(
         staging_path.unlink(missing_ok=True)
 
 
-@router.post("/convert", response_model=JobCreatedResponse)
+@router.post("/convert", summary="Converter documento (arquivo, URL, Drive ou Dropbox)", response_model=JobCreatedResponse)
 async def convert_document(
     source_type: str = Form(
         ...,
@@ -1280,7 +1280,7 @@ def _job_status_with_db_fallback(redis_client, job_id: str, owned_job: Optional[
         "error": owned_job.error_message,
     }
 
-@router.get("/jobs/{job_id}", response_model=JobStatusResponse)
+@router.get("/jobs/{job_id}", summary="Estado do job", response_model=JobStatusResponse)
 async def get_job_status(
     job_id: str,
     current_user: User = Depends(get_current_active_user),
@@ -1523,7 +1523,7 @@ async def get_job_status(
     return JobStatusResponse(**response_data)
 
 
-@router.delete("/jobs/{job_id}", summary="Deletar job")
+@router.delete("/jobs/{job_id}", summary="Excluir job")
 async def delete_job(
     job_id: str,
     current_user: User = Depends(get_current_active_user),
@@ -1777,7 +1777,7 @@ async def delete_job_source(
                                  source_deleted_at=source_deleted_at(db_job))
 
 
-@router.get("/jobs/{job_id}/result", response_model=JobResultResponse)
+@router.get("/jobs/{job_id}/result", summary="Resultado do job", response_model=JobResultResponse)
 async def get_job_result(
     job_id: str,
     format_: Optional[str] = Query(
@@ -1969,7 +1969,7 @@ def _transcript_response(job_id: str, fmt: str, redis_client, generation=None, a
     )
 
 
-@router.get("/jobs/{job_id}/transcript/partial", response_model=PartialTranscriptResponse)
+@router.get("/jobs/{job_id}/transcript/partial", summary="Transcrição parcial em andamento", response_model=PartialTranscriptResponse)
 async def get_partial_transcript(
     job_id: str,
     since: int = Query(0, ge=0, description="Índice do primeiro segmento a retornar (o `next` da consulta anterior)"),
@@ -2004,7 +2004,7 @@ async def get_partial_transcript(
     )
 
 
-@router.get("/jobs/{job_id}/pages", response_model=JobPagesResponse)
+@router.get("/jobs/{job_id}/pages", summary="Listar páginas do job", response_model=JobPagesResponse)
 async def get_job_pages(
     job_id: str,
     current_user: User = Depends(get_current_active_user),
@@ -2122,7 +2122,7 @@ async def get_job_pages(
     )
 
 
-@router.get("/jobs/{job_id}/pages/{page_number}/status", summary="Status de página específica por número")
+@router.get("/jobs/{job_id}/pages/{page_number}/status", summary="Estado de uma página")
 async def get_page_status_by_number(
     job_id: str,
     page_number: int,
@@ -2215,7 +2215,7 @@ async def get_page_status_by_number(
     }
 
 
-@router.get("/jobs/{job_id}/pages/{page_number}/result", summary="Resultado de página específica por número")
+@router.get("/jobs/{job_id}/pages/{page_number}/result", summary="Resultado de uma página")
 async def get_page_result_by_number(
     job_id: str,
     page_number: int,
@@ -2586,7 +2586,7 @@ async def search_jobs(
         raise HTTPException(status_code=500, detail="Erro ao buscar jobs")
 
 
-@router.post("/jobs/{job_id}/pages/{page_number}/retry", summary="Retry de página que falhou")
+@router.post("/jobs/{job_id}/pages/{page_number}/retry", summary="Refazer página com falha")
 async def retry_failed_page(
     job_id: str,
     page_number: int,
@@ -2859,7 +2859,7 @@ async def get_page_pdf(
     }
 
 
-@router.get("/health", response_model=HealthCheckResponse)
+@router.get("/health", summary="Verificar saúde da API", response_model=HealthCheckResponse)
 async def health_check():
     """Health check endpoint"""
     redis_client = get_redis_client()

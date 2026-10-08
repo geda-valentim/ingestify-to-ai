@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Ingestify API",
-    "description": "\nAPI assíncrona para conversão de documentos para Markdown usando Docling\n\n## Autenticação\n\nEsta API suporta dois métodos de autenticação:\n\n### 1. Bearer Token (JWT)\n1. Registre um usuário em `/auth/register`\n2. Faça login em `/auth/login` para obter o token\n3. Clique no botão **\"Authorize\"** (cadeado 🔒) no topo desta página\n4. Cole o token no campo \"bearerAuth\" (sem prefixo \"Bearer\")\n5. Clique em \"Authorize\"\n\n### 2. API Key\n1. Faça login para obter um token JWT\n2. Crie uma API Key em `/api-keys/`\n3. Clique no botão **\"Authorize\"** (cadeado 🔒)\n4. Cole a API Key no campo \"apiKeyAuth\"\n5. Clique em \"Authorize\"\n\nApós autorizar, todos os endpoints protegidos usarão automaticamente suas credenciais.\n\nSe um request trouxer **os dois** (Bearer e `X-API-Key`), vale o JWT.\n\n## Projetos e pastas\n\nTodo job pertence a um **projeto** (obrigatório) e, opcionalmente, a uma **pasta** do\nprojeto (um nível). Os endpoints que criam jobs (`/upload`, `/convert`, `/transcribe`,\n`/images/*`) aceitam:\n\n- `project`: nome do projeto. É criado se não existir (*get-or-add*). Caixa, espaços e\n  acentos sobre letras latinas não contam: `Reunião` e ` reuniao ` são o mesmo projeto;\n- `project_id`: ID de um projeto existente (nunca cria);\n- `folder` / `folder_id`: a pasta dentro do projeto (o nome não pode ter `/`).\n\nSem `project`/`project_id`, o job vai para o projeto **vinculado à API key** (veja\n`PATCH /api-keys/{key_id}`). Isso só vale para requests autenticados apenas pela key: com\nJWT, o vínculo é ignorado. Sem projeto no request e sem vínculo, a resposta é **422**.\nUm arquivo repetido só é reaproveitado dentro do mesmo projeto.\n\n```bash\ncurl -H \"X-API-Key: ...\" -F \"file=@aula.mp3\" -F \"project=Aulas\" -F \"folder=Setembro\" .../transcribe\n```\n",
-    "version": "1.0.0"
+    "description": "\nAPI assíncrona que converte documentos (PDF, DOCX, HTML, PPTX, XLSX...) em Markdown,\ntranscreve áudio e vídeo e analisa imagens. Todo pedido vira um **job**: a resposta\ntraz o `job_id` na hora e o trabalho segue em workers Celery. Guias completos no\nportal de documentação (`/pt/docs`); referência gerada em `/redoc` e `/openapi.json`.\n\n## Autenticação\n\n- **JWT** (`bearerAuth`): `POST /auth/login` devolve `access_token`; envie\n  `Authorization: Bearer <token>`. `POST /auth/refresh` renova a sessão.\n- **API key** (`apiKeyAuth`): crie em `POST /api-keys/` (com JWT) e envie\n  `X-API-Key: <chave>`. Uma key pode ser vinculada a um projeto\n  (`PATCH /api-keys/{key_id}`).\n- Com os dois no mesmo request, vale o JWT. Rotas marcadas como sessão de\n  administrador (`x-access: admin-session`) ou só JWT (`x-access: jwt`) recusam API key.\n- No Swagger, clique em **Authorize** e preencha `bearerAuth` (só o token, sem o\n  prefixo `Bearer`) e/ou `apiKeyAuth`. A autorização persiste entre recargas.\n- **Primeira instalação**: `GET /auth/setup` (público) diz se a instalação ainda não tem\n  usuário (`root_pending`) e se o registro exige token. O primeiro `POST /auth/register`\n  de uma instalação vazia cria o **root**, a identidade de bootstrap do IAM. Em produção\n  isso exige `setup_token` igual ao `ROOT_SETUP_TOKEN` do servidor (fora de produção,\n  só quando ele está configurado).\n\n## Permissões (IAM)\n\nCada usuário é dono dos próprios jobs, projetos, tags, API keys e conexões de datalake:\nrecurso de outro usuário responde 404. Rotas `/admin/*` exigem permissões de plataforma\nconcedidas por papéis IAM (`platform_admin`, `platform_operator`, `platform_auditor`,\n`remote_engine_user`), e as rotas de engines usam os papéis de engines (`observer`,\n`engine_operator`, `access_admin`...), hoje guardados como vínculos IAM em\n`/admin/iam/bindings`. Root e os administradores de bootstrap equivalem a\n`platform_admin`. `POST /iam/check` diz o que o chamador pode fazer; `GET /iam/permissions`\nlista o catálogo. O campo `x-access` de cada operação diz a credencial exigida. Guia:\n[Acesso e IAM](/pt/docs/engine-access).\n\n## Projetos e pastas\n\nTodo job pertence a um **projeto** (obrigatório) e, opcionalmente, a uma **pasta** do\nprojeto (um nível). Os endpoints que criam jobs (`/upload`, `/convert`, `/transcribe`,\n`/images/*`) aceitam:\n\n- `project`: nome do projeto. É criado se não existir (*get-or-add*). Caixa, espaços e\n  acentos sobre letras latinas não contam: `Reunião` e ` reuniao ` são o mesmo projeto;\n- `project_id`: ID de um projeto existente (nunca cria);\n- `folder` / `folder_id`: a pasta dentro do projeto (o nome não pode ter `/`).\n\nSem `project`/`project_id`, o job vai para o projeto **vinculado à API key** (veja\n`PATCH /api-keys/{key_id}`). Isso só vale para requests autenticados apenas pela key: com\nJWT, o vínculo é ignorado. Sem projeto no request e sem vínculo, a resposta é **422**.\nUm arquivo repetido só é reaproveitado dentro do mesmo projeto (`duplicate: true`).\n\n```bash\ncurl -H \"X-API-Key: ...\" -F \"file=@aula.mp3\" -F \"project=Aulas\" -F \"folder=Setembro\" .../transcribe\n```\n\n## Ciclo de vida do job\n\n`POST` devolve `job_id`; acompanhe com `GET /jobs/{job_id}` (`status`, `progress`) e\nbusque o resultado em `GET /jobs/{job_id}/result`. Estados (`status`):\n\n- `pending` / `queued`: aceito, aguardando worker;\n- `processing`: em execução (PDF de várias páginas: split → páginas em paralelo → merge;\n  `GET /jobs/{job_id}/pages` mostra cada página);\n- `completed`: concluído;\n- `partial`: terminou com lacunas (ex.: algumas páginas falharam); o resultado\n  preservado fica disponível e as páginas com falha podem ser refeitas\n  (`POST /jobs/{job_id}/pages/{n}/retry`);\n- `failed`: falhou depois das tentativas automáticas; `error` explica;\n- `cancelled`: cancelado (sessões ao vivo, análise composta de imagem).\n\n## Arquivos de origem (`purge_source`)\n\n`/upload`, `/convert`, `/transcribe` e as oito rotas `/images/*` aceitam\n`purge_source` (padrão `false`). Com `true`, os arquivos de origem (o arquivo enviado,\nos PDFs por página, as cópias da imagem) são apagados quando o job termina, depois das\ntentativas automáticas; o resultado fica. Para apagar depois, use\n`DELETE /jobs/{job_id}/source` (200; 404 sem origem; 409 `JOB_STILL_PROCESSING`;\n503 `SOURCE_DELETE_FAILED`). `GET /jobs/{job_id}` informa `source_available`,\n`source_deleted_at` e `source_deletable`. Sem origem, o PDF de página responde 410\n`SOURCE_PURGED` e o retry de página 409 `SOURCE_NOT_AVAILABLE`.\n\n## Idempotência (Full Analysis e rostos)\n\n`/images/analyze` com `mode=full` e `/images/faces` exigem o header `Idempotency-Key`\n(1..128 caracteres). A mesma chave com o mesmo pedido devolve o mesmo job enquanto a\ntentativa está na fila, rodando ou concluída; depois que ela falha de vez, a mesma chave\nabre a tentativa seguinte (`attempt` + 1, job novo). Chave usada com outro pedido: 409;\njob da chave excluído: 410 (use outra chave). `purge_source` não entra na comparação.\n\n## Erros\n\nErros HTTP vêm em `{\"detail\": ...}`: texto, lista de validação (422) ou objeto. Recusas\ncom código (jobs, engines, perfis de execução, acesso, IAM, root) trazem\n`{\"detail\": {\"code\": \"...\", \"message\": \"...\", \"next_steps\": [...]}}`, com `cause`\n(o gate interno quando um código genérico embrulha outro) e `technical` (texto original)\nquando houver. Use `code` para decidir; `message` é para pessoas. Falhas não tratadas\nrespondem 500 com `{\"error\": {\"code\": \"INTERNAL_ERROR\", \"message\": \"...\"}}`.\n\n## Limites de taxa\n\nLogin: `RATE_LIMIT_PER_MINUTE` tentativas por IP por minuto (padrão 10) e bloqueio\ntemporário da conta após `LOGIN_MAX_FAILED_ATTEMPTS` falhas (padrão 5, por\n`LOGIN_LOCKOUT_SECONDS`, padrão 900 s). Registro: `REGISTER_LIMIT_PER_HOUR` por IP (padrão\n5). Excedido, a resposta é **429**. Uploads respeitam `MAX_FILE_SIZE_MB` (413).\n",
+    "version": "1.1.0"
   },
   "paths": {
     "/auth/register": {
@@ -11,7 +11,7 @@
         "tags": [
           "Authentication"
         ],
-        "summary": "Register",
+        "summary": "Registrar usuário",
         "description": "Register a new user\n\n## Request Body:\n```json\n{\n  \"email\": \"user@example.com\",\n  \"username\": \"testuser\",\n  \"password\": \"Test123\"\n}\n```\n\n## Returns:\nUser object with id, email, username, is_active, created_at, is_admin\n\nThe first account of an installation without root becomes its root user\n(spec 0019); see GET /auth/setup. `setup_token` is only read for that account.\n\n## Errors:\n- 400: Email or username already exists\n- 403: ROOT_SETUP_TOKEN_REQUIRED / ROOT_SETUP_TOKEN_INVALID (root account only)\n- 429: Too many registrations from this IP",
         "operationId": "register_auth_register_post",
         "requestBody": {
@@ -54,7 +54,7 @@
         "tags": [
           "Authentication"
         ],
-        "summary": "Installation setup state (public)",
+        "summary": "Estado da instalação (root pendente)",
         "description": "Whether this installation still needs its root user (spec 0019).\n\n`root_pending` is true only for a brand-new installation (no users): the next\nregistration becomes root. An installation with users but no root keeps plain\nregistrations; an operator designates root with `make_admin.py --root`.\nPublic on purpose: the registration screen uses it to explain that the account\nbecomes root and whether a setup token is needed. Reveals nothing else.",
         "operationId": "setup_status_auth_setup_get",
         "responses": {
@@ -77,7 +77,7 @@
         "tags": [
           "Authentication"
         ],
-        "summary": "Login",
+        "summary": "Fazer login",
         "description": "Login with username/email and password (OAuth2 compatible)\n\n## Request Body (form-urlencoded):\n- username: testuser (or email)\n- password: Test123\n\n## Returns:\n```json\n{\n  \"access_token\": \"eyJ...\",\n  \"token_type\": \"bearer\"\n}\n```\n\n## Usage:\nUse the access_token in subsequent requests:\n```\nAuthorization: Bearer eyJ...\n```\n\n## Errors:\n- 401: Invalid credentials\n- 429: Too many attempts (per IP, or too many failures for this account)",
         "operationId": "login_auth_login_post",
         "requestBody": {
@@ -120,7 +120,7 @@
         "tags": [
           "Authentication"
         ],
-        "summary": "Refresh Token",
+        "summary": "Renovar token JWT",
         "description": "Troca um JWT ainda válido por um novo, com validade renovada.\n\nÉ o \"heartbeat\" do frontend: enquanto a pessoa usa o app, a sessão é\nrenovada antes de expirar; parada por mais que `JWT_EXPIRATION_MINUTES`,\nela expira e o login é pedido de novo.\n\nSó aceita `Authorization: Bearer <jwt>`. Uma API key não vira sessão.\n\n## Erros:\n- 401: token ausente, expirado ou inválido, ou usuário inativo",
         "operationId": "refresh_token_auth_refresh_post",
         "responses": {
@@ -148,7 +148,7 @@
         "tags": [
           "Authentication"
         ],
-        "summary": "Get Current User Info",
+        "summary": "Usuário autenticado",
         "description": "Get information about the currently authenticated user\n\n## Headers Required:\n```\nAuthorization: Bearer <token>\n```\nor\n```\nX-API-Key: <api_key>\n```\n\n## Returns:\nUser object with id, email, username, is_active, created_at, is_admin, and:\n- `permissions`: flat list, the 0009 engine permissions plus the platform/IAM\n  permissions the caller holds under the current IAM_MODE (spec 0014 CA12)\n- `bootstrap`: emergency access (the is_admin column or ADMIN_USER_IDS)\n- `platform_roles`: managed roles held through active bindings\n\n## Errors:\n- 401: Not authenticated or invalid token/API key",
         "operationId": "get_current_user_info_auth_me_get",
         "responses": {
@@ -179,7 +179,7 @@
         "tags": [
           "API Keys"
         ],
-        "summary": "List Api Keys",
+        "summary": "Listar API keys",
         "description": "List all API keys for the authenticated user\n\n## Returns:\nArray of API key info (without the actual key):\n```json\n[\n  {\n    \"id\": \"uuid\",\n    \"name\": \"Production Server\",\n    \"last_used_at\": \"2025-10-02T12:00:00\",\n    \"expires_at\": \"2025-11-01T00:00:00\",\n    \"is_active\": true,\n    \"created_at\": \"2025-10-02T00:00:00\"\n  }\n]\n```\n\n## Note:\nThe actual API key is NOT returned (for security).\nIt's only shown once during creation.\n\n## Errors:\n- 401: Not authenticated",
         "operationId": "list_api_keys_api_keys__get",
         "responses": {
@@ -212,7 +212,7 @@
         "tags": [
           "API Keys"
         ],
-        "summary": "Create Api Key",
+        "summary": "Criar API key",
         "description": "Create a new API key for the authenticated user\n\n## Request Body:\n```json\n{\n  \"name\": \"Production Server\",\n  \"expires_in_days\": 30,  // optional, null = never expires\n  \"project\": \"Transcrições automáticas\"  // optional: name (get-or-add) or \"project_id\"\n}\n```\n\nUploads made with a key bound to a project, that do not name a project,\ngo to that project. A request that also sends a JWT is a JWT request and\ndoes not use the binding.\n\n## Returns:\n```json\n{\n  \"id\": \"uuid\",\n  \"name\": \"Production Server\",\n  \"api_key\": \"doc2md_sk_...\",  // ONLY SHOWN ONCE!\n  \"expires_at\": \"2025-11-01T00:00:00\",\n  \"created_at\": \"2025-10-02T00:00:00\"\n}\n```\n\n## Important:\n- The `api_key` is shown ONLY ONCE during creation\n- Save it immediately - you won't be able to see it again\n- Use it in requests with header: `X-API-Key: doc2md_sk_...`\n\n## Errors:\n- 401: Not authenticated",
         "operationId": "create_api_key_api_keys__post",
         "requestBody": {
@@ -263,7 +263,7 @@
         "tags": [
           "API Keys"
         ],
-        "summary": "Update Api Key Project",
+        "summary": "Vincular API key a um projeto",
         "description": "Bind the key to a project, or unbind it (`{\"project_id\": null}`)\n\nUploads made with this key that name no project go to the bound project.\nA key without a project must send `project` on every upload (422 otherwise).\nRe-binding changes where new uploads go; a file already processed in another\nproject is processed again in the new one.\n\n## Errors:\n- 404: API key or project not found (or not yours)",
         "operationId": "update_api_key_project_api_keys__key_id__patch",
         "security": [
@@ -324,7 +324,7 @@
         "tags": [
           "API Keys"
         ],
-        "summary": "Revoke Api Key",
+        "summary": "Revogar API key",
         "description": "Revoke (delete) an API key\n\n## Path Parameters:\n- `key_id`: UUID of the API key to revoke\n\n## Returns:\n204 No Content on success\n\n## Errors:\n- 401: Not authenticated\n- 404: API key not found or doesn't belong to user",
         "operationId": "revoke_api_key_api_keys__key_id__delete",
         "security": [
@@ -370,7 +370,7 @@
         "tags": [
           "Admin & Monitoring"
         ],
-        "summary": "Get system statistics",
+        "summary": "Estatísticas do sistema",
         "description": "Get comprehensive system statistics for monitoring dashboard\n\nReturns counts of jobs/pages by status, stuck jobs, etc.\nUseful for building admin dashboards and monitoring tools.",
         "operationId": "get_stats_admin_stats_get",
         "responses": {
@@ -403,7 +403,7 @@
         "tags": [
           "Admin & Monitoring"
         ],
-        "summary": "List stuck jobs",
+        "summary": "Listar jobs travados",
         "description": "List all jobs currently stuck in processing state\n\nArgs:\n    threshold_minutes: Override default threshold (from config if not specified)\n    limit: Maximum number of jobs to return\n\nReturns:\n    List of stuck jobs with details",
         "operationId": "list_stuck_jobs_admin_jobs_stuck_get",
         "security": [
@@ -467,7 +467,7 @@
         "tags": [
           "Admin & Monitoring"
         ],
-        "summary": "Manually trigger stuck job recovery",
+        "summary": "Recuperar jobs travados",
         "description": "Manually trigger the stuck job detection and recovery process\n\nThis runs the same logic as the periodic monitoring task,\nbut can be triggered on-demand by administrators.\n\nArgs:\n    threshold_minutes: Override default threshold (from config if not specified)\n\nReturns:\n    Number of jobs/pages marked as failed",
         "operationId": "recover_stuck_jobs_admin_jobs_recover_stuck_post",
         "security": [
@@ -521,7 +521,7 @@
         "tags": [
           "Admin & Monitoring"
         ],
-        "summary": "Bulk retry all failed pages of a job",
+        "summary": "Refazer todas as páginas com falha de um job",
         "description": "Retry all failed pages of a specific job\n\nRequeues every FAILED page still under the retry limit\n(`MONITORING_MAX_RETRY_COUNT`), exactly like the per-page retry\n(`POST /jobs/{job_id}/pages/{n}/retry`): the original PDF is located first,\nthen the pages become pending and the job processing, under the job's row\nlock (the same lock the source purge takes).\n\nReturns:\n    Number of pages queued for retry\n\nErrors:\n    404: job not found\n    409 `SOURCE_NOT_AVAILABLE`: the original was deleted (purge_source /\n    DELETE /jobs/{id}/source); nothing was changed",
         "operationId": "retry_all_failed_pages_admin_jobs__job_id__retry_all_failed_post",
         "security": [
@@ -575,7 +575,7 @@
         "tags": [
           "Admin & Monitoring"
         ],
-        "summary": "Manually trigger cleanup of old jobs",
+        "summary": "Limpar jobs antigos",
         "description": "Manually trigger cleanup of old completed/failed jobs from Redis\n\nArgs:\n    days_old: Override default days threshold (from config if not specified)\n\nReturns:\n    Number of jobs cleaned up",
         "operationId": "trigger_cleanup_admin_cleanup_post",
         "security": [
@@ -629,7 +629,7 @@
         "tags": [
           "Admin & Monitoring"
         ],
-        "summary": "Check monitoring system health",
+        "summary": "Saúde do monitoramento",
         "description": "Check if the monitoring system (Celery Beat) is functioning\n\nReturns information about scheduled tasks and their last run times",
         "operationId": "monitoring_health_admin_health_monitoring_get",
         "responses": {
@@ -662,7 +662,7 @@
         "tags": [
           "Admin & Monitoring"
         ],
-        "summary": "List unacknowledged broker messages",
+        "summary": "Listar mensagens não confirmadas do broker",
         "description": "Messages the Celery broker holds as delivered but not yet acknowledged.\n\nEach one is either a task running now or one whose worker died - the latter only\nreturns to its queue after CELERY_VISIBILITY_TIMEOUT_SECONDS (hours). `orphans` is\nthe latest check by workers.monitoring.check_broker_unacked: messages no live\nworker held on two consecutive checks. Requeue one with\nPOST /admin/broker/unacked/{delivery_tag}/requeue.",
         "operationId": "list_broker_unacked_admin_broker_unacked_get",
         "responses": {
@@ -695,7 +695,7 @@
         "tags": [
           "Admin & Monitoring"
         ],
-        "summary": "Requeue an orphaned broker message",
+        "summary": "Reenfileirar mensagem órfã do broker",
         "description": "Put an orphaned message back at the head of its queue, so its task runs again now\ninstead of after the visibility timeout.\n\nRefused (409) unless the latest monitoring check flagged it as orphaned AND no\nworker reports holding it right now - otherwise a task still running would run\ntwice.",
         "operationId": "requeue_broker_unacked_admin_broker_unacked__delivery_tag__requeue_post",
         "security": [
@@ -777,7 +777,7 @@
         "tags": [
           "Vision"
         ],
-        "summary": "Detectar rostos e analisar expressões em uma imagem base64",
+        "summary": "Detectar rostos e expressões (JSON base64)",
         "operationId": "analyze_images_faces_post",
         "security": [
           {
@@ -857,7 +857,7 @@
         "tags": [
           "Vision"
         ],
-        "summary": "Upload de imagem para detecção facial e expressões",
+        "summary": "Detectar rostos e expressões (multipart)",
         "operationId": "upload_images_faces_upload_post",
         "security": [
           {
@@ -937,7 +937,7 @@
         "tags": [
           "Datalakes"
         ],
-        "summary": "Discover Connection",
+        "summary": "Descobrir conexão de datalake",
         "description": "Read buckets with draft settings, without creating or updating a connection.",
         "operationId": "discover_connection_datalakes_discover_post",
         "requestBody": {
@@ -986,7 +986,7 @@
         "tags": [
           "Datalakes"
         ],
-        "summary": "Create Bucket",
+        "summary": "Criar bucket",
         "description": "Create storage now; saving the connection remains a separate operation.",
         "operationId": "create_bucket_datalakes_buckets_post",
         "requestBody": {
@@ -1035,7 +1035,7 @@
         "tags": [
           "Datalakes"
         ],
-        "summary": "Partition Preview",
+        "summary": "Prévia do particionamento",
         "operationId": "partition_preview_datalakes_partition_preview_post",
         "requestBody": {
           "content": {
@@ -1083,7 +1083,7 @@
         "tags": [
           "Datalakes"
         ],
-        "summary": "List Connections",
+        "summary": "Listar conexões de datalake",
         "operationId": "list_connections_datalakes_get",
         "responses": {
           "200": {
@@ -1109,7 +1109,7 @@
         "tags": [
           "Datalakes"
         ],
-        "summary": "Create Connection",
+        "summary": "Criar conexão de datalake",
         "operationId": "create_connection_datalakes_post",
         "requestBody": {
           "content": {
@@ -1157,7 +1157,7 @@
         "tags": [
           "Datalakes"
         ],
-        "summary": "Update Connection",
+        "summary": "Atualizar conexão de datalake",
         "operationId": "update_connection_datalakes__connection_id__patch",
         "security": [
           {
@@ -1214,7 +1214,7 @@
         "tags": [
           "Datalakes"
         ],
-        "summary": "Delete Connection",
+        "summary": "Excluir conexão de datalake",
         "operationId": "delete_connection_datalakes__connection_id__delete",
         "security": [
           {
@@ -1258,7 +1258,7 @@
         "tags": [
           "Datalakes"
         ],
-        "summary": "List Buckets",
+        "summary": "Listar buckets da conexão",
         "operationId": "list_buckets_datalakes__connection_id__buckets_get",
         "security": [
           {
@@ -1307,7 +1307,7 @@
         "tags": [
           "Datalakes"
         ],
-        "summary": "Test Connection",
+        "summary": "Testar conexão de datalake",
         "operationId": "test_connection_datalakes__connection_id__test_post",
         "security": [
           {
@@ -1366,7 +1366,7 @@
         "tags": [
           "Datalakes"
         ],
-        "summary": "List Objects",
+        "summary": "Listar objetos da conexão",
         "operationId": "list_objects_datalakes__connection_id__objects_get",
         "security": [
           {
@@ -1446,7 +1446,7 @@
         "tags": [
           "Datalakes"
         ],
-        "summary": "Get Delivery",
+        "summary": "Estado da entrega no datalake",
         "operationId": "get_delivery_jobs__job_id__datalake_get",
         "security": [
           {
@@ -1495,7 +1495,7 @@
         "tags": [
           "Datalakes"
         ],
-        "summary": "Retry Delivery",
+        "summary": "Refazer entrega no datalake",
         "operationId": "retry_delivery_jobs__job_id__datalake_retry_post",
         "security": [
           {
@@ -2158,7 +2158,7 @@
         "tags": [
           "Admin - Engines"
         ],
-        "summary": "Feature routes and their backlog",
+        "summary": "Rotas por funcionalidade e backlog",
         "operationId": "list_routes_admin_routing_get",
         "responses": {
           "200": {
@@ -2193,7 +2193,7 @@
         "tags": [
           "Admin - Engines"
         ],
-        "summary": "Create or replace a feature's route",
+        "summary": "Criar ou substituir a rota de uma funcionalidade",
         "operationId": "put_route_admin_routing__feature__put",
         "security": [
           {
@@ -2251,7 +2251,7 @@
         "tags": [
           "Admin - Engines"
         ],
-        "summary": "Remove a route (it drains back to today's path)",
+        "summary": "Remover rota (volta ao caminho padrão)",
         "operationId": "delete_route_admin_routing__feature__delete",
         "security": [
           {
@@ -2301,7 +2301,7 @@
         "tags": [
           "Admin - Engines"
         ],
-        "summary": "Dispatcher, in-flight work and backlog",
+        "summary": "Dispatcher, trabalho em andamento e backlog",
         "operationId": "engines_status_admin_engines_status_get",
         "responses": {
           "200": {
@@ -2333,7 +2333,7 @@
         "tags": [
           "Admin - Engines"
         ],
-        "summary": "Engine adapters, their GPUs and limits",
+        "summary": "Adaptadores de engine, GPUs e limites",
         "operationId": "list_engine_adapters_admin_engine_adapters_get",
         "responses": {
           "200": {
@@ -2365,7 +2365,7 @@
         "tags": [
           "Admin - Engines"
         ],
-        "summary": "List engines",
+        "summary": "Listar engines",
         "operationId": "list_engines_admin_engines_get",
         "responses": {
           "200": {
@@ -2395,7 +2395,7 @@
         "tags": [
           "Admin - Engine control"
         ],
-        "summary": "Connection",
+        "summary": "Criar conexão de engine",
         "operationId": "connection_admin_engines_post",
         "requestBody": {
           "content": {
@@ -2440,7 +2440,7 @@
         "tags": [
           "Admin - Engines"
         ],
-        "summary": "One engine",
+        "summary": "Detalhar engine",
         "operationId": "get_engine_admin_engines__engine_id__get",
         "security": [
           {
@@ -2490,7 +2490,7 @@
         "tags": [
           "Admin - Engines"
         ],
-        "summary": "Physical GPUs: declared vs detected, VRAM budgeted and used",
+        "summary": "GPUs físicas: declaradas, detectadas e VRAM",
         "operationId": "list_gpus_admin_gpus_get",
         "responses": {
           "200": {
@@ -2522,7 +2522,7 @@
         "tags": [
           "Admin - Engines"
         ],
-        "summary": "Set how a feature runs on an engine",
+        "summary": "Configurar funcionalidade em uma engine",
         "operationId": "put_engine_feature_admin_engines__engine_id__features__feature__put",
         "security": [
           {
@@ -2589,7 +2589,7 @@
         "tags": [
           "Admin - Engines"
         ],
-        "summary": "Stop running a feature on an engine",
+        "summary": "Remover funcionalidade de uma engine",
         "operationId": "delete_engine_feature_admin_engines__engine_id__features__feature__delete",
         "security": [
           {
@@ -2664,7 +2664,7 @@
         "tags": [
           "Admin - Engines"
         ],
-        "summary": "Declare the local engine's physical GPUs",
+        "summary": "Declarar as GPUs físicas da engine local",
         "operationId": "put_engine_gpus_admin_engines__engine_id__gpus_put",
         "security": [
           {
@@ -2724,7 +2724,7 @@
         "tags": [
           "Admin - Engines"
         ],
-        "summary": "Test an engine's credentials and deployment (no GPU)",
+        "summary": "Testar credenciais e implantação da engine (sem GPU)",
         "operationId": "test_engine_admin_engines__engine_id__test_post",
         "security": [
           {
@@ -2774,7 +2774,7 @@
         "tags": [
           "Admin - Engines"
         ],
-        "summary": "Let the dispatcher place work on an engine",
+        "summary": "Ativar engine no dispatcher",
         "operationId": "activate_engine_admin_engines__engine_id__activate_post",
         "security": [
           {
@@ -2841,7 +2841,7 @@
         "tags": [
           "Admin - Engines"
         ],
-        "summary": "Stop placing new work on an engine (work in flight finishes)",
+        "summary": "Pausar engine (o trabalho em andamento termina)",
         "operationId": "pause_engine_admin_engines__engine_id__pause_post",
         "security": [
           {
@@ -2908,7 +2908,7 @@
         "tags": [
           "Admin - Engines"
         ],
-        "summary": "Forget an engine's recorded failures",
+        "summary": "Zerar falhas registradas da engine",
         "operationId": "reset_engine_health_admin_engines__engine_id__reset_health_post",
         "security": [
           {
@@ -2958,7 +2958,7 @@
         "tags": [
           "Admin - Engines"
         ],
-        "summary": "Set an engine's spending ceiling per period",
+        "summary": "Definir teto de gasto da engine por período",
         "operationId": "put_engine_budget_admin_engines__engine_id__budget_put",
         "security": [
           {
@@ -3018,7 +3018,7 @@
         "tags": [
           "Admin - Engines"
         ],
-        "summary": "Replace an engine's credentials (sealed, write-only)",
+        "summary": "Substituir credenciais da engine (somente escrita)",
         "operationId": "put_engine_credentials_admin_engines__engine_id__credentials_put",
         "security": [
           {
@@ -3076,7 +3076,7 @@
         "tags": [
           "Admin - Engines"
         ],
-        "summary": "Forget an engine's credentials",
+        "summary": "Apagar credenciais da engine",
         "operationId": "delete_engine_credentials_admin_engines__engine_id__credentials_delete",
         "security": [
           {
@@ -3136,7 +3136,7 @@
         "tags": [
           "Admin - Engines"
         ],
-        "summary": "Benchmark results (gpu x E) and the learned speed per key",
+        "summary": "Benchmarks e velocidade aprendida da engine",
         "operationId": "engine_benchmarks_admin_engines__engine_id__benchmarks_get",
         "security": [
           {
@@ -3209,7 +3209,7 @@
         "tags": [
           "Admin - Engines"
         ],
-        "summary": "Read the provider's spend report for one engine now",
+        "summary": "Conciliar gasto da engine com o provedor",
         "operationId": "reconcile_engine_admin_engines__engine_id__reconcile_post",
         "security": [
           {
@@ -3259,7 +3259,7 @@
         "tags": [
           "Admin - Engines"
         ],
-        "summary": "Test every remote engine's credentials and deployment, in turn (no GPU)",
+        "summary": "Testar todas as engines remotas (sem GPU)",
         "operationId": "test_all_engines_admin_engines_test_all_post",
         "responses": {
           "200": {
@@ -3288,7 +3288,7 @@
         "tags": [
           "Admin - Execution profiles and access"
         ],
-        "summary": "Me",
+        "summary": "Meu acesso às engines",
         "operationId": "me_admin_access_me_get",
         "responses": {
           "200": {
@@ -3313,7 +3313,7 @@
         "tags": [
           "Admin - Execution profiles and access"
         ],
-        "summary": "Profiles",
+        "summary": "Listar perfis de execução",
         "operationId": "profiles_admin_execution_profiles_get",
         "responses": {
           "200": {
@@ -3336,7 +3336,7 @@
         "tags": [
           "Admin - Execution profiles and access"
         ],
-        "summary": "Create",
+        "summary": "Criar perfil de execução",
         "operationId": "create_admin_execution_profiles_post",
         "requestBody": {
           "content": {
@@ -3381,7 +3381,7 @@
         "tags": [
           "Admin - Execution profiles and access"
         ],
-        "summary": "Detail",
+        "summary": "Detalhar perfil de execução",
         "operationId": "detail_admin_execution_profiles__id__get",
         "security": [
           {
@@ -3425,7 +3425,7 @@
         "tags": [
           "Admin - Execution profiles and access"
         ],
-        "summary": "Metadata",
+        "summary": "Atualizar metadados do perfil de execução",
         "operationId": "metadata_admin_execution_profiles__id__put",
         "security": [
           {
@@ -3481,7 +3481,7 @@
         "tags": [
           "Admin - Execution profiles and access"
         ],
-        "summary": "Revision",
+        "summary": "Criar revisão do perfil de execução",
         "operationId": "revision_admin_execution_profiles__id__revisions_post",
         "security": [
           {
@@ -3537,7 +3537,7 @@
         "tags": [
           "Admin - Execution profiles and access"
         ],
-        "summary": "Publish",
+        "summary": "Publicar revisão do perfil de execução",
         "operationId": "publish_admin_execution_profiles__id__publish_post",
         "security": [
           {
@@ -3593,7 +3593,7 @@
         "tags": [
           "Admin - Execution profiles and access"
         ],
-        "summary": "Archive",
+        "summary": "Arquivar perfil de execução",
         "operationId": "archive_admin_execution_profiles__id__archive_post",
         "security": [
           {
@@ -3649,7 +3649,7 @@
         "tags": [
           "Admin - Execution profiles and access"
         ],
-        "summary": "Bind",
+        "summary": "Vincular perfil publicado ao runtime da engine",
         "operationId": "bind_admin_engines__id__runtime_profile_bind_post",
         "security": [
           {
@@ -3705,7 +3705,7 @@
         "tags": [
           "Admin - Execution profiles and access"
         ],
-        "summary": "Import Profile",
+        "summary": "Importar perfil do runtime da engine",
         "operationId": "import_profile_admin_engines__id__runtime_profile_import_post",
         "security": [
           {
@@ -3761,7 +3761,7 @@
         "tags": [
           "Admin - Execution profiles and access"
         ],
-        "summary": "Policies",
+        "summary": "Listar políticas de acesso",
         "operationId": "policies_admin_access_policies_get",
         "responses": {
           "200": {
@@ -3784,7 +3784,7 @@
         "tags": [
           "Admin - Execution profiles and access"
         ],
-        "summary": "Policy Create",
+        "summary": "Criar política de acesso",
         "operationId": "policy_create_admin_access_policies_post",
         "requestBody": {
           "content": {
@@ -3829,7 +3829,7 @@
         "tags": [
           "Admin - Execution profiles and access"
         ],
-        "summary": "Policy Revise",
+        "summary": "Revisar política de acesso",
         "operationId": "policy_revise_admin_access_policies__id__revisions_post",
         "security": [
           {
@@ -3885,7 +3885,7 @@
         "tags": [
           "Admin - Execution profiles and access"
         ],
-        "summary": "Roles",
+        "summary": "Listar papéis de engines",
         "operationId": "roles_admin_access_roles_get",
         "responses": {
           "200": {
@@ -3910,7 +3910,7 @@
         "tags": [
           "Admin - Execution profiles and access"
         ],
-        "summary": "Subjects",
+        "summary": "Listar sujeitos de acesso",
         "operationId": "subjects_admin_access_subjects_get",
         "responses": {
           "200": {
@@ -3935,7 +3935,7 @@
         "tags": [
           "Admin - Execution profiles and access"
         ],
-        "summary": "Grants",
+        "summary": "Listar concessões de engines",
         "operationId": "grants_admin_access_grants_get",
         "responses": {
           "200": {
@@ -3959,7 +3959,7 @@
         "tags": [
           "Admin - Execution profiles and access"
         ],
-        "summary": "Grant",
+        "summary": "Conceder papel de engines",
         "operationId": "grant_admin_access_grants_post",
         "requestBody": {
           "content": {
@@ -4005,7 +4005,7 @@
         "tags": [
           "Admin - Execution profiles and access"
         ],
-        "summary": "Revoke",
+        "summary": "Revogar concessão de engines",
         "operationId": "revoke_admin_access_grants__id__revoke_post",
         "deprecated": true,
         "security": [
@@ -4062,7 +4062,7 @@
         "tags": [
           "Admin - Execution profiles and access"
         ],
-        "summary": "Attributes",
+        "summary": "Listar atributos de ambiente das engines",
         "operationId": "attributes_admin_access_engine_attributes_get",
         "responses": {
           "200": {
@@ -4087,7 +4087,7 @@
         "tags": [
           "Admin - Execution profiles and access"
         ],
-        "summary": "Classify",
+        "summary": "Classificar ambiente da engine",
         "operationId": "classify_admin_access_engine_attributes__id__put",
         "security": [
           {
@@ -4143,7 +4143,7 @@
         "tags": [
           "Admin - Execution profiles and access"
         ],
-        "summary": "Resources",
+        "summary": "Listar recursos qualificados",
         "operationId": "resources_admin_access_resources_get",
         "responses": {
           "200": {
@@ -4166,7 +4166,7 @@
         "tags": [
           "Admin - Execution profiles and access"
         ],
-        "summary": "Qualify",
+        "summary": "Qualificar recurso",
         "operationId": "qualify_admin_access_resources_put",
         "requestBody": {
           "content": {
@@ -4211,7 +4211,7 @@
         "tags": [
           "Admin - Execution profiles and access"
         ],
-        "summary": "Hosts",
+        "summary": "Listar hosts de perfis de execução",
         "operationId": "hosts_admin_execution_profile_hosts_get",
         "responses": {
           "200": {
@@ -4236,7 +4236,7 @@
         "tags": [
           "Admin - Execution profiles and access"
         ],
-        "summary": "Principals",
+        "summary": "Listar principais da instalação",
         "operationId": "principals_admin_access_installation_principals_get",
         "responses": {
           "200": {
@@ -4259,7 +4259,7 @@
         "tags": [
           "Admin - Execution profiles and access"
         ],
-        "summary": "Principal Create",
+        "summary": "Criar principal da instalação",
         "operationId": "principal_create_admin_access_installation_principals_post",
         "requestBody": {
           "content": {
@@ -4304,7 +4304,7 @@
         "tags": [
           "Admin - Execution profiles and access"
         ],
-        "summary": "Principal State",
+        "summary": "Alterar estado de principal da instalação",
         "operationId": "principal_state_admin_access_installation_principals__id__put",
         "security": [
           {
@@ -4360,7 +4360,7 @@
         "tags": [
           "Admin - Execution profiles and access"
         ],
-        "summary": "Subject State",
+        "summary": "Alterar estado de sujeito de acesso",
         "operationId": "subject_state_admin_access_subjects__id__state_put",
         "security": [
           {
@@ -4416,7 +4416,7 @@
         "tags": [
           "IAM"
         ],
-        "summary": "The permission catalog and the managed roles",
+        "summary": "Catálogo de permissões e papéis gerenciados",
         "operationId": "list_permissions_iam_permissions_get",
         "responses": {
           "200": {
@@ -4444,7 +4444,7 @@
         "tags": [
           "IAM"
         ],
-        "summary": "Which platform permissions the caller holds",
+        "summary": "Verificar permissões de plataforma do chamador",
         "description": "Answers for the caller only, as IAM_MODE decides it, and never audits (asking\nis not exercising). Only platform/IAM permissions in this slice: a data or 0009\nengine permission, or a name outside the catalog, is a 422.",
         "operationId": "check_permissions_iam_check_post",
         "requestBody": {
@@ -4503,7 +4503,7 @@
         "tags": [
           "IAM"
         ],
-        "summary": "Platform and engines bindings",
+        "summary": "Listar vínculos de plataforma e de engines",
         "description": "Filtered per row: platform bindings for `iam.bindings.read` (as IAM_MODE\ndecides it); engines bindings the caller's 0009 delegation covers (bootstrap\nsees them all), with `engine_access_enabled`. Newest first.",
         "operationId": "list_bindings_admin_iam_bindings_get",
         "security": [
@@ -4552,7 +4552,7 @@
         "tags": [
           "IAM"
         ],
-        "summary": "Grant a platform or engines role",
+        "summary": "Conceder papel de plataforma ou de engines",
         "operationId": "grant_binding_admin_iam_bindings_post",
         "security": [
           {
@@ -4597,7 +4597,7 @@
         "tags": [
           "IAM"
         ],
-        "summary": "Revoke a platform or engines binding",
+        "summary": "Revogar vínculo de plataforma ou de engines",
         "operationId": "revoke_binding_admin_iam_bindings__binding_id__revoke_post",
         "security": [
           {
@@ -4653,7 +4653,7 @@
         "tags": [
           "Admin - Engine control"
         ],
-        "summary": "Adapters",
+        "summary": "Listar adaptadores de controle de engine",
         "operationId": "adapters_admin_engine_control_adapters_get",
         "responses": {
           "200": {
@@ -4678,7 +4678,7 @@
         "tags": [
           "Admin - Engine control"
         ],
-        "summary": "Caps",
+        "summary": "Capacidades da engine",
         "operationId": "caps_admin_engines__engine_id__capabilities_get",
         "security": [
           {
@@ -4740,7 +4740,7 @@
         "tags": [
           "Admin - Engine control"
         ],
-        "summary": "Model Profiles",
+        "summary": "Listar perfis de modelo",
         "operationId": "model_profiles_admin_model_profiles_get",
         "responses": {
           "200": {
@@ -4765,7 +4765,7 @@
         "tags": [
           "Admin - Engine control"
         ],
-        "summary": "Get Profile",
+        "summary": "Ler perfil de runtime da engine",
         "operationId": "get_profile_admin_engines__engine_id__runtime_profile_get",
         "security": [
           {
@@ -4819,7 +4819,7 @@
         "tags": [
           "Admin - Engine control"
         ],
-        "summary": "Put Profile",
+        "summary": "Gravar perfil de runtime da engine",
         "operationId": "put_profile_admin_engines__engine_id__runtime_profile_put",
         "security": [
           {
@@ -4875,7 +4875,7 @@
         "tags": [
           "Admin - Engine control"
         ],
-        "summary": "Status",
+        "summary": "Estado do runtime da engine",
         "operationId": "status_admin_engines__engine_id__runtime_status_get",
         "security": [
           {
@@ -4921,7 +4921,7 @@
         "tags": [
           "Admin - Engine control"
         ],
-        "summary": "Plan",
+        "summary": "Planejar operação na engine",
         "operationId": "plan_admin_engines__engine_id__operation_plans_post",
         "security": [
           {
@@ -4977,7 +4977,7 @@
         "tags": [
           "Admin - Engine control"
         ],
-        "summary": "Execute",
+        "summary": "Executar operação na engine",
         "operationId": "execute_admin_engines__engine_id__operations_post",
         "security": [
           {
@@ -5042,7 +5042,7 @@
         "tags": [
           "Admin - Engine control"
         ],
-        "summary": "History",
+        "summary": "Histórico de operações de engine",
         "operationId": "history_admin_engine_operations_get",
         "security": [
           {
@@ -5121,7 +5121,7 @@
         "tags": [
           "Admin - Engine control"
         ],
-        "summary": "Snapshot",
+        "summary": "Detalhar operação de engine",
         "operationId": "snapshot_admin_engine_operations__operation_id__get",
         "security": [
           {
@@ -5167,7 +5167,7 @@
         "tags": [
           "Admin - Engine control"
         ],
-        "summary": "Events",
+        "summary": "Eventos da operação de engine",
         "operationId": "events_admin_engine_operations__operation_id__events_get",
         "security": [
           {
@@ -5223,7 +5223,7 @@
         "tags": [
           "Admin - Engine control"
         ],
-        "summary": "Cancel",
+        "summary": "Cancelar operação de engine",
         "operationId": "cancel_admin_engine_operations__operation_id__cancel_post",
         "security": [
           {
@@ -5269,7 +5269,7 @@
         "tags": [
           "Admin - Engine control"
         ],
-        "summary": "Stream",
+        "summary": "Acompanhar operação de engine (SSE)",
         "operationId": "stream_admin_engine_operations__operation_id__stream_get",
         "security": [
           {
@@ -5325,7 +5325,7 @@
         "tags": [
           "Admin - Engine control"
         ],
-        "summary": "Recover",
+        "summary": "Recuperar operação de engine",
         "operationId": "recover_admin_engine_operations__operation_id__recover_post",
         "security": [
           {
@@ -5371,7 +5371,7 @@
         "tags": [
           "Engine hosts"
         ],
-        "summary": "Host Heartbeat",
+        "summary": "Heartbeat do host de engine",
         "operationId": "host_heartbeat_internal_engine_hosts__host_id__heartbeat_post",
         "parameters": [
           {
@@ -5427,7 +5427,7 @@
         "tags": [
           "Engine hosts"
         ],
-        "summary": "Host Next",
+        "summary": "Próxima operação para o host",
         "operationId": "host_next_internal_engine_hosts__host_id__next_get",
         "parameters": [
           {
@@ -5473,7 +5473,7 @@
         "tags": [
           "Engine hosts"
         ],
-        "summary": "Host Check",
+        "summary": "Verificar se a operação ainda vale",
         "operationId": "host_check_internal_engine_hosts__host_id__operations__op_id__check_get",
         "parameters": [
           {
@@ -5537,7 +5537,7 @@
         "tags": [
           "Engine hosts"
         ],
-        "summary": "Host Event",
+        "summary": "Enviar evento da operação",
         "operationId": "host_event_internal_engine_hosts__host_id__operations__op_id__events_post",
         "parameters": [
           {
@@ -5602,7 +5602,7 @@
         "tags": [
           "Engine hosts"
         ],
-        "summary": "Host Result",
+        "summary": "Enviar resultado da operação",
         "operationId": "host_result_internal_engine_hosts__host_id__operations__op_id__result_post",
         "parameters": [
           {
@@ -5728,7 +5728,7 @@
         "tags": [
           "Projects"
         ],
-        "summary": "Um nome de projeto casa com um projeto existente?",
+        "summary": "Resolver nome de projeto",
         "description": "Diz, sem criar nada, se `name` é um projeto existente (pela regra de\nnormalização do backend: `reuniao` casa com \"Reunião\") ou se seria criado.\n\n`{\"valid\": true, \"match\": {\"id\", \"name\"}}`, `{\"valid\": true, \"match\": null}`\nou `{\"valid\": false, \"error\": \"...\"}`. Sempre 200.",
         "operationId": "resolve_project_name_projects_resolve_get",
         "security": [
@@ -5782,7 +5782,7 @@
         "tags": [
           "Projects"
         ],
-        "summary": "Um nome de pasta casa com uma pasta existente do projeto?",
+        "summary": "Resolver nome de pasta do projeto",
         "description": "Igual a `GET /projects/resolve`, para uma pasta do projeto. Projeto alheio: 404.",
         "operationId": "resolve_folder_name_projects__project_id__folders_resolve_get",
         "security": [
@@ -5845,7 +5845,7 @@
         "tags": [
           "Live transcription"
         ],
-        "summary": "Create Session",
+        "summary": "Criar sessão de transcrição ao vivo",
         "operationId": "create_session_transcribe_live_sessions_post",
         "requestBody": {
           "content": {
@@ -5893,7 +5893,7 @@
         "tags": [
           "Live transcription"
         ],
-        "summary": "Session Status",
+        "summary": "Estado da sessão ao vivo",
         "operationId": "session_status_transcribe_live_sessions__job_id__get",
         "security": [
           {
@@ -5940,7 +5940,7 @@
         "tags": [
           "Live transcription"
         ],
-        "summary": "Cancel Session",
+        "summary": "Cancelar sessão ao vivo",
         "operationId": "cancel_session_transcribe_live_sessions__job_id__delete",
         "security": [
           {
@@ -5989,7 +5989,7 @@
         "tags": [
           "Conversion"
         ],
-        "summary": "Upload e converter arquivo",
+        "summary": "Enviar e converter arquivo",
         "description": "Upload direto de arquivo para conversão\n\nEste endpoint é dedicado exclusivamente para upload de arquivos.\nUse os outros endpoints para converter de URL, Google Drive ou Dropbox.\n\n## Parâmetros:\n- `file`: Arquivo para upload\n- `name`: Nome de identificação opcional (se não fornecido, usa o nome do arquivo)\n- `docling_preset`: Quality/speed preset (apenas para PDFs):\n  - **fast** (padrão): Conversão rápida, apenas texto (~35s/MB)\n    - OCR: Desligado | Images: Desligadas | Tables: Ligadas\n  - **balanced**: Velocidade moderada, extrai imagens (~70-105s/MB)\n    - OCR: Desligado | Images: Ligadas | Tables: Ligadas\n  - **quality**: Máxima qualidade, inclui OCR para documentos escaneados (~350s/MB)\n    - OCR: Ligado | Images: Ligadas | Tables: Ligadas\n- `purge_source`: Se `true`, apaga os arquivos de origem (o arquivo enviado e os\n  PDFs por página) quando o job termina — `completed`, ou `failed`/`partial` depois\n  das tentativas automáticas — e fica só o resultado. Veja \"Arquivos de origem\".\n\n## Arquivos de origem (`purge_source`)\n- O que é apagado: o arquivo enviado (MinIO `uploads/...` e cópia local) e, num\n  PDF de várias páginas, os PDFs por página (`/jobs/{job_id}/pages/{n}/pdf`\n  passa a responder 410 `SOURCE_PURGED`). O markdown (inteiro e por página) fica.\n- Quando: ao terminar `completed`, ou `failed`/`partial` depois de esgotados os\n  retries automáticos; nunca enquanto houver retry ou página na fila. Depois\n  disso o retry manual de página responde 409 `SOURCE_NOT_AVAILABLE`.\n- `GET /jobs/{job_id}` informa `source_available`, `source_deleted_at` e\n  `source_deletable`. Para apagar depois: `DELETE /jobs/{job_id}/source`.\n- Arquivo repetido no mesmo projeto: com `purge_source=true` a resposta traz o\n  job existente com `duplicate: true` e ele passa a apagar a origem (na hora, se\n  já terminou; `source_available` diz o resultado). Com `false`, um job existente\n  cuja origem foi (ou será) apagada não é reaproveitado: um job novo é criado.\n\n```bash\ncurl -X POST http://localhost:8000/upload \\\n  -H \"X-API-Key: your-api-key\" \\\n  -F \"file=@contrato.pdf\" \\\n  -F \"project=Cliente X\" \\\n  -F \"purge_source=true\"\n```\n\n## Formatos suportados\nPDF, DOCX, DOC, HTML, PPTX, XLSX, RTF, ODT\n\n## Retorno\nRetorna imediatamente um `job_id` para consultar o progresso via `/jobs/{job_id}`,\ne onde o job ficou (`project`, `folder`)\n\n## Exemplos:\n```bash\n# Fast mode (default)\ncurl -X POST http://localhost:8000/upload       -H \"X-API-Key: your-api-key\"       -F \"file=@documento.pdf\"       -F \"project=Cliente X\"\n\n# Quality mode with OCR\ncurl -X POST http://localhost:8000/upload       -H \"X-API-Key: your-api-key\"       -F \"file=@documento_escaneado.pdf\"       -F \"docling_preset=quality\"\n```",
         "operationId": "upload_and_convert_upload_post",
         "requestBody": {
@@ -6091,7 +6091,7 @@
         "tags": [
           "Conversion"
         ],
-        "summary": "Convert Document",
+        "summary": "Converter documento (arquivo, URL, Drive ou Dropbox)",
         "description": "Conversão de documentos para Markdown\n\n## Opções de uso:\n\n### 1. Upload de arquivo (multipart/form-data)\n- `source_type`: \"file\"\n- `file`: Selecione o arquivo para upload\n- `source`: Deixe vazio\n\n### 2. URL pública\n- `source_type`: \"url\"\n- `source`: \"https://example.com/document.pdf\"\n- `file`: Deixe vazio\n\n### 3. Google Drive\n- `source_type`: \"gdrive\"\n- `source`: \"1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms\" (file ID)\n- header `X-Source-Token`: \"ya29.a0AfH6SMB...\" (OAuth2 token do Google)\n- `file`: Deixe vazio\n\n### 4. Dropbox\n- `source_type`: \"dropbox\"\n- `source`: \"/documents/report.pdf\" (path do arquivo)\n- header `X-Source-Token`: \"sl.B1a2c3...\" (access token do Dropbox)\n\nO header `Authorization` autentica no Ingestify e nunca é repassado ao\nprovedor nem colocado na mensagem do Celery (S-01).\n- `file`: Deixe vazio\n\n## Projeto (obrigatório) e pasta\n`project` (nome; criado se não existir) ou `project_id`, e opcionalmente\n`folder`/`folder_id`. Uma API key vinculada a um projeto dispensa o campo\n(só sem JWT). Sem projeto: 422. Um arquivo repetido só é reaproveitado\ndentro do mesmo projeto.\n\n## Arquivos de origem (`purge_source`)\nCom `purge_source=true` os arquivos de origem (o enviado, ou o baixado da URL,\ne os PDFs por página) são apagados quando o job termina: `completed`, ou\n`failed`/`partial` depois das tentativas automáticas. O resultado fica. Mesmas\nregras de `/upload` (inclusive para arquivo repetido).\nPara apagar depois: `DELETE /jobs/{job_id}/source`\n\n## Formatos suportados\nPDF, DOCX, DOC, HTML, PPTX, XLSX, RTF, ODT\n\n## Retorno\nRetorna imediatamente um `job_id` para consultar o progresso via `/jobs/{job_id}`",
         "operationId": "convert_document_convert_post",
         "security": [
@@ -6180,7 +6180,7 @@
         "tags": [
           "Conversion"
         ],
-        "summary": "Get Job Status",
+        "summary": "Estado do job",
         "description": "Consultar status de qualquer tipo de job (main, split, page, merge)\n\n## Pagination for pages list:\n- `page_limit`: Maximum number of pages to return (default: all pages)\n- `page_offset`: Number of pages to skip (default: 0)\n\nExample: GET /jobs/{job_id}?page_limit=50&page_offset=0\n\n## Permissões:\n- Apenas o dono do job (verificado no MySQL) pode consultá-lo.\n  Jobs de outros usuários retornam 404.",
         "operationId": "get_job_status_jobs__job_id__get",
         "security": [
@@ -6256,7 +6256,7 @@
         "tags": [
           "Conversion"
         ],
-        "summary": "Deletar job",
+        "summary": "Excluir job",
         "description": "Deletar job e todos os seus dados associados\n\nRemove completamente um job do sistema, incluindo:\n- Metadados do MySQL (job e pages)\n- Conteúdo do Elasticsearch (markdown)\n- Status temporário do Redis\n- O arquivo original (documento, áudio ou vídeo) no MinIO e as cópias locais\n- Para transcrições: as transcrições guardadas no MinIO\n\n**Atenção:** Esta operação é irreversível!\n\n## Para jobs MAIN com páginas:\n- Deleta o job principal\n- Deleta todos os jobs filhos (split, pages, merge)\n- Deleta todos os registros de páginas\n- Remove todo o conteúdo markdown\n\n## Permissões:\n- Apenas o dono do job (verificado no MySQL) pode deletá-lo\n\n## Retorno:\n- 200: Job deletado com sucesso\n- 404: Job não encontrado (também retornado quando o job pertence a outro\n  usuário, para não expor a existência do recurso)",
         "operationId": "delete_job_jobs__job_id__delete",
         "security": [
@@ -6358,7 +6358,7 @@
         "tags": [
           "Conversion"
         ],
-        "summary": "Get Job Result",
+        "summary": "Resultado do job",
         "description": "Recuperar resultado de qualquer tipo de job (main ou page individual)\n\n## Permissões:\n- Apenas o dono do job (verificado no MySQL) pode acessar o resultado.\n  Jobs de outros usuários retornam 404.\n\nPara jobs de transcrição (/transcribe), `?format=vtt|srt|txt|json` retorna o\narquivo no formato pedido (ex.: legenda WebVTT com `Content-Type: text/vtt`).",
         "operationId": "get_job_result_jobs__job_id__result_get",
         "security": [
@@ -6431,7 +6431,7 @@
         "tags": [
           "Conversion"
         ],
-        "summary": "Get Partial Transcript",
+        "summary": "Transcrição parcial em andamento",
         "description": "Texto de uma transcrição enquanto ela acontece\n\nRetorna os segmentos já transcritos a partir de `since`, e em `next` o valor de\n`since` para a próxima consulta - assim cada consulta traz só o texto novo.\nSó o provider faster-whisper transcreve em segmentos; com os providers da OpenAI\na lista fica vazia até o fim. Quando o job termina a lista também fica vazia:\no texto completo passa a estar em `GET /jobs/{job_id}/result`.\n\n## Permissões:\n- Apenas o dono do job (verificado no MySQL) pode consultá-lo.\n  Jobs de outros usuários retornam 404.",
         "operationId": "get_partial_transcript_jobs__job_id__transcript_partial_get",
         "security": [
@@ -6496,7 +6496,7 @@
         "tags": [
           "Conversion"
         ],
-        "summary": "Get Job Pages",
+        "summary": "Listar páginas do job",
         "description": "Obter progresso detalhado por página com job_id de cada página (para PDFs)\n\n## Permissões:\n- Apenas o dono do job (verificado no MySQL) pode consultar as páginas.\n  Jobs de outros usuários retornam 404.",
         "operationId": "get_job_pages_jobs__job_id__pages_get",
         "security": [
@@ -6548,7 +6548,7 @@
         "tags": [
           "Conversion"
         ],
-        "summary": "Status de página específica por número",
+        "summary": "Estado de uma página",
         "description": "Consulta o status de uma página específica usando o número da página\n\n## Parâmetros:\n- `job_id`: ID do job principal\n- `page_number`: Número da página (1, 2, 3, ...)\n\n## Retorno:\nStatus da página específica\n\n## Exemplo:\n```\nGET /jobs/550e8400-e29b-41d4-a716-446655440000/pages/5/status\n```\n\nRetorna o status da página 5 do job especificado.\n\n## Permissões:\n- Apenas o dono do job (verificado no MySQL) pode consultar a página.\n  Jobs de outros usuários retornam 404.",
         "operationId": "get_page_status_by_number_jobs__job_id__pages__page_number__status_get",
         "security": [
@@ -6607,7 +6607,7 @@
         "tags": [
           "Conversion"
         ],
-        "summary": "Resultado de página específica por número",
+        "summary": "Resultado de uma página",
         "description": "Recupera o resultado (markdown) de uma página específica usando o número da página\n\n## Parâmetros:\n- `job_id`: ID do job principal\n- `page_number`: Número da página (1, 2, 3, ...)\n\n## Retorno:\nMarkdown da página específica\n\n## Exemplo:\n```\nGET /jobs/550e8400-e29b-41d4-a716-446655440000/pages/5/result\n```\n\nRetorna o markdown da página 5 do job especificado.\n\n## Vantagem:\nNão precisa conhecer o `page_job_id` - basta usar o job principal + número da página!\n\n## Permissões:\n- Apenas o dono do job (verificado no MySQL) pode acessar o resultado.\n  Jobs de outros usuários retornam 404.",
         "operationId": "get_page_result_by_number_jobs__job_id__pages__page_number__result_get",
         "security": [
@@ -6906,7 +6906,7 @@
         "tags": [
           "Conversion"
         ],
-        "summary": "Retry de página que falhou",
+        "summary": "Refazer página com falha",
         "description": "Tenta reprocessar uma página que falhou\n\n## Parâmetros:\n- `job_id`: ID do job principal\n- `page_number`: Número da página que falhou\n\n## Retorno:\nNovo job_id da página em retry\n\n## Exemplo:\n```\nPOST /jobs/550e8400-e29b-41d4-a716-446655440000/pages/5/retry\n```\n\nReprocessa a página 5 do job especificado.\n\n## Permissões:\n- Apenas o dono do job (verificado no MySQL) pode reprocessar a página.\n  Jobs de outros usuários retornam 404.",
         "operationId": "retry_failed_page_jobs__job_id__pages__page_number__retry_post",
         "security": [
@@ -7022,9 +7022,9 @@
     "/health": {
       "get": {
         "tags": [
-          "Conversion"
+          "Status"
         ],
-        "summary": "Health Check",
+        "summary": "Verificar saúde da API",
         "description": "Health check endpoint",
         "operationId": "health_check_health_get",
         "responses": {
@@ -7044,7 +7044,7 @@
     },
     "/": {
       "get": {
-        "summary": "Root",
+        "summary": "Identificação da API",
         "description": "Root endpoint",
         "operationId": "root__get",
         "responses": {
@@ -7057,7 +7057,10 @@
             }
           }
         },
-        "x-access": "public"
+        "x-access": "public",
+        "tags": [
+          "Status"
+        ]
       }
     }
   },
@@ -15477,13 +15480,13 @@
         "type": "http",
         "scheme": "bearer",
         "bearerFormat": "JWT",
-        "description": "JWT token obtido via /auth/login"
+        "description": "JWT de POST /auth/login (campo access_token). No Authorize, cole só o token, sem o prefixo Bearer. Obrigatório nas rotas x-access jwt/admin-session."
       },
       "apiKeyAuth": {
         "type": "apiKey",
         "in": "header",
         "name": "X-API-Key",
-        "description": "API Key criada via /api-keys/"
+        "description": "API key criada em POST /api-keys/, enviada no header X-API-Key. Não vale nas rotas que exigem sessão (x-access jwt/admin-session); com JWT junto, vale o JWT."
       },
       "engineHostAuth": {
         "type": "apiKey",
@@ -15493,6 +15496,68 @@
       }
     }
   },
+  "tags": [
+    {
+      "name": "Authentication",
+      "description": "Registro, login, renovação do JWT, usuário atual e o estado de primeira instalação (root)."
+    },
+    {
+      "name": "Projects",
+      "description": "Projetos e pastas que organizam os jobs; resolução de nomes para *get-or-add*."
+    },
+    {
+      "name": "Conversion",
+      "description": "Criar jobs (upload, conversão por URL/Drive/Dropbox, transcrição), acompanhar estado, páginas e resultado, buscar, excluir jobs e apagar os arquivos de origem."
+    },
+    {
+      "name": "Vision",
+      "description": "Análise de imagens: descrição, OCR, tarefas de visão, Full Analysis e detecção facial; capacidades e cancelamento."
+    },
+    {
+      "name": "Live transcription",
+      "description": "Sessões de transcrição ao vivo: criar (ticket do WebSocket), consultar e cancelar."
+    },
+    {
+      "name": "Tags",
+      "description": "Tags do usuário e tags de cada job."
+    },
+    {
+      "name": "Datalakes",
+      "description": "Conexões S3/MinIO de destino, buckets, prévia de particionamento e entrega do resultado de um job."
+    },
+    {
+      "name": "API Keys",
+      "description": "Criar, listar, vincular a um projeto e revogar API keys (requer JWT)."
+    },
+    {
+      "name": "IAM",
+      "description": "Catálogo de permissões, verificação das permissões do chamador e vínculos (bindings) de papéis de plataforma e de engines."
+    },
+    {
+      "name": "Admin & Monitoring",
+      "description": "Administração da plataforma: estatísticas, jobs travados, retry em massa, limpeza e saúde do broker e do monitoramento."
+    },
+    {
+      "name": "Admin - Engines",
+      "description": "Engines de processamento: cadastro, funcionalidades, GPUs, orçamento, credenciais, testes, benchmarks e rotas por funcionalidade."
+    },
+    {
+      "name": "Admin - Engine control",
+      "description": "Controle de runtime das engines: adaptadores, capacidades, perfis de runtime, planos e operações (com eventos e stream SSE)."
+    },
+    {
+      "name": "Admin - Execution profiles and access",
+      "description": "Perfis de execução (revisões, publicação, vínculo) e acesso às engines: políticas, papéis, concessões, atributos de ambiente e principais."
+    },
+    {
+      "name": "Engine hosts",
+      "description": "Rotas internas de máquina para o agente de host das engines (`X-Engine-Host-Token`); não são para usuários."
+    },
+    {
+      "name": "Status",
+      "description": "Identificação e saúde da API (públicas)."
+    }
+  ],
   "x-websockets": [
     {
       "path": "/transcribe/live/sessions/{job_id}/stream",
