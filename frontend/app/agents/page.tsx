@@ -61,7 +61,7 @@ const benefits = [
   [
     "06",
     "Operate the compute behind it.",
-    "Configure local workers, supported remote engines and routing budgets. Your agent calls the API; your team controls how work is executed.",
+    "Configure local workers, supported remote processing and routing budgets. Your agent calls the API; your team controls how work is executed.",
   ],
 ];
 const tools = [
@@ -95,7 +95,7 @@ const faq = [
   ],
   [
     "Can the data stay on infrastructure I control?",
-    "You can self-host Ingestify and run local workers. Configure the engines and storage destinations appropriate for your deployment; data sent to an external provider follows the route you enable.",
+    "You can self-host Ingestify and run local workers. Configure processing routes and storage destinations appropriate for your deployment; data sent to an external provider follows the route you enable.",
   ],
 ];
 

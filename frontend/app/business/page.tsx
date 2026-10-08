@@ -110,7 +110,7 @@ const questions = [
   {
     title: "Can I run this on my own infrastructure?",
     answer:
-      "The repository supports deployment with Docker Compose and local workers. Choose engines and storage destinations that suit your environment. The data path depends on the providers and routes you enable.",
+      "The repository supports deployment with Docker Compose and local workers. Choose processing routes and storage destinations that suit your environment. The data path depends on the providers and routes you enable.",
     href: "/docs/compute",
     link: "Explore processing options",
   },
@@ -420,7 +420,7 @@ export default function BusinessPage() {
               failures to guide recovery.
             </p>
             <p>
-              <strong>Infrastructure.</strong> Configure engines and
+              <strong>Infrastructure.</strong> Configure processing routes and
               destinations for your operating environment.
             </p>
           </div>

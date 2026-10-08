@@ -239,8 +239,8 @@ export function LandingSections({ signedIn }: { signedIn: boolean }) {
           </div>
         </div>
         <p className="formats-docs">
-          See the <Link href="/docs">documentation</Link> for the full
-          format matrix, engine compatibility and deployment limits.
+          See the <Link href="/docs">documentation</Link> for the full format
+          matrix, available operations and deployment limits.
         </p>
       </section>
       <section
@@ -249,7 +249,7 @@ export function LandingSections({ signedIn }: { signedIn: boolean }) {
         data-reveal
       >
         <div className="section-index">
-          <span>02 / MORE THAN A CONVERSION ENGINE</span>
+          <span>02 / CONVERT, ORGANIZE AND RECOVER</span>
           <span>LOCAL ↔ OPTIONAL CLOUD</span>
         </div>
         <div className="compute-layout">
@@ -260,9 +260,8 @@ export function LandingSections({ signedIn }: { signedIn: boolean }) {
               <span className="secondary-title">With control.</span>
             </h2>
             <p>
-              A conversion engine handles the file. Ingestify adds the
-              operational layer: jobs, projects, page-level recovery and an API
-              for your data workflows.
+              Convert your files and keep the work organized with jobs,
+              projects, page-level recovery and an API for your data workflows.
             </p>
             <div
               className="compute-toggle"
@@ -273,14 +272,14 @@ export function LandingSections({ signedIn }: { signedIn: boolean }) {
                 Local
               </button>
               <button aria-pressed={cloud} onClick={() => setCloud(true)}>
-                Modal · audio
+                Remote · audio
                 <ArrowUpRight size={14} />
               </button>
             </div>
             <p className="compute-selection" aria-live="polite">
               {cloud
-                ? "This audio example runs on Modal. Documents and images stay with local workers."
-                : "This audio example runs locally. Modal is an optional route for transcription."}
+                ? "This audio example uses a configured remote transcription route. Documents and images stay with local workers."
+                : "This audio example runs locally. Remote transcription is an optional processing route."}
             </p>
             <Link className="landing-text-link" href="/docs/compute">
               Explore execution

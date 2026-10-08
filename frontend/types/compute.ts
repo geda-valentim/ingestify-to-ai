@@ -254,9 +254,9 @@ export interface EnginesStatus {
 }
 
 export const FEATURE_TITLES: Record<Feature, string> = {
-  transcription: "Transcription (Whisper)",
-  document_conversion: "Document conversion (Docling)",
-  vision: "Vision (Florence-2)",
+  transcription: "Transcription",
+  document_conversion: "Document conversion",
+  vision: "Image analysis",
 };
 
 export const FEATURES: Feature[] = ["transcription", "document_conversion", "vision"];

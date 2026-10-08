@@ -114,7 +114,7 @@ export function ImageUploadOptions({ file: selectedFile, disabled, onChange, onV
                       {imageOperation === "full" && <div className="space-y-3 rounded border p-3">
                         <p className="text-sm">Descrições, texto, objetos, regiões e segmentações em uma execução. A imagem basta: consultas e regiões são selecionadas automaticamente.</p>
                         <label className="block space-y-1 text-sm">Perfil do Full Analysis<select aria-label="Perfil do Full Analysis" value={fullProfile} onChange={e => { fullProfileChosen.current = true; setFullProfile(e.target.value as typeof fullProfile); }} className="block h-10 w-full rounded border bg-background px-3">
-                          <option value="image-full-v1">Florence · 15 famílias</option><option value="image-full-v2">Florence + rostos e expressões · 18 famílias</option>
+                          <option value="image-full-v1">Análise visual · 15 famílias</option><option value="image-full-v2">Análise visual + rostos e expressões · 18 famílias</option>
                         </select></label>
                         {fullProfile === "image-full-v2" && <FaceOptionsFields full value={faceOptions} onChange={setFaceOptions} disabled={disabled} />}
                         <p className="text-xs text-muted-foreground">{fullProfile === "image-full-v2" ? "18 famílias; até 5 rostos e 54 chamadas incluindo recuperação." : "15 tarefas de visão; até 3 consultas, 4 regiões e 32 chamadas."} Pode demorar mais. O resultado mostra cobertura e limites.</p>

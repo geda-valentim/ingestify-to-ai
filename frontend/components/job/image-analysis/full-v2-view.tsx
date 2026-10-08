@@ -30,7 +30,7 @@ Motivo: ${image.reason_code ?? "—"}
       <p className="text-sm">{image.coverage.task_families_completed}/{image.coverage.task_families_total} famílias concluídas · {image.calls_started} chamadas · {(image.duration_ms/1000).toFixed(1)} s</p>
       <div className="flex flex-wrap gap-2"><Button size="sm" onClick={() => downloadText(`${fileName}.full.json`, JSON.stringify(image, null, 2), "application/json")}>Baixar Full JSON</Button><Button size="sm" variant="outline" onClick={() => downloadText(`${fileName}.full.md`, markdown(), "text/markdown")}>Baixar Markdown</Button></div>
     </section>
-    <div role="group" aria-label="Análises da imagem" className="flex gap-2"><Button variant={tab === "faces" ? "default" : "outline"} onClick={() => setTab("faces")}>Rostos e expressões</Button><Button variant={tab === "florence" ? "default" : "outline"} onClick={() => setTab("florence")}>Florence · 15 famílias</Button></div>
+    <div role="group" aria-label="Análises da imagem" className="flex gap-2"><Button variant={tab === "faces" ? "default" : "outline"} onClick={() => setTab("faces")}>Rostos e expressões</Button><Button variant={tab === "florence" ? "default" : "outline"} onClick={() => setTab("florence")}>Análise visual · 15 famílias</Button></div>
     {tab === "faces" ? <FaceView analysis={image.faces} width={image.width} height={image.height} mime={image.image_mime_type ?? "image/png"} imageBase64={image.image_base64} fileName={fileName} /> : <FullImageView image={native} fileName={fileName} showSummary={false} />}
   </div>;
 }

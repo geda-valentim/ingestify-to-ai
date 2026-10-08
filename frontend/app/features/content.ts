@@ -3,7 +3,8 @@
  * routes, worker code or docs/features/*.md; keep it in sync when they change.
  * Pure data (no React) so tests can load it without a bundler.
  */
-export type IconName = "document" | "scan" | "audio" | "mic" | "video" | "image";
+export type IconName =
+  "document" | "scan" | "audio" | "mic" | "video" | "image";
 
 export type FeatureSection = {
   id: string;
@@ -29,14 +30,19 @@ export type Feature = {
   figure: {
     heading: string;
     inputs: { icon: IconName; label: string }[];
-    engine: string;
+    operation: string;
     steps: string[];
     outputs: string[];
     caption: string;
   };
   sections: FeatureSection[];
   endpoints: { method: string; path: string; purpose: string }[];
-  example: { title: string; headline: string; description: string; code: string };
+  example: {
+    title: string;
+    headline: string;
+    description: string;
+    code: string;
+  };
   docs: { slug: string; note: string }[];
   availability: string;
 };
@@ -44,16 +50,17 @@ export type Feature = {
 const documents: Feature = {
   slug: "documents",
   name: "Documents",
-  accent: "#677da9",
+  accent: "#111",
   metaTitle: "Document conversion to Markdown — Ingestify",
   metaDescription:
-    "Convert PDF, DOCX, PPTX, XLSX and HTML to Markdown with Docling. Multi-page PDFs are split into page jobs processed in parallel, with per-page results, page retry, extracted images and page renders.",
+    "Convert PDF, DOCX, PPTX, XLSX and HTML to structured Markdown. Multi-page PDFs are split into page jobs processed in parallel, with per-page results, page retry, extracted images and page renders.",
   title: ["Documents in.", "Markdown out."],
   valueProp:
-    "Convert PDFs and office documents into Markdown with Docling — page by page, with tables, optional OCR and the images inside.",
+    "Turn PDFs and office documents into structured Markdown — page by page, with tables, optional OCR and the images inside.",
   heroNote:
     "Upload in the platform or through the API. Every job belongs to a project and returns a job ID you can track.",
-  summary: "Docling conversion to Markdown, with per-page jobs for PDFs.",
+  summary:
+    "Document conversion to Markdown, with per-page progress and recovery for PDFs.",
   highlights: [
     "PDF, DOCX, PPTX, XLSX, HTML, ODT and Markdown",
     "fast, balanced and quality presets",
@@ -66,29 +73,34 @@ const documents: Feature = {
       { icon: "document", label: "contract.pdf · 12 pages" },
       { icon: "scan", label: "scan.pdf · preset quality" },
     ],
-    engine: "Docling",
-    steps: ["Split the PDF into pages", "Convert pages in parallel", "Merge into one result"],
+    operation: "Document conversion",
+    steps: [
+      "Split the PDF into pages",
+      "Convert pages in parallel",
+      "Merge into one result",
+    ],
     outputs: ["markdown", "metadata", "assets[]", "page results"],
-    caption: "Main job, page jobs and a merge job — each page can be read or retried on its own.",
+    caption:
+      "Main job, page jobs and a merge job — each page can be read or retried on its own.",
   },
   sections: [
     {
       id: "formats",
       label: "What you can send",
-      title: ["PDFs and office files.", "Converted by Docling."],
+      title: ["PDFs and office files.", "Ready for your workflows."],
       intro:
         "Use POST /upload for files, or POST /convert with source_type=url to fetch a public URL. The default upload limit is 50 MB.",
       cards: [
         {
           label: "Formats",
-          title: "Formats Docling reads",
-          body: "Ingestify recognizes these extensions and hands them to Docling:",
+          title: "Your everyday document formats",
+          body: "Convert common document formats into readable, structured content:",
           items: [".pdf", ".docx · .pptx · .xlsx", ".html · .htm · .odt · .md"],
         },
         {
           label: "Legacy files",
           title: "Older formats",
-          body: "Legacy .doc, .ppt, .xls and .rtf files are passed to Docling too, but they often fail. Save them as the modern format when you can.",
+          body: "Legacy .doc, .ppt, .xls and .rtf files may not convert reliably. Save them in a modern format for better compatibility.",
         },
         {
           label: "URLs",
@@ -99,13 +111,13 @@ const documents: Feature = {
     },
     {
       id: "presets",
-      label: "Docling presets",
+      label: "Conversion options",
       tone: "dark",
       title: ["Choose speed or depth.", "Per upload."],
       intro:
-        "Set docling_preset on POST /upload. The presets control OCR, picture images and table structure for PDFs; quality is the slowest.",
+        "Choose fast conversion, extracted figures or OCR for scanned pages. The profiles control OCR, picture images and table structure for PDFs; quality takes longer.",
       table: {
-        caption: "Docling presets and what they enable",
+        caption: "Document conversion profiles and their capabilities",
         head: ["Preset", "OCR", "Picture images", "Table structure"],
         rows: [
           ["fast (default)", "Off", "Off", "On"],
@@ -149,7 +161,7 @@ const documents: Feature = {
         {
           label: "image_mode=referenced",
           title: "Extracted figures",
-          body: "Each figure Docling finds is stored as a PNG and linked from the Markdown at /jobs/{job_id}/assets/{name}.",
+          body: "Each extracted figure is stored as a PNG and linked from the Markdown at /jobs/{job_id}/assets/{name}.",
         },
         {
           label: "page_images=true",
@@ -187,11 +199,27 @@ const documents: Feature = {
     },
   ],
   endpoints: [
-    { method: "POST", path: "/upload", purpose: "Upload a document (preset, images, project)." },
+    {
+      method: "POST",
+      path: "/upload",
+      purpose: "Upload a document (preset, images, project).",
+    },
     { method: "POST", path: "/convert", purpose: "Convert a file or a URL." },
-    { method: "GET", path: "/jobs/{job_id}/pages", purpose: "List page jobs and their status." },
-    { method: "GET", path: "/jobs/{job_id}/result", purpose: "Markdown, metadata and assets[]." },
-    { method: "POST", path: "/jobs/{job_id}/pages/{n}/retry", purpose: "Retry one failed page." },
+    {
+      method: "GET",
+      path: "/jobs/{job_id}/pages",
+      purpose: "List page jobs and their status.",
+    },
+    {
+      method: "GET",
+      path: "/jobs/{job_id}/result",
+      purpose: "Markdown, metadata and assets[].",
+    },
+    {
+      method: "POST",
+      path: "/jobs/{job_id}/pages/{n}/retry",
+      purpose: "Retry one failed page.",
+    },
   ],
   example: {
     title: "Convert a PDF with images",
@@ -202,7 +230,6 @@ const documents: Feature = {
   -H "X-API-Key: $INGESTIFY_API_KEY" \\
   -F "file=@report.pdf" \\
   -F "project=Reports" \\
-  -F "docling_preset=balanced" \\
   -F "image_mode=referenced" \\
   -F "page_images=true"
 
@@ -211,11 +238,17 @@ curl "$API/jobs/$JOB_ID/pages" -H "X-API-Key: $INGESTIFY_API_KEY"
 curl "$API/jobs/$JOB_ID/result" -H "X-API-Key: $INGESTIFY_API_KEY"`,
   },
   docs: [
-    { slug: "documents", note: "POST /upload and /convert fields, presets and images." },
+    {
+      slug: "documents",
+      note: "POST /upload and /convert fields, presets and images.",
+    },
     { slug: "pdf-pages", note: "Page jobs, page PDFs and page retry." },
     { slug: "results", note: "Result shape and assets." },
     { slug: "projects", note: "Projects, folders and tags." },
-    { slug: "platform-documents", note: "Convert and review documents in the platform." },
+    {
+      slug: "platform-documents",
+      note: "Convert and review documents in the platform.",
+    },
     { slug: "authentication", note: "API keys and tokens." },
   ],
   availability:
@@ -225,18 +258,19 @@ curl "$API/jobs/$JOB_ID/result" -H "X-API-Key: $INGESTIFY_API_KEY"`,
 const images: Feature = {
   slug: "images",
   name: "Images",
-  accent: "#789481",
+  accent: "#111",
   metaTitle: "Image captions, OCR and detection — Ingestify",
   metaDescription:
-    "Describe images, extract text with regions, detect objects and segment regions with Florence-2. Run Full Analysis across every task, add optional face analysis and deliver results to S3, MinIO, GCS or Azure.",
+    "Describe images, extract text with regions, detect objects and segment regions. Run Full Analysis across every task, add optional face analysis and deliver results to S3, MinIO, GCS or Azure.",
   title: ["Images in.", "Text, boxes and regions out."],
   valueProp:
-    "Describe an image, read its text and locate what is in it with Florence-2 — one task at a time or all of them with Full Analysis.",
+    "Describe an image, read its text and locate objects and regions — one task at a time or together with Full Analysis.",
   heroNote:
     "Use the platform or the API. Accepts PNG, JPEG, WEBP, BMP, GIF and TIFF up to 10 MB.",
-  summary: "Florence-2 captions, OCR, detection and segmentation, plus Full Analysis.",
+  summary:
+    "Image captions, OCR, object detection and segmentation, plus Full Analysis.",
   highlights: [
-    "15 Florence-2 tasks, listed by GET /images/capabilities",
+    "15 vision tasks, listed by GET /images/capabilities",
     "OCR with regions, grounding and segmentation",
     "Full Analysis with per-step progress",
     "Optional face analysis and storage delivery",
@@ -247,20 +281,25 @@ const images: Feature = {
       { icon: "image", label: "receipt.png" },
       { icon: "scan", label: "task <OCR_WITH_REGION>" },
     ],
-    engine: "Florence-2 base",
-    steps: ["Validate the image", "Run the vision task", "Return text, boxes or polygons"],
+    operation: "Image analysis",
+    steps: [
+      "Validate the image",
+      "Run the vision task",
+      "Return text, boxes or polygons",
+    ],
     outputs: ["text", "boxes", "polygons", "markdown"],
-    caption: "Each task returns its native output; Full Analysis runs the families together.",
+    caption:
+      "Each task returns its native output; Full Analysis runs the families together.",
   },
   sections: [
     {
       id: "tasks",
-      label: "Florence-2 tasks",
+      label: "Vision capabilities",
       title: ["Fifteen tasks.", "One catalog."],
       intro:
         "GET /images/capabilities lists each task with its output and the input it needs. Some tasks need text or a region given as normalized [x_min, y_min, x_max, y_max].",
       table: {
-        caption: "Florence-2 tasks exposed by GET /images/capabilities",
+        caption: "Vision tasks exposed by GET /images/capabilities",
         head: ["Task", "What it does", "Output", "Input"],
         rows: [
           ["<CAPTION>", "Short description", "text", "—"],
@@ -271,10 +310,30 @@ const images: Feature = {
           ["<OD>", "Detect objects", "boxes", "—"],
           ["<DENSE_REGION_CAPTION>", "Describe regions", "boxes", "—"],
           ["<REGION_PROPOSAL>", "Propose regions", "boxes", "—"],
-          ["<CAPTION_TO_PHRASE_GROUNDING>", "Locate phrases in the image", "boxes", "text"],
-          ["<REFERRING_EXPRESSION_SEGMENTATION>", "Segment by description", "polygons", "text"],
-          ["<OPEN_VOCABULARY_DETECTION>", "Detect objects by text", "mixed", "text"],
-          ["<REGION_TO_SEGMENTATION>", "Segment a region", "polygons", "region"],
+          [
+            "<CAPTION_TO_PHRASE_GROUNDING>",
+            "Locate phrases in the image",
+            "boxes",
+            "text",
+          ],
+          [
+            "<REFERRING_EXPRESSION_SEGMENTATION>",
+            "Segment by description",
+            "polygons",
+            "text",
+          ],
+          [
+            "<OPEN_VOCABULARY_DETECTION>",
+            "Detect objects by text",
+            "mixed",
+            "text",
+          ],
+          [
+            "<REGION_TO_SEGMENTATION>",
+            "Segment a region",
+            "polygons",
+            "region",
+          ],
           ["<REGION_TO_CATEGORY>", "Classify a region", "text", "region"],
           ["<REGION_TO_DESCRIPTION>", "Describe a region", "text", "region"],
           ["<REGION_TO_OCR>", "Extract text from a region", "text", "region"],
@@ -315,12 +374,12 @@ const images: Feature = {
         {
           label: "Detection",
           title: "Faces and landmarks",
-          body: "MediaPipe detects faces with boxes, confidence and keypoints, plus landmarks and blendshapes.",
+          body: "Detect faces with bounding boxes, confidence and keypoints, plus facial landmarks and movement measurements.",
         },
         {
           label: "Expressions",
           title: "Eight expression classes",
-          body: "EmotiEffLib scores anger, contempt, disgust, fear, happiness, neutral, sadness and surprise. Scores are not calibrated and do not determine a person’s emotional state.",
+          body: "Get scores for eight visible expression classes: anger, contempt, disgust, fear, happiness, neutral, sadness and surprise. Scores are not calibrated and do not determine a person’s emotional state.",
         },
         {
           label: "No identification",
@@ -353,11 +412,31 @@ const images: Feature = {
     },
   ],
   endpoints: [
-    { method: "GET", path: "/images/capabilities", purpose: "Tasks, limits and model status." },
-    { method: "POST", path: "/images/describe/upload", purpose: "Caption an image." },
-    { method: "POST", path: "/images/ocr/upload", purpose: "Text with regions." },
-    { method: "POST", path: "/images/analyze/upload", purpose: "Any task, or mode=full." },
-    { method: "POST", path: "/images/faces/upload", purpose: "Face analysis, when enabled." },
+    {
+      method: "GET",
+      path: "/images/capabilities",
+      purpose: "Tasks, limits and model status.",
+    },
+    {
+      method: "POST",
+      path: "/images/describe/upload",
+      purpose: "Caption an image.",
+    },
+    {
+      method: "POST",
+      path: "/images/ocr/upload",
+      purpose: "Text with regions.",
+    },
+    {
+      method: "POST",
+      path: "/images/analyze/upload",
+      purpose: "Any task, or mode=full.",
+    },
+    {
+      method: "POST",
+      path: "/images/faces/upload",
+      purpose: "Face analysis, when enabled.",
+    },
   ],
   example: {
     title: "Ground a phrase in an image",
@@ -385,25 +464,24 @@ curl -X POST "$API/images/ocr/upload" \\
     { slug: "job-status", note: "Poll asynchronous jobs." },
   ],
   availability:
-    "Image analysis and face analysis are enabled per installation. The default model is Florence-2 base; tasks are fixed, not free-form prompts.",
+    "Image analysis and face analysis are enabled per installation. Check the capabilities catalog for available tasks and their inputs.",
 };
 
 const audioVideo: Feature = {
   slug: "audio-video",
   name: "Audio & Video",
-  accent: "#8b6d97",
+  accent: "#111",
   metaTitle: "Audio & Video transcription — Ingestify",
   metaDescription:
-    "Transcribe audio and video files with Whisper (faster-whisper) and get Markdown, SRT, VTT, plain text or JSON with segment and optional word timestamps. Optional live capture and speaker labels.",
+    "Turn audio and video files into Markdown, SRT, VTT, plain text or JSON with segment and optional word timestamps. Optional live capture and speaker labels.",
   title: ["Recordings in.", "Timestamped text out."],
   valueProp:
     "Send an audio or video file and get a transcript with timestamps — as Markdown, SRT or VTT captions, plain text or JSON.",
   heroNote:
     "File transcription runs through the API. Live microphone capture and speaker labels are optional features that an administrator enables.",
-  summary:
-    "Whisper transcription for audio and video files, with captions and timestamps.",
+  summary: "Audio and video transcription, with captions and timestamps.",
   highlights: [
-    "faster-whisper with the turbo model by default",
+    "Timestamped transcription for audio and video files",
     "Markdown, SRT, VTT, TXT and JSON from one job",
     "Language auto-detection and optional word timestamps",
     "Optional live capture on the Live screen",
@@ -414,10 +492,15 @@ const audioVideo: Feature = {
       { icon: "audio", label: "meeting.mp3" },
       { icon: "video", label: "webinar.mp4 · audio track" },
     ],
-    engine: "faster-whisper · turbo",
-    steps: ["Detect or use the language", "Transcribe with timestamps", "Write every format"],
+    operation: "Transcription + timestamps",
+    steps: [
+      "Detect or use the language",
+      "Transcribe with timestamps",
+      "Write every format",
+    ],
     outputs: ["markdown", "srt", "vtt", "txt", "json"],
-    caption: "Each job keeps all five formats; pick one with ?format= when you fetch the result.",
+    caption:
+      "Each job keeps all five formats; pick one with ?format= when you fetch the result.",
   },
   sections: [
     {
@@ -431,13 +514,21 @@ const audioVideo: Feature = {
           label: "Audio",
           title: "Common audio formats",
           body: "Accepted extensions:",
-          items: [".mp3 .wav .m4a .flac", ".ogg .oga .opus .spx", ".webm .wma .aac"],
+          items: [
+            ".mp3 .wav .m4a .flac",
+            ".ogg .oga .opus .spx",
+            ".webm .wma .aac",
+          ],
         },
         {
           label: "Video",
           title: "Video, transcribed by its audio",
           body: "Accepted extensions:",
-          items: [".mp4 .m4v .mkv .mov", ".avi .webm .wmv .flv", ".mpeg .mpg .ts .3gp"],
+          items: [
+            ".mp4 .m4v .mkv .mov",
+            ".avi .webm .wmv .flv",
+            ".mpeg .mpg .ts .3gp",
+          ],
         },
         {
           label: "Limits",
@@ -450,14 +541,14 @@ const audioVideo: Feature = {
       id: "transcription",
       label: "How it transcribes",
       tone: "dark",
-      title: ["Whisper on your workers.", "Options per request."],
+      title: ["Speech into useful text.", "Options per request."],
       intro:
-        "The engine and model are chosen by the installation, not per request. Each request chooses the language, timestamps and default output.",
+        "Choose the language, timestamps and default output for each recording. Processing capabilities depend on your installation.",
       cards: [
         {
-          label: "Engine",
-          title: "faster-whisper by default",
-          body: "The default provider is faster-whisper with the turbo model (large-v3-turbo weights). Operators can switch to openai-whisper or to the OpenAI API — the latter sends audio to OpenAI.",
+          label: "Transcription",
+          title: "A transcript you can work with",
+          body: "Turn speech into readable text and reusable captions. Keep every output format in the same job, ready for search, review and your next workflow.",
         },
         {
           label: "Language",
@@ -472,7 +563,7 @@ const audioVideo: Feature = {
         {
           label: "Speakers",
           title: "Speaker labels, when enabled",
-          body: "With the WhisperX provider and diarization enabled by an administrator, set diarize=true (optionally min_speakers / max_speakers, up to 20). It is off by default.",
+          body: "When speaker labeling is enabled by an administrator, set diarize=true (optionally min_speakers / max_speakers, up to 20) to distinguish speakers in the transcript. It is off by default.",
         },
         {
           label: "Source files",
@@ -500,7 +591,10 @@ const audioVideo: Feature = {
           ["srt", "SubRip captions for video players and editors."],
           ["vtt", "WebVTT captions for the web."],
           ["txt", "Plain text."],
-          ["json", "Segments with start and end times, plus words when requested."],
+          [
+            "json",
+            "Segments with start and end times, plus words when requested.",
+          ],
         ],
       },
     },
@@ -513,7 +607,7 @@ const audioVideo: Feature = {
         {
           label: "File captions",
           title: "Partial transcript of a running job",
-          body: "GET /jobs/{job_id}/transcript/partial?since=N returns the segments transcribed so far while an uploaded file is still processing (with faster-whisper).",
+          body: "GET /jobs/{job_id}/transcript/partial?since=N returns the segments transcribed so far while an uploaded file is still processing, when incremental transcription is available.",
         },
         {
           label: "Live capture",
@@ -530,33 +624,49 @@ const audioVideo: Feature = {
     {
       id: "compute",
       label: "Where it runs",
-      title: ["Local workers first.", "Remote GPU if you route it."],
+      title: ["Your infrastructure.", "Your processing choices."],
       intro:
-        "Transcription runs on your own workers. Administrators can add a Modal GPU engine and route jobs to it.",
+        "Run transcription on your own workers, or enable a supported remote processing route. Your team controls execution, capacity and budget.",
       cards: [
         {
           label: "Routing",
           title: "Remote steps by route",
-          body: "Nothing goes remote unless a route includes a remote step — for example, wait for a local worker first and fall back to Modal.",
+          body: "Processing follows the route your team enables — for example, wait for local capacity first and use a configured remote fallback for transcription.",
         },
         {
           label: "Budget",
           title: "Spending limits",
-          body: "A Modal engine is activated only with a passing test and a USD limit. The engine is marked exhausted when the budget runs out.",
+          body: "Activate a remote transcription route after a successful connection test and set a spending limit. Processing is constrained when its budget is exhausted.",
         },
         {
           label: "Size",
-          title: "Large media stays local",
-          body: "Media over 512 MB or 4 hours is not sent to Modal. Partial transcripts stream from remote jobs too.",
+          title: "Plan for larger recordings",
+          body: "Use local capacity for larger recordings. Check the configured route’s size and duration limits before submitting media for remote processing.",
         },
       ],
     },
   ],
   endpoints: [
-    { method: "POST", path: "/transcribe", purpose: "Submit an audio or video file." },
-    { method: "GET", path: "/jobs/{job_id}", purpose: "Track status and progress." },
-    { method: "GET", path: "/jobs/{job_id}/transcript/partial", purpose: "Read segments while it runs." },
-    { method: "GET", path: "/jobs/{job_id}/result?format=srt", purpose: "Download the transcript." },
+    {
+      method: "POST",
+      path: "/transcribe",
+      purpose: "Submit an audio or video file.",
+    },
+    {
+      method: "GET",
+      path: "/jobs/{job_id}",
+      purpose: "Track status and progress.",
+    },
+    {
+      method: "GET",
+      path: "/jobs/{job_id}/transcript/partial",
+      purpose: "Read segments while it runs.",
+    },
+    {
+      method: "GET",
+      path: "/jobs/{job_id}/result?format=srt",
+      purpose: "Download the transcript.",
+    },
   ],
   example: {
     title: "Transcribe a recording",
@@ -576,15 +686,24 @@ curl "$API/jobs/$JOB_ID/result?format=vtt" \\
   -H "X-API-Key: $INGESTIFY_API_KEY"`,
   },
   docs: [
-    { slug: "transcription", note: "POST /transcribe fields, formats and limits." },
-    { slug: "file-captions", note: "Partial transcript while a file is processed." },
+    {
+      slug: "transcription",
+      note: "POST /transcribe fields, formats and limits.",
+    },
+    {
+      slug: "file-captions",
+      note: "Partial transcript while a file is processed.",
+    },
     { slug: "live", note: "Live sessions, WebSocket stream and events." },
     { slug: "results", note: "Download the result in each format." },
-    { slug: "platform-transcription", note: "Use transcripts and the Live screen." },
-    { slug: "compute", note: "Engines, Modal routing and budgets." },
+    {
+      slug: "platform-transcription",
+      note: "Use transcripts and the Live screen.",
+    },
+    { slug: "compute", note: "Processing routes, capacity and budgets." },
   ],
   availability:
-    "Engines, live capture, speaker labels and remote GPUs depend on how your installation is configured and on your account permissions.",
+    "Live capture, speaker labels and remote processing depend on how your installation is configured and on your account permissions.",
 };
 
 export const FEATURES: Feature[] = [documents, audioVideo, images];

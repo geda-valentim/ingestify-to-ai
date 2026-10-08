@@ -1,33 +1,37 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import {
-  ArrowDown,
   ArrowRight,
   ArrowUpRight,
   AudioLines,
+  BookOpen,
+  Check,
   FileText,
   Image as ImageIcon,
   Layers,
-  Mic,
-  ScanText,
-  Video,
+  Workflow,
 } from "lucide-react";
 import { Brand } from "@/components/brand";
-import { PublicHeader } from "@/components/public-header";
 import { GITHUB } from "@/components/landing/content";
 import { DOCS_API_URL, DOCS_ORIGIN } from "../docs/config";
 import { DOCS_TOPICS, docsHref } from "../docs/topics";
-import { FEATURES, type Feature, type IconName } from "./content";
+import { FEATURES, type Feature } from "./content";
 import styles from "./features.module.css";
 
-const ICONS = {
-  document: FileText,
-  scan: ScanText,
-  audio: AudioLines,
-  mic: Mic,
-  video: Video,
-  image: ImageIcon,
-} satisfies Record<IconName, unknown>;
+import { FeatureExperience } from "./feature-experience";
+import { FeatureArtwork, ProductDemo } from "./product-demo";
+import { PRODUCT_STORIES } from "./product-stories";
+
+const PRODUCT_ICONS = {
+  documents: FileText,
+  "audio-video": AudioLines,
+  images: ImageIcon,
+};
+const BENEFIT_ICONS = {
+  knowledge: BookOpen,
+  structure: Layers,
+  workflow: Workflow,
+};
 
 export function featureMetadata(feature: Feature): Metadata {
   const url = `${DOCS_ORIGIN}/features/${feature.slug}`;
@@ -69,78 +73,21 @@ export function PublicFooter() {
   );
 }
 
-function HeroFigure({ feature }: { feature: Feature }) {
-  const { figure } = feature;
-  return (
-    <figure
-      className={styles.figure}
-      aria-labelledby={`${feature.slug}-figure-caption`}
-      style={{ ["--accent" as string]: feature.accent }}
-    >
-      <div className={styles.figureHeading}>
-        <span>{figure.heading}</span>
-        <span>Illustrative example</span>
-      </div>
-      <div className={styles.figureInputs}>
-        {figure.inputs.map(({ icon, label }) => {
-          const Icon = ICONS[icon];
-          return (
-            <div key={label}>
-              <Icon size={19} aria-hidden="true" />
-              <span>{label}</span>
-            </div>
-          );
-        })}
-      </div>
-      <div className={styles.connector} aria-hidden="true">
-        <ArrowDown size={21} />
-      </div>
-      <div className={styles.processor}>
-        <div>
-          <Layers size={23} aria-hidden="true" />
-          <strong>Ingestify</strong>
-          <span>{figure.engine}</span>
-        </div>
-        <ol>
-          {figure.steps.map((step, index) => (
-            <li key={step}>
-              <span>{String(index + 1).padStart(2, "0")}</span> {step}
-            </li>
-          ))}
-        </ol>
-      </div>
-      <div className={styles.connector} aria-hidden="true">
-        <ArrowDown size={21} />
-      </div>
-      <div className={styles.outputs} aria-label="Outputs">
-        {figure.outputs.map((output) => (
-          <span key={output}>{output}</span>
-        ))}
-      </div>
-      <figcaption id={`${feature.slug}-figure-caption`}>
-        {figure.caption}
-      </figcaption>
-    </figure>
-  );
-}
-
 export function FeaturePage({ feature }: { feature: Feature }) {
+  const story = PRODUCT_STORIES[feature.slug];
   const others = FEATURES.filter((item) => item.slug !== feature.slug);
   const code = feature.example.code.replaceAll("$API", DOCS_API_URL);
   let sectionNumber = 0;
   const label = () => String(++sectionNumber).padStart(2, "0");
 
   return (
-    <div className={styles.page} lang="en" data-feature={feature.slug}>
-      <a href="#feature-content" className={styles.skip}>
-        Skip to content
-      </a>
-      <PublicHeader />
+    <FeatureExperience slug={feature.slug} accent={feature.accent}>
       <main id="feature-content">
         <section className={styles.hero} aria-labelledby="feature-title">
           <div className={styles.heroCopy}>
             <p className={styles.eyebrow}>
-              <Link href="/features">Features</Link> / {feature.name}
+              <span className={styles.eyebrowDot} aria-hidden="true" />
+              {story.eyebrow}
             </p>
             <h1 id="feature-title">
               {feature.title[0]}
@@ -150,15 +97,87 @@ export function FeaturePage({ feature }: { feature: Feature }) {
             <p className={styles.heroDescription}>{feature.valueProp}</p>
             <div className={styles.actions}>
               <Link href="/register" className={styles.button}>
-                Create an account <ArrowUpRight size={17} aria-hidden="true" />
+                Get started <ArrowUpRight size={17} aria-hidden="true" />
               </Link>
-              <Link href={docsHref(feature.docs[0].slug, "en")} className={styles.textLink}>
+              <Link
+                href={docsHref(feature.docs[0].slug, "en")}
+                className={styles.textLink}
+              >
                 Read the docs <ArrowRight size={16} aria-hidden="true" />
               </Link>
             </div>
+            <div className={styles.heroTrust}>
+              <span>
+                <Check size={13} aria-hidden="true" />
+                {feature.slug === "audio-video"
+                  ? "API transcription"
+                  : "Platform + API"}
+              </span>
+              <span>
+                <Check size={13} aria-hidden="true" /> Structured results
+              </span>
+            </div>
             <p className={styles.heroNote}>{feature.heroNote}</p>
           </div>
-          <HeroFigure feature={feature} />
+          <ProductDemo feature={feature} />
+        </section>
+
+        <nav className={styles.productNav} aria-label="Product features">
+          {FEATURES.map((item) => {
+            const Icon = PRODUCT_ICONS[item.slug];
+            return (
+              <Link
+                key={item.slug}
+                href={`/features/${item.slug}`}
+                aria-current={item.slug === feature.slug ? "page" : undefined}
+              >
+                <Icon size={16} aria-hidden="true" />
+                {item.name}
+                <ArrowUpRight size={14} aria-hidden="true" />
+              </Link>
+            );
+          })}
+        </nav>
+        <section className={styles.valueSection} aria-labelledby="value-title">
+          <div className={styles.stats}>
+            {story.stats.map(([value, description]) => (
+              <div key={value}>
+                <strong>{value}</strong>
+                <span>{description}</span>
+              </div>
+            ))}
+            <div className={styles.formatStack}>
+              <span>WORKS WITH YOUR FILES</span>
+              <div>
+                {story.formats.map((format) => (
+                  <code key={format}>{format}</code>
+                ))}
+              </div>
+            </div>
+          </div>
+          <div className={styles.valueIntro}>
+            <p className={styles.eyebrow}>
+              FROM RAW FILES TO REAL POSSIBILITIES
+            </p>
+            <h2 id="value-title">{story.promise}</h2>
+            <p>{story.intro}</p>
+          </div>
+          <div className={styles.benefits}>
+            {story.benefits.map((benefit, index) => {
+              const Icon = BENEFIT_ICONS[benefit.icon];
+              return (
+                <article key={benefit.title}>
+                  <div className={styles.benefitVisual}>
+                    <Icon size={36} strokeWidth={1.2} aria-hidden="true" />
+                    <span className={styles.benefitOrbit} />
+                    <span className={styles.benefitIndex}>0{index + 1}</span>
+                  </div>
+                  <h3>{benefit.title}</h3>
+                  <p>{benefit.body}</p>
+                </article>
+              );
+            })}
+          </div>
         </section>
 
         {feature.sections.map((section) => (
@@ -220,8 +239,17 @@ export function FeaturePage({ feature }: { feature: Feature }) {
             )}
             {section.cards && (
               <div className={styles.cards}>
-                {section.cards.map((card) => (
+                {section.cards.map((card, index) => (
                   <article key={card.title}>
+                    <span className={styles.cardIcon} aria-hidden="true">
+                      {index % 3 === 0 ? (
+                        <Layers size={20} strokeWidth={1.5} />
+                      ) : index % 3 === 1 ? (
+                        <FileText size={20} strokeWidth={1.5} />
+                      ) : (
+                        <Workflow size={20} strokeWidth={1.5} />
+                      )}
+                    </span>
                     {card.label && (
                       <span className={styles.cardLabel}>{card.label}</span>
                     )}
@@ -276,15 +304,24 @@ export function FeaturePage({ feature }: { feature: Feature }) {
                 <span>curl</span>
                 <span>{feature.example.title}</span>
               </div>
-              <pre tabIndex={0} aria-label={`curl example: ${feature.example.title}`}>
+              <pre
+                tabIndex={0}
+                aria-label={`curl example: ${feature.example.title}`}
+              >
                 <code>{code}</code>
               </pre>
-              <figcaption>Replace $INGESTIFY_API_KEY with your API key.</figcaption>
+              <figcaption>
+                Replace $INGESTIFY_API_KEY with your API key.
+              </figcaption>
             </figure>
           </div>
         </section>
 
-        <section className={styles.section} id="docs" aria-labelledby="docs-title">
+        <section
+          className={styles.section}
+          id="docs"
+          aria-labelledby="docs-title"
+        >
           <div className={styles.sectionLabel}>
             <span>{label()} / DOCUMENTATION</span>
             <span>GUIDES AND API CONTRACTS</span>
@@ -314,36 +351,53 @@ export function FeaturePage({ feature }: { feature: Feature }) {
           </div>
         </section>
 
-        <section className={styles.closing} aria-labelledby="closing-title">
-          <p className={styles.eyebrow}>MORE FEATURES</p>
-          <h2 id="closing-title">
-            Bring a real file.
-            <br />
-            <span>See what comes back.</span>
+        <section className={styles.related} aria-labelledby="related-title">
+          <div className={styles.sectionLabel}>
+            <span>KEEP EXPLORING</span>
+            <span>ONE PLATFORM. MORE POSSIBILITIES.</span>
+          </div>
+          <h2 id="related-title">
+            More inputs. <span>More potential.</span>
           </h2>
-          <p>
-            Ingestify also handles{" "}
-            {others.map((item, index) => (
-              <span key={item.slug}>
-                {index > 0 && " and "}
-                <Link href={`/features/${item.slug}`} className={styles.inlineLink}>
-                  {item.name.toLowerCase()}
-                </Link>
-              </span>
-            ))}{" "}
-            through the same jobs, projects and API keys.
-          </p>
+          <div className={styles.relatedGrid}>
+            {others.map((item) => (
+              <Link
+                key={item.slug}
+                href={`/features/${item.slug}`}
+                className={styles.relatedCard}
+                data-product={item.slug}
+              >
+                <div className={styles.relatedArtwork}>
+                  <FeatureArtwork slug={item.slug} />
+                </div>
+                <div>
+                  <h3>{item.name}</h3>
+                  <p>{item.summary}</p>
+                  <span className={styles.textLink}>
+                    Explore {item.name}
+                    <ArrowUpRight size={16} aria-hidden="true" />
+                  </span>
+                </div>
+              </Link>
+            ))}
+          </div>
+        </section>
+        <section className={styles.closing} aria-labelledby="closing-title">
+          <div className={styles.closingGlow} aria-hidden="true" />
+          <p className={styles.eyebrow}>YOUR NEXT WORKFLOW STARTS HERE</p>
+          <h2 id="closing-title">{story.cta}</h2>
+          <p>{story.ctaBody}</p>
           <div className={styles.actions}>
             <Link href="/register" className={styles.button}>
-              Create an account <ArrowRight size={17} aria-hidden="true" />
+              Get started <ArrowRight size={17} aria-hidden="true" />
             </Link>
             <Link href="/docs" className={styles.textLink}>
-              Documentation <ArrowUpRight size={16} aria-hidden="true" />
+              Explore the docs <ArrowUpRight size={16} aria-hidden="true" />
             </Link>
           </div>
         </section>
       </main>
       <PublicFooter />
-    </div>
+    </FeatureExperience>
   );
 }

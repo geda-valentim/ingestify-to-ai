@@ -179,8 +179,8 @@ const guides: Record<string, Guide> = {
             "Open /convert, select a project/folder and add the document in the File tab. Use Custom Name and Tags to make it easier to locate in the history.",
           ),
           t(
-            "Para guardar as imagens do documento, marque Extract images (cada figura vira um PNG, mostrado no Markdown). Marque Render each page as an image em slides, PDFs escaneados ou páginas que são uma imagem só: o Docling não detecta uma imagem de página inteira como figura. As duas opções valem para todas as abas; num arquivo que não é PDF, só Extract images tem efeito.",
-            "To keep the document's images, check Extract images (every picture becomes a PNG, shown in the Markdown). Check Render each page as an image for slides, scanned PDFs or pages that are a single image: Docling does not detect a full-page image as a picture. Both options apply to every tab; for a file that is not a PDF, only Extract images has an effect.",
+            "Para guardar as imagens do documento, marque Extract images (cada figura vira um PNG, mostrado no Markdown). Marque Render each page as an image em slides, PDFs escaneados ou páginas que são uma imagem só: uma imagem de página inteira pode não ser extraída como figura. As duas opções valem para todas as abas; num arquivo que não é PDF, só Extract images tem efeito.",
+            "To keep the document's images, check Extract images (every picture becomes a PNG, shown in the Markdown). Check Render each page as an image for slides, scanned PDFs or pages that are a single image: a full-page image may not be extracted as an individual picture. Both options apply to every tab; for a file that is not a PDF, only Extract images has an effect.",
           ),
           t(
             "Don't keep the original file after converting apaga o arquivo e os PDFs das páginas quando o job termina. Com imagens, elas não somem junto: ficam disponíveis por um prazo (1 hora por padrão) para você baixar e então são apagadas.",
@@ -338,8 +338,8 @@ const guides: Record<string, Guide> = {
     ),
     requirements: [
       t(
-        "Uma imagem compatível, um projeto e uma engine de visão disponível. O perfil Florence tem 15 famílias. O perfil que inclui rostos e expressões tem 18 e depende da feature facial estar habilitada e disponível.",
-        "A supported image, a project and an available vision engine. The Florence profile has 15 families. The profile including faces and expressions has 18 and depends on the facial feature being enabled and available.",
+        "Uma imagem compatível, um projeto e processamento de imagens disponível. O perfil de análise visual tem 15 famílias. O perfil que inclui rostos e expressões tem 18 e depende da feature facial estar habilitada e disponível.",
+        "A supported image, a project and available image processing. The visual analysis profile has 15 families. The profile including faces and expressions has 18 and depends on the facial feature being enabled and available.",
       ),
     ],
     parts: [
@@ -405,8 +405,8 @@ const guides: Record<string, Guide> = {
     ),
     problems: [
       t(
-        "Perfil facial indisponível: use o perfil Florence disponível ou consulte a administração; a existência do perfil na documentação não habilita a engine.",
-        "Facial profile unavailable: use the available Florence profile or contact the administrator; documenting a profile does not enable its engine.",
+        "Perfil facial indisponível: use o perfil de análise visual disponível ou consulte a administração; a existência do perfil na documentação não habilita a engine.",
+        "Facial profile unavailable: use the available visual analysis profile or contact the administrator; documenting a profile does not enable its engine.",
       ),
       t(
         "Regiões vazias ou baixa cobertura: confira a etapa e a consulta selecionadas, o motivo de omissão e os limites informados. Para integrações, preserve Idempotency-Key ao repetir o mesmo pedido após perda de resposta.",
@@ -618,8 +618,8 @@ const guides: Record<string, Guide> = {
         "An account with administrative permission: root (the first registration of a new installation; see GET /auth/setup), another bootstrap administrator or a role granted under Admin → Access. Each Admin section appears only with the matching permission; possessing a user API key does not grant administration.",
       ),
       t(
-        "Conheça a infraestrutura local e as contas externas configuradas. Engines locais e Modal têm capacidades diferentes; cadastrar uma conta não habilita todas as features.",
-        "Understand the local infrastructure and configured external accounts. Local and Modal engines have different capabilities; registering an account does not enable every feature.",
+        "Conheça a infraestrutura local e as contas externas configuradas. Processamento local e remoto têm capacidades diferentes; cadastrar uma conta não habilita todas as features.",
+        "Understand the local infrastructure and configured external accounts. Local and remote processing have different capabilities; registering an account does not enable every feature.",
       ),
     ],
     parts: [

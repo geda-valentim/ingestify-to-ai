@@ -504,7 +504,7 @@ const COPY = {
     projectsRequiredTitle: "Upload sem projeto — 422",
     transcribeIntro: (
       <P>
-        Transcreve a fala de um áudio ou vídeo (Whisper). Do vídeo, só a faixa
+        Transcreve a fala de um áudio ou vídeo. Do vídeo, só a faixa
         de áudio é usada. A resposta volta imediatamente com o <C>job_id</C>; a
         transcrição roda em segundo plano, na GPU quando disponível (com
         fallback automático para CPU). Todos os formatos de saída são gerados de
@@ -896,7 +896,7 @@ const COPY = {
     projectsRequiredTitle: "Upload with no project — 422",
     transcribeIntro: (
       <P>
-        Transcribes the speech in an audio or video file (Whisper). For video,
+        Transcribes the speech in an audio or video file. For video,
         only the audio track is used. The response comes back immediately with
         the <C>job_id</C>; the transcription runs in the background, on the GPU
         when available (falling back to CPU automatically). Every output format
@@ -1153,7 +1153,7 @@ const FORMAT_TYPES: [keyof typeof COPY.pt.formatsDesc, string][] = [
 const MEDIA_COPY = {
   pt: {
     docsIntro:
-      "Converte PDFs e documentos em Markdown com Docling. /upload recebe um arquivo e devolve job_id imediatamente. /convert também recebe fontes externas; ambos usam multipart/form-data.",
+      "Converte PDFs e documentos em Markdown estruturado. /upload recebe um arquivo e devolve job_id imediatamente. /convert também recebe fontes externas; ambos usam multipart/form-data.",
     fields: ["Campo", "Uso"],
     docsRows: [
       [
@@ -1190,7 +1190,7 @@ const MEDIA_COPY = {
       ],
       [
         "page_images",
-        "Opcional, padrão false. true renderiza cada página do PDF como PNG (fora do Markdown), com ou sem image_mode. Use em slides, PDFs escaneados e páginas que são uma imagem só: o Docling não detecta uma imagem de página inteira como figura.",
+        "Opcional, padrão false. true renderiza cada página do PDF como PNG (fora do Markdown), com ou sem image_mode. Use em slides, PDFs escaneados e páginas que são uma imagem só: uma imagem de página inteira pode não ser extraída como figura.",
       ],
       [
         "describe_images",
@@ -1209,7 +1209,7 @@ const MEDIA_COPY = {
       ["quality", "sim", "sim", "sim", "PDF escaneado; mais lento"],
     ],
     formats:
-      "PDF, DOCX, HTML, PPTX e XLSX dependem do suporte da versão instalada do Docling. A API aceita o upload antes de validar a conversão: um arquivo incompatível termina com status failed. DOC/PPT/XLS legados, RTF e ODT não têm sucesso garantido.",
+      "PDF, DOCX, HTML, PPTX e XLSX dependem das capacidades de conversão disponíveis na instalação. A API aceita o upload antes de validar a conversão: um arquivo incompatível termina com status failed. DOC/PPT/XLS legados, RTF e ODT não têm sucesso garantido.",
     docsDuplicate:
       "O mesmo arquivo no mesmo projeto, com as mesmas opções (docling_preset, image_mode, page_images, describe_images, ocr_images), reaproveita o job existente (duplicate: true) e adiciona as tags; a pasta do job existente é preservada. Um job failed ou partial não é reaproveitado: reenviar é a nova tentativa. Outro preset ou outras opções de imagem criam outro job, e uma conversão com imagens não reaproveita um job cujas imagens já foram apagadas ou expiram em menos da metade de ASSET_RETENTION_SECONDS. Um arquivo em outro projeto é processado novamente.",
     docsResult:
@@ -1237,7 +1237,7 @@ const MEDIA_COPY = {
       "Para apagar o original depois, sem esperar purge_source, use DELETE /jobs/{job_id}/source (exige a permissão de excluir o job). Ele apaga também as imagens extraídas e as páginas renderizadas, mesmo que o original já tenha sido apagado. 200: {job_id, source_deleted, source_deleted_at, assets_deleted} (source_deleted=false quando só restavam imagens). 404: job inexistente, de outro usuário ou sem arquivos de origem nem imagens. 409 JOB_STILL_PROCESSING: o job ou uma página ainda está na fila, em processamento ou aguardando nova tentativa (consulte source_deletable). 503 SOURCE_DELETE_FAILED: o armazenamento recusou; o que não foi apagado continua referenciado e chamar de novo termina. Funciona igual para transcrições e jobs de imagem.",
     assetsTitle: "Imagens extraídas (image_mode, page_images)",
     assetsIntro:
-      "Com image_mode=referenced, cada figura que o Docling encontra é guardada como PNG e o Markdown troca o placeholder por ![Image](/jobs/{job_id}/assets/{name}), um caminho relativo da API. Com page_images=true, cada página do PDF também vira um PNG. Todas aparecem em assets do /result, ordenadas por página (a página renderizada, depois as figuras na ordem do documento).",
+      "Com image_mode=referenced, cada figura extraída é guardada como PNG e o Markdown troca o placeholder por ![Image](/jobs/{job_id}/assets/{name}), um caminho relativo da API. Com page_images=true, cada página do PDF também vira um PNG. Todas aparecem em assets do /result, ordenadas por página (a página renderizada, depois as figuras na ordem do documento).",
     assetsRows: [
       [
         "assets_skipped",
@@ -1261,7 +1261,7 @@ const MEDIA_COPY = {
       ],
     ],
     assetsNote:
-      "Uma página que é só imagem (escaneada, slide exportado como figura) nem sempre vira figura no Docling, que trata a imagem de página inteira como fundo: use page_images=true para ter a página inteira. Na interface, /convert oferece as duas opções (Extract images, Render each page as an image) e a página do job mostra as imagens na aba Images, com download individual e em .zip.",
+      "Uma página que é só imagem (escaneada, slide exportado como figura) nem sempre é extraída como figura individual: use page_images=true para ter a página inteira. Na interface, /convert oferece as duas opções (Extract images, Render each page as an image) e a página do job mostra as imagens na aba Images, com download individual e em .zip.",
     assetFields: {
       name: "p{página:04d}-img{índice:02d}-{sha256[:12]}.png (figura) ou p{página:04d}-page-{sha256[:12]}.png (página); página 0000 em formatos sem página (DOCX…).",
       kind: "picture (image_mode=referenced) ou page (page_images=true).",
@@ -1343,7 +1343,7 @@ const MEDIA_COPY = {
   },
   en: {
     docsIntro:
-      "Converts PDFs and documents to Markdown with Docling. /upload accepts a file and immediately returns job_id. /convert also accepts external sources; both use multipart/form-data.",
+      "Converts PDFs and documents to structured Markdown. /upload accepts a file and immediately returns job_id. /convert also accepts external sources; both use multipart/form-data.",
     fields: ["Field", "Usage"],
     docsRows: [
       [
@@ -1380,7 +1380,7 @@ const MEDIA_COPY = {
       ],
       [
         "page_images",
-        "Optional, default false. true renders every PDF page to a PNG (not in the Markdown), with or without image_mode. Use it for slides, scanned PDFs and pages that are a single image: Docling does not detect a full-page image as a picture.",
+        "Optional, default false. true renders every PDF page to a PNG (not in the Markdown), with or without image_mode. Use it for slides, scanned PDFs and pages that are a single image: a full-page image may not be extracted as an individual picture.",
       ],
       [
         "describe_images",
@@ -1399,7 +1399,7 @@ const MEDIA_COPY = {
       ["quality", "yes", "yes", "yes", "Scanned PDF; slower"],
     ],
     formats:
-      "PDF, DOCX, HTML, PPTX and XLSX depend on the installed Docling version. The API accepts the upload before validating conversion: an incompatible file ends with status failed. Legacy DOC/PPT/XLS, RTF and ODT are not guaranteed to convert.",
+      "PDF, DOCX, HTML, PPTX and XLSX depend on the conversion capabilities available in the installation. The API accepts the upload before validating conversion: an incompatible file ends with status failed. Legacy DOC/PPT/XLS, RTF and ODT are not guaranteed to convert.",
     docsDuplicate:
       "The same file in the same project, with the same options (docling_preset, image_mode, page_images, describe_images, ocr_images), reuses the existing job (duplicate: true) and adds the supplied tags; the existing job's folder is preserved. A failed or partial job is not reused: sending the file again is the retry. Another preset or other image options create another job, and a conversion with images never reuses a job whose images were already deleted or expire in less than half of ASSET_RETENTION_SECONDS. Uploading to another project processes the file again.",
     docsResult:
@@ -1427,7 +1427,7 @@ const MEDIA_COPY = {
       "To delete the original later, without purge_source, call DELETE /jobs/{job_id}/source (requires permission to delete the job). It also deletes the extracted images and page renders, even when the original is already gone. 200: {job_id, source_deleted, source_deleted_at, assets_deleted} (source_deleted=false when only images were left). 404: the job doesn't exist, belongs to another user or has neither source files nor images. 409 JOB_STILL_PROCESSING: the job or a page is still queued, processing or waiting for a retry (check source_deletable). 503 SOURCE_DELETE_FAILED: storage refused; whatever was not deleted stays referenced and calling again finishes it. Works the same for transcripts and image jobs.",
     assetsTitle: "Extracted images (image_mode, page_images)",
     assetsIntro:
-      "With image_mode=referenced, every picture Docling finds is stored as a PNG and the Markdown replaces the placeholder with ![Image](/jobs/{job_id}/assets/{name}), a relative API path. With page_images=true, every PDF page also becomes a PNG. All of them are listed in assets of /result, ordered by page (the page render, then the pictures in document order).",
+      "With image_mode=referenced, every extracted picture is stored as a PNG and the Markdown replaces the placeholder with ![Image](/jobs/{job_id}/assets/{name}), a relative API path. With page_images=true, every PDF page also becomes a PNG. All of them are listed in assets of /result, ordered by page (the page render, then the pictures in document order).",
     assetsRows: [
       [
         "assets_skipped",
@@ -1451,7 +1451,7 @@ const MEDIA_COPY = {
       ],
     ],
     assetsNote:
-      "A page that is only an image (scanned, a slide exported as a picture) is not always a Docling picture, since Docling treats a full-page image as background: use page_images=true to get the whole page. In the interface, /convert offers both options (Extract images, Render each page as an image) and the job page shows the images in its Images tab, with single and .zip downloads.",
+      "A page that is only an image (scanned, a slide exported as a picture) may not be extracted as an individual picture: use page_images=true to get the whole page. In the interface, /convert offers both options (Extract images, Render each page as an image) and the job page shows the images in its Images tab, with single and .zip downloads.",
     assetFields: {
       name: "p{page:04d}-img{index:02d}-{sha256[:12]}.png (picture) or p{page:04d}-page-{sha256[:12]}.png (page); page 0000 for formats without pages (DOCX…).",
       kind: "picture (image_mode=referenced) or page (page_images=true).",
@@ -1966,7 +1966,7 @@ const COMPUTE_COPY = {
   pt: {
     title: "Compute: execução e capacidade",
     intro:
-      "Compute reúne os motores que executam os jobs, sua capacidade e as rotas por funcionalidade. A instalação padrão usa os workers locais; contas Modal são opcionais e atendem transcrição de arquivos.",
+      "Compute reúne os motores que executam os jobs, sua capacidade e as rotas por funcionalidade. A instalação padrão usa os workers locais; o processamento remoto é opcional e atende transcrição de arquivos quando configurado.",
     admin:
       "As telas permitem configurar e operar motores. Com o acesso delegado habilitado, cada usuário vê somente engines, perfis e ações autorizados. GPU, routing e status globais continuam restritos ao administrador. Os comandos Docker permanecem disponíveis.",
     head: ["Tela", "O que mostra"],
@@ -1977,20 +1977,20 @@ const COMPUTE_COPY = {
     profileFlow:
       "Crie um perfil e publique uma revisão. Na engine, abra Configuração e escolha essa revisão em Perfil de execução. Vincular muda apenas o desejado; revise e confirme Aplicar perfil para executar. Desejado, aplicado e observado permanecem separados. A biblioteca e o acesso são opt-in e exigem migração.",
     engines:
-      "Motores local/Modal, saúde, status, capacidade, teste, deploy e orçamento.",
+      "Execução local e remota, saúde, status, capacidade, teste, deploy e orçamento.",
     gpus: "GPUs declaradas e detectadas, VRAM orçada e uso atual. Valor desconhecido não significa zero.",
     routing:
       "Prioridade dos motores e backlog por funcionalidade. Sem rota, o job usa a fila local habitual.",
     status:
       "Despachante, worker remoto, tentativas em voo e workers configurados × vivos.",
     capacity:
-      "Capacidade = workers × execuções por worker. A declaração não cria réplicas nem escolhe a placa CUDA do container. GPU local e Modal aceitam uma execução por worker; aumentar réplicas exige memória suficiente para todos os modelos na mesma placa.",
+      "Capacidade = workers × execuções por worker. A declaração não cria réplicas nem escolhe a placa CUDA do container. GPU local e rotas remotas compatíveis aceitam uma execução por worker; aumentar réplicas exige memória suficiente para todos os modelos na mesma placa.",
     health:
       "Um worker vivo pode estar ocupado ou com modelo ainda frio. A tela compara workers configurados e vivos; a confirmação de dispositivo e aquecimento vem dos logs e resultados. /health verifica a aplicação, enquanto o status Compute detalha a execução.",
     privacy:
-      "Provider e motor são configurações distintas: faster-whisper/openai-whisper processam no worker; openai-api envia o áudio à OpenAI. O rótulo local informa qual executor atendeu. O orçamento Compute cobre contas Modal; cobranças de openai-api ficam fora dele. PDF e imagem têm rotas somente locais no adapter atual.",
+      "O local de processamento depende da configuração: a transcrição pode executar no worker ou enviar o áudio à API externa selecionada. O rótulo local informa qual executor atendeu. O orçamento Compute cobre as contas de processamento remoto; cobranças da API externa de transcrição ficam fora dele. PDF e imagem têm rotas somente locais no adapter atual.",
     security:
-      "Engines, perfis e controle exigem sessão JWT; o servidor valida papéis e escopos também antes dos efeitos. Credenciais Modal são somente escrita e exigem senha atual, com acesso explícito de bootstrap ou connection_manager. API keys não dão acesso ao controlador.",
+      "Engines, perfis e controle exigem sessão JWT; o servidor valida papéis e escopos também antes dos efeitos. Credenciais de processamento remoto são somente escrita e exigem senha atual, com acesso explícito de bootstrap ou connection_manager. API keys não dão acesso ao controlador.",
     guide: "Setup, chaves, limites, deploy e benchmark no guia do operador",
     samples: "Leituras de diagnóstico (substitua o token JWT de admin)",
     fileCaptions:
@@ -1999,7 +1999,7 @@ const COMPUTE_COPY = {
   en: {
     title: "Compute: execution and capacity",
     intro:
-      "Compute brings together job execution engines, their capacity and per-feature routes. The default installation uses local workers; optional Modal accounts handle file transcription.",
+      "Compute brings together job execution engines, their capacity and per-feature routes. The default installation uses local workers; optional remote processing handles file transcription when configured.",
     admin:
       "These screens let you configure and operate engines. When delegated access is enabled, users see only authorized engines, profiles and actions. Global GPU, routing and status remain administrator-only. Docker commands remain available.",
     head: ["Screen", "What it shows"],
@@ -2010,20 +2010,20 @@ const COMPUTE_COPY = {
     profileFlow:
       "Create a profile and publish a revision. Open the engine Configuration tab and select that revision under Execution profile. Binding changes desired state only; review and confirm Apply profile to execute. Desired, applied and observed states stay separate. The library and access are opt-in and require migration.",
     engines:
-      "Local/Modal engines, health, status, capacity, tests, deployment and budget.",
+      "Local and remote execution, health, status, capacity, tests, deployment and budget.",
     gpus: "Declared and detected GPUs, budgeted VRAM and current usage. An unknown value does not mean zero.",
     routing:
       "Engine priority and backlog per feature. Without a route, a job uses the usual local queue.",
     status:
       "Dispatcher, remote worker, in-flight attempts and configured versus live workers.",
     capacity:
-      "Capacity = workers × executions per worker. Declaring capacity does not create replicas or select the container's CUDA device. Local GPU and Modal bindings accept one execution per worker; adding replicas requires enough memory for all models sharing the card.",
+      "Capacity = workers × executions per worker. Declaring capacity does not create replicas or select the container's CUDA device. Local GPU and supported remote bindings accept one execution per worker; adding replicas requires enough memory for all models sharing the card.",
     health:
       "A live worker may be busy or have a cold model. The screen compares configured and live workers; logs and results confirm the device and model warmup. /health checks the application, while Compute status details execution.",
     privacy:
-      "Providers and engines are separate settings: faster-whisper/openai-whisper process on the worker; openai-api sends audio to OpenAI. The local label identifies the executor. Compute budgets cover Modal accounts; openai-api charges are outside those budgets. The current adapter supports only local routes for PDFs and images.",
+      "Processing location depends on configuration: transcription can run on a worker or send audio to the selected external API. The local label identifies the executor. Compute budgets cover remote processing accounts; external transcription API charges are outside those budgets. The current adapter supports only local routes for PDFs and images.",
     security:
-      "Engine, profile and control APIs require a JWT session; roles and scopes are checked again before effects. Modal credentials are write-only and require the current password plus bootstrap or connection_manager permission. API keys do not grant controller access.",
+      "Engine, profile and control APIs require a JWT session; roles and scopes are checked again before effects. Remote processing credentials are write-only and require the current password plus bootstrap or connection_manager permission. API keys do not grant controller access.",
     guide:
       "Setup, keys, limits, deployment and benchmarks in the operator guide",
     samples: "Diagnostic reads (replace the admin JWT token)",
