@@ -1170,7 +1170,7 @@ const MEDIA_COPY = {
       ],
       [
         "docling_preset",
-        "Apenas /upload: fast (padrão), balanced ou quality. /convert usa as opções DOCLING_* do servidor.",
+        "/upload e /convert: fast, balanced ou quality. Omitido: fast no /upload; no /convert, as opções DOCLING_* do servidor.",
       ],
       [
         "source_type / source",
@@ -1192,6 +1192,14 @@ const MEDIA_COPY = {
         "page_images",
         "Opcional, padrão false. true renderiza cada página do PDF como PNG (fora do Markdown), com ou sem image_mode. Use em slides, PDFs escaneados e páginas que são uma imagem só: o Docling não detecta uma imagem de página inteira como figura.",
       ],
+      [
+        "describe_images",
+        "Opcional, padrão false. true descreve cada figura (modelo de visão Florence-2, em inglês) logo abaixo dela no Markdown, com image_mode none ou referenced. Veja Descrição e OCR de figuras abaixo.",
+      ],
+      [
+        "ocr_images",
+        "Opcional, padrão false. true lê o texto dentro de cada figura (OCR) e o insere abaixo dela no Markdown, com image_mode none ou referenced.",
+      ],
     ],
     presetsTitle: "Escolher velocidade e OCR",
     presetsHead: ["Preset", "OCR", "Imagens", "Tabelas", "Uso"],
@@ -1203,7 +1211,7 @@ const MEDIA_COPY = {
     formats:
       "PDF, DOCX, HTML, PPTX e XLSX dependem do suporte da versão instalada do Docling. A API aceita o upload antes de validar a conversão: um arquivo incompatível termina com status failed. DOC/PPT/XLS legados, RTF e ODT não têm sucesso garantido.",
     docsDuplicate:
-      "O mesmo arquivo no mesmo projeto, com as mesmas opções (docling_preset, image_mode, page_images), reaproveita o job existente (duplicate: true) e adiciona as tags; a pasta do job existente é preservada. Um job failed ou partial não é reaproveitado: reenviar é a nova tentativa. Outro preset ou outras opções de imagem criam outro job, e uma conversão com imagens não reaproveita um job cujas imagens já foram apagadas ou expiram em menos da metade de ASSET_RETENTION_SECONDS. Um arquivo em outro projeto é processado novamente.",
+      "O mesmo arquivo no mesmo projeto, com as mesmas opções (docling_preset, image_mode, page_images, describe_images, ocr_images), reaproveita o job existente (duplicate: true) e adiciona as tags; a pasta do job existente é preservada. Um job failed ou partial não é reaproveitado: reenviar é a nova tentativa. Outro preset ou outras opções de imagem criam outro job, e uma conversão com imagens não reaproveita um job cujas imagens já foram apagadas ou expiram em menos da metade de ASSET_RETENTION_SECONDS. Um arquivo em outro projeto é processado novamente.",
     docsResult:
       "Consulte /jobs/{job_id} a cada poucos segundos e leia result.markdown (e result.assets, se pediu imagens) de /jobs/{job_id}/result quando completed. Documentos não geram VTT/SRT. /result retorna 400 enquanto o job processa, 500 se falhou e 404 se o status/resultado expirou.",
     sourceTitle: "Arquivos de origem (purge_source)",
@@ -1214,7 +1222,7 @@ const MEDIA_COPY = {
       ],
       [
         "Quando",
-        "Ao terminar completed, ou failed/partial depois de esgotadas as tentativas automáticas; nunca enquanto houver retry ou página na fila.",
+        "Ao terminar completed, ou failed/partial depois de esgotadas as tentativas automáticas; nunca enquanto houver retry ou página na fila. Com describe_images/ocr_images, só depois que as descrições estão no Markdown.",
       ],
       [
         "Arquivo repetido",
@@ -1265,7 +1273,32 @@ const MEDIA_COPY = {
       height: "Altura em pixels.",
       size_bytes: "Tamanho do PNG.",
       url: "Caminho relativo da API (/jobs/{job_id_principal}/assets/{name}); prefixe com a URL da API e envie a mesma credencial.",
+      description: "describe_images=true: legenda da figura (Florence-2, em inglês); null se não pedida, página renderizada ou falha.",
+      ocr_text: "ocr_images=true: texto lido na figura; null se não pedido, página renderizada ou falha.",
     },
+    figuresTitle: "Descrição e OCR de figuras (describe_images, ocr_images)",
+    figuresIntro:
+      "Com describe_images=true, cada figura (picture do Docling) recebe uma legenda do modelo de visão Florence-2; com ocr_images=true, o texto dentro dela é lido (OCR). O texto entra no Markdown logo abaixo da figura: com image_mode=referenced a linha ![Image](...) fica e o bloco vem depois; com image_mode=none o placeholder <!-- image --> é substituído pelo bloco. As legendas são em inglês, por enquanto.",
+    figuresRows: [
+      [
+        "O que é lido",
+        "Só figuras, nunca as páginas renderizadas (page_images). Imagens idênticas são descritas uma vez só. Figuras menores que CONVERSION_ASSET_MIN_PX e as que passam de CONVERSION_FIGURE_MAX_COUNT (padrão 50 por documento) ficam sem texto e são contadas em figures_skipped.",
+      ],
+      [
+        "Resultado",
+        "GET /jobs/{job_id}/result traz result.figures_described, result.figures_ocr e result.figures_skipped (inteiros; só quando o job pediu describe_images ou ocr_images, senão null/ausentes). Cada item de result.assets ganha description e ocr_text (texto ou null).",
+      ],
+      [
+        "Tempo",
+        "O job continua processing até o texto estar no Markdown (o progresso passa de 90%). Com purge_source=true o original só é apagado depois disso.",
+      ],
+      [
+        "Duplicatas",
+        "describe_images e ocr_images fazem parte da operação: o mesmo arquivo com e sem descrição são jobs diferentes.",
+      ],
+    ],
+    figuresNote:
+      "Na interface, /convert reúne essas opções no grupo PDF options (Describe figures, OCR text in figures) e a página do job mostra as contagens e, na aba Images, a descrição e o OCR de cada figura.",
     recipeTitle: "Receita: PDF → imagens → descrição e OCR",
     recipeSteps: [
       "Converta com image_mode=referenced (e page_images=true para slides, escaneados ou páginas que são uma imagem só). purge_source=true apaga o PDF no fim do job; as imagens ficam ASSET_RETENTION_SECONDS.",
@@ -1327,7 +1360,7 @@ const MEDIA_COPY = {
       ],
       [
         "docling_preset",
-        "/upload only: fast (default), balanced or quality. /convert uses the server's DOCLING_* settings.",
+        "/upload and /convert: fast, balanced or quality. Omitted: fast on /upload; on /convert, the server's DOCLING_* settings.",
       ],
       [
         "source_type / source",
@@ -1349,6 +1382,14 @@ const MEDIA_COPY = {
         "page_images",
         "Optional, default false. true renders every PDF page to a PNG (not in the Markdown), with or without image_mode. Use it for slides, scanned PDFs and pages that are a single image: Docling does not detect a full-page image as a picture.",
       ],
+      [
+        "describe_images",
+        "Optional, default false. true describes every figure (Florence-2 vision model, in English) right below it in the Markdown, with image_mode none or referenced. See Figure descriptions and OCR below.",
+      ],
+      [
+        "ocr_images",
+        "Optional, default false. true reads the text inside every figure (OCR) and inserts it below the figure in the Markdown, with image_mode none or referenced.",
+      ],
     ],
     presetsTitle: "Choosing speed and OCR",
     presetsHead: ["Preset", "OCR", "Images", "Tables", "Usage"],
@@ -1360,7 +1401,7 @@ const MEDIA_COPY = {
     formats:
       "PDF, DOCX, HTML, PPTX and XLSX depend on the installed Docling version. The API accepts the upload before validating conversion: an incompatible file ends with status failed. Legacy DOC/PPT/XLS, RTF and ODT are not guaranteed to convert.",
     docsDuplicate:
-      "The same file in the same project, with the same options (docling_preset, image_mode, page_images), reuses the existing job (duplicate: true) and adds the supplied tags; the existing job's folder is preserved. A failed or partial job is not reused: sending the file again is the retry. Another preset or other image options create another job, and a conversion with images never reuses a job whose images were already deleted or expire in less than half of ASSET_RETENTION_SECONDS. Uploading to another project processes the file again.",
+      "The same file in the same project, with the same options (docling_preset, image_mode, page_images, describe_images, ocr_images), reuses the existing job (duplicate: true) and adds the supplied tags; the existing job's folder is preserved. A failed or partial job is not reused: sending the file again is the retry. Another preset or other image options create another job, and a conversion with images never reuses a job whose images were already deleted or expire in less than half of ASSET_RETENTION_SECONDS. Uploading to another project processes the file again.",
     docsResult:
       "Poll /jobs/{job_id} every few seconds and read result.markdown (and result.assets, if you asked for images) from /jobs/{job_id}/result once completed. Documents do not produce VTT/SRT. /result returns 400 while processing, 500 on failure and 404 if the status/result has expired.",
     sourceTitle: "Source files (purge_source)",
@@ -1371,7 +1412,7 @@ const MEDIA_COPY = {
       ],
       [
         "When",
-        "When the job ends completed, or failed/partial after every automatic retry ran; never while a retry or a page is still queued.",
+        "When the job ends completed, or failed/partial after every automatic retry ran; never while a retry or a page is still queued. With describe_images/ocr_images, only once the descriptions are in the Markdown.",
       ],
       [
         "Repeated file",
@@ -1422,7 +1463,32 @@ const MEDIA_COPY = {
       height: "Height in pixels.",
       size_bytes: "Size of the PNG.",
       url: "Relative API path (/jobs/{main_job_id}/assets/{name}); prefix it with the API URL and send the same credentials.",
+      description: "describe_images=true: the figure's caption (Florence-2, in English); null when not requested, for page renders, or on failure.",
+      ocr_text: "ocr_images=true: the text read in the figure; null when not requested, for page renders, or on failure.",
     },
+    figuresTitle: "Figure descriptions and OCR (describe_images, ocr_images)",
+    figuresIntro:
+      "With describe_images=true, every figure (a Docling picture) gets a caption from the Florence-2 vision model; with ocr_images=true, the text inside it is read (OCR). The text goes into the Markdown right below the figure: with image_mode=referenced the ![Image](...) line stays and the block follows it; with image_mode=none the <!-- image --> placeholder is replaced by the block. Captions are in English for now.",
+    figuresRows: [
+      [
+        "What is read",
+        "Figures only, never rendered pages (page_images). Identical images are described once. Figures smaller than CONVERSION_ASSET_MIN_PX and those past CONVERSION_FIGURE_MAX_COUNT (default 50 per document) get no text and are counted in figures_skipped.",
+      ],
+      [
+        "Result",
+        "GET /jobs/{job_id}/result returns result.figures_described, result.figures_ocr and result.figures_skipped (integers; only when the job asked for describe_images or ocr_images, otherwise null/absent). Every result.assets item gains description and ocr_text (string or null).",
+      ],
+      [
+        "Timing",
+        "The job stays processing until the text is in the Markdown (progress goes past 90%). With purge_source=true the original is deleted only after that.",
+      ],
+      [
+        "Duplicates",
+        "describe_images and ocr_images are part of the operation: the same file with and without descriptions are different jobs.",
+      ],
+    ],
+    figuresNote:
+      "In the interface, /convert groups these options under PDF options (Describe figures, OCR text in figures) and the job page shows the counts and, in the Images tab, each figure's description and OCR text.",
     recipeTitle: "Recipe: PDF → images → description and OCR",
     recipeSteps: [
       "Convert with image_mode=referenced (and page_images=true for slides, scans or pages that are a single image). purge_source=true deletes the PDF when the job ends; the images stay ASSET_RETENTION_SECONDS.",
@@ -1650,6 +1716,57 @@ function MediaSections({ lang, section }: { lang: Lang; section: string }) {
             ].join("\n"),
           )}
           <P small>{t.assetsNote}</P>
+          <Subheading>{t.figuresTitle}</Subheading>
+          <P>{t.figuresIntro}</P>
+          <Table head={t.fields} rows={t.figuresRows} />
+          {block(
+            curl("/upload", [
+              `  -F "file=@${pt ? "relatorio" : "report"}.pdf"`,
+              `  -F "project=${pt ? "Relatorios" : "Reports"}"`,
+              '  -F "image_mode=referenced"',
+              '  -F "describe_images=true"',
+              '  -F "ocr_images=true"',
+            ]),
+          )}
+          {block(
+            [
+              `![Image](/jobs/${EXAMPLE_JOB_ID}/assets/p0003-img01-3f2a9c1b7d4e.png)`,
+              "",
+              "> **Figure (description, English):** A bar chart comparing quarterly revenue for 2025 and 2026.",
+              "> **Text in figure (OCR):** Revenue (USD M) Q1 Q2 Q3 Q4",
+            ].join("\n"),
+          )}
+          {block(
+            JSON.stringify(
+              {
+                figures_described: 4,
+                figures_ocr: 3,
+                figures_skipped: 1,
+                assets: [
+                  {
+                    name: "p0003-img01-3f2a9c1b7d4e.png",
+                    kind: "picture",
+                    page: 3,
+                    "…": "…",
+                    description: "A bar chart comparing quarterly revenue for 2025 and 2026.",
+                    ocr_text: "Revenue (USD M) Q1 Q2 Q3 Q4",
+                  },
+                ],
+              },
+              null,
+              2,
+            ),
+          )}
+          {block(
+            curl("/convert", [
+              '  -F "source_type=url"',
+              '  -F "source=https://example.com/report.pdf"',
+              `  -F "project=${project}"`,
+              '  -F "docling_preset=balanced"',
+              '  -F "describe_images=true"',
+            ]),
+          )}
+          <P small>{t.figuresNote}</P>
           <Subheading>{t.recipeTitle}</Subheading>
           <ol className="list-decimal space-y-1 pl-6 text-muted-foreground">
             {t.recipeSteps.map((step) => (

@@ -266,6 +266,10 @@ export interface ConversionAsset {
   size_bytes: number;
   /** Relative API path: /jobs/{main_job_id}/assets/{name} (needs the same credentials) */
   url: string;
+  /** Florence-2 caption of a picture (describe_images=true; English), null when not described */
+  description?: string | null;
+  /** Text read inside a picture (ocr_images=true), null when none / not read */
+  ocr_text?: string | null;
 }
 
 /** Pictures that were not stored, by reason (they stay as <!-- image --> in the Markdown). */
@@ -283,6 +287,11 @@ export interface ConversionResult {
   /** Only when the job asked for image_mode=referenced and/or page_images=true (null otherwise) */
   assets?: ConversionAsset[] | null;
   assets_skipped?: ConversionAssetsSkipped | null;
+  /** Only when the job asked for describe_images and/or ocr_images (null otherwise) */
+  figures_described?: number | null;
+  figures_ocr?: number | null;
+  /** Figures not described/read: too small or past the per-document limit */
+  figures_skipped?: number | null;
 }
 
 export type CaptionTask = "<CAPTION>" | "<DETAILED_CAPTION>" | "<MORE_DETAILED_CAPTION>";
@@ -523,12 +532,21 @@ export interface SourceDeletedResponse {
   assets_deleted?: boolean;
 }
 
-/** Image options of a document conversion (/upload and /convert, every source type). */
+/** Docling quality/speed preset of a PDF conversion (/upload and /convert). */
+export type DoclingPreset = "fast" | "balanced" | "quality";
+
+/** PDF/document options of a conversion (/upload and /convert, every source type). */
 export interface DocumentImageOptions {
+  /** fast (default): text only, no OCR · balanced: + picture images · quality: + OCR for scanned PDFs */
+  docling_preset?: DoclingPreset;
   /** referenced: every picture Docling finds is stored as a PNG and referenced from the Markdown */
   image_mode?: "none" | "referenced";
   /** true: every PDF page is also rendered to a PNG (kind "page"), outside the Markdown */
   page_images?: boolean;
+  /** true: every figure is captioned (Florence-2, English) inline in the Markdown */
+  describe_images?: boolean;
+  /** true: the text inside every figure is read (OCR) inline in the Markdown */
+  ocr_images?: boolean;
 }
 
 export interface ConvertRequest extends UploadLocation, DocumentImageOptions {

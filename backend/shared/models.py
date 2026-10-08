@@ -157,6 +157,13 @@ class Job(Base):
     assets_manifest = Column(JSON, nullable=True)
     assets_expire_at = Column(DateTime, nullable=True)
     assets_deleted_at = Column(DateTime, nullable=True)
+    # Describe stage of describe_images / ocr_images (workers/figure_tasks.py, alembic
+    # d4b80025f6c2): "describing" while the figures go through the vision worker,
+    # "finishing" between the COMPLETED commit and the post-completion steps, NULL
+    # otherwise; figures_stage_at is its heartbeat (each figure dispatched, started or
+    # settled), which the stuck-job monitor reads instead of started_at.
+    figures_stage = Column(String(16), nullable=True)
+    figures_stage_at = Column(DateTime, nullable=True)
 
     # Job status
     status = Column(Enum(JobStatus), default=JobStatus.PENDING, nullable=False, index=True)

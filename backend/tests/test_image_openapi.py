@@ -34,7 +34,9 @@ def test_facial_migrations_have_one_head_on_current_main_chain():
     # image_analysis_submissions.attempt follows spec 0019 as the single head.
     # jobs source bookkeeping + uq_pages_job_page follow it; the conversion image
     # assets columns follow them as the single head.
-    assert scripts.get_heads() == ['c3a70024e5b1']
+    # the describe-stage columns (describe_images / ocr_images) follow them as the single head.
+    assert scripts.get_heads() == ['d4b80025f6c2']
+    assert scripts.get_revision('d4b80025f6c2').down_revision == 'c3a70024e5b1'
     assert scripts.get_revision('c3a70024e5b1').down_revision == 'b8f20022e1c4'
     assert scripts.get_revision('b8f20022e1c4').down_revision == 'a7d30021c5e9'
     assert scripts.get_revision('a7d30021c5e9').down_revision == 'f1c90019d3e4'

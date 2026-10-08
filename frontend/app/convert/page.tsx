@@ -81,13 +81,15 @@ function ConversionWorkspace() {
   const hasHydrated = useAuthStore((state) => state._hasHydrated);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const isImage = !!selectedFile && uploadSourceType(selectedFile.name) === "image";
+  const isAudio = !!selectedFile && uploadSourceType(selectedFile.name) === "audio";
   const [imageRequest, setImageRequest] = useState<Partial<UploadRequest>>({});
   const [imageValid, setImageValid] = useState(false);
   const imageKey = useRef<{ signature: string; key: string } | null>(null);
   const [customName, setCustomName] = useState("");
   const [tags, setTags] = useState<string[]>([]);
   const [purgeSource, setPurgeSource] = useState(false);
-  // Documents only (image_mode / page_images): /upload and /convert take them for every source type
+  // Documents only (docling_preset, image_mode, page_images, describe_images,
+  // ocr_images): /upload and /convert take them for every source type
   const [documentImages, setDocumentImages] = useState<DocumentImageOptions>({});
   const [uploadSuccess, setUploadSuccess] = useState<string | null>(null);
   const [urlSource, setUrlSource] = useState("");
@@ -215,12 +217,13 @@ function ConversionWorkspace() {
       image_idempotency_key = imageKey.current.key;
     }
     // Document uploads have no client-side key: the server deduplicates them by
-    // checksum + operation (preset, image_mode, page_images), so changing an image
-    // option is already another job there
+    // checksum + operation (docling_preset, image_mode, page_images,
+    // describe_images, ocr_images), so changing any of these options is already
+    // another job there. Audio takes none of the PDF options.
     uploadMutation.mutate({
       route: "upload",
       body: {
-        ...(isImage ? { ...imageRequest, image_idempotency_key } : documentImages),
+        ...(isImage ? { ...imageRequest, image_idempotency_key } : isAudio ? {} : documentImages),
         file: selectedFile,
         name: isImage ? undefined : customName || undefined,
         tags,
@@ -252,6 +255,7 @@ function ConversionWorkspace() {
         sourceToken,
         name: customName || undefined,
         tags,
+        purge_source: purgeSource,
         ...documentImages,
         ...toUploadLocation(project, folder),
       },
@@ -273,13 +277,16 @@ function ConversionWorkspace() {
     convertFrom("dropbox", dropboxSource, dropboxToken);
   };
 
-  const imageFields = (idPrefix: string, withPurge: boolean) => (
+  // The "PDF options" group of every tab, purge_source included (shared state:
+  // the tabs post the same options to /upload or /convert)
+  const pdfOptions = (idPrefix: string) => (
     <DocumentImageFields
       idPrefix={idPrefix}
       value={documentImages}
       onChange={setDocumentImages}
       disabled={uploadMutation.isPending}
-      purgeSource={withPurge && purgeSource}
+      purgeSource={purgeSource}
+      onPurgeSourceChange={setPurgeSource}
     />
   );
 
@@ -391,29 +398,31 @@ function ConversionWorkspace() {
                     <TagInput id="tagsFile" value={tags} onChange={setTags} />
                   </div>
 
-                  {!isImage && imageFields("file", true)}
-
-                  <div className="flex items-start space-x-2">
-                    <Checkbox
-                      id="purgeSourceFile"
-                      checked={purgeSource}
-                      onCheckedChange={(checked) => setPurgeSource(checked === true)}
-                      disabled={uploadMutation.isPending}
-                      className="mt-0.5"
-                    />
-                    <div className="space-y-1">
-                      <Label htmlFor="purgeSourceFile" className="font-normal">
-                        {isImage
-                          ? "Don't keep the original file after processing"
-                          : "Don't keep the original file after converting"}
-                      </Label>
-                      <p className="text-xs text-muted-foreground">
-                        {isImage
-                          ? "Every stored copy of the image is deleted when the job finishes (also when it fails or is cancelled); only the analysis result is kept."
-                          : "The file and its page PDFs are deleted when the job finishes (also when it fails, after its automatic retries); the Markdown result is kept, and failed pages can no longer be retried. Extracted images are kept for a limited time so you can download them."}
-                      </p>
+                  {!isImage && !isAudio ? (
+                    pdfOptions("file")
+                  ) : (
+                    <div className="flex items-start space-x-2">
+                      <Checkbox
+                        id="purgeSourceFile"
+                        checked={purgeSource}
+                        onCheckedChange={(checked) => setPurgeSource(checked === true)}
+                        disabled={uploadMutation.isPending}
+                        className="mt-0.5"
+                      />
+                      <div className="space-y-1">
+                        <Label htmlFor="purgeSourceFile" className="font-normal">
+                          {isImage
+                            ? "Don't keep the original file after processing"
+                            : "Don't keep the original file after converting"}
+                        </Label>
+                        <p className="text-xs text-muted-foreground">
+                          {isImage
+                            ? "Every stored copy of the image is deleted when the job finishes (also when it fails or is cancelled); only the analysis result is kept."
+                            : "The file is deleted when the job finishes (also when it fails, after its automatic retries); the transcript is kept."}
+                        </p>
+                      </div>
                     </div>
-                  </div>
+                  )}
 
                   <Button
                     onClick={handleFileUpload}
@@ -458,7 +467,7 @@ function ConversionWorkspace() {
                     <TagInput id="tagsUrl" value={tags} onChange={setTags} />
                   </div>
 
-                  {imageFields("url", false)}
+                  {pdfOptions("url")}
 
                   <Button
                     onClick={handleUrlConvert}
@@ -517,7 +526,7 @@ function ConversionWorkspace() {
                     <TagInput id="tagsGdrive" value={tags} onChange={setTags} />
                   </div>
 
-                  {imageFields("gdrive", false)}
+                  {pdfOptions("gdrive")}
 
                   <Button
                     onClick={handleGdriveConvert}
@@ -576,7 +585,7 @@ function ConversionWorkspace() {
                     <TagInput id="tagsDropbox" value={tags} onChange={setTags} />
                   </div>
 
-                  {imageFields("dropbox", false)}
+                  {pdfOptions("dropbox")}
 
                   <Button
                     onClick={handleDropboxConvert}

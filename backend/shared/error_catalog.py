@@ -81,6 +81,12 @@ CATALOG = {
         "(por exemplo, \"imprimir como PDF\") e envie a nova versão.",
         ["fix_input"],
     ),
+    "FIGURES_FAILED": (
+        "A conversão terminou, mas não foi possível concluir a etapa de descrição/OCR "
+        "das figuras (describe_images / ocr_images) depois das novas tentativas "
+        "automáticas. Envie o arquivo novamente, ou sem essas opções.",
+        ["retry"],
+    ),
     "RETRY_NOT_QUEUED": (
         "A nova tentativa automática não pôde ser agendada (fila indisponível), então "
         "o processamento foi encerrado com falha. Envie o arquivo novamente.",

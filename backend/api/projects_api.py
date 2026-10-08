@@ -304,7 +304,8 @@ def resolve_upload_location(db: Session, user: User, plan: UploadPlan, path: str
 # ---------------------------------------------------------------------------
 
 def conversion_operation_key(docling_preset: Optional[str], image_mode: Optional[str] = None,
-                             page_images: bool = False) -> str:
+                             page_images: bool = False, describe_images: bool = False,
+                             ocr_images: bool = False) -> str:
     """
     Dedup key of a document conversion: the operation and the options that change
     its result. The same file converted with another preset is another job; a
@@ -312,7 +313,8 @@ def conversion_operation_key(docling_preset: Optional[str], image_mode: Optional
 
     `image_mode` / `page_images` (image assets) enter the key only when not the
     default, so every key recorded before they existed (all `none` / false) is
-    still the key of a conversion without assets.
+    still the key of a conversion without assets. The same holds for
+    `describe_images` / `ocr_images` (figure descriptions / OCR): only when true.
     """
     import hashlib
     import json
@@ -320,7 +322,8 @@ def conversion_operation_key(docling_preset: Optional[str], image_mode: Optional
     from shared.conversion_assets import normalize_options, requested_options
 
     payload = {"operation": "conversion", "docling_preset": docling_preset or None}
-    payload.update(requested_options(*normalize_options(image_mode, page_images)))
+    payload.update(requested_options(*normalize_options(image_mode, page_images),
+                                     describe_images=describe_images is True, ocr_images=ocr_images is True))
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
 
 

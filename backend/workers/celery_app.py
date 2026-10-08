@@ -34,7 +34,17 @@ celery_app.conf.update(
     broker_connection_retry_on_startup=True,
     # Above every task time limit, so a long task is never redelivered while it runs;
     # a message whose worker died is caught sooner by workers.monitoring.check_broker_unacked
-    broker_transport_options={"visibility_timeout": settings.celery_visibility_timeout_seconds},
+    #
+    # priority_steps: with the Redis transport each queue is one list per priority step
+    # and a worker always pops the lowest step first (0 = first). Batch work on a
+    # shared queue goes at a high number: the figures of describe_images /
+    # ocr_images run at 9 on the vision queue, so an interactive /images/* request
+    # (no priority = 0) waits at most for the one figure in flight (prefetch 1,
+    # acks_late). queue_order_strategy stays round_robin: it only orders *different*
+    # queues of a multi-queue worker, and "priority" there would let the first queue
+    # starve the others.
+    broker_transport_options={"visibility_timeout": settings.celery_visibility_timeout_seconds,
+                              "priority_steps": list(range(10))},
     # Isolation settings
     task_default_queue=settings.celery_task_default_queue,  # Fila isolada
     worker_name=settings.celery_worker_name,  # Hostname único
@@ -84,6 +94,9 @@ celery_app.autodiscover_tasks(["workers"])
 # is actually loaded), and an unregistered task name under task_acks_late +
 # task_reject_on_worker_lost is redelivered forever rather than failing once.
 import workers.vision_tasks  # noqa: F401,E402
+# The describe stage of a conversion (describe_images / ocr_images): its vision task is
+# named workers.vision_tasks.* (vision queue), its finalize workers.tasks.* (default queue)
+import workers.figure_tasks  # noqa: F401,E402
 
 # Local workers announce which feature lane they serve and the GPU they see
 # (spec 0003); signal handlers only, nothing runs at import
@@ -95,6 +108,8 @@ import workers.engines.heartbeat  # noqa: F401,E402
 # nothing to do with vision.
 celery_app.conf.task_routes = {
     "workers.engine_control.tasks.*": {"queue": settings.engine_control_queue},
+    # Figures of a conversion: batch work, behind every interactive vision task
+    "workers.vision_tasks.describe_figure_task": {"queue": settings.vision_queue, "priority": 9},
     "workers.vision_tasks.*": {"queue": settings.vision_queue},
     # The dispatcher's own tasks (spec 0003): only published once a feature has a route
     "workers.engines.tasks.*": {"queue": settings.dispatch_queue},

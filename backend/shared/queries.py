@@ -4,7 +4,7 @@ Database query helpers for monitoring and recovery
 
 from datetime import datetime, timedelta
 from typing import List, Optional
-from sqlalchemy import and_, exists, or_
+from sqlalchemy import func, and_, exists, or_
 from sqlalchemy.orm import Session
 
 from shared.models import Job, Page, JobStatus
@@ -75,7 +75,9 @@ def get_stuck_jobs(
             and_(
                 Job.status == JobStatus.PROCESSING,
                 Job.started_at.isnot(None),
-                Job.started_at < threshold_time,
+                # A describe stage (describe_images / ocr_images) is judged by its
+                # heartbeat, refreshed by every figure, not by when the job started
+                func.coalesce(Job.figures_stage_at, Job.started_at) < threshold_time,
                 ~_has_live_engine_usage(),
                 ~_has_open_backlog_items(),
             )

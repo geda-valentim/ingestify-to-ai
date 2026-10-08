@@ -647,7 +647,7 @@ def test_result_lists_the_assets_from_the_durable_manifest(api):
 
     assert [a["name"] for a in body["assets"]] == [a["name"] for a in assets]
     assert set(body["assets"][0]) == {"name", "kind", "page", "bbox", "sha256", "mime", "width", "height",
-                                      "size_bytes", "url"}
+                                      "size_bytes", "url", "description", "ocr_text"}
     assert body["assets_skipped"] == {"too_small": 0, "count_limit": 0, "size_limit": 0, "unavailable": 0}
 
 
@@ -1044,7 +1044,7 @@ def test_a_page_job_result_publishes_only_the_asset_fields(api, monkeypatch):
     r = api.client.get(f"/jobs/{PAGE_JOB}/result", headers=jwt())
 
     assert r.status_code == 200, r.text
-    assert set(r.json()["result"]["assets"][0]) == set(ca.PUBLIC_FIELDS)
+    assert set(r.json()["result"]["assets"][0]) == set(ca.PUBLIC_FIELDS + ca.FIGURE_FIELDS)
 
 
 @pytest.mark.parametrize("remaining, reused", [(timedelta(minutes=10), False), (timedelta(minutes=50), True)])

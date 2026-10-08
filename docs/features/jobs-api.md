@@ -40,6 +40,10 @@ Detalhes de armazenamento: [storage-and-retention.md](storage-and-retention.md).
 
 `10%` ao iniciar → `20 + int(páginas_concluídas / total * 70)` conforme as páginas
 terminam → `100%` quando o merge conclui. Documentos não divididos vão de 10 → 80 → 90 → 100.
+Com `describe_images`/`ocr_images` o job fica `processing` depois do merge (ou da
+conversão) em 90 → 99% enquanto as figuras passam pelo worker de visão
+(`stage: describing_figures`, `figures_done`/`figures_total`) e só então vai a 100%
+(ver [conversion.md](conversion.md#descrição-e-ocr-das-figuras-describe_images-ocr_images)).
 
 ## Autorização
 
@@ -150,6 +154,9 @@ assets_skipped}, completed_at}` e, para jobs PAGE, `page_number` e `parent_job_i
 parâmetro `?format=` só tem efeito em transcrições. `assets`/`assets_skipped` vêm de
 `jobs.assets_manifest` (o Elasticsearch guarda só o Markdown) e são `null` num job sem
 `image_mode`/`page_images`; o resultado de um job PAGE traz as imagens da própria página.
+Com `describe_images`/`ocr_images`: `figures_described`, `figures_ocr`, `figures_skipped`
+(inteiros, por posição de figura; `null` sem as opções, lidos de `metadata.figures`) e,
+em cada asset, `description` / `ocr_text` (`null` quando não pedidos ou ausentes).
 
 ```bash
 curl -H "X-API-Key: $INGESTIFY_API_KEY" http://localhost:8000/jobs/$JOB_ID/result \

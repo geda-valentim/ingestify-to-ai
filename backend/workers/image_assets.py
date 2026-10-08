@@ -15,6 +15,7 @@ Testable without docling's models: `extract_pictures` only needs a
 import hashlib
 import io
 import logging
+import re
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -166,42 +167,172 @@ def _bbox(doc, prov) -> Optional[dict]:
         return None
 
 
-def extract_pictures(doc, collector: AssetCollector) -> str:
+class FigureCollector:
+    """
+    The figures of one conversion run that go through the vision worker
+    (describe_images / ocr_images; shared/figure_descriptions.py): one entry per
+    PictureItem, in document order.
+
+    - `image_mode=referenced`: the figure is the stored asset (`from_asset`): its
+      anchor is the asset URL, nothing more is stored;
+    - `image_mode=none`: the PNG is stored in the temporary area
+      `figures/{job_id}/` (`store`), once per distinct image of this run, at most
+      CONVERSION_FIGURE_MAX_COUNT distinct images; its anchor is a marker the
+      export writes where docling's placeholder was.
+
+    Pictures under CONVERSION_ASSET_MIN_PX on either side, unreadable ones and
+    those past the limit are entries with `skip` (they keep the placeholder).
+    """
+
+    def __init__(self, job_id: str, storage_factory: Callable, *, page_offset: int = 0, settings=None,
+                 budget=None):
+        if settings is None:
+            from shared.config import get_settings
+
+            settings = get_settings()
+        self.job_id = str(job_id)
+        self.page_offset = int(page_offset or 0)
+        self.min_px = int(settings.conversion_asset_min_px)
+        self.max_count = int(getattr(settings, "conversion_figure_max_count", 50))
+        # A split PDF's page jobs share the document-wide cap (JobAssetBudget, namespace
+        # "figures", slot = sha256), checked before each upload
+        self.budget = budget
+        self._storage_factory = storage_factory
+        self._storage = None
+        self.entries = []
+        self._stored = {}  # sha256 -> object name
+
+    def absolute_page(self, local_page: Optional[int]) -> Optional[int]:
+        return local_page + self.page_offset if local_page else None
+
+    def _storage_client(self):
+        if self._storage is None:
+            self._storage = self._storage_factory()
+        return self._storage
+
+    def _entry(self, name, page, sha256=None, obj=None, anchor=None, skip=None) -> dict:
+        entry = {"name": name, "page": page, "sha256": sha256, "object": obj, "anchor": anchor, "skip": skip}
+        self.entries.append(entry)
+        return entry
+
+    def from_asset(self, asset: dict) -> dict:
+        from shared.conversion_assets import object_name as asset_object
+
+        return self._entry(asset["name"], asset.get("page"), asset["sha256"],
+                           asset_object(self.job_id, asset["name"]), asset["url"])
+
+    def skipped(self, page: Optional[int], reason: str) -> dict:
+        return self._entry(None, page, skip=reason)
+
+    def store(self, image, *, page: Optional[int], index: int) -> dict:
+        """image_mode=none: keep the PNG for the vision worker; the entry's anchor is its marker."""
+        from shared.figure_descriptions import figure_object, marker
+
+        if image is None:
+            return self.skipped(page, "unavailable")
+        width, height = image.size
+        if width < self.min_px or height < self.min_px:
+            return self.skipped(page, "too_small")
+        data = encode_png(image)
+        sha256 = hashlib.sha256(data).hexdigest()
+        name = picture_name(page, index, sha256)
+        obj = self._stored.get(sha256)
+        if obj is None:
+            if len(self._stored) >= self.max_count:
+                return self.skipped(page, "count_limit")
+            # One object per distinct image, named by its hash: the same image on
+            # several pages of a split PDF is stored (and counted) once
+            obj = figure_object(self.job_id, f"{sha256}.png")
+            if self.budget is not None:
+                if self.budget.has(sha256):
+                    self._stored[sha256] = obj
+                    return self._entry(name, page, sha256, obj, marker(name))
+                allowed, _reason = self.budget.precheck(sha256)
+                if allowed is not False:
+                    allowed, _reason = self.budget.commit(sha256, len(data))
+                if allowed is False:
+                    return self.skipped(page, "count_limit")
+            storage = self._storage_client()
+            stored = storage.upload_file(bucket_name=storage.bucket_results, object_name=obj, file_data=data,
+                                         content_type=ASSET_MIME)
+            if stored is False:
+                raise RuntimeError(f"MinIO did not store {obj}")
+            self._stored[sha256] = obj
+        return self._entry(name, page, sha256, obj, marker(name))
+
+    def result_fields(self) -> dict:
+        return {"figures": [dict(entry) for entry in self.entries]}
+
+
+def _skip_reason(collector: AssetCollector, before: dict) -> str:
+    for reason, count in collector.skipped.items():
+        if count > before.get(reason, 0):
+            return reason
+    return "unavailable"
+
+
+def extract_pictures(doc, collector: Optional[AssetCollector], figures: Optional[FigureCollector] = None) -> str:
     """
     Store every picture of `doc` (docling_core DoclingDocument) and return its
     markdown with the stored pictures referenced by asset URL, in document order.
 
     Every picture the export could embed ends with either our URL or no image at
     all (placeholder): never a `data:` URI in the markdown.
+
+    `collector` None (image_mode=none) with `figures`: no asset is stored; each
+    figure to describe gets a `<!-- figure:{name} -->` marker in place of the
+    placeholder (shared/figure_descriptions.py), the others keep the placeholder.
     """
     from docling_core.types.doc import ImageRef, ImageRefMode, PictureItem
 
+    from shared.figure_descriptions import MARKER_URI_PREFIX, marker
+
+    pages_of = collector if collector is not None else figures
     handled = set()
     per_page = {}
+    marked = []
     for item, _level in doc.iterate_items():
         if not isinstance(item, PictureItem):
             continue
         handled.add(id(item))
         prov = item.prov[0] if item.prov else None
-        page = collector.absolute_page(prov.page_no if prov else None)
+        page = pages_of.absolute_page(prov.page_no if prov else None)
         per_page[page] = per_page.get(page, 0) + 1
         try:
             image = item.get_image(doc)
         except Exception as e:  # noqa: BLE001 - counted as unavailable
             logger.warning(f"Could not read a picture of page {page}: {e}")
             image = None
-        asset = collector.add_picture(image, page=page, index=per_page[page],
-                                      bbox=_bbox(doc, prov) if prov else None)
-        if asset is None:
-            item.image = None  # the export writes the placeholder
-            continue
+        if collector is not None:
+            before = dict(collector.skipped)
+            asset = collector.add_picture(image, page=page, index=per_page[page],
+                                          bbox=_bbox(doc, prov) if prov else None)
+            if figures is not None:
+                if asset is not None:
+                    figures.from_asset(asset)
+                else:
+                    figures.skipped(page, _skip_reason(collector, before))
+            if asset is None:
+                item.image = None  # the export writes the placeholder
+                continue
+            uri = asset["url"]
+        else:
+            entry = figures.store(image, page=page, index=per_page[page])
+            if entry.get("skip"):
+                item.image = None
+                continue
+            uri = MARKER_URI_PREFIX + entry["name"]
+            marked.append(entry["name"])
         if item.image is None:
             item.image = ImageRef.from_pil(image, dpi=72)
-        item.image.uri = Path(asset["url"])
+        item.image.uri = Path(uri)
     for item in getattr(doc, "pictures", None) or []:
         if id(item) not in handled:
             item.image = None
-    return doc.export_to_markdown(image_mode=ImageRefMode.REFERENCED)
+    markdown = doc.export_to_markdown(image_mode=ImageRefMode.REFERENCED)
+    for name in marked:
+        markdown = re.sub(r"!\[[^\]]*\]\(" + re.escape(MARKER_URI_PREFIX + name) + r"\)", marker(name), markdown)
+    return markdown
 
 
 def render_pages(pdf_path: Path, collector: AssetCollector) -> int:

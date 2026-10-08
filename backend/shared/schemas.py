@@ -332,6 +332,8 @@ class ConversionAsset(BaseModel):
     height: int
     size_bytes: int
     url: str = Field(..., description="Caminho relativo na API: /jobs/{job_id}/assets/{name} (sempre o job principal)")
+    description: Optional[str] = Field(None, description="describe_images=true: descrição da figura (Florence-2, em inglês); null se não pedida, página renderizada ou falhou")
+    ocr_text: Optional[str] = Field(None, description="ocr_images=true: texto lido na figura; null se não pedido, página renderizada ou falhou")
 
 
 class ConversionAssetsSkipped(BaseModel):
@@ -350,6 +352,10 @@ class ConversionResult(BaseModel):
     # ordenados por página, depois a página renderizada, depois as figuras na ordem do documento
     assets: Optional[List[ConversionAsset]] = None
     assets_skipped: Optional[ConversionAssetsSkipped] = None
+    # Só quando o job pediu describe_images e/ou ocr_images (senão null), por posição de figura
+    figures_described: Optional[int] = Field(None, description="Figuras que receberam descrição")
+    figures_ocr: Optional[int] = Field(None, description="Figuras cujo texto foi lido (OCR)")
+    figures_skipped: Optional[int] = Field(None, description="Figuras sem texto: pequenas demais, além do limite ou falha na análise")
 
 
 class JobResultResponse(BaseModel):
