@@ -13,6 +13,22 @@
 - Pool configurável por processo: `DB_POOL_SIZE` (20), `DB_MAX_OVERFLOW` (20),
   `DB_POOL_TIMEOUT` (15 s). O MariaDB do dev foi para `max_connections=500`.
 
+## 2026-10: Páginas públicas de funcionalidades (/features)
+
+- Novas páginas públicas em inglês: `/features` (índice), `/features/documents`,
+  `/features/audio-video` e `/features/images`, com metadata (title, description,
+  canonical, OpenGraph `en_US`), exemplo `curl` com os endpoints e campos reais e links
+  para os tópicos de `/docs` via `docsHref`.
+- Conteúdo derivado do código e de `docs/features/*`: presets Docling (`fast`/`balanced`/
+  `quality` só em `/upload`), páginas de PDF e retry, `image_mode`/`page_images`,
+  `purge_source`, dedup; `POST /transcribe` (faster-whisper `turbo` por padrão, formatos
+  markdown/srt/vtt/txt/json, live e diarização apenas quando habilitados); as 15 tarefas
+  Florence-2 de `GET /images/capabilities`, `wait`, Full Analysis, faces (desligado por
+  padrão) e entrega em datalake só para Full Analysis/faces.
+- Header público ganha o link **Features**; `app/sitemap.ts` lista as quatro rotas.
+- Testes: `frontend/tests/feature-pages.test.cjs` (slugs de docs, tarefas iguais a
+  `vision_capabilities.py`, header e sitemap) e `public-navigation-browser.py` estendido.
+
 ## 2026-10: Imagens da conversão de documentos (API 1.2.0)
 
 - `POST /upload` e `POST /convert` ganham `image_mode` (`none` padrão | `referenced`) e
