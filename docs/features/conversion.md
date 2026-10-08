@@ -4,7 +4,9 @@
 > Fonte da verdade: [backend/api/routes.py](../../backend/api/routes.py),
 > [backend/workers/tasks.py](../../backend/workers/tasks.py),
 > [backend/workers/converter.py](../../backend/workers/converter.py),
-> [backend/shared/pdf_splitter.py](../../backend/shared/pdf_splitter.py).
+> [backend/shared/pdf_splitter.py](../../backend/shared/pdf_splitter.py),
+> [backend/shared/conversion_assets.py](../../backend/shared/conversion_assets.py),
+> [backend/workers/image_assets.py](../../backend/workers/image_assets.py).
 
 ## O que faz
 
@@ -172,6 +174,127 @@ no MinIO; o arquivo baixado só existe no diretório de trabalho e já é apagad
 completa. A API aceita `purge_source` nelas (apaga o download e os PDFs por página quando
 o job falha de vez), mas a interface não oferece.
 
+### Imagens do documento (`image_mode`, `page_images`)
+
+Por padrão (`image_mode=none`) nada muda: o Docling roda com
+`generate_picture_images=False` (preset `fast`) e o Markdown traz `<!-- image -->` no
+lugar de cada figura; nenhuma imagem sai do Ingestify. Os dois campos de form, em
+`/upload` e `/convert`:
+
+| Campo | Valores | Efeito |
+|---|---|---|
+| `image_mode` | `none` (padrão) \| `referenced` | `referenced`: liga `generate_picture_images` (escala `CONVERSION_IMAGES_SCALE`, padrão 2.0 = 144 DPI; só neste modo — `none` com os presets `balanced`/`quality` mantém a escala padrão do Docling, custo e saída iguais aos de antes), guarda cada `PictureItem` como PNG e o Markdown passa a referenciá-lo: `![Image](/jobs/{job_id}/assets/{name})` (caminho relativo da API). Outro valor: `422`. |
+| `page_images` | `false` (padrão) \| `true` | Só PDF: renderiza cada página como PNG com pypdfium2 (`CONVERSION_PAGE_IMAGE_DPI`, padrão 150). Não aparece no Markdown. Funciona com ou sem `image_mode`. |
+
+Como o Markdown referencia as figuras: o worker percorre os `PictureItem` do documento
+Docling na ordem do documento, grava cada PNG e põe a URL do asset em
+`picture.image.uri`; o export é `export_to_markdown(image_mode=ImageRefMode.REFERENCED)`
+(docling-core 2.100). Uma figura pulada fica com `image=None` e o export escreve o
+placeholder; nenhuma figura sai como `data:` URI.
+
+O resultado (`GET /jobs/{job_id}/result`) ganha:
+
+```json
+{
+  "markdown": "## Aula 1\n\n![Image](/jobs/<job_id>/assets/p0001-img01-3f2a9c1b7d4e.png)",
+  "assets": [
+    {"name": "p0001-page-9b1c0d2e3f4a.png", "kind": "page", "page": 1, "bbox": null,
+     "sha256": "9b1c…", "mime": "image/png", "width": 1275, "height": 1650,
+     "size_bytes": 182311, "url": "/jobs/<job_id>/assets/p0001-page-9b1c0d2e3f4a.png"},
+    {"name": "p0001-img01-3f2a9c1b7d4e.png", "kind": "picture", "page": 1,
+     "bbox": {"l": 99.8, "t": 265.7, "r": 400.0, "b": 492.1, "coord_origin": "TOPLEFT",
+              "page_width": 612.0, "page_height": 792.0},
+     "sha256": "3f2a…", "mime": "image/png", "width": 601, "height": 453,
+     "size_bytes": 48213, "url": "/jobs/<job_id>/assets/p0001-img01-3f2a9c1b7d4e.png"}
+  ],
+  "assets_skipped": {"too_small": 0, "count_limit": 0, "size_limit": 0, "unavailable": 0}
+}
+```
+
+- Ordem: página, depois a página renderizada, depois as figuras na ordem do documento.
+- Nomes: `p{página:04d}-img{índice:02d}-{sha256[:12]}.png` (índice 1-based na página) e
+  `p{página:04d}-page-{sha256[:12]}.png`; página `0000` em formatos sem página (DOCX…).
+- `bbox`: pontos PDF, origem no canto superior esquerdo, com o tamanho da página.
+- Sem `image_mode`/`page_images`, `assets` e `assets_skipped` vêm `null` e o Markdown é
+  idêntico ao de antes.
+- Limites (`assets_skipped`): figura menor que `CONVERSION_ASSET_MIN_PX` (32) em qualquer
+  lado → `too_small`; mais de `CONVERSION_ASSET_MAX_COUNT` (500) assets ou
+  `CONVERSION_ASSET_MAX_TOTAL_MB` (200) por job → `count_limit` / `size_limit`;
+  imagem que o Docling não entregou → `unavailable`. Figura pulada fica como placeholder.
+- Uma página que é só uma imagem (escaneada) nem sempre vira `PictureItem` no Docling (o
+  layout pode tratá-la como fundo): use `page_images=true` para ter a página inteira.
+
+**Onde ficam:** bucket de resultados, `assets/{job_id_principal}/{name}`. A lista durável é
+`jobs.assets_manifest` (gravada junto com o `completed`); o Elasticsearch guarda só o
+Markdown. Baixe com `GET /jobs/{job_id}/assets/{name}` (ver
+[jobs-api.md](jobs-api.md#get-jobsjob_idassetsname)).
+
+**PDF dividido:** cada job de página extrai as próprias imagens com o número **absoluto**
+da página e grava direto sob o job principal (URLs já em `/jobs/{principal}/assets/…`).
+Os limites do job valem para todas as páginas juntas, em duas camadas:
+
+1. **Reserva no Redis, antes de codificar e enviar** (`JobAssetBudget`): cada posição
+   (`p0003-img02`, `p0003-page`) reserva uma vaga em `job:{id}:assets:slots` e seus bytes
+   em `job:{id}:assets:bytes` (TTL 24 h). Esgotada a contagem ou os bytes, a página nem
+   renderiza/codifica a imagem (`count_limit`/`size_limit`). Um retry da mesma página
+   reaproveita a própria vaga. Quem fica com o orçamento depende da ordem em que as
+   páginas terminam.
+2. **O merge é a autoridade** (`combine_pages`, em ordem de página): o que passar do limite
+   sai da lista, vira placeholder no Markdown e o PNG é apagado. Sem Redis, cada página
+   aplica só os próprios limites e o merge corta o excedente.
+
+**Opções duráveis:** `image_mode`/`page_images` ficam na configuração pedida do job
+(`JobConfiguration.options`, só quando diferentes do padrão); o worker as relê do banco no
+`process_conversion` e em cada página (retry de página e merge as respeitam mesmo que a
+mensagem do Celery não as traga).
+
+**Nunca URL sem manifesto:** o worker grava `jobs.assets_manifest` **antes** de publicar
+qualquer resultado (Redis, Elasticsearch, páginas). Se essa gravação falhar, as referências
+voltam a `<!-- image -->`, os PNGs são apagados e o resultado sai sem `assets`. O merge
+lista as imagens que as páginas guardaram mesmo que não consiga ler as opções do job.
+
+**Job que termina sem manifesto** (`failed`/`partial`, com ou sem `purge_source`): as
+imagens das páginas que completaram e ainda têm resultado ganham um manifesto (ficam
+baixáveis e seguem a retenção normal: um `partial` pode ser completado por retry de
+página, que refaz o manifesto no merge); sem nada listável (documento único que falhou,
+resultados de página expirados), `assets/{id}/` é apagado.
+
+**Retenção:**
+
+- Sem `purge_source`, as imagens duram o mesmo que o job (`DELETE /jobs/{id}` apaga
+  `assets/{id}/`).
+- Com `purge_source=true`, o original e os PDFs por página seguem a regra de sempre, mas
+  as imagens **não** são apagadas quando o job termina (o cliente precisa baixá-las): o
+  purge grava `jobs.assets_expire_at = agora + ASSET_RETENTION_SECONDS` (padrão 3600) e a
+  task periódica `workers.image_full_tasks.reconcile` (no máximo uma vez por minuto em todo
+  o cluster — lock Redis `assets:expiry:lock`; sem Redis, por processo —, até 20 jobs por
+  vez, a expiração mais antiga primeiro, sob o lock da linha do job, idempotente) apaga
+  `assets/{id}/` e grava `jobs.assets_deleted_at`. Uma exclusão que falha é adiada 5 min
+  (`ASSET_EXPIRY_RETRY_SECONDS`), para não travar o lote. Uma duplicata com `purge_source=true` de um job já terminado
+  agenda a mesma expiração.
+- `DELETE /jobs/{job_id}/source` apaga as imagens na hora (também depois que o purge já
+  levou o original).
+- Depois de apagadas, `GET /jobs/{id}/assets/{name}` responde `410 SOURCE_PURGED`
+  (`cause: ASSETS_PURGED`); `GET /jobs/{id}` informa `assets_available` e `assets_expire_at`.
+
+**Deduplicação:** `image_mode` e `page_images` entram no `operation_key` (só quando
+diferentes do padrão, então as chaves antigas continuam valendo): uma conversão
+`referenced` nunca devolve um job `none`, nem um job sem chave (anterior às chaves), nem
+um job cujas imagens já foram apagadas ou expiram em menos da metade de
+`ASSET_RETENTION_SECONDS` (aí um job novo é criado, em vez de devolver URLs prestes a
+responder 410).
+
+**Na interface:** a visualização do Markdown busca cada `/jobs/{id}/assets/{name}` na API
+com a credencial da sessão e mostra a imagem por um blob URL (liberado ao sair); imagem
+apagada ou inexistente aparece como "Image unavailable".
+
+```bash
+curl -X POST http://localhost:8000/upload \
+  -H "X-API-Key: $INGESTIFY_API_KEY" \
+  -F "file=@apostila.pdf" -F "project=Cursos" \
+  -F "image_mode=referenced" -F "page_images=true" -F "purge_source=true"
+```
+
 ### Presets do Docling
 
 Definidos em `get_converter()` ([converter.py](../../backend/workers/converter.py)):
@@ -288,6 +411,12 @@ Variáveis lidas por [backend/shared/config.py](../../backend/shared/config.py):
 | `DOCLING_ENABLE_TABLE_STRUCTURE` | `true` | Reconhecimento de tabelas quando não há preset. |
 | `DOCLING_ENABLE_IMAGES` | `false` | `generate_picture_images` quando não há preset. |
 | `DOCLING_NUM_THREADS` | `4` | Threads do Docling (`AcceleratorOptions.num_threads`). |
+| `CONVERSION_IMAGES_SCALE` | `2.0` | `images_scale` do Docling quando as figuras são geradas (`image_mode=referenced`, presets `balanced`/`quality`). |
+| `CONVERSION_PAGE_IMAGE_DPI` | `150` | DPI das páginas renderizadas (`page_images=true`). |
+| `CONVERSION_ASSET_MIN_PX` | `32` | Figura menor que isso em largura ou altura é pulada (`too_small`). |
+| `CONVERSION_ASSET_MAX_COUNT` | `500` | Máximo de assets (figuras + páginas) por job. |
+| `CONVERSION_ASSET_MAX_TOTAL_MB` | `200` | Máximo de bytes PNG por job. |
+| `ASSET_RETENTION_SECONDS` | `3600` | Com `purge_source=true`, quanto tempo as imagens ficam depois do fim do job. |
 | `DEVICE` | `auto` | Dispositivo do Docling (e de Whisper/Florence-2). |
 | `DOCLING_USE_V2_BACKEND` | `true` | **Sem efeito**: declarado mas não lido por nenhum código. O conversor sempre tenta `DoclingParseDocumentBackend` e depois `DoclingParseV2DocumentBackend`. |
 | `CELERY_TASK_DEFAULT_QUEUE` | `ingestify` | Fila das tasks de documento. |

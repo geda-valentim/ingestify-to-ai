@@ -8,7 +8,9 @@ from fastapi.routing import APIRoute, APIWebSocketRoute
 
 # 1.1.0: first bump since 1.0.0. The contract only grew backward-compatibly
 # (projects, IAM, purge_source, image analysis, live...); see docs/CHANGELOG.md.
-API_VERSION = "1.1.0"
+# 1.2.0: image assets of a document conversion (image_mode, page_images,
+# GET /jobs/{job_id}/assets/{name}), backward compatible.
+API_VERSION = "1.2.0"
 
 API_DESCRIPTION = """
 API assíncrona que converte documentos (PDF, DOCX, HTML, PPTX, XLSX...) em Markdown,
@@ -90,6 +92,19 @@ tentativas automáticas; o resultado fica. Para apagar depois, use
 503 `SOURCE_DELETE_FAILED`). `GET /jobs/{job_id}` informa `source_available`,
 `source_deleted_at` e `source_deletable`. Sem origem, o PDF de página responde 410
 `SOURCE_PURGED` e o retry de página 409 `SOURCE_NOT_AVAILABLE`.
+
+## Imagens da conversão (`image_mode`, `page_images`)
+
+`/upload` e `/convert` aceitam `image_mode` (`none`, padrão: o markdown mantém
+`<!-- image -->`; `referenced`: cada figura vira um PNG referenciado no markdown como
+`![Image](/jobs/{job_id}/assets/{name})`) e `page_images` (`true`: cada página do PDF
+renderizada como PNG). `GET /jobs/{job_id}/result` lista `assets` (`name`, `kind`
+`picture`|`page`, `page`, `bbox`, `sha256`, `mime`, `width`, `height`, `size_bytes`,
+`url`) e `assets_skipped`; cada imagem sai em `GET /jobs/{job_id}/assets/{name}` (sempre
+o job principal, também num PDF dividido). Com `purge_source=true` as imagens ficam
+`ASSET_RETENTION_SECONDS` depois do fim do job (`assets_expire_at` em
+`GET /jobs/{job_id}`) e então são apagadas; `DELETE /jobs/{job_id}/source` apaga na hora.
+Depois disso a rota responde 410 `SOURCE_PURGED`.
 
 ## Idempotência (Full Analysis e rostos)
 

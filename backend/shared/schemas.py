@@ -189,6 +189,11 @@ class JobStatusResponse(BaseModel):
     # DELETE /jobs/{job_id}/source pode rodar agora? (há arquivo e nada na fila:
     # nem o job, nem retry automático, nem página pendente; lido do banco)
     source_deletable: bool = False
+    # Imagens extraídas / páginas renderizadas (image_mode, page_images): ainda podem
+    # ser baixadas em GET /jobs/{job_id}/assets/{name}? E quando serão apagadas
+    # (UTC; só com purge_source=true, ASSET_RETENTION_SECONDS depois do fim do job)
+    assets_available: bool = False
+    assets_expire_at: Optional[datetime] = None
 
     # Onde o job está (spec 0004). Jobs filhos herdam do job MAIN.
     project: Optional[ProjectRef] = None
@@ -225,6 +230,8 @@ class SourceDeletedResponse(BaseModel):
     job_id: str
     source_deleted: bool
     source_deleted_at: Optional[datetime] = None
+    # As imagens extraídas / páginas renderizadas também foram apagadas
+    assets_deleted: bool = False
 
 
 class TranscriptSegment(BaseModel):
@@ -302,10 +309,47 @@ class DocumentMetadata(BaseModel):
     provenance: Optional[Dict[str, Any]] = None
 
 
+class ConversionAssetBBox(BaseModel):
+    """Caixa da figura na página, em pontos PDF, origem no canto superior esquerdo"""
+    l: float
+    t: float
+    r: float
+    b: float
+    coord_origin: str = "TOPLEFT"
+    page_width: Optional[float] = None
+    page_height: Optional[float] = None
+
+
+class ConversionAsset(BaseModel):
+    """Imagem extraída de uma conversão (image_mode=referenced) ou página renderizada (page_images=true)"""
+    name: str = Field(..., description="Nome do asset: p{página:04d}-img{índice:02d}-{sha256[:12]}.png ou p{página:04d}-page-{sha256[:12]}.png")
+    kind: Literal["picture", "page"]
+    page: Optional[int] = Field(None, description="Página (1-based, absoluta no documento); null em formatos sem página")
+    bbox: Optional[ConversionAssetBBox] = Field(None, description="Só para kind=picture: posição na página")
+    sha256: str
+    mime: str = "image/png"
+    width: int
+    height: int
+    size_bytes: int
+    url: str = Field(..., description="Caminho relativo na API: /jobs/{job_id}/assets/{name} (sempre o job principal)")
+
+
+class ConversionAssetsSkipped(BaseModel):
+    """Imagens não guardadas, por motivo"""
+    too_small: int = 0
+    count_limit: int = 0
+    size_limit: int = 0
+    unavailable: int = 0
+
+
 class ConversionResult(BaseModel):
     markdown: str
     metadata: DocumentMetadata
     image: Optional["ImageJobResult | ImageFullAnalysisResult | ImageFullV2Result | FaceAnalysisResult"] = None
+    # Só quando o job pediu image_mode=referenced e/ou page_images=true (senão null):
+    # ordenados por página, depois a página renderizada, depois as figuras na ordem do documento
+    assets: Optional[List[ConversionAsset]] = None
+    assets_skipped: Optional[ConversionAssetsSkipped] = None
 
 
 class JobResultResponse(BaseModel):

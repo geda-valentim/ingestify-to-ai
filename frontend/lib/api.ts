@@ -336,6 +336,24 @@ export const jobsApi = {
     return response.json();
   },
 
+  /**
+   * One image asset of a conversion (image_mode=referenced / page_images), fetched
+   * with the session's credentials: the markdown references it by a relative API
+   * path (`/jobs/{job_id}/assets/{name}`) that an <img> cannot authenticate.
+   * Resolves to null when it is gone (404, 410 SOURCE_PURGED).
+   */
+  async getAssetBlob(jobId: string, name: string, signal?: AbortSignal): Promise<Blob | null> {
+    const response = await apiFetch(
+      `${API_URL}/jobs/${encodeURIComponent(jobId)}/assets/${encodeURIComponent(name)}`,
+      { headers: getHeaders(true), signal },
+    );
+    if (response.status === 404 || response.status === 410) return null;
+    if (!response.ok) {
+      throw new Error(`Failed to fetch image: ${response.statusText}`);
+    }
+    return response.blob();
+  },
+
   /** The text of a transcription while it runs, from segment `since` on. */
   async getPartialTranscript(jobId: string, since: number): Promise<PartialTranscriptResponse> {
     const response = await apiFetch(`${API_URL}/jobs/${jobId}/transcript/partial?since=${since}`, {

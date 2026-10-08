@@ -119,6 +119,14 @@ nunca do Redis:
 - `source_deletable` (bool): `DELETE /jobs/{job_id}/source` pode rodar agora (há arquivo e
   nada pendente: nem o job, nem retry automático, nem página `pending`/`processing`).
 
+Imagens da conversão (`image_mode=referenced` / `page_images=true`; ver
+[conversion.md](conversion.md#imagens-do-documento-image_mode-page_images)), também do MySQL:
+
+- `assets_available` (bool): o job tem imagens e elas ainda podem ser baixadas.
+- `assets_expire_at` (datetime UTC ou `null`): quando a task periódica vai apagá-las (só com
+  `purge_source=true`: `ASSET_RETENTION_SECONDS` depois do fim do job); `null` = duram o
+  mesmo que o job.
+
 Jobs de imagem (`/images/*`): `source_available` é `true` enquanto alguma cópia da imagem
 original existe — o handoff `{TEMP_STORAGE_PATH}/images/{job_id}/`, o original e a prévia
 da Full Analysis/rostos (`ImageAnalysisRun.source_path`/`preview_path`) ou um resultado
@@ -137,9 +145,11 @@ para sempre. Entre tentativas automáticas de `process_conversion` o job aparece
 2. Resultado do **Elasticsearch** (`job_results`); se não houver, do Redis
    (`job:{id}:result`); se nenhum, `404`.
 
-Resposta: `{job_id, type, status: "completed", result: {markdown, metadata}, completed_at}`
-e, para jobs PAGE, `page_number` e `parent_job_id`. O parâmetro `?format=` só tem efeito
-em transcrições.
+Resposta: `{job_id, type, status: "completed", result: {markdown, metadata, assets,
+assets_skipped}, completed_at}` e, para jobs PAGE, `page_number` e `parent_job_id`. O
+parâmetro `?format=` só tem efeito em transcrições. `assets`/`assets_skipped` vêm de
+`jobs.assets_manifest` (o Elasticsearch guarda só o Markdown) e são `null` num job sem
+`image_mode`/`page_images`; o resultado de um job PAGE traz as imagens da própria página.
 
 ```bash
 curl -H "X-API-Key: $INGESTIFY_API_KEY" http://localhost:8000/jobs/$JOB_ID/result \
@@ -167,11 +177,36 @@ curl -H "X-API-Key: $INGESTIFY_API_KEY" http://localhost:8000/jobs/$JOB_ID/resul
   Se o enfileiramento falhar, página e job voltam ao que eram (`500`). Resposta inclui
   `new_page_job_id`, `retry_count` e `retry_limit: 3`.
 
+### `GET /jobs/{job_id}/assets/{name}`
+
+Devolve o PNG de uma imagem extraída (`kind: picture`) ou de uma página renderizada
+(`kind: page`). Autorização `jobs.read` (a mesma de `GET /jobs/{id}`; job de outro usuário
+→ `404`). `job_id` é sempre o job principal, também num PDF dividido.
+
+- `name` precisa estar em `assets` do job (`jobs.assets_manifest`) e casar com
+  `p\d{4}-(img\d{2,}|page)-[0-9a-f]{12}\.png`; qualquer outro nome — caminho, `..`, nome
+  bem formado que não é do job — responde `404 {"code": "ASSET_NOT_FOUND"}` sem tocar o
+  armazenamento.
+- `200`: `Content-Type: image/png`, `Content-Length`, `ETag: "<sha256>"`,
+  `Cache-Control: private, max-age=3600`, `X-Content-Type-Options: nosniff`; corpo em
+  streaming do MinIO (`assets/{job_id}/{name}` no bucket de resultados).
+- `304` com `If-None-Match` igual ao ETag.
+- `410 {"code": "SOURCE_PURGED", "cause": "ASSETS_PURGED", "assets_deleted_at", ...}`
+  depois que as imagens foram apagadas (`DELETE /jobs/{id}/source`, ou retenção vencida
+  com `purge_source=true`).
+- `503 {"code": "ASSET_STORAGE_UNAVAILABLE"}` com o MinIO fora.
+
+```bash
+curl -H "X-API-Key: $INGESTIFY_API_KEY" -o figura.png \
+  http://localhost:8000/jobs/$JOB_ID/assets/p0001-img01-3f2a9c1b7d4e.png
+```
+
 ### `DELETE /jobs/{job_id}`
 
 Remove, nesta ordem: o resultado e as páginas no Elasticsearch; os arquivos de origem
 (o original no bucket onde ele está — `ingestify-uploads` ou `ingestify-audio` —, os PDFs
-por página e as cópias locais); para transcrições, as legendas no MinIO; as linhas do MySQL (`jobs` filhos, `pages`, o MAIN —
+por página e as cópias locais); as imagens da conversão (`ingestify-results/assets/{job_id}/`);
+para transcrições, as legendas no MinIO; as linhas do MySQL (`jobs` filhos, `pages`, o MAIN —
 `job_tags` cai por cascade); e as chaves do Redis (MAIN, SPLIT, PAGEs, MERGE e o índice
 `user:{id}:jobs`). Responde `{message, job_id, deleted_at}`.
 
@@ -190,8 +225,8 @@ página, então um retry não começa entre a checagem e o apagamento.
 
 | Resposta | Quando |
 |---|---|
-| `200 {"job_id", "source_deleted": true, "source_deleted_at"}` | apagado |
-| `404` | job inexistente, de outro usuário, job filho, ou sem arquivos de origem (já apagados) |
+| `200 {"job_id", "source_deleted": true, "source_deleted_at", "assets_deleted"}` | apagado |
+| `404` | job inexistente, de outro usuário, job filho, ou sem arquivos de origem nem imagens (já apagados) |
 | `409 {"code": "JOB_STILL_PROCESSING", "message": ...}` | o job está `queued`/`processing` (inclui um retry automático agendado, que espera como `queued`), ou alguma página está `pending`/`processing` (retry de página, ou retry automático de página) |
 | `503 {"code": "SOURCE_DELETE_FAILED", ...}` | o MinIO recusou; o que não foi apagado continua referenciado (chamar de novo termina) |
 
@@ -201,8 +236,16 @@ embutida no resultado guardado (`image.image_base64` vira `null` no MinIO e no R
 relatório da Full Analysis é regravado sob o novo hash) — e mantém o resultado da
 inferência. `409` enquanto o job está `queued`/`processing`.
 
-Depois disso o retry de página responde `409 SOURCE_NOT_AVAILABLE` e o PDF de página `410
-SOURCE_PURGED`. Para apagar automaticamente quando o job terminar, use
+Conversão com imagens (`image_mode`/`page_images`): apaga primeiro `assets/{job_id}/` e grava
+`assets_deleted_at` num commit próprio (`assets_deleted: true` na resposta); depois retoma o
+lock, confere de novo se há algo pendente (`409`) e apaga a origem. Se a origem falhar
+(`503`), as imagens já constam como apagadas (`410`, nunca `404`) e chamar de novo termina.
+Funciona mesmo depois que o purge já levou o original (as imagens ficam
+`ASSET_RETENTION_SECONDS` para download): aí responde `source_deleted: false`,
+`assets_deleted: true`.
+
+Depois disso o retry de página responde `409 SOURCE_NOT_AVAILABLE`, o PDF de página `410
+SOURCE_PURGED` e as imagens `410 SOURCE_PURGED` (`cause: ASSETS_PURGED`). Para apagar automaticamente quando o job terminar, use
 `purge_source=true` no `/upload`, `/convert`, `/transcribe` (ver
 [conversion.md](conversion.md#guardar-ou-apagar-o-arquivo-original-purge_source)) ou em
 qualquer rota `/images/*` (ver
@@ -213,6 +256,7 @@ qualquer rota `/images/*` (ver
 | Variável | Default | Efeito |
 |---|---|---|
 | `RESULT_TTL_SECONDS` | `3600` | TTL de `job:{id}:result` no Redis. |
+| `ASSET_RETENTION_SECONDS` | `3600` | Com `purge_source=true`, quanto tempo as imagens da conversão ficam depois do fim do job. |
 | (fixo no código) | 24 h | TTL de `job:{id}:status`, `job:{id}:owner`, `job:{id}:pages:total`. |
 | (fixo no código) | 15 min | Validade da URL de `/pages/{n}/pdf` (`PAGE_PDF_URL_TTL_SECONDS`). |
 | (fixo no código) | 3 | Limite de retries manuais por página. |

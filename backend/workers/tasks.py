@@ -30,6 +30,7 @@ from shared.models import Job, Page, JobStatus
 from shared.config import get_settings
 from shared.pdf_splitter import PDFSplitter, should_split_pdf
 from shared.engines.media import AUDIO_EXTENSIONS
+from shared import conversion_assets
 # Moved to workers.engines.pipeline; the old names stay importable from here
 from workers.engines.pipeline import (  # noqa: F401
     finish_transcription,
@@ -107,6 +108,73 @@ def _catalog_error(code: str, technical) -> str:
 
     message = error_catalog.describe(code)[0]
     return f"{message} ({technical})" if technical else message
+
+
+def _with_durable_image_options(job_id: str, options: dict) -> dict:
+    """
+    `options` plus the image-asset options stored with the MAIN job (its requested
+    configuration), so a retry, a page retry or a redelivered message honours
+    them whatever its Celery message carries. Unchanged for a job without assets.
+    """
+    durable = conversion_assets.durable_options(job_id, SessionLocal)
+    if conversion_assets.wants_assets(durable):
+        return {**options, **durable}
+    return options
+
+
+def _asset_collector(job_id: str, options: dict, page_number: int = None):
+    """The AssetCollector of a run that asked for image assets, else None."""
+    if not conversion_assets.wants_assets(options):
+        return None
+    from workers.image_assets import AssetCollector
+
+    budget = None
+    if page_number:
+        # The page jobs of a split PDF share the per-job limits (Redis fast path;
+        # the merge stays the authority)
+        budget = conversion_assets.JobAssetBudget(
+            get_redis_client(), job_id, max_count=int(settings.conversion_asset_max_count),
+            max_bytes=int(settings.conversion_asset_max_total_mb) * 1024 * 1024)
+    return AssetCollector(job_id, get_minio_client, page_offset=(page_number - 1) if page_number else 0,
+                          budget=budget)
+
+
+def _publish_manifest(job_id: str, markdown: str, manifest):
+    """
+    Persist the asset manifest BEFORE any result (Redis, Elasticsearch, MySQL page
+    rows) is published, and fail closed: when it cannot be written, the markdown
+    references go back to placeholders and the stored PNGs are deleted, so no URL
+    is ever published without a manifest that serves it.
+
+    Returns (markdown, manifest or None).
+    """
+    if manifest is None:
+        return markdown, None
+    try:
+        with SessionLocal() as db:
+            job = db.query(Job).filter(Job.id == job_id).with_for_update().first()
+            if job is None:
+                raise RuntimeError("job row not found")
+            job.assets_manifest = manifest
+            db.commit()
+        return markdown, manifest
+    except Exception as e:  # noqa: BLE001 - the conversion itself still succeeds
+        logger.error(f"[MAIN JOB {job_id}] Could not store the asset manifest, dropping the assets: {e}")
+        for asset in manifest.get("assets") or []:
+            markdown = conversion_assets.unreference(markdown, asset["url"])
+        try:
+            minio = get_minio_client()
+            minio.delete_folder(minio.bucket_results, conversion_assets.asset_prefix(job_id))
+        except Exception as cleanup_error:  # noqa: BLE001
+            logger.warning(f"[MAIN JOB {job_id}] Could not delete the unlisted assets: {cleanup_error}")
+        return markdown, None
+
+
+def _convert(converter, file_path, options: dict, collector):
+    """convert_to_markdown, called exactly as before when the job wants no assets."""
+    if collector is None:
+        return converter.convert_to_markdown(file_path, options)
+    return converter.convert_to_markdown(file_path, options, assets=collector)
 
 
 def _retry_or_settle(task, *, countdown, exc=None, settle=None, **retry_kwargs):
@@ -550,6 +618,11 @@ def process_conversion(
         if isinstance(getattr(job, 'transcription_profile', None), dict):
             from shared.transcription import options_from_profile
             options.update(options_from_profile(job.transcription_profile, options))
+        # Image assets (image_mode / page_images): durable with the job, so every
+        # retry and every page of a split honours them
+        image_options = conversion_assets.job_options(job)
+        if conversion_assets.wants_assets(image_options):
+            options.update(image_options)
         if _strict_audio_task(options):
             current = job.transcript_attempt_id
             expected = options.get('_expected_attempt_id', current)
@@ -646,8 +719,21 @@ def process_conversion(
             # Documento não-PDF ou PDF single page - processar direto
             logger.info(f"[MAIN JOB {job_id}] Single document - converting directly")
 
-            converter = get_converter(preset=preset)
-            result = converter.convert_to_markdown(file_path, options)
+            collector = _asset_collector(job_id, options)
+            if collector is not None:
+                converter = get_converter(preset=preset, picture_images=options.get('image_mode') == 'referenced')
+            else:
+                converter = get_converter(preset=preset)
+            result = _convert(converter, file_path, options, collector)
+            assets_manifest = None
+            if collector is not None:
+                result["markdown"], assets_manifest = _publish_manifest(
+                    job_id, result.get("markdown", ""),
+                    {"assets": result.get("assets") or [],
+                     "skipped": result.get("assets_skipped") or conversion_assets.empty_skipped()})
+                if assets_manifest is None:
+                    result.pop("assets", None)
+                    result.pop("assets_skipped", None)
 
             logger.info(f"[MAIN JOB {job_id}] Conversion complete")
             redis_client.update_job_progress(job_id, 80)
@@ -1109,10 +1195,17 @@ def _run_page_conversion(
 
     if options is None:
         options = {}
+    options = _with_durable_image_options(parent_job_id, options)
 
     redis_client = get_redis_client()
     es_client = get_es_client()
-    converter = get_converter(preset=options.get("docling_preset"))
+    # Page assets are stored under the MAIN job, with the absolute page number
+    collector = _asset_collector(parent_job_id, options, page_number)
+    if collector is not None:
+        converter = get_converter(preset=options.get("docling_preset"),
+                                  picture_images=options.get("image_mode") == "referenced")
+    else:
+        converter = get_converter(preset=options.get("docling_preset"))
 
     log_prefix = f"[PAGE JOB {page_job_id}]"
     logger.info(f"{log_prefix} Processing page {page_number} of job {parent_job_id}")
@@ -1168,7 +1261,7 @@ def _run_page_conversion(
             logger.info(f"{log_prefix} Extracted page {page_number} to {page_path}")
 
         # Convert page
-        result = converter.convert_to_markdown(page_path, options)
+        result = _convert(converter, page_path, options, collector)
 
         # Store page result in Redis
         redis_client.set_job_result(page_job_id, result)
@@ -1497,14 +1590,30 @@ def merge_pages_task(
             page_result = redis_client.get_job_result(page_job_id)
 
             if page_result:
-                page_results.append((page_num, page_result["markdown"]))
+                page_results.append((page_num, page_result["markdown"], page_result.get("assets") or [],
+                                     page_result.get("assets_skipped")))
                 total_words += page_result.get("metadata", {}).get("words", 0)
 
         # Sort by page number
         page_results.sort(key=lambda x: x[0])
 
+        # Image assets: concatenated in page order, served under the MAIN job, the
+        # per-job limits applied across pages (shared/conversion_assets.py)
+        # (pages that stored assets decide too: unknown options never hide them)
+        assets_manifest = None
+        wants = conversion_assets.wants_assets(conversion_assets.durable_options(parent_job_id, SessionLocal))
+        if wants or any(assets for _, _, assets, _ in page_results):
+            markdowns, assets, skipped, dropped = conversion_assets.combine_pages(
+                parent_job_id, page_results, max_count=int(settings.conversion_asset_max_count),
+                max_bytes=int(settings.conversion_asset_max_total_mb) * 1024 * 1024)
+            _delete_dropped_assets(parent_job_id, dropped)
+            assets_manifest = {"assets": assets, "skipped": skipped}
+        else:
+            markdowns = [markdown for _, markdown, _, _ in page_results]
+
         # Combine all pages
-        combined_markdown = "\n\n---\n\n".join([markdown for _, markdown in page_results])
+        combined_markdown = "\n\n---\n\n".join(markdowns)
+        combined_markdown, assets_manifest = _publish_manifest(parent_job_id, combined_markdown, assets_manifest)
 
         # Create merged result
         merged_result = {
@@ -1518,6 +1627,9 @@ def merge_pages_task(
                 "author": None,
             }
         }
+        if assets_manifest is not None:
+            merged_result["assets"] = conversion_assets.public_assets(assets_manifest["assets"])
+            merged_result["assets_skipped"] = assets_manifest["skipped"]
 
         # Store merged result in main job (Redis)
         redis_client.set_job_result(parent_job_id, merged_result)
@@ -1619,6 +1731,18 @@ def merge_pages_task(
             self, exc=exc, countdown=30 * (2 ** self.request.retries),
             settle=(lambda error: _record_main_failure(parent_job_id, redis_client, error, retrying=False))
             if retrying else None)
+
+
+def _delete_dropped_assets(job_id: str, dropped: list) -> None:
+    """The merge dropped these assets (per-job limits across pages): their PNGs go too."""
+    if not dropped:
+        return
+    try:
+        minio = get_minio_client()
+        for asset in dropped:
+            minio.delete_file(minio.bucket_results, conversion_assets.object_name(job_id, asset["name"]))
+    except Exception as e:  # noqa: BLE001 - unlisted, never served; DELETE /jobs/{id} removes them
+        logger.warning(f"[MERGE] Could not delete {len(dropped)} assets over the limits of job {job_id}: {e}")
 
 
 # ============================================

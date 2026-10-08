@@ -96,6 +96,7 @@ FRONTEND_OPERATIONS = [
     ("delete", "/jobs/{job_id}", "jobsApi.delete - delete from list and detail"),
     ("delete", "/jobs/{job_id}/source", "jobsApi.deleteSource - 'Apagar arquivo original' on the detail page"),
     ("get", "/jobs/{job_id}/result", "jobsApi.getResult"),
+    ("get", "/jobs/{job_id}/assets/{name}", "jobsApi.getAssetBlob - images in the rendered markdown"),
     ("get", "/jobs/{job_id}/pages", "jobsApi.getPages"),
     ("get", "/jobs/{job_id}/pages/{page_number}/pdf", "jobsApi.getPagePdf"),
     ("post", "/jobs/{job_id}/pages/{page_number}/retry",
@@ -233,8 +234,9 @@ def _client_paths():
     while start != -1:
         body = _template_body(source, start + len(_API_URL_MARKER))
         path = _strip_interpolations(body).split("?")[0]
-        # A trailing `{}` is an interpolated query string, not a path segment.
-        while path.endswith("{}"):
+        # A trailing `{}` glued to the path is an interpolated query string; after
+        # a "/" it is a path segment (`/jobs/${id}/assets/${name}`).
+        while path.endswith("{}") and not path.endswith("/{}"):
             path = path[: -len("{}")]
         paths.add(path or "/")
         start = source.find(_API_URL_MARKER, start + 1)

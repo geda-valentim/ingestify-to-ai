@@ -150,6 +150,14 @@ class Job(Base):
     source_deleted_at = Column(DateTime, nullable=True)  # when they were deleted (UTC)
     operation_key = Column(String(64), nullable=True)  # dedup key of a document conversion
 
+    # Image assets of a document conversion (shared/conversion_assets.py, alembic
+    # c3a70024e5b1): the durable manifest {"assets": [...], "skipped": {...}}, when
+    # the beat deletes them (purge_source + ASSET_RETENTION_SECONDS) and when they
+    # were deleted. The PNGs live in the results bucket under assets/{job_id}/.
+    assets_manifest = Column(JSON, nullable=True)
+    assets_expire_at = Column(DateTime, nullable=True)
+    assets_deleted_at = Column(DateTime, nullable=True)
+
     # Job status
     status = Column(Enum(JobStatus), default=JobStatus.PENDING, nullable=False, index=True)
     progress = Column(Integer, default=0)  # 0-100

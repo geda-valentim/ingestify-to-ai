@@ -2,7 +2,7 @@
 
 Gerado do OpenAPI da aplicação por `scripts/generate_api_docs.py`. Não edite este arquivo à mão.
 
-API `1.1.0`: **138 operações HTTP** e **1 WebSocket(s)**.
+API `1.2.0`: **139 operações HTTP** e **1 WebSocket(s)**.
 
 Base pública de desenvolvimento: `https://dev.ingestify.ai/api`. Os caminhos abaixo são relativos à base.
 
@@ -151,6 +151,7 @@ Guias de imagem: [PT](https://dev.ingestify.ai/pt/docs/images) / [EN](https://de
 | DELETE | `/jobs/{job_id}` | JWT ou API key | Excluir job |
 | DELETE | `/jobs/{job_id}/source` | JWT ou API key | Apagar o arquivo original do job |
 | GET | `/jobs/{job_id}/result` | JWT ou API key | Resultado do job |
+| GET | `/jobs/{job_id}/assets/{name}` | JWT ou API key | Baixar imagem extraída ou página renderizada |
 | GET | `/jobs/{job_id}/transcript/partial` | JWT ou API key | Transcrição parcial em andamento |
 | GET | `/jobs/{job_id}/pages` | JWT ou API key | Listar páginas do job |
 | GET | `/jobs/{job_id}/pages/{page_number}/status` | JWT ou API key | Estado de uma página |
@@ -438,6 +439,31 @@ Use os outros endpoints para converter de URL, Google Drive ou Dropbox.
 - `purge_source`: Se `true`, apaga os arquivos de origem (o arquivo enviado e os
   PDFs por página) quando o job termina — `completed`, ou `failed`/`partial` depois
   das tentativas automáticas — e fica só o resultado. Veja "Arquivos de origem".
+- `image_mode`: `none` (padrão) ou `referenced` (figuras viram PNGs referenciados
+  no markdown). Veja "Imagens".
+- `page_images`: `true` renderiza cada página do PDF como PNG. Veja "Imagens".
+
+## Imagens (`image_mode`, `page_images`)
+- `image_mode=referenced`: cada figura encontrada pelo Docling vira um PNG e o
+  markdown troca o placeholder `<!-- image -->` por
+  `![Image](/jobs/{job_id}/assets/p0001-img01-<sha12>.png)` (caminho relativo na API).
+- `page_images=true`: cada página do PDF vira um PNG (kind `page`), fora do markdown.
+- `GET /jobs/{job_id}/result` traz `assets` (`name`, `kind`, `page`, `bbox`, `sha256`,
+  `mime`, `width`, `height`, `size_bytes`, `url`), em ordem de página, e
+  `assets_skipped` (figuras pequenas demais ou além dos limites do job).
+- Baixe cada uma com `GET /jobs/{job_id}/assets/{name}` (mesma autenticação).
+- PDF de várias páginas: as imagens de todas as páginas ficam no job principal.
+- Com `purge_source=true` as imagens não são apagadas no fim do job: ficam
+  `ASSET_RETENTION_SECONDS` (padrão 1 h; `GET /jobs/{job_id}` informa
+  `assets_expire_at`) e então são apagadas; `DELETE /jobs/{job_id}/source` apaga na hora.
+- O mesmo arquivo com outro `image_mode`/`page_images` é outro job (não é duplicata).
+
+```bash
+curl -X POST http://localhost:8000/upload \
+  -H "X-API-Key: your-api-key" \
+  -F "file=@apostila.pdf" -F "project=Cursos" \
+  -F "image_mode=referenced" -F "page_images=true" -F "purge_source=true"
+```
 
 ## Arquivos de origem (`purge_source`)
 - O que é apagado: o arquivo enviado (MinIO `uploads/...` e cópia local) e, num
@@ -493,6 +519,8 @@ Content-Type: `multipart/form-data`. Esquema: [Body_upload_and_convert_upload_po
 | `language` | não | string / null |  | Idioma para áudio/vídeo; omitido detecta automaticamente |
 | `include_word_timestamps` | não | boolean / null |  |  |
 | `purge_source` | não | boolean | default=false | Se true, apaga os arquivos de origem do job — o arquivo enviado (MinIO e cópia local) e, num PDF dividido, os PDFs por página — quando o job termina: `completed`, ou `failed`/`partial` depois de esgotadas as tentativas automáticas (nunca enquanto houver retry ou página na fila). O resultado (markdown, markdown por página) fica. Depois disso o retry manual de página não é mais possível. GET /jobs/{job_id} informa `source_available` e `source_deleted_at`. Arquivo repetido no mesmo projeto: com true o job existente é devolvido (`duplicate: true`) e passa a apagar a origem (na hora, se já terminou); com false um job existente cuja origem foi (ou será) apagada não é reaproveitado e um job novo é criado. Padrão false (mantém). Para apagar depois: DELETE /jobs/{job_id}/source |
+| `image_mode` | não | string | default="none"; enum=["none", "referenced"] | Imagens do documento (PDF, DOCX...). `none` (padrão): como sempre, o markdown traz `<!-- image -->` no lugar de cada figura e nenhuma imagem é guardada. `referenced`: cada figura vira um PNG (`assets` em GET /jobs/{job_id}/result, kind `picture`, com página, bbox, sha256 e tamanho) e o markdown a referencia: `![Image](/jobs/{job_id}/assets/{name})`. Baixe com GET /jobs/{job_id}/assets/{name}. Figuras menores que CONVERSION_ASSET_MIN_PX ou além dos limites do job (CONVERSION_ASSET_MAX_COUNT, CONVERSION_ASSET_MAX_TOTAL_MB) ficam como placeholder e são contadas em `assets_skipped`. Com purge_source=true as imagens ficam ASSET_RETENTION_SECONDS (padrão 3600) depois do fim do job e então são apagadas |
+| `page_images` | não | boolean | default=false | Se true (só PDF), cada página é renderizada como PNG (CONVERSION_PAGE_IMAGE_DPI, padrão 150) e entra em `assets` com kind `page`; não aparece no markdown. Funciona com ou sem image_mode. Mesmas regras de retenção de image_mode. Padrão false |
 | `project` | não | string / null |  | Nome do projeto (obrigatório, a menos que a API key esteja vinculada a um projeto). É criado se não existir; grafias equivalentes ('Reunião', ' reuniao ') são o mesmo projeto. |
 | `project_id` | não | string / null |  | ID de um projeto existente (alternativa a 'project'; nunca cria). |
 | `folder` | não | string / null |  | Nome da pasta dentro do projeto (opcional; criada se não existir; sem '/'). |
@@ -675,6 +703,13 @@ e os PDFs por página) são apagados quando o job termina: `completed`, ou
 regras de `/upload` (inclusive para arquivo repetido).
 Para apagar depois: `DELETE /jobs/{job_id}/source`
 
+## Imagens (`image_mode`, `page_images`)
+`image_mode=referenced` guarda cada figura como PNG e o markdown passa a
+referenciá-la (`![Image](/jobs/{job_id}/assets/{name})`); `page_images=true`
+renderiza cada página do PDF. A lista sai em `assets` de
+`GET /jobs/{job_id}/result` e cada imagem em `GET /jobs/{job_id}/assets/{name}`.
+Mesmas regras de `/upload` (retenção com purge_source, deduplicação).
+
 ## Formatos suportados
 PDF, DOCX, DOC, HTML, PPTX, XLSX, RTF, ODT
 
@@ -705,6 +740,8 @@ Content-Type: `multipart/form-data`. Esquema: [Body_convert_document_convert_pos
 | `language` | não | string / null |  | Idioma para áudio/vídeo; omitido detecta automaticamente |
 | `include_word_timestamps` | não | boolean / null |  |  |
 | `purge_source` | não | boolean | default=false | Se true, apaga os arquivos de origem do job — o arquivo enviado (MinIO e cópia local) e, num PDF dividido, os PDFs por página — quando o job termina: `completed`, ou `failed`/`partial` depois de esgotadas as tentativas automáticas (nunca enquanto houver retry ou página na fila). O resultado (markdown, markdown por página) fica. Depois disso o retry manual de página não é mais possível. GET /jobs/{job_id} informa `source_available` e `source_deleted_at`. Arquivo repetido no mesmo projeto: com true o job existente é devolvido (`duplicate: true`) e passa a apagar a origem (na hora, se já terminou); com false um job existente cuja origem foi (ou será) apagada não é reaproveitado e um job novo é criado. Padrão false (mantém). Para apagar depois: DELETE /jobs/{job_id}/source |
+| `image_mode` | não | string | default="none"; enum=["none", "referenced"] | Imagens do documento (PDF, DOCX...). `none` (padrão): como sempre, o markdown traz `<!-- image -->` no lugar de cada figura e nenhuma imagem é guardada. `referenced`: cada figura vira um PNG (`assets` em GET /jobs/{job_id}/result, kind `picture`, com página, bbox, sha256 e tamanho) e o markdown a referencia: `![Image](/jobs/{job_id}/assets/{name})`. Baixe com GET /jobs/{job_id}/assets/{name}. Figuras menores que CONVERSION_ASSET_MIN_PX ou além dos limites do job (CONVERSION_ASSET_MAX_COUNT, CONVERSION_ASSET_MAX_TOTAL_MB) ficam como placeholder e são contadas em `assets_skipped`. Com purge_source=true as imagens ficam ASSET_RETENTION_SECONDS (padrão 3600) depois do fim do job e então são apagadas |
+| `page_images` | não | boolean | default=false | Se true (só PDF), cada página é renderizada como PNG (CONVERSION_PAGE_IMAGE_DPI, padrão 150) e entra em `assets` com kind `page`; não aparece no markdown. Funciona com ou sem image_mode. Mesmas regras de retenção de image_mode. Padrão false |
 | `project` | não | string / null |  | Nome do projeto (obrigatório, a menos que a API key esteja vinculada a um projeto). É criado se não existir; grafias equivalentes ('Reunião', ' reuniao ') são o mesmo projeto. |
 | `project_id` | não | string / null |  | ID de um projeto existente (alternativa a 'project'; nunca cria). |
 | `folder` | não | string / null |  | Nome da pasta dentro do projeto (opcional; criada se não existir; sem '/'). |
@@ -819,9 +856,16 @@ passa a null); o resultado da inferência fica.
 Para apagar automaticamente quando o job terminar, envie `purge_source=true` em
 `/upload`, `/convert`, `/transcribe` ou em qualquer rota `/images/*`.
 
+Conversão com imagens (`image_mode=referenced`, `page_images=true`): apaga também
+as imagens extraídas e as páginas renderizadas (`assets_deleted: true`); depois
+disso `GET /jobs/{job_id}/assets/{name}` responde 410 `SOURCE_PURGED`. Com
+`purge_source=true` elas não somem no fim do job (ficam `ASSET_RETENTION_SECONDS`
+para o cliente baixar); esta rota as apaga antes do prazo, mesmo que o original já
+tenha sido apagado.
+
 ## Retorno
-- 200: `{"job_id": "...", "source_deleted": true, "source_deleted_at": "..."}`
-- 404: job inexistente, de outro usuário, ou sem arquivos de origem
+- 200: `{"job_id": "...", "source_deleted": true, "source_deleted_at": "...", "assets_deleted": false}`
+- 404: job inexistente, de outro usuário, ou sem arquivos de origem nem imagens
 - 409: `{"code": "JOB_STILL_PROCESSING"}`: o job ainda está na fila ou em processamento,
   espera um retry automático, ou tem página na fila/em processamento (retry de página)
 - 503: `{"code": "SOURCE_DELETE_FAILED"}`: o armazenamento recusou; o que não foi
@@ -869,6 +913,50 @@ Respostas declaradas:
 | 200 | application/json | [JobResultResponse](#model-jobresultresponse) | Successful Response |
 | 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
 | 202 | — | objeto livre | Análise composta em andamento; consulte poll_url/result_url. |
+
+### GET /jobs/{job_id}/assets/{name}
+
+Baixar imagem extraída ou página renderizada
+
+Autorização: **JWT ou API key**. Operation ID: `get_job_asset_jobs__job_id__assets__name__get`.
+
+Devolve o PNG de uma imagem extraída (`image_mode=referenced`, kind `picture`) ou
+de uma página renderizada (`page_images=true`, kind `page`) de uma conversão.
+
+- `name`: exatamente um dos nomes listados em `assets` de
+  `GET /jobs/{job_id}/result` (ex.: `p0001-img01-3f2a9c1b7d4e.png`). Qualquer
+  outro nome (inclusive caminhos) responde 404.
+- `job_id`: sempre o job principal; num PDF de várias páginas as imagens de
+  todas as páginas ficam nele (a `url` de cada asset já aponta para cá).
+- Mesma autenticação e permissão de `GET /jobs/{job_id}` (`jobs.read`); job de
+  outro usuário responde 404.
+- Cabeçalhos: `Content-Type: image/png`, `ETag` = sha256 do PNG,
+  `Cache-Control: private`. `If-None-Match` com o mesmo ETag responde 304.
+- Depois que as imagens são apagadas (`DELETE /jobs/{job_id}/source`, ou
+  `purge_source=true` + `ASSET_RETENTION_SECONDS`): 410 `SOURCE_PURGED`.
+
+```bash
+curl -H "X-API-Key: ..." -o figura.png \
+  http://localhost:8000/jobs/<job_id>/assets/p0001-img01-3f2a9c1b7d4e.png
+```
+
+Parâmetros:
+
+| Nome | Local | Obrigatório | Tipo | Padrões/limites | Descrição |
+| --- | --- | --- | --- | --- | --- |
+| `job_id` | path | sim | string |  |  |
+| `name` | path | sim | string |  |  |
+
+Respostas declaradas:
+
+| Status | Content-Type | Esquema | Descrição |
+| --- | --- | --- | --- |
+| 200 | image/png | objeto livre | O PNG |
+| 304 | — | objeto livre | If-None-Match igual ao ETag (sha256) |
+| 404 | — | objeto livre | Job inexistente, de outro usuário, ou nome que não está em `assets` do job |
+| 410 | — | objeto livre | `SOURCE_PURGED` (cause `ASSETS_PURGED`): as imagens já foram apagadas |
+| 503 | — | objeto livre | `ASSET_STORAGE_UNAVAILABLE`: armazenamento indisponível |
+| 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
 
 ### GET /jobs/{job_id}/transcript/partial
 
@@ -4938,6 +5026,8 @@ Esquema JSON completo:
 | `language` | não | string / null |  | Idioma para áudio/vídeo; omitido detecta automaticamente |
 | `include_word_timestamps` | não | boolean / null |  |  |
 | `purge_source` | não | boolean | default=false | Se true, apaga os arquivos de origem do job — o arquivo enviado (MinIO e cópia local) e, num PDF dividido, os PDFs por página — quando o job termina: `completed`, ou `failed`/`partial` depois de esgotadas as tentativas automáticas (nunca enquanto houver retry ou página na fila). O resultado (markdown, markdown por página) fica. Depois disso o retry manual de página não é mais possível. GET /jobs/{job_id} informa `source_available` e `source_deleted_at`. Arquivo repetido no mesmo projeto: com true o job existente é devolvido (`duplicate: true`) e passa a apagar a origem (na hora, se já terminou); com false um job existente cuja origem foi (ou será) apagada não é reaproveitado e um job novo é criado. Padrão false (mantém). Para apagar depois: DELETE /jobs/{job_id}/source |
+| `image_mode` | não | string | default="none"; enum=["none", "referenced"] | Imagens do documento (PDF, DOCX...). `none` (padrão): como sempre, o markdown traz `<!-- image -->` no lugar de cada figura e nenhuma imagem é guardada. `referenced`: cada figura vira um PNG (`assets` em GET /jobs/{job_id}/result, kind `picture`, com página, bbox, sha256 e tamanho) e o markdown a referencia: `![Image](/jobs/{job_id}/assets/{name})`. Baixe com GET /jobs/{job_id}/assets/{name}. Figuras menores que CONVERSION_ASSET_MIN_PX ou além dos limites do job (CONVERSION_ASSET_MAX_COUNT, CONVERSION_ASSET_MAX_TOTAL_MB) ficam como placeholder e são contadas em `assets_skipped`. Com purge_source=true as imagens ficam ASSET_RETENTION_SECONDS (padrão 3600) depois do fim do job e então são apagadas |
+| `page_images` | não | boolean | default=false | Se true (só PDF), cada página é renderizada como PNG (CONVERSION_PAGE_IMAGE_DPI, padrão 150) e entra em `assets` com kind `page`; não aparece no markdown. Funciona com ou sem image_mode. Mesmas regras de retenção de image_mode. Padrão false |
 | `project` | não | string / null |  | Nome do projeto (obrigatório, a menos que a API key esteja vinculada a um projeto). É criado se não existir; grafias equivalentes ('Reunião', ' reuniao ') são o mesmo projeto. |
 | `project_id` | não | string / null |  | ID de um projeto existente (alternativa a 'project'; nunca cria). |
 | `folder` | não | string / null |  | Nome da pasta dentro do projeto (opcional; criada se não existir; sem '/'). |
@@ -5067,6 +5157,22 @@ Esquema JSON completo:
       "type": "boolean",
       "title": "Purge Source",
       "description": "Se true, apaga os arquivos de origem do job — o arquivo enviado (MinIO e cópia local) e, num PDF dividido, os PDFs por página — quando o job termina: `completed`, ou `failed`/`partial` depois de esgotadas as tentativas automáticas (nunca enquanto houver retry ou página na fila). O resultado (markdown, markdown por página) fica. Depois disso o retry manual de página não é mais possível. GET /jobs/{job_id} informa `source_available` e `source_deleted_at`. Arquivo repetido no mesmo projeto: com true o job existente é devolvido (`duplicate: true`) e passa a apagar a origem (na hora, se já terminou); com false um job existente cuja origem foi (ou será) apagada não é reaproveitado e um job novo é criado. Padrão false (mantém). Para apagar depois: DELETE /jobs/{job_id}/source",
+      "default": false
+    },
+    "image_mode": {
+      "type": "string",
+      "enum": [
+        "none",
+        "referenced"
+      ],
+      "title": "Image Mode",
+      "description": "Imagens do documento (PDF, DOCX...). `none` (padrão): como sempre, o markdown traz `<!-- image -->` no lugar de cada figura e nenhuma imagem é guardada. `referenced`: cada figura vira um PNG (`assets` em GET /jobs/{job_id}/result, kind `picture`, com página, bbox, sha256 e tamanho) e o markdown a referencia: `![Image](/jobs/{job_id}/assets/{name})`. Baixe com GET /jobs/{job_id}/assets/{name}. Figuras menores que CONVERSION_ASSET_MIN_PX ou além dos limites do job (CONVERSION_ASSET_MAX_COUNT, CONVERSION_ASSET_MAX_TOTAL_MB) ficam como placeholder e são contadas em `assets_skipped`. Com purge_source=true as imagens ficam ASSET_RETENTION_SECONDS (padrão 3600) depois do fim do job e então são apagadas",
+      "default": "none"
+    },
+    "page_images": {
+      "type": "boolean",
+      "title": "Page Images",
+      "description": "Se true (só PDF), cada página é renderizada como PNG (CONVERSION_PAGE_IMAGE_DPI, padrão 150) e entra em `assets` com kind `page`; não aparece no markdown. Funciona com ou sem image_mode. Mesmas regras de retenção de image_mode. Padrão false",
       "default": false
     },
     "project": {
@@ -5569,6 +5675,8 @@ Esquema JSON completo:
 | `language` | não | string / null |  | Idioma para áudio/vídeo; omitido detecta automaticamente |
 | `include_word_timestamps` | não | boolean / null |  |  |
 | `purge_source` | não | boolean | default=false | Se true, apaga os arquivos de origem do job — o arquivo enviado (MinIO e cópia local) e, num PDF dividido, os PDFs por página — quando o job termina: `completed`, ou `failed`/`partial` depois de esgotadas as tentativas automáticas (nunca enquanto houver retry ou página na fila). O resultado (markdown, markdown por página) fica. Depois disso o retry manual de página não é mais possível. GET /jobs/{job_id} informa `source_available` e `source_deleted_at`. Arquivo repetido no mesmo projeto: com true o job existente é devolvido (`duplicate: true`) e passa a apagar a origem (na hora, se já terminou); com false um job existente cuja origem foi (ou será) apagada não é reaproveitado e um job novo é criado. Padrão false (mantém). Para apagar depois: DELETE /jobs/{job_id}/source |
+| `image_mode` | não | string | default="none"; enum=["none", "referenced"] | Imagens do documento (PDF, DOCX...). `none` (padrão): como sempre, o markdown traz `<!-- image -->` no lugar de cada figura e nenhuma imagem é guardada. `referenced`: cada figura vira um PNG (`assets` em GET /jobs/{job_id}/result, kind `picture`, com página, bbox, sha256 e tamanho) e o markdown a referencia: `![Image](/jobs/{job_id}/assets/{name})`. Baixe com GET /jobs/{job_id}/assets/{name}. Figuras menores que CONVERSION_ASSET_MIN_PX ou além dos limites do job (CONVERSION_ASSET_MAX_COUNT, CONVERSION_ASSET_MAX_TOTAL_MB) ficam como placeholder e são contadas em `assets_skipped`. Com purge_source=true as imagens ficam ASSET_RETENTION_SECONDS (padrão 3600) depois do fim do job e então são apagadas |
+| `page_images` | não | boolean | default=false | Se true (só PDF), cada página é renderizada como PNG (CONVERSION_PAGE_IMAGE_DPI, padrão 150) e entra em `assets` com kind `page`; não aparece no markdown. Funciona com ou sem image_mode. Mesmas regras de retenção de image_mode. Padrão false |
 | `project` | não | string / null |  | Nome do projeto (obrigatório, a menos que a API key esteja vinculada a um projeto). É criado se não existir; grafias equivalentes ('Reunião', ' reuniao ') são o mesmo projeto. |
 | `project_id` | não | string / null |  | ID de um projeto existente (alternativa a 'project'; nunca cria). |
 | `folder` | não | string / null |  | Nome da pasta dentro do projeto (opcional; criada se não existir; sem '/'). |
@@ -5687,6 +5795,22 @@ Esquema JSON completo:
       "type": "boolean",
       "title": "Purge Source",
       "description": "Se true, apaga os arquivos de origem do job — o arquivo enviado (MinIO e cópia local) e, num PDF dividido, os PDFs por página — quando o job termina: `completed`, ou `failed`/`partial` depois de esgotadas as tentativas automáticas (nunca enquanto houver retry ou página na fila). O resultado (markdown, markdown por página) fica. Depois disso o retry manual de página não é mais possível. GET /jobs/{job_id} informa `source_available` e `source_deleted_at`. Arquivo repetido no mesmo projeto: com true o job existente é devolvido (`duplicate: true`) e passa a apagar a origem (na hora, se já terminou); com false um job existente cuja origem foi (ou será) apagada não é reaproveitado e um job novo é criado. Padrão false (mantém). Para apagar depois: DELETE /jobs/{job_id}/source",
+      "default": false
+    },
+    "image_mode": {
+      "type": "string",
+      "enum": [
+        "none",
+        "referenced"
+      ],
+      "title": "Image Mode",
+      "description": "Imagens do documento (PDF, DOCX...). `none` (padrão): como sempre, o markdown traz `<!-- image -->` no lugar de cada figura e nenhuma imagem é guardada. `referenced`: cada figura vira um PNG (`assets` em GET /jobs/{job_id}/result, kind `picture`, com página, bbox, sha256 e tamanho) e o markdown a referencia: `![Image](/jobs/{job_id}/assets/{name})`. Baixe com GET /jobs/{job_id}/assets/{name}. Figuras menores que CONVERSION_ASSET_MIN_PX ou além dos limites do job (CONVERSION_ASSET_MAX_COUNT, CONVERSION_ASSET_MAX_TOTAL_MB) ficam como placeholder e são contadas em `assets_skipped`. Com purge_source=true as imagens ficam ASSET_RETENTION_SECONDS (padrão 3600) depois do fim do job e então são apagadas",
+      "default": "none"
+    },
+    "page_images": {
+      "type": "boolean",
+      "title": "Page Images",
+      "description": "Se true (só PDF), cada página é renderizada como PNG (CONVERSION_PAGE_IMAGE_DPI, padrão 150) e entra em `assets` com kind `page`; não aparece no markdown. Funciona com ou sem image_mode. Mesmas regras de retenção de image_mode. Padrão false",
       "default": false
     },
     "project": {
@@ -6621,6 +6745,230 @@ Esquema JSON completo:
 }
 ```
 
+<a id="model-conversionasset"></a>
+
+### ConversionAsset
+
+Imagem extraída de uma conversão (image_mode=referenced) ou página renderizada (page_images=true)
+
+| Campo | Obrigatório | Tipo | Padrões/limites | Descrição |
+| --- | --- | --- | --- | --- |
+| `name` | sim | string |  | Nome do asset: p{página:04d}-img{índice:02d}-{sha256[:12]}.png ou p{página:04d}-page-{sha256[:12]}.png |
+| `kind` | sim | string | enum=["picture", "page"] |  |
+| `page` | não | integer / null |  | Página (1-based, absoluta no documento); null em formatos sem página |
+| `bbox` | não | [ConversionAssetBBox](#model-conversionassetbbox) / null |  | Só para kind=picture: posição na página |
+| `sha256` | sim | string |  |  |
+| `mime` | não | string | default="image/png" |  |
+| `width` | sim | integer |  |  |
+| `height` | sim | integer |  |  |
+| `size_bytes` | sim | integer |  |  |
+| `url` | sim | string |  | Caminho relativo na API: /jobs/{job_id}/assets/{name} (sempre o job principal) |
+
+Esquema JSON completo:
+
+```json
+{
+  "properties": {
+    "name": {
+      "type": "string",
+      "title": "Name",
+      "description": "Nome do asset: p{página:04d}-img{índice:02d}-{sha256[:12]}.png ou p{página:04d}-page-{sha256[:12]}.png"
+    },
+    "kind": {
+      "type": "string",
+      "enum": [
+        "picture",
+        "page"
+      ],
+      "title": "Kind"
+    },
+    "page": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Page",
+      "description": "Página (1-based, absoluta no documento); null em formatos sem página"
+    },
+    "bbox": {
+      "anyOf": [
+        {
+          "$ref": "#/components/schemas/ConversionAssetBBox"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Só para kind=picture: posição na página"
+    },
+    "sha256": {
+      "type": "string",
+      "title": "Sha256"
+    },
+    "mime": {
+      "type": "string",
+      "title": "Mime",
+      "default": "image/png"
+    },
+    "width": {
+      "type": "integer",
+      "title": "Width"
+    },
+    "height": {
+      "type": "integer",
+      "title": "Height"
+    },
+    "size_bytes": {
+      "type": "integer",
+      "title": "Size Bytes"
+    },
+    "url": {
+      "type": "string",
+      "title": "Url",
+      "description": "Caminho relativo na API: /jobs/{job_id}/assets/{name} (sempre o job principal)"
+    }
+  },
+  "type": "object",
+  "required": [
+    "name",
+    "kind",
+    "sha256",
+    "width",
+    "height",
+    "size_bytes",
+    "url"
+  ],
+  "title": "ConversionAsset",
+  "description": "Imagem extraída de uma conversão (image_mode=referenced) ou página renderizada (page_images=true)"
+}
+```
+
+<a id="model-conversionassetbbox"></a>
+
+### ConversionAssetBBox
+
+Caixa da figura na página, em pontos PDF, origem no canto superior esquerdo
+
+| Campo | Obrigatório | Tipo | Padrões/limites | Descrição |
+| --- | --- | --- | --- | --- |
+| `l` | sim | number |  |  |
+| `t` | sim | number |  |  |
+| `r` | sim | number |  |  |
+| `b` | sim | number |  |  |
+| `coord_origin` | não | string | default="TOPLEFT" |  |
+| `page_width` | não | number / null |  |  |
+| `page_height` | não | number / null |  |  |
+
+Esquema JSON completo:
+
+```json
+{
+  "properties": {
+    "l": {
+      "type": "number",
+      "title": "L"
+    },
+    "t": {
+      "type": "number",
+      "title": "T"
+    },
+    "r": {
+      "type": "number",
+      "title": "R"
+    },
+    "b": {
+      "type": "number",
+      "title": "B"
+    },
+    "coord_origin": {
+      "type": "string",
+      "title": "Coord Origin",
+      "default": "TOPLEFT"
+    },
+    "page_width": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Page Width"
+    },
+    "page_height": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Page Height"
+    }
+  },
+  "type": "object",
+  "required": [
+    "l",
+    "t",
+    "r",
+    "b"
+  ],
+  "title": "ConversionAssetBBox",
+  "description": "Caixa da figura na página, em pontos PDF, origem no canto superior esquerdo"
+}
+```
+
+<a id="model-conversionassetsskipped"></a>
+
+### ConversionAssetsSkipped
+
+Imagens não guardadas, por motivo
+
+| Campo | Obrigatório | Tipo | Padrões/limites | Descrição |
+| --- | --- | --- | --- | --- |
+| `too_small` | não | integer | default=0 |  |
+| `count_limit` | não | integer | default=0 |  |
+| `size_limit` | não | integer | default=0 |  |
+| `unavailable` | não | integer | default=0 |  |
+
+Esquema JSON completo:
+
+```json
+{
+  "properties": {
+    "too_small": {
+      "type": "integer",
+      "title": "Too Small",
+      "default": 0
+    },
+    "count_limit": {
+      "type": "integer",
+      "title": "Count Limit",
+      "default": 0
+    },
+    "size_limit": {
+      "type": "integer",
+      "title": "Size Limit",
+      "default": 0
+    },
+    "unavailable": {
+      "type": "integer",
+      "title": "Unavailable",
+      "default": 0
+    }
+  },
+  "type": "object",
+  "title": "ConversionAssetsSkipped",
+  "description": "Imagens não guardadas, por motivo"
+}
+```
+
 <a id="model-conversionresult"></a>
 
 ### ConversionResult
@@ -6630,6 +6978,8 @@ Esquema JSON completo:
 | `markdown` | sim | string |  |  |
 | `metadata` | sim | [DocumentMetadata](#model-documentmetadata) |  |  |
 | `image` | não | [ImageJobResult](#model-imagejobresult) / [ImageFullAnalysisResult](#model-imagefullanalysisresult) / [ImageFullV2Result](#model-imagefullv2result) / [FaceAnalysisResult](#model-faceanalysisresult) / null |  |  |
+| `assets` | não | array de [ConversionAsset](#model-conversionasset) / null |  |  |
+| `assets_skipped` | não | [ConversionAssetsSkipped](#model-conversionassetsskipped) / null |  |  |
 
 Esquema JSON completo:
 
@@ -6662,6 +7012,30 @@ Esquema JSON completo:
         }
       ],
       "title": "Image"
+    },
+    "assets": {
+      "anyOf": [
+        {
+          "items": {
+            "$ref": "#/components/schemas/ConversionAsset"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Assets"
+    },
+    "assets_skipped": {
+      "anyOf": [
+        {
+          "$ref": "#/components/schemas/ConversionAssetsSkipped"
+        },
+        {
+          "type": "null"
+        }
+      ]
     }
   },
   "type": "object",
@@ -11561,6 +11935,8 @@ Esquema JSON completo:
 | `source_available` | não | boolean | default=false |  |
 | `source_deleted_at` | não | string (date-time) / null |  |  |
 | `source_deletable` | não | boolean | default=false |  |
+| `assets_available` | não | boolean | default=false |  |
+| `assets_expire_at` | não | string (date-time) / null |  |  |
 | `project` | não | [ProjectRef](#model-projectref) / null |  |  |
 | `folder` | não | [FolderRef](#model-folderref) / null |  |  |
 | `parent_job_id` | não | string (uuid) / null |  |  |
@@ -11682,6 +12058,23 @@ Esquema JSON completo:
       "type": "boolean",
       "title": "Source Deletable",
       "default": false
+    },
+    "assets_available": {
+      "type": "boolean",
+      "title": "Assets Available",
+      "default": false
+    },
+    "assets_expire_at": {
+      "anyOf": [
+        {
+          "type": "string",
+          "format": "date-time"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Assets Expire At"
     },
     "project": {
       "anyOf": [
@@ -13746,6 +14139,7 @@ Resposta de DELETE /jobs/{job_id}/source
 | `job_id` | sim | string |  |  |
 | `source_deleted` | sim | boolean |  |  |
 | `source_deleted_at` | não | string (date-time) / null |  |  |
+| `assets_deleted` | não | boolean | default=false |  |
 
 Esquema JSON completo:
 
@@ -13771,6 +14165,11 @@ Esquema JSON completo:
         }
       ],
       "title": "Source Deleted At"
+    },
+    "assets_deleted": {
+      "type": "boolean",
+      "title": "Assets Deleted",
+      "default": false
     }
   },
   "type": "object",
