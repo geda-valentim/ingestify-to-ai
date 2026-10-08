@@ -236,8 +236,10 @@ embutida no resultado guardado (`image.image_base64` vira `null` no MinIO e no R
 relatório da Full Analysis é regravado sob o novo hash) — e mantém o resultado da
 inferência. `409` enquanto o job está `queued`/`processing`.
 
-Conversão com imagens (`image_mode`/`page_images`): apaga também `assets/{job_id}/` e grava
-`assets_deleted_at` (`assets_deleted: true` na resposta), no mesmo lock e no mesmo commit.
+Conversão com imagens (`image_mode`/`page_images`): apaga primeiro `assets/{job_id}/` e grava
+`assets_deleted_at` num commit próprio (`assets_deleted: true` na resposta); depois retoma o
+lock, confere de novo se há algo pendente (`409`) e apaga a origem. Se a origem falhar
+(`503`), as imagens já constam como apagadas (`410`, nunca `404`) e chamar de novo termina.
 Funciona mesmo depois que o purge já levou o original (as imagens ficam
 `ASSET_RETENTION_SECONDS` para download): aí responde `source_deleted: false`,
 `assets_deleted: true`.

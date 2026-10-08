@@ -27,6 +27,14 @@
   `CONVERSION_PAGE_IMAGE_DPI`, `CONVERSION_ASSET_MIN_PX`, `CONVERSION_ASSET_MAX_COUNT`,
   `CONVERSION_ASSET_MAX_TOTAL_MB`, `ASSET_RETENTION_SECONDS`.
 - `info.version` 1.1.0 → **1.2.0** (contrato cresceu de forma compatível).
+- Revisão: `image_mode=none` não muda mais a escala das figuras (`CONVERSION_IMAGES_SCALE`
+  só com `referenced`); orçamento do job por PDF dividido reservado no Redis antes de
+  codificar/enviar (o merge segue como autoridade); limites checados antes de codificar e
+  de renderizar; job `failed`/`partial` sem manifesto lista o que existe ou apaga o
+  prefixo; manifesto gravado antes de publicar (sem URL sem manifesto); expiração com lock
+  Redis e adiamento de falhas; `DELETE /jobs/{id}/source` registra as imagens antes da
+  origem; resultado de página só com os campos públicos; dedup ignora jobs cujas imagens
+  expiram logo; a interface carrega as imagens com a credencial.
 - Teste `test_compose_passes_iam_mode_wherever_engine_access_enabled_goes` considera só os
   `docker-compose*.yml` versionados (overlays locais não rastreados não o quebram mais).
 

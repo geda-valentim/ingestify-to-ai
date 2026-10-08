@@ -1862,11 +1862,20 @@ async def delete_job_source(
         db.rollback()
         raise HTTPException(status_code=409, detail=error_catalog.detail("JOB_STILL_PROCESSING"))
 
+    assets_deleted = False
     try:
-        # The assets first, without committing: delete_source's single commit then
-        # records both, still under the row lock
-        assets_deleted = has_assets and conversion_assets.delete_assets(
-            db, db_job, get_minio_client, commit=not has_source)
+        if has_assets:
+            # Assets first, committed on their own: once they are gone from MinIO
+            # `assets_deleted_at` is recorded (410 from then on), whatever happens
+            # to the source below. Calling again finishes what is left.
+            assets_deleted = conversion_assets.delete_assets(db, db_job, get_minio_client, commit=True)
+            if has_source:
+                # The commit released the row lock: take it again and re-check
+                db_job = lock_job(db, job_id)
+                has_source = db_job is not None and source_available(db_job)
+                if has_source and has_pending_work(db, db_job, locked=True):
+                    db.rollback()
+                    raise HTTPException(status_code=409, detail=error_catalog.detail("JOB_STILL_PROCESSING"))
         if has_source:
             delete_source(db, db_job, get_minio_client)
     except (SourceDeleteError, conversion_assets.AssetDeleteError) as e:
@@ -2029,6 +2038,9 @@ async def get_job_result(
     # the markdown; a page job's Redis result carries its own page's assets)
     if db_job is not None:
         result_data = {**result_data, **conversion_assets.result_fields(db_job)}
+    elif isinstance(result_data.get("assets"), list):
+        # A page job's raw Redis result: only the published fields
+        result_data = {**result_data, "assets": conversion_assets.public_assets(result_data["assets"])}
 
     # Build response
     response_data = {

@@ -27,7 +27,8 @@ from shared.conversion_assets import (
     object_name,
     page_name,
     picture_name,
-    public_asset,
+    public_assets,
+    slot_of,
     sort_key,
 )
 
@@ -42,11 +43,15 @@ class AssetCollector:
     Always stored under the MAIN job id (`job_id`). Limits (settings): pictures
     under `CONVERSION_ASSET_MIN_PX` on either side are skipped (`too_small`), and
     at most `CONVERSION_ASSET_MAX_COUNT` assets / `CONVERSION_ASSET_MAX_TOTAL_MB`
-    bytes are stored (`count_limit` / `size_limit`); a split PDF's merge applies the
-    same limits across its pages.
+    bytes are stored (`count_limit` / `size_limit`). The count and the bytes used
+    so far are checked before an image is encoded, the encoded size before it is
+    uploaded. A split PDF's page jobs also share `budget`
+    (shared.conversion_assets.JobAssetBudget, the per-job reservation); the merge
+    applies the limits across pages once more, as the authority.
     """
 
-    def __init__(self, job_id: str, storage_factory: Callable, *, page_offset: int = 0, settings=None):
+    def __init__(self, job_id: str, storage_factory: Callable, *, page_offset: int = 0, settings=None,
+                 budget=None):
         if settings is None:
             from shared.config import get_settings
 
@@ -57,6 +62,7 @@ class AssetCollector:
         self.max_count = int(settings.conversion_asset_max_count)
         self.max_bytes = int(settings.conversion_asset_max_total_mb) * 1024 * 1024
         self.page_dpi = int(settings.conversion_page_image_dpi)
+        self.budget = budget
         self._storage_factory = storage_factory
         self._storage = None
         self.assets = []
@@ -71,22 +77,42 @@ class AssetCollector:
             self._storage = self._storage_factory()
         return self._storage
 
-    def _store(self, image, *, kind: str, page: Optional[int], position: int, bbox=None,
-               index: int = 0) -> Optional[dict]:
+    def blocked(self, kind: str, page: Optional[int], index: int = 0) -> Optional[str]:
+        """Why nothing more may be stored at this position (before any encoding), or None."""
+        if len(self.assets) >= self.max_count:
+            return "count_limit"
+        if self.total_bytes >= self.max_bytes:
+            return "size_limit"
+        if self.budget is not None:
+            allowed, reason = self.budget.precheck(slot_of(kind, page, index))
+            if allowed is False:
+                return reason
+        return None
+
+    def skip(self, reason: str) -> None:
+        self.skipped[reason] += 1
+
+    def _store(self, image, *, kind: str, page: Optional[int], bbox=None, index: int = 0) -> Optional[dict]:
         if image is None:
-            self.skipped["unavailable"] += 1
+            self.skip("unavailable")
             return None
         width, height = image.size
         if kind == KIND_PICTURE and (width < self.min_px or height < self.min_px):
-            self.skipped["too_small"] += 1
+            self.skip("too_small")
+            return None
+        reason = self.blocked(kind, page, index)
+        if reason:
+            self.skip(reason)
             return None
         data = encode_png(image)
-        if len(self.assets) + 1 > self.max_count:
-            self.skipped["count_limit"] += 1
-            return None
         if self.total_bytes + len(data) > self.max_bytes:
-            self.skipped["size_limit"] += 1
+            self.skip("size_limit")
             return None
+        if self.budget is not None:
+            allowed, reason = self.budget.commit(slot_of(kind, page, index), len(data))
+            if allowed is False:
+                self.skip(reason)
+                return None
         sha256 = hashlib.sha256(data).hexdigest()
         name = picture_name(page, index, sha256) if kind == KIND_PICTURE else page_name(page or 0, sha256)
         storage = self._storage_client()
@@ -97,25 +123,22 @@ class AssetCollector:
         asset = {
             "name": name, "kind": kind, "page": page, "bbox": bbox, "sha256": sha256, "mime": ASSET_MIME,
             "width": width, "height": height, "size_bytes": len(data), "url": asset_url(self.job_id, name),
-            "position": position,
         }
         self.assets.append(asset)
         self.total_bytes += len(data)
         return asset
 
     def add_picture(self, image, *, page: Optional[int], index: int, bbox=None) -> Optional[dict]:
-        return self._store(image, kind=KIND_PICTURE, page=page, position=index, bbox=bbox, index=index)
+        return self._store(image, kind=KIND_PICTURE, page=page, bbox=bbox, index=index)
 
     def add_page(self, image, *, page: int) -> Optional[dict]:
-        return self._store(image, kind=KIND_PAGE, page=page, position=0)
+        return self._store(image, kind=KIND_PAGE, page=page)
 
     def ordered(self) -> list:
         return sorted(self.assets, key=sort_key)
 
-    def result_fields(self, *, public: bool = False) -> dict:
-        assets = self.ordered()
-        return {"assets": [public_asset(a) for a in assets] if public else assets,
-                "assets_skipped": dict(self.skipped)}
+    def result_fields(self) -> dict:
+        return {"assets": public_assets(self.assets), "assets_skipped": dict(self.skipped)}
 
 
 def encode_png(image) -> bytes:
@@ -189,12 +212,18 @@ def render_pages(pdf_path: Path, collector: AssetCollector) -> int:
     pdf = pdfium.PdfDocument(str(pdf_path))
     try:
         for index in range(len(pdf)):
+            number = collector.absolute_page(index + 1)
+            # Checked before rendering: once a limit is hit no page is rendered
+            reason = collector.blocked(KIND_PAGE, number)
+            if reason:
+                collector.skip(reason)
+                continue
             page = pdf[index]
             try:
                 image = page.render(scale=collector.page_dpi / 72.0).to_pil()
             finally:
                 page.close()
-            if collector.add_page(image, page=collector.absolute_page(index + 1)) is not None:
+            if collector.add_page(image, page=number) is not None:
                 stored += 1
     finally:
         pdf.close()

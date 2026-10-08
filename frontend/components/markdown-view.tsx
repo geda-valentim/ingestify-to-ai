@@ -1,8 +1,70 @@
 "use client";
 
+import { useEffect, useState, type ImgHTMLAttributes } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { jobsApi } from "@/lib/api";
 import { cn } from "@/lib/utils";
+
+/** `/jobs/{job_id}/assets/{name}`: an image asset of a conversion (relative API path). */
+const ASSET_PATH = /^\/jobs\/([^/?#]+)\/assets\/([^/?#]+)$/;
+
+/**
+ * An image of the converted document. Asset paths are API routes that need the
+ * user's credentials, so they are fetched with them and shown from a blob URL
+ * (revoked on unmount); a missing or deleted asset shows a placeholder. Any
+ * other src is left to the browser as before.
+ */
+function MarkdownImage({ src, alt, ...rest }: ImgHTMLAttributes<HTMLImageElement>) {
+  const match = typeof src === "string" ? ASSET_PATH.exec(src) : null;
+  const [url, setUrl] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    if (!match) return;
+    const [, jobId, name] = match;
+    const controller = new AbortController();
+    let objectUrl: string | null = null;
+    setUrl(null);
+    setFailed(false);
+    jobsApi
+      .getAssetBlob(decodeURIComponent(jobId), decodeURIComponent(name), controller.signal)
+      .then((blob) => {
+        if (controller.signal.aborted) return;
+        if (!blob) {
+          setFailed(true);
+          return;
+        }
+        objectUrl = URL.createObjectURL(blob);
+        setUrl(objectUrl);
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) setFailed(true);
+      });
+    return () => {
+      controller.abort();
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [src]);
+
+  if (!match) {
+    // eslint-disable-next-line @next/next/no-img-element
+    return <img src={src} alt={alt ?? ""} {...rest} />;
+  }
+  if (failed) {
+    return (
+      <span className="inline-block rounded border border-dashed px-3 py-2 text-xs text-muted-foreground">
+        Image unavailable{alt ? `: ${alt}` : ""}
+      </span>
+    );
+  }
+  if (!url) {
+    return <span className="inline-block h-24 w-32 animate-pulse rounded bg-muted" aria-label={alt ?? "image"} />;
+  }
+  // eslint-disable-next-line @next/next/no-img-element
+  return <img src={url} alt={alt ?? ""} {...rest} />;
+}
 
 /**
  * Rendered Markdown (GFM: tables, task lists, strikethrough).
@@ -34,7 +96,9 @@ export function MarkdownView({ content, className }: { content: string; classNam
         className
       )}
     >
-      <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
+      <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ img: ({ node: _node, ...props }) => <MarkdownImage {...props} /> }}>
+        {content}
+      </ReactMarkdown>
     </div>
   );
 }

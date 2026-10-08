@@ -341,17 +341,31 @@ def retry_image_purges(force=False):
 
 
 # Image assets of document conversions (purge_source + ASSET_RETENTION_SECONDS) are
-# deleted from the same beat, at most once a minute per process
+# deleted from the same beat, at most once a minute across every process (Redis
+# lock); without Redis, at most once a minute per process
 ASSET_EXPIRY_INTERVAL_SECONDS = 60
+ASSET_EXPIRY_LOCK = 'assets:expiry:lock'
 _last_asset_expiry = None
+
+
+def _asset_expiry_turn():
+    """True when this process runs the expiry now (one per interval cluster-wide)."""
+    global _last_asset_expiry
+    try:
+        from shared.redis_client import get_redis_client
+        client = get_redis_client().client
+        return bool(client.set(ASSET_EXPIRY_LOCK, '1', nx=True, ex=ASSET_EXPIRY_INTERVAL_SECONDS))
+    except Exception:  # noqa: BLE001 - Redis down: throttle per process
+        if _last_asset_expiry is not None and time.monotonic() - _last_asset_expiry < ASSET_EXPIRY_INTERVAL_SECONDS:
+            return False
+        _last_asset_expiry = time.monotonic()
+        return True
 
 
 def expire_conversion_assets(force=False):
     """Bounded, idempotent deletion of expired conversion assets (shared.conversion_assets)."""
-    global _last_asset_expiry
-    if not force and _last_asset_expiry is not None and time.monotonic() - _last_asset_expiry < ASSET_EXPIRY_INTERVAL_SECONDS:
+    if not force and not _asset_expiry_turn():
         return 0
-    _last_asset_expiry = time.monotonic()
     from shared.conversion_assets import expire_due_assets
     return expire_due_assets(SessionLocal, get_minio_client)
 

@@ -183,7 +183,7 @@ lugar de cada figura; nenhuma imagem sai do Ingestify. Os dois campos de form, e
 
 | Campo | Valores | Efeito |
 |---|---|---|
-| `image_mode` | `none` (padrão) \| `referenced` | `referenced`: liga `generate_picture_images` (escala `CONVERSION_IMAGES_SCALE`, padrão 2.0 = 144 DPI), guarda cada `PictureItem` como PNG e o Markdown passa a referenciá-lo: `![Image](/jobs/{job_id}/assets/{name})` (caminho relativo da API). Outro valor: `422`. |
+| `image_mode` | `none` (padrão) \| `referenced` | `referenced`: liga `generate_picture_images` (escala `CONVERSION_IMAGES_SCALE`, padrão 2.0 = 144 DPI; só neste modo — `none` com os presets `balanced`/`quality` mantém a escala padrão do Docling, custo e saída iguais aos de antes), guarda cada `PictureItem` como PNG e o Markdown passa a referenciá-lo: `![Image](/jobs/{job_id}/assets/{name})` (caminho relativo da API). Outro valor: `422`. |
 | `page_images` | `false` (padrão) \| `true` | Só PDF: renderiza cada página como PNG com pypdfium2 (`CONVERSION_PAGE_IMAGE_DPI`, padrão 150). Não aparece no Markdown. Funciona com ou sem `image_mode`. |
 
 Como o Markdown referencia as figuras: o worker percorre os `PictureItem` do documento
@@ -230,14 +230,34 @@ Markdown. Baixe com `GET /jobs/{job_id}/assets/{name}` (ver
 [jobs-api.md](jobs-api.md#get-jobsjob_idassetsname)).
 
 **PDF dividido:** cada job de página extrai as próprias imagens com o número **absoluto**
-da página e grava direto sob o job principal (URLs já em `/jobs/{principal}/assets/…`);
-o merge concatena em ordem de página e aplica os limites do job sobre o total (o que
-passar do limite sai da lista, vira placeholder no Markdown e o PNG é apagado).
+da página e grava direto sob o job principal (URLs já em `/jobs/{principal}/assets/…`).
+Os limites do job valem para todas as páginas juntas, em duas camadas:
+
+1. **Reserva no Redis, antes de codificar e enviar** (`JobAssetBudget`): cada posição
+   (`p0003-img02`, `p0003-page`) reserva uma vaga em `job:{id}:assets:slots` e seus bytes
+   em `job:{id}:assets:bytes` (TTL 24 h). Esgotada a contagem ou os bytes, a página nem
+   renderiza/codifica a imagem (`count_limit`/`size_limit`). Um retry da mesma página
+   reaproveita a própria vaga. Quem fica com o orçamento depende da ordem em que as
+   páginas terminam.
+2. **O merge é a autoridade** (`combine_pages`, em ordem de página): o que passar do limite
+   sai da lista, vira placeholder no Markdown e o PNG é apagado. Sem Redis, cada página
+   aplica só os próprios limites e o merge corta o excedente.
 
 **Opções duráveis:** `image_mode`/`page_images` ficam na configuração pedida do job
 (`JobConfiguration.options`, só quando diferentes do padrão); o worker as relê do banco no
 `process_conversion` e em cada página (retry de página e merge as respeitam mesmo que a
 mensagem do Celery não as traga).
+
+**Nunca URL sem manifesto:** o worker grava `jobs.assets_manifest` **antes** de publicar
+qualquer resultado (Redis, Elasticsearch, páginas). Se essa gravação falhar, as referências
+voltam a `<!-- image -->`, os PNGs são apagados e o resultado sai sem `assets`. O merge
+lista as imagens que as páginas guardaram mesmo que não consiga ler as opções do job.
+
+**Job que termina sem manifesto** (`failed`/`partial`, com ou sem `purge_source`): as
+imagens das páginas que completaram e ainda têm resultado ganham um manifesto (ficam
+baixáveis e seguem a retenção normal: um `partial` pode ser completado por retry de
+página, que refaz o manifesto no merge); sem nada listável (documento único que falhou,
+resultados de página expirados), `assets/{id}/` é apagado.
 
 **Retenção:**
 
@@ -246,9 +266,11 @@ mensagem do Celery não as traga).
 - Com `purge_source=true`, o original e os PDFs por página seguem a regra de sempre, mas
   as imagens **não** são apagadas quando o job termina (o cliente precisa baixá-las): o
   purge grava `jobs.assets_expire_at = agora + ASSET_RETENTION_SECONDS` (padrão 3600) e a
-  task periódica `workers.image_full_tasks.reconcile` (no máximo uma vez por minuto, até
-  20 jobs por vez, sob o lock da linha do job, idempotente) apaga `assets/{id}/` e grava
-  `jobs.assets_deleted_at`. Uma duplicata com `purge_source=true` de um job já terminado
+  task periódica `workers.image_full_tasks.reconcile` (no máximo uma vez por minuto em todo
+  o cluster — lock Redis `assets:expiry:lock`; sem Redis, por processo —, até 20 jobs por
+  vez, a expiração mais antiga primeiro, sob o lock da linha do job, idempotente) apaga
+  `assets/{id}/` e grava `jobs.assets_deleted_at`. Uma exclusão que falha é adiada 5 min
+  (`ASSET_EXPIRY_RETRY_SECONDS`), para não travar o lote. Uma duplicata com `purge_source=true` de um job já terminado
   agenda a mesma expiração.
 - `DELETE /jobs/{job_id}/source` apaga as imagens na hora (também depois que o purge já
   levou o original).
@@ -258,7 +280,13 @@ mensagem do Celery não as traga).
 **Deduplicação:** `image_mode` e `page_images` entram no `operation_key` (só quando
 diferentes do padrão, então as chaves antigas continuam valendo): uma conversão
 `referenced` nunca devolve um job `none`, nem um job sem chave (anterior às chaves), nem
-um job cujas imagens já foram apagadas.
+um job cujas imagens já foram apagadas ou expiram em menos da metade de
+`ASSET_RETENTION_SECONDS` (aí um job novo é criado, em vez de devolver URLs prestes a
+responder 410).
+
+**Na interface:** a visualização do Markdown busca cada `/jobs/{id}/assets/{name}` na API
+com a credencial da sessão e mostra a imagem por um blob URL (liberado ao sair); imagem
+apagada ou inexistente aparece como "Image unavailable".
 
 ```bash
 curl -X POST http://localhost:8000/upload \

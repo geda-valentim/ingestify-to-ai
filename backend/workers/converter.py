@@ -10,7 +10,8 @@ logger = logging.getLogger(__name__)
 class DoclingConverter:
     """Wrapper for Docling document converter"""
 
-    def __init__(self, enable_ocr: bool = False, enable_table_structure: bool = True, enable_images: bool = False):
+    def __init__(self, enable_ocr: bool = False, enable_table_structure: bool = True, enable_images: bool = False,
+                 picture_images: bool = False):
         """
         Initialize Docling converter with optimizations
 
@@ -18,6 +19,9 @@ class DoclingConverter:
             enable_ocr: Enable OCR for scanned documents (slower, disable for digital PDFs)
             enable_table_structure: Enable table structure recognition (disable if no tables needed)
             enable_images: Enable image extraction and processing (slower, disable for text-only conversion)
+            picture_images: image_mode=referenced: picture crops are generated (whatever
+                enable_images says) at CONVERSION_IMAGES_SCALE. Only this flag changes
+                the scale, so image_mode=none costs and converts exactly as before.
         """
         try:
             from docling.document_converter import DocumentConverter, PdfFormatOption, InputFormat
@@ -44,9 +48,9 @@ class DoclingConverter:
             pipeline_options = PdfPipelineOptions()
             pipeline_options.do_ocr = enable_ocr  # Disable OCR for speed (digital PDFs only)
             pipeline_options.do_table_structure = enable_table_structure  # Disable if no tables
-            pipeline_options.generate_picture_images = enable_images  # Disable image extraction for speed
-            if enable_images:
-                # Resolution of the picture crops (image_mode=referenced assets)
+            pipeline_options.generate_picture_images = enable_images or picture_images  # Disable image extraction for speed
+            if picture_images:
+                # Resolution of the stored picture assets (image_mode=referenced only)
                 from shared.config import get_settings
                 pipeline_options.images_scale = float(get_settings().conversion_images_scale)
 
@@ -292,18 +296,20 @@ def get_converter(preset: str = None, picture_images: bool = False) -> DoclingCo
         enable_images = settings.docling_enable_images
         enable_table_structure = settings.docling_enable_table_structure
 
-    return _cached_converter(enable_ocr, enable_table_structure, enable_images or picture_images)
+    if picture_images:
+        return _cached_converter(enable_ocr, enable_table_structure, enable_images, True)
+    return _cached_converter(enable_ocr, enable_table_structure, enable_images)
 
 
 # One converter per option set and process: building one loads docling's layout
 # and table models (onto the GPU when DEVICE=cuda), so a fresh instance per task
 # reloaded the weights for every page. Two slots cover a preset plus the default
-# without letting every combination pile up in VRAM (image_mode=referenced on the
-# fast preset resolves to the balanced option set, not a new one).
+# without letting every combination pile up in VRAM. picture_images
+# (image_mode=referenced) is part of the key: its crops use another images_scale.
 @lru_cache(maxsize=2)
-def _cached_converter(enable_ocr: bool, enable_table_structure: bool, enable_images: bool) -> DoclingConverter:
-    return DoclingConverter(
-        enable_ocr=enable_ocr,
-        enable_table_structure=enable_table_structure,
-        enable_images=enable_images,
-    )
+def _cached_converter(enable_ocr: bool, enable_table_structure: bool, enable_images: bool,
+                      picture_images: bool = False) -> DoclingConverter:
+    options = dict(enable_ocr=enable_ocr, enable_table_structure=enable_table_structure, enable_images=enable_images)
+    if picture_images:
+        options["picture_images"] = True
+    return DoclingConverter(**options)

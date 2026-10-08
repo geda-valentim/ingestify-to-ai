@@ -94,6 +94,7 @@ class FakeMinio:
         self.objects = {}
         self.deleted = []
         self.fail = False
+        self.fail_buckets = set()
 
     def upload_file(self, bucket_name, object_name, file_data=None, file_path=None, content_type=None):
         if self.fail:
@@ -109,7 +110,7 @@ class FakeMinio:
         return FakeStream(self.objects[(bucket_name, object_name)])
 
     def delete_file(self, bucket_name, object_name):
-        if self.fail:
+        if self.fail or bucket_name in self.fail_buckets:
             raise ConnectionError("minio down")
         self.objects.pop((bucket_name, object_name), None)
         self.deleted.append((bucket_name, object_name))
@@ -492,8 +493,12 @@ def test_the_beat_retries_a_failed_deletion(worker):
     assert ca.expire_due_assets(worker.Session, lambda: worker.minio, now=later) == 0
     assert worker.job().assets_deleted_at is None
 
+    # postponed (backoff), so it never blocks the oldest-first batch
+    postponed = worker.job().assets_expire_at
+    assert postponed == later + timedelta(seconds=ca.ASSET_EXPIRY_RETRY_SECONDS)
     worker.minio.fail = False
-    assert ca.expire_due_assets(worker.Session, lambda: worker.minio, now=later) == 1
+    assert ca.expire_due_assets(worker.Session, lambda: worker.minio, now=later) == 0
+    assert ca.expire_due_assets(worker.Session, lambda: worker.minio, now=postponed) == 1
 
 
 def test_options_are_durable_for_page_retries(worker):
@@ -847,3 +852,225 @@ def test_real_docling_extracts_pictures_and_renders_pages(tmp_path, monkeypatch)
     for asset in result["assets"]:
         data = storage.objects[(storage.bucket_results, ca.object_name(JOB_ID, asset["name"]))]
         assert hashlib.sha256(data).hexdigest() == asset["sha256"]
+
+
+
+# ---------------------------------------------------------------------------
+# Review fixes
+# ---------------------------------------------------------------------------
+
+def test_image_mode_none_never_changes_the_picture_scale(monkeypatch):
+    """balanced/quality and DOCLING_ENABLE_IMAGES keep docling's own images_scale."""
+    pytest.importorskip("docling")
+    from docling.document_converter import InputFormat
+    from workers import converter as converter_module
+
+    def scale(converter):
+        return converter.converter.format_to_options[InputFormat.PDF].pipeline_options
+
+    monkeypatch.setenv("DEVICE", "cpu")
+    get_settings.cache_clear()
+    try:
+        plain = DoclingConverter(enable_ocr=False, enable_table_structure=True, enable_images=True)
+        referenced = DoclingConverter(enable_ocr=False, enable_table_structure=True, enable_images=False,
+                                      picture_images=True)
+    finally:
+        get_settings.cache_clear()
+    default_scale = type(scale(plain))().images_scale
+    assert scale(plain).generate_picture_images is True and scale(plain).images_scale == default_scale
+    assert scale(referenced).generate_picture_images is True
+    assert scale(referenced).images_scale == get_settings().conversion_images_scale
+
+    built = []
+    monkeypatch.setattr(converter_module, "DoclingConverter", lambda **kw: built.append(kw) or kw)
+    converter_module._cached_converter.cache_clear()
+    try:
+        assert converter_module.get_converter("balanced") == {
+            "enable_ocr": False, "enable_table_structure": True, "enable_images": True}
+        assert converter_module.get_converter("balanced", picture_images=True)["picture_images"] is True
+        assert len(built) == 2  # its own cache slot
+    finally:
+        converter_module._cached_converter.cache_clear()
+
+
+def test_limits_are_checked_before_encoding_and_rendering(tmp_path, monkeypatch):
+    from workers import image_assets
+    encoded = []
+    real = image_assets.encode_png
+    monkeypatch.setattr(image_assets, "encode_png", lambda image: encoded.append(1) or real(image))
+
+    collector = AssetCollector(JOB_ID, lambda: FakeMinio(), settings=limits(conversion_asset_max_count=1))
+    extract_pictures(document([(1, gradient(40, 40, n)) for n in range(1, 4)]), collector)
+    assert len(encoded) == 1 and collector.skipped["count_limit"] == 2
+
+    import pypdfium2
+    rendered = []
+    real_render = pypdfium2.PdfPage.render
+    monkeypatch.setattr(pypdfium2.PdfPage, "render", lambda self, **kw: rendered.append(1) or real_render(self, **kw))
+    source = tmp_path / "curso.pdf"
+    source.write_bytes(_pdf_samples.course_pdf())
+    pages = AssetCollector(JOB_ID, lambda: FakeMinio(), settings=limits(conversion_asset_max_count=1))
+    assert render_pages(source, pages) == 1
+    assert len(rendered) == 1 and pages.skipped["count_limit"] == 2
+
+
+def test_split_pages_share_the_job_budget_before_uploading(worker, monkeypatch):
+    monkeypatch.setattr(tasks.settings, "conversion_asset_max_count", 2)
+    add_job(worker.Session, image_mode="none", page_images=True, pages=[1, 2, 3], status=JobStatus.PROCESSING)
+    files = split_pages(worker, 3)
+    worker.state.make_document = lambda path: document([])
+
+    run_pages(worker, files)
+
+    assert len(worker.minio.assets()) == 2  # page 3 was never rendered nor uploaded
+    assert worker.redis.get_job_result("page-3")["assets_skipped"]["count_limit"] == 1
+    run_pages(worker, files, order=[1])  # a retry of a page reuses its reservation
+    assert worker.redis.get_job_result("page-1")["assets"]
+    tasks.merge_pages_task.run(**worker.state.merges[0])
+    assert [a["page"] for a in worker.job().assets_manifest["assets"]] == [1, 2]
+
+
+def test_without_redis_the_budget_falls_back_to_per_page_limits_and_the_merge(worker, monkeypatch):
+    monkeypatch.setattr(tasks.settings, "conversion_asset_max_count", 2)
+    add_job(worker.Session, image_mode="none", page_images=True, pages=[1, 2, 3], status=JobStatus.PROCESSING)
+    files = split_pages(worker, 3)
+    worker.state.make_document = lambda path: document([])
+
+    class DownRedis:
+        client = property(lambda self: self)
+
+        def __getattr__(self, name):
+            raise ConnectionError("redis down")
+    real = ca.JobAssetBudget.__init__
+    monkeypatch.setattr(ca.JobAssetBudget, "__init__",
+                        lambda self, client, job_id, **kw: real(self, DownRedis(), job_id, **kw))
+
+    run_pages(worker, files)
+    assert len(worker.minio.assets()) == 3
+    tasks.merge_pages_task.run(**worker.state.merges[0])
+    assert [a["page"] for a in worker.job().assets_manifest["assets"]] == [1, 2]
+    assert len(worker.minio.assets()) == 2  # the merge trimmed and deleted the third
+
+
+def test_a_partial_job_lists_the_assets_of_its_completed_pages(worker, monkeypatch):
+    add_job(worker.Session, image_mode="referenced", pages=[1, 2], status=JobStatus.PROCESSING)
+    files = split_pages(worker, 2)
+    monkeypatch.setattr("shared.redis_client.get_redis_client", lambda: worker.redis)
+    run_pages(worker, files, order=[1])
+    with worker.Session() as db:  # page 2 failed for good: the job settles PARTIAL
+        page = db.query(Page).filter(Page.job_id == JOB_ID, Page.page_number == 2).one()
+        page.status = JobStatus.FAILED
+        db.get(Job, JOB_ID).status = JobStatus.PARTIAL
+        db.commit()
+
+    tasks._purge_source_if_requested(JOB_ID)
+
+    job = worker.job()
+    assert [a["page"] for a in job.assets_manifest["assets"]] == [1]
+    assert job.minio_upload_path is not None  # no purge_source: the source stays
+    assert ca.assets_available(job)
+
+
+def test_a_failed_job_without_a_manifest_deletes_its_assets(worker, monkeypatch):
+    add_job(worker.Session, image_mode="referenced", status=JobStatus.FAILED)
+    worker.minio.objects[(worker.minio.bucket_results, ca.object_name(JOB_ID, "p0001-img01-0123456789ab.png"))] = b"x"
+    monkeypatch.setattr("shared.redis_client.get_redis_client", lambda: worker.redis)
+
+    tasks._purge_source_if_requested(JOB_ID)
+
+    assert worker.minio.assets() == [] and worker.job().assets_manifest is None
+
+
+def _fail_manifest_writes(Session):
+    from sqlalchemy import event
+
+    def before_flush(session, *_):
+        for obj in session.dirty:
+            if isinstance(obj, Job) and session.is_modified(obj) and \
+                    "assets_manifest" in {a.key for a in Job.__mapper__.attrs if
+                                          getattr(__import__("sqlalchemy").inspect(obj).attrs, a.key).history.has_changes()}:
+                raise RuntimeError("database refused")
+    event.listen(Session, "before_flush", before_flush)
+
+
+def test_a_manifest_that_cannot_be_stored_publishes_no_urls(worker):
+    add_job(worker.Session, image_mode="referenced")
+    _fail_manifest_writes(worker.Session)
+
+    assert worker.convert()["status"] == "completed"
+
+    result = worker.redis.get_job_result(JOB_ID)
+    assert "/assets/" not in result["markdown"] and "<!-- image -->" in result["markdown"]
+    assert "assets" not in result
+    assert worker.minio.assets() == [] and worker.job().assets_manifest is None
+
+
+def test_the_merge_writes_the_manifest_even_when_the_options_cannot_be_read(worker, monkeypatch):
+    add_job(worker.Session, image_mode="referenced", pages=[1, 2], status=JobStatus.PROCESSING)
+    files = split_pages(worker, 2)
+    run_pages(worker, files)
+    monkeypatch.setattr(ca, "durable_options", lambda *a, **kw: {})
+
+    tasks.merge_pages_task.run(**worker.state.merges[0])
+
+    assert [a["page"] for a in worker.job().assets_manifest["assets"]] == [1, 2]
+
+
+def test_delete_source_records_the_assets_even_when_the_source_delete_fails(api):
+    asset = completed_with_assets(api)[0]
+    api.minio.fail_buckets = {api.minio.bucket_uploads}
+
+    r = api.client.delete(f"/jobs/{JOB_ID}/source", headers=jwt())
+
+    assert r.status_code == 503
+    assert api.client.get(asset["url"], headers=jwt()).status_code == 410  # not 404
+    api.minio.fail_buckets = set()
+    again = api.client.delete(f"/jobs/{JOB_ID}/source", headers=jwt())
+    assert again.status_code == 200 and again.json()["source_deleted"] is True
+    assert again.json()["assets_deleted"] is False
+
+
+PAGE_JOB = "bbbbbbbb-1111-4222-8333-444444444444"
+
+
+def test_a_page_job_result_publishes_only_the_asset_fields(api, monkeypatch):
+    monkeypatch.setattr("shared.redis_client.get_redis_client", lambda: api.redis)
+    assets = completed_with_assets(api)
+    api.redis.set_job_status(job_id=PAGE_JOB, job_type="page", status="completed", parent_job_id=JOB_ID,
+                             page_number=1)
+    api.redis.set_job_result(PAGE_JOB, {"markdown": "x", "metadata": METADATA,
+                                        "assets": [{**assets[0], "position": 1, "internal": "y"}]})
+
+    r = api.client.get(f"/jobs/{PAGE_JOB}/result", headers=jwt())
+
+    assert r.status_code == 200, r.text
+    assert set(r.json()["result"]["assets"][0]) == set(ca.PUBLIC_FIELDS)
+
+
+@pytest.mark.parametrize("remaining, reused", [(timedelta(minutes=10), False), (timedelta(minutes=50), True)])
+def test_dedup_skips_jobs_whose_assets_expire_soon(api, remaining, reused):
+    from api.projects_api import conversion_operation_key
+    completed_with_assets(api)
+    with api.Session() as db:
+        job = db.get(Job, JOB_ID)
+        job.file_checksum, job.project_id = hashlib.sha256(PDF).hexdigest(), api.project.id
+        job.operation_key = conversion_operation_key("fast", "referenced")
+        job.assets_expire_at = datetime.utcnow() + remaining
+        db.commit()
+    api.db.expire_all()
+
+    body = post(api, image_mode="referenced", purge_source="true").json()
+
+    assert (body["job_id"] == JOB_ID) is reused
+
+
+def test_the_expiry_runs_once_per_interval_across_processes(worker, fake_redis, monkeypatch):
+    from workers import image_full_tasks
+    monkeypatch.setattr("shared.redis_client.get_redis_client", lambda: fake_redis)
+    calls = []
+    monkeypatch.setattr(ca, "expire_due_assets", lambda *a, **kw: calls.append(1) or 0)
+
+    image_full_tasks.expire_conversion_assets()
+    image_full_tasks.expire_conversion_assets()  # another process, same minute: skipped
+
+    assert len(calls) == 1

@@ -307,6 +307,9 @@ job:{job_id}:transcript:partial  # LIST of {start,end,text} segments of a runnin
 job:{job_id}:source_token     # Drive/Dropbox provider token handed to the worker out of band (S-01; 6h TTL; deleted after download)
 user:{user_id}:jobs          # SET of that user's job IDs (30d TTL)
 monitoring:broker_unacked    # Last orphaned-broker-message check, for /admin/broker/unacked (1h TTL)
+job:{job_id}:assets:slots     # HASH slot -> bytes: per-job image-asset budget shared by a split PDF's pages (24h TTL; fast path, the merge is the authority)
+job:{job_id}:assets:bytes     # Bytes reserved in that budget (24h TTL)
+assets:expiry:lock            # One asset-expiry sweep per minute across processes (60s TTL)
 ```
 
 **There is no per-page key namespace.** Each page is modelled as a *job* in its own

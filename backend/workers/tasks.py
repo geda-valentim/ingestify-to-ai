@@ -128,7 +128,46 @@ def _asset_collector(job_id: str, options: dict, page_number: int = None):
         return None
     from workers.image_assets import AssetCollector
 
-    return AssetCollector(job_id, get_minio_client, page_offset=(page_number - 1) if page_number else 0)
+    budget = None
+    if page_number:
+        # The page jobs of a split PDF share the per-job limits (Redis fast path;
+        # the merge stays the authority)
+        budget = conversion_assets.JobAssetBudget(
+            get_redis_client(), job_id, max_count=int(settings.conversion_asset_max_count),
+            max_bytes=int(settings.conversion_asset_max_total_mb) * 1024 * 1024)
+    return AssetCollector(job_id, get_minio_client, page_offset=(page_number - 1) if page_number else 0,
+                          budget=budget)
+
+
+def _publish_manifest(job_id: str, markdown: str, manifest):
+    """
+    Persist the asset manifest BEFORE any result (Redis, Elasticsearch, MySQL page
+    rows) is published, and fail closed: when it cannot be written, the markdown
+    references go back to placeholders and the stored PNGs are deleted, so no URL
+    is ever published without a manifest that serves it.
+
+    Returns (markdown, manifest or None).
+    """
+    if manifest is None:
+        return markdown, None
+    try:
+        with SessionLocal() as db:
+            job = db.query(Job).filter(Job.id == job_id).with_for_update().first()
+            if job is None:
+                raise RuntimeError("job row not found")
+            job.assets_manifest = manifest
+            db.commit()
+        return markdown, manifest
+    except Exception as e:  # noqa: BLE001 - the conversion itself still succeeds
+        logger.error(f"[MAIN JOB {job_id}] Could not store the asset manifest, dropping the assets: {e}")
+        for asset in manifest.get("assets") or []:
+            markdown = conversion_assets.unreference(markdown, asset["url"])
+        try:
+            minio = get_minio_client()
+            minio.delete_folder(minio.bucket_results, conversion_assets.asset_prefix(job_id))
+        except Exception as cleanup_error:  # noqa: BLE001
+            logger.warning(f"[MAIN JOB {job_id}] Could not delete the unlisted assets: {cleanup_error}")
+        return markdown, None
 
 
 def _convert(converter, file_path, options: dict, collector):
@@ -688,9 +727,13 @@ def process_conversion(
             result = _convert(converter, file_path, options, collector)
             assets_manifest = None
             if collector is not None:
-                assets_manifest = {"assets": result.get("assets") or [],
-                                   "skipped": result.get("assets_skipped") or conversion_assets.empty_skipped()}
-                result["assets"] = [conversion_assets.public_asset(a) for a in assets_manifest["assets"]]
+                result["markdown"], assets_manifest = _publish_manifest(
+                    job_id, result.get("markdown", ""),
+                    {"assets": result.get("assets") or [],
+                     "skipped": result.get("assets_skipped") or conversion_assets.empty_skipped()})
+                if assets_manifest is None:
+                    result.pop("assets", None)
+                    result.pop("assets_skipped", None)
 
             logger.info(f"[MAIN JOB {job_id}] Conversion complete")
             redis_client.update_job_progress(job_id, 80)
@@ -729,8 +772,6 @@ def process_conversion(
                     job.completed_at = datetime.utcnow()
                     job.char_count = len(markdown_content)
                     job.has_elasticsearch_result = es_success
-                    if assets_manifest is not None:
-                        job.assets_manifest = assets_manifest
                     db.commit()
             except Exception as e:
                 logger.error(f"[MAIN JOB {job_id}] MySQL completion error: {e}")
@@ -1558,8 +1599,10 @@ def merge_pages_task(
 
         # Image assets: concatenated in page order, served under the MAIN job, the
         # per-job limits applied across pages (shared/conversion_assets.py)
+        # (pages that stored assets decide too: unknown options never hide them)
         assets_manifest = None
-        if conversion_assets.wants_assets(conversion_assets.durable_options(parent_job_id, SessionLocal)):
+        wants = conversion_assets.wants_assets(conversion_assets.durable_options(parent_job_id, SessionLocal))
+        if wants or any(assets for _, _, assets, _ in page_results):
             markdowns, assets, skipped, dropped = conversion_assets.combine_pages(
                 parent_job_id, page_results, max_count=int(settings.conversion_asset_max_count),
                 max_bytes=int(settings.conversion_asset_max_total_mb) * 1024 * 1024)
@@ -1570,6 +1613,7 @@ def merge_pages_task(
 
         # Combine all pages
         combined_markdown = "\n\n---\n\n".join(markdowns)
+        combined_markdown, assets_manifest = _publish_manifest(parent_job_id, combined_markdown, assets_manifest)
 
         # Create merged result
         merged_result = {
@@ -1584,7 +1628,7 @@ def merge_pages_task(
             }
         }
         if assets_manifest is not None:
-            merged_result["assets"] = [conversion_assets.public_asset(a) for a in assets_manifest["assets"]]
+            merged_result["assets"] = conversion_assets.public_assets(assets_manifest["assets"])
             merged_result["assets_skipped"] = assets_manifest["skipped"]
 
         # Store merged result in main job (Redis)
@@ -1617,8 +1661,6 @@ def merge_pages_task(
                 job.completed_at = datetime.utcnow()
                 job.char_count = len(combined_markdown)
                 job.has_elasticsearch_result = es_success
-                if assets_manifest is not None:
-                    job.assets_manifest = assets_manifest
                 db.commit()
         except Exception as e:
             logger.error(f"[MERGE JOB {merge_job_id}] MySQL completion error: {e}")

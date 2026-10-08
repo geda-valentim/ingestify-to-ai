@@ -336,6 +336,23 @@ def _operation_key_of(job: Job) -> Optional[str]:
     return getattr(job, "operation_key", None)
 
 
+def _assets_expire_soon(job: Job) -> bool:
+    """
+    The job's assets are scheduled to go (purge_source) in less than half of
+    ASSET_RETENTION_SECONDS: a request for assets is better served by a new job
+    than by URLs about to answer 410.
+    """
+    from datetime import datetime, timedelta
+
+    from shared.config import get_settings
+
+    expire_at = getattr(job, "assets_expire_at", None)
+    if expire_at is None:
+        return False
+    margin = timedelta(seconds=int(get_settings().asset_retention_seconds) / 2)
+    return expire_at - datetime.utcnow() < margin
+
+
 def find_duplicate_job(db: Session, user_id: str, checksum: str, location: UploadLocation,
                        transcription_profile_hash: Optional[str] = None,
                        purge_source: bool = False,
@@ -352,7 +369,8 @@ def find_duplicate_job(db: Session, user_id: str, checksum: str, location: Uploa
     before operation keys existed matches any conversion of the same file without
     image assets, as it did then. `assets_requested` (the request has
     `image_mode=referenced` or `page_images=true`): such a request is never
-    answered by a keyless job, nor by one whose assets were already deleted.
+    answered by a keyless job, nor by one whose assets were already deleted or
+    expire in less than half of ASSET_RETENTION_SECONDS (`_assets_expire_soon`).
 
     With `purge_source=false` (keep the original) a job whose original is already
     gone, or was asked to be deleted, is not reused: the file is processed again
@@ -393,6 +411,8 @@ def find_duplicate_job(db: Session, user_id: str, checksum: str, location: Uploa
             # Recorded before operation keys: a conversion without image assets
             return plain
         if recorded != operation_key:
+            return False
+        if assets_requested and _assets_expire_soon(job):
             return False
         # Image assets already deleted (purge / DELETE /jobs/{id}/source): the
         # request would get dead asset URLs, so the file is processed again

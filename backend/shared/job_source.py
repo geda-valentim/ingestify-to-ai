@@ -293,21 +293,14 @@ def _schedule_asset_expiry(job: Job) -> None:
         logger.warning(f"[MAIN JOB {job.id}] Could not schedule the asset expiry: {e}")
 
 
-def _discard_unlisted_assets(job: Job, minio_factory: Callable) -> None:
-    """
-    A job that settled FAILED / PARTIAL never got a manifest (only a completed merge
-    writes one), so nothing can download the assets its completed pages stored;
-    with the source gone no page retry can complete it either: delete them now.
-    """
-    from shared.conversion_assets import asset_prefix, job_options, manifest_of, wants_assets
+def _settle_unlisted_assets(job: Job, minio_factory: Callable) -> bool:
+    from shared.conversion_assets import settle_unlisted_assets
 
-    if job.status == JobStatus.COMPLETED or manifest_of(job) is not None or not wants_assets(job_options(job)):
-        return
     try:
-        minio = minio_factory()
-        minio.delete_folder(minio.bucket_results, asset_prefix(job.id))
-    except Exception as e:  # noqa: BLE001 - DELETE /jobs/{id} removes them later
-        logger.warning(f"[MAIN JOB {job.id}] Could not delete the unlisted assets: {e}")
+        return settle_unlisted_assets(job, minio_factory)
+    except Exception as e:  # noqa: BLE001 - never block the purge over it
+        logger.warning(f"[MAIN JOB {job.id}] Could not settle the unlisted assets: {e}")
+        return False
 
 
 def purge_source_if_requested(job_id: str, *, session_factory, minio_factory: Callable,
@@ -329,13 +322,15 @@ def purge_source_if_requested(job_id: str, *, session_factory, minio_factory: Ca
             if not purge_due(db, job, locked=True):
                 db.rollback()
                 return False
+            # Image assets a settled job has no manifest for: listed, or deleted
+            # (with or without purge_source; shared/conversion_assets.py)
+            assets_changed = _settle_unlisted_assets(job, minio_factory)
             if not (requested or purge_requested(job)):
-                db.rollback()
+                db.commit() if assets_changed else db.rollback()
                 return False
             # Assets are kept for the client to download, then expire (committed
             # with the delete below, which always commits)
             _schedule_asset_expiry(job)
-            _discard_unlisted_assets(job, minio_factory)
             if delete_source(db, job, minio_factory):
                 logger.info(f"[MAIN JOB {job_id}] Source files purged (purge_source, job {job.status.value})")
             return True
