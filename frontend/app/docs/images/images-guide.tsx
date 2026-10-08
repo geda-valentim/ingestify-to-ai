@@ -39,6 +39,49 @@ export function ImagesGuide({ lang }: { lang: DocsLang }) {
       <Table head={t.imagesHead} rows={t.imagesRows} />
       <P small>{t.imageOptions}</P>
       <P small>{t.imageTasks}</P>
+      <Subheading>{t.formatTitle}</Subheading>
+      <P>{t.formatIntro}</P>
+      <Table head={t.formatHead} rows={t.formatRows} />
+      <P small>{t.formatJsonExample}</P>
+      {block(
+        curl("/images/describe/upload", [
+          '  -F "file=@photo.png"',
+          `  -F "project=${project}"`,
+        ]),
+      )}
+      {block(
+        JSON.stringify(
+          {
+            job_id: "JOB_ID",
+            status: "completed",
+            description: "A red car parked on a street.",
+            task: "<MORE_DETAILED_CAPTION>",
+            width: 800,
+            height: 600,
+            "…": "…",
+          },
+          null,
+          2,
+        ),
+      )}
+      <P small>{t.formatMarkdownExample}</P>
+      {block(
+        curl("/images/describe/upload", [
+          '  -F "file=@photo.png"',
+          `  -F "project=${project}"`,
+          '  -F "output_format=markdown"',
+        ]),
+      )}
+      {block(
+        "# Descrição da imagem\n\nA red car parked on a street.\n\n## Metadados\n\n- Arquivo: photo.png\n- Dimensões: 800 × 600 px\n- Modelo: `florence-community/Florence-2-base-ft`\n- Tarefa: Descrição muito detalhada (`<MORE_DETAILED_CAPTION>`)\n- Job: `JOB_ID`\n",
+      )}
+      <P small>{t.formatReadExample}</P>
+      {block(
+        [
+          `curl "${API_URL}/jobs/JOB_ID/result?format=json" -H "X-API-Key: ${key}"`,
+          `curl "${API_URL}/jobs/JOB_ID/result?format=markdown" -H "X-API-Key: ${key}"`,
+        ].join("\n"),
+      )}
       <P small>
         {pt
           ? "Imagens de um PDF ou documento: converta com image_mode=referenced (e page_images=true para slides e escaneados), baixe cada item de assets com a mesma credencial, deduplique pelo sha256 (estas rotas não deduplicam) e envie-o a describe/ocr com purge_source=true. Passo a passo com curl em "

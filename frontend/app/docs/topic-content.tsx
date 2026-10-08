@@ -684,7 +684,9 @@ const COPY = {
         Sem <C>?format=</C>, vale o <C>output_format</C> escolhido no envio. Com
         ele, você pede qualquer formato a qualquer momento — todos foram
         gerados. Os formatos de arquivo vêm com <C>Content-Disposition</C> e
-        podem ser salvos direto.
+        podem ser salvos direto. Jobs de imagem (<C>/images/*</C>) respondem em
+        JSON por padrão; <C>?format=markdown</C> é opcional e{" "}
+        <C>?format=json</C> pede o JSON explicitamente.
       </P>
     ),
     formatsHead: ["format", "Content-Type", "Conteúdo"],
@@ -1076,7 +1078,9 @@ const COPY = {
         Without <C>?format=</C>, the <C>output_format</C> chosen at upload
         applies. With it, you can ask for any format at any time — all of them
         were produced. File formats come with <C>Content-Disposition</C> and can
-        be saved directly.
+        be saved directly. Image jobs (<C>/images/*</C>) answer in JSON by
+        default; <C>?format=markdown</C> is optional and <C>?format=json</C>{" "}
+        asks for JSON explicitly.
       </P>
     ),
     formatsHead: ["format", "Content-Type", "Contents"],
