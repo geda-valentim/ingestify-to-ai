@@ -340,7 +340,16 @@ export const jobsApi = {
     return response.json();
   },
 
-  async getResult(jobId: string, kind?: JobKind | null): Promise<JobResultResponse> {
+  /**
+   * `job` is the job's status (GET /jobs/{id}), when known: its `kind` picks the
+   * format, and a Full Analysis / faces report (bare on ?format=json) takes the
+   * job's own `status` / `completed_at` instead of invented ones.
+   */
+  async getResult(
+    jobId: string,
+    job?: Pick<JobStatusResponse, "kind" | "status" | "completed_at"> | null,
+  ): Promise<JobResultResponse> {
+    const kind: JobKind | null | undefined = job?.kind;
     // Explicit format: a transcription job created with output_format=vtt (or
     // srt/txt/json) answers a bare /result with that file, not with this JSON.
     // An image job answers ?format=markdown with rendered Markdown (and a bare
@@ -354,15 +363,21 @@ export const jobsApi = {
       throw new Error(`Failed to fetch job result: ${response.statusText}`);
     }
 
+    // A Full Analysis / faces job that has not settled answers 202 {job_id, status,
+    // poll_url}: there is no result yet, never wrap it as one
+    if (response.status === 202) {
+      throw new Error("The job result is not ready yet");
+    }
+
     const body = await response.json();
-    // A Full Analysis / faces job answers ?format=json with the bare report
+    // A settled Full Analysis / faces job answers ?format=json with the bare report
     if (image && body && !("result" in body)) {
       return {
         job_id: jobId,
         type: "main",
-        status: body.image?.analysis_status ?? "completed",
+        status: job?.status,
         result: body,
-        completed_at: "",
+        completed_at: job?.completed_at ?? undefined,
       } as JobResultResponse;
     }
     return body;

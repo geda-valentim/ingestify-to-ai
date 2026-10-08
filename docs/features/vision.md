@@ -523,7 +523,10 @@ máximo: 900s desde a admissão, incluindo fila, carga, inferência e persistên
 `GET /jobs/{id}/result` retorna 202 enquanto processa. Ao terminar, o envelope
 contém `image.operation=full_analysis`, `analysis_status`, `coverage`,
 `resolved_inputs`, `calls_started`, `results[]` e Markdown. `?format=json` entrega
-o envelope bruto; `?format=markdown` mantém o envelope padrão. Estados finais:
+o relatório bruto `{markdown, metadata, image}`, sem o envelope do job;
+`?format=markdown` entrega o relatório renderizado (`text/markdown`; até a API 1.3.0
+devolvia o envelope padrão, ver CHANGELOG); sem `?format=`, o envelope padrão (ou o
+Markdown, se o job foi criado com `output_format=markdown`). Estados finais:
 `completed`, `partial`, `failed`, `cancelled`. Só `completed` indica cobertura
 integral sem truncamento e persistência durável. Cada etapa mantém output nativo,
 texto, linhas/caixas/polígonos, motivo, tentativas, duração e metadados de geração.

@@ -154,7 +154,7 @@ export default function JobStatusPage({ params }: PageProps) {
   // Fetch result when job is completed
   const { data: result, isError: isResultError, refetch: refetchResult } = useQuery({
     queryKey: ["job-result", resolvedParams.id, token],
-    queryFn: () => jobsApi.getResult(resolvedParams.id, status?.kind),
+    queryFn: () => jobsApi.getResult(resolvedParams.id, status),
     enabled: !!token && (status?.status === "completed" || (status?.kind === "image" && ["partial", "failed", "cancelled"].includes(status.status))),
   });
 

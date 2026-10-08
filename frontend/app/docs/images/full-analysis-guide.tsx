@@ -188,8 +188,8 @@ export function FullAnalysisGuide({ lang }: { lang: DocsLang }) {
       />
       <P small>
         {pt
-          ? "?format=json devolve o relatório bruto {markdown,metadata,image}, sem o envelope externo do job; ?format=markdown mantém o envelope padrão. Outros formatos retornam 422. As coordenadas de regions/lines são pixels do PNG canônico retornado, sem rotação EXIF posterior. GIF/TIFF usa o primeiro frame. O status SQL e o resultado privado no MinIO sobrevivem à expiração do cache Redis."
-          : "?format=json returns the raw report {markdown,metadata,image}, without the outer job envelope; ?format=markdown keeps the default envelope. Other formats return 422. regions/lines coordinates are pixels of the returned canonical PNG, without later EXIF rotation. GIF/TIFF uses the first frame. SQL status and private MinIO results survive Redis cache expiry."}
+          ? "?format=json devolve o relatório bruto {markdown,metadata,image}, sem o envelope externo do job; ?format=markdown devolve o relatório renderizado como text/markdown (até a API 1.3.0 devolvia o envelope padrão); sem ?format, o envelope padrão, ou o Markdown se o job foi criado com output_format=markdown. Outros formatos retornam 422. As coordenadas de regions/lines são pixels do PNG canônico retornado, sem rotação EXIF posterior. GIF/TIFF usa o primeiro frame. O status SQL e o resultado privado no MinIO sobrevivem à expiração do cache Redis."
+          : "?format=json returns the raw report {markdown,metadata,image}, without the outer job envelope; ?format=markdown returns the report rendered as text/markdown (up to API 1.3.0 it returned the default envelope); without ?format, the default envelope, or the Markdown when the job was created with output_format=markdown. Other formats return 422. regions/lines coordinates are pixels of the returned canonical PNG, without later EXIF rotation. GIF/TIFF uses the first frame. SQL status and private MinIO results survive Redis cache expiry."}
       </P>
       <Subheading>
         {pt ? "Cancelamento e exclusão" : "Cancellation and deletion"}

@@ -386,3 +386,33 @@ def test_every_image_route_publishes_output_format_and_markdown():
     result = schema["paths"]["/jobs/{job_id}/result"]["get"]
     assert "text/markdown" in result["responses"]["200"]["content"]
     assert "markdown" in next(p for p in result["parameters"] if p["name"] == "format")["description"]
+
+
+def test_ampersands_urls_and_emails_render_literally():
+    md = vm.text("&lt;b&gt; A&B see https://evil.example/x www.Example.com mail a@b.co")
+    assert md.startswith("&amp;lt;b&amp;gt; A&amp;B")
+    assert "https:&#47;&#47;evil.example/x" in md and "://" not in md
+    assert "www&#46;Example.com" in md and "a&#64;b.co" in md
+    assert vm.cell("http://x.y") == "http:&#47;&#47;x.y"
+
+
+def test_malformed_results_render_instead_of_raising():
+    assert vm.render_describe({"description": {"x": 1}, "task": ["bad"], "width": "w", "model": "m"}).startswith(
+        "# Descrição da imagem\n\nNenhum resultado detectado.")
+    assert vm.render_ocr({"text": 5, "lines": "nope"}).startswith("# Texto da imagem\n\n5\n")
+    assert vm.render_ocr({"text": None, "lines": [None, {"text": ["x"]}]}).startswith(
+        "# Texto da imagem\n\nNenhum texto detectado.")
+    short = vm.regions_table([{"label": "car", "bbox": [1, 2]}, "junk", {"bbox": "x"}])
+    assert "| car | 1 | 2 | — | — |" in short
+    md = vm.render_analyze({"task": {"t": 1}, "regions": [{"label": None, "bbox": [1, None, "a", float("nan")]}],
+                            "request": "x", "text": None})
+    assert md.startswith("# Tarefa de visão") and "| — | 1 | — | — | — |" in md
+    faces = vm.render_faces({"detection": ["bad"], "faces": [{"face_id": 3, "bbox": [1], "expression": "x",
+                                                             "movements": None}, "junk"], "models": "x",
+                             "coverage": [1]})
+    assert "| `3` | 1 | — | — | — | — | — | — |" in faces
+    full = vm.render_full({"results": [{"task": {"bad": 1}, "status": "succeeded", "lines": "x", "regions": 3},
+                                       "junk"], "faces": {"detection": None}, "coverage": None})
+    assert full.startswith("# Análise completa da imagem") and "Nenhum rosto detectado." in full
+    assert vm.render_result("nope").startswith("# Resultado da imagem")
+    assert vm.render_image({"operation": ["x"]}).startswith("# Resultado da imagem")

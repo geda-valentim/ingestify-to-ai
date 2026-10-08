@@ -13,7 +13,7 @@ export function FacesGuide({ lang }: { lang: DocsLang }) {
       ["POST /images/faces", pt ? "JSON: image_base64, projeto e face_options" : "JSON: image_base64, project and face_options"],
       ["POST /images/faces/upload", pt ? "Multipart: file e face_options como JSON" : "Multipart: file and JSON face_options"],
       ["POST /images/analyze(/upload)", 'mode=full; full_options.profile=image-full-v2'],
-      ["GET /jobs/{id}/result", pt ? "Resultado durável, inclusive partial; format=json exporta o envelope" : "Durable result, including partial; format=json exports the envelope"],
+      ["GET /jobs/{id}/result", pt ? "Resultado durável, inclusive partial; sem format, o envelope do job; format=json, o relatório bruto {markdown,metadata,image}; format=markdown, o relatório em text/markdown" : "Durable result, including partial; without format, the job envelope; format=json, the bare report {markdown,metadata,image}; format=markdown, the report as text/markdown"],
     ]} />
     <CodeBlock code={`curl "${DOCS_API_URL}/images/faces/upload" \\\n  -H "X-API-Key: ${pt ? "SUA_CHAVE" : "YOUR_KEY"}" \\\n  -H "Idempotency-Key: face-request-001" \\\n  -F "file=@photo.jpg" -F "project=Images" \\\n  -F 'face_options={"mode":"expressions","max_faces":5,"min_expression_score":0.5}'`} copyLabel={pt ? "Copiar código" : "Copy code"} />
     <CodeBlock code={`curl "${DOCS_API_URL}/images/analyze/upload" \\\n  -H "X-API-Key: ${pt ? "SUA_CHAVE" : "YOUR_KEY"}" \\\n  -H "Idempotency-Key: full-v2-request-001" \\\n  -F "file=@photo.jpg" -F "project=Images" -F "mode=full" \\\n  -F 'full_options={"profile":"image-full-v2","faces":{"max_faces":5}}'`} copyLabel={pt ? "Copiar código" : "Copy code"} />

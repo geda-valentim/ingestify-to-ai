@@ -2011,10 +2011,11 @@ def _result_format_error(code: str, **context) -> HTTPException:
     response_model=JobResultResponse,
     responses={200: {
         "description": "O resultado. JSON por padrão; `text/markdown` para `format=markdown` de um "
-                       "job de imagem; `text/vtt`, `application/x-subrip` ou `text/plain` para os "
-                       "formatos de transcrição.",
+                       "job de imagem; `text/vtt` (vtt), `application/x-subrip` (srt), `text/plain` "
+                       "(txt) ou `application/json` (json) para os formatos de transcrição.",
         "content": {"text/markdown": {"schema": {"type": "string"}},
                     "text/vtt": {"schema": {"type": "string"}},
+                    "application/x-subrip": {"schema": {"type": "string"}},
                     "text/plain": {"schema": {"type": "string"}}},
     }},
 )

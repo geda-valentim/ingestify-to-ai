@@ -959,10 +959,11 @@ Respostas declaradas:
 
 | Status | Content-Type | Esquema | Descrição |
 | --- | --- | --- | --- |
-| 200 | application/json | [JobResultResponse](#model-jobresultresponse) | O resultado. JSON por padrão; `text/markdown` para `format=markdown` de um job de imagem; `text/vtt`, `application/x-subrip` ou `text/plain` para os formatos de transcrição. |
-| 200 | text/markdown | string | O resultado. JSON por padrão; `text/markdown` para `format=markdown` de um job de imagem; `text/vtt`, `application/x-subrip` ou `text/plain` para os formatos de transcrição. |
-| 200 | text/vtt | string | O resultado. JSON por padrão; `text/markdown` para `format=markdown` de um job de imagem; `text/vtt`, `application/x-subrip` ou `text/plain` para os formatos de transcrição. |
-| 200 | text/plain | string | O resultado. JSON por padrão; `text/markdown` para `format=markdown` de um job de imagem; `text/vtt`, `application/x-subrip` ou `text/plain` para os formatos de transcrição. |
+| 200 | application/json | [JobResultResponse](#model-jobresultresponse) | O resultado. JSON por padrão; `text/markdown` para `format=markdown` de um job de imagem; `text/vtt` (vtt), `application/x-subrip` (srt), `text/plain` (txt) ou `application/json` (json) para os formatos de transcrição. |
+| 200 | text/markdown | string | O resultado. JSON por padrão; `text/markdown` para `format=markdown` de um job de imagem; `text/vtt` (vtt), `application/x-subrip` (srt), `text/plain` (txt) ou `application/json` (json) para os formatos de transcrição. |
+| 200 | text/vtt | string | O resultado. JSON por padrão; `text/markdown` para `format=markdown` de um job de imagem; `text/vtt` (vtt), `application/x-subrip` (srt), `text/plain` (txt) ou `application/json` (json) para os formatos de transcrição. |
+| 200 | application/x-subrip | string | O resultado. JSON por padrão; `text/markdown` para `format=markdown` de um job de imagem; `text/vtt` (vtt), `application/x-subrip` (srt), `text/plain` (txt) ou `application/json` (json) para os formatos de transcrição. |
+| 200 | text/plain | string | O resultado. JSON por padrão; `text/markdown` para `format=markdown` de um job de imagem; `text/vtt` (vtt), `application/x-subrip` (srt), `text/plain` (txt) ou `application/json` (json) para os formatos de transcrição. |
 | 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
 | 202 | — | objeto livre | Análise composta em andamento; consulte poll_url/result_url. |
 

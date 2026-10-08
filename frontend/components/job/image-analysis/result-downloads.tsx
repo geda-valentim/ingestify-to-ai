@@ -11,6 +11,12 @@ const FORMATS = {
   json: { label: "Download JSON", extension: "json", type: "application/json" },
 } as const;
 
+/** "photo.png" -> "photo": the download gets its own extension. */
+export function baseName(fileName: string): string {
+  const dot = fileName.lastIndexOf(".");
+  return dot > 0 ? fileName.slice(0, dot) : fileName;
+}
+
 /**
  * The image job's result exactly as the API serves it: GET /jobs/{id}/result
  * with ?format=markdown (rendered by the server) or ?format=json.
@@ -25,7 +31,7 @@ export function ResultDownloads({ jobId, fileName }: { jobId: string; fileName: 
     try {
       const content = await jobsApi.getImageResultFile(jobId, format);
       const { extension, type } = FORMATS[format];
-      downloadText(`${fileName}.${extension}`, content, type);
+      downloadText(`${baseName(fileName)}.${extension}`, content, type);
     } catch (err) {
       setError(formatApiError(err));
     } finally {

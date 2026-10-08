@@ -15,7 +15,9 @@ from fastapi.routing import APIRoute, APIWebSocketRoute
 # docling_preset on /convert, backward compatible.
 # 1.4.0: output_format=json|markdown on the eight /images/* routes and
 # ?format=json|markdown on GET /jobs/{job_id}/result of image jobs; JSON stays the
-# default (backward compatible).
+# default. Behaviour change: ?format=markdown on an image job used to return the
+# JSON envelope and now returns text/markdown (use ?format=json); an invalid
+# ?format= returns the error-catalog object (RESULT_FORMAT_INVALID), not a string.
 API_VERSION = "1.4.0"
 
 API_DESCRIPTION = """

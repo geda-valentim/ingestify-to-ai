@@ -18,8 +18,21 @@
   formato devolve o mesmo job, apenas renderizado no formato pedido.
 - Renderização em `backend/shared/vision_markdown.py` (determinística; o texto do modelo
   é escapado e nunca abre HTML nem estrutura Markdown; nunca inclui `image_base64`).
-- Interface: o job de imagem tem "Download as Markdown" / "Download JSON" com o resultado
+- Interface: o job de imagem tem "Download Markdown" / "Download JSON" com o resultado
   servido pela API.
+- **Mudança de comportamento: `?format=markdown` em jobs de imagem.** Até a API 1.3.0,
+  `GET /jobs/{job_id}/result?format=markdown` de um job de imagem (describe, ocr, analyze,
+  full, faces) devolvia o envelope JSON padrão; agora devolve o Markdown renderizado
+  (`text/markdown; charset=utf-8`). Afeta clientes que mandavam `?format=markdown` a jobs
+  de imagem e liam a resposta como JSON (a interface web fazia isso e foi ajustada).
+  Migração: use `?format=json` (em describe/ocr/analyze, o mesmo envelope; em full/faces,
+  o relatório sem envelope, como antes) ou omita `?format=` num job criado sem
+  `output_format=markdown` para receber o envelope padrão. Transcrições e documentos não
+  mudam.
+- **Mudança de comportamento: `?format=` inválido.** Um formato desconhecido em
+  `GET /jobs/{job_id}/result` (qualquer tipo de job) responde 422 com o objeto do catálogo
+  de erros (`detail: {code: "RESULT_FORMAT_INVALID", message, next_steps}`) em vez de uma
+  string em `detail`. Clientes que liam `detail` como texto devem ler `detail.message`.
 
 ## 2026-10: Descrição e OCR das figuras no Markdown (API 1.3.0)
 

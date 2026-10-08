@@ -138,6 +138,12 @@ nativo que ainda embute a imagem. Um job nativo que falhou já não tem nenhuma 
 o handoff), então responde `false` mesmo sem `purge_source`. Ver
 [vision.md](vision.md#guardar-ou-apagar-a-imagem-original-purge_source).
 
+`configuration` (`{operation, options, provider, model}`, do MySQL) é o pedido gravado do
+job. Num job de imagem criado com `output_format=markdown`, `configuration.options` inclui
+`"output_format": "markdown"` (o padrão de `GET /jobs/{job_id}/result`); sem a opção, ou com
+`json`, a chave não aparece. Num job de transcrição, `options.output_format` é o formato
+pedido no `/transcribe`.
+
 `status` de um PDF dividido cujas páginas terminaram todas, com alguma falha definitiva,
 é **`partial`** (com `error_message` "N de M páginas falharam…"), não mais `processing`
 para sempre. Entre tentativas automáticas de `process_conversion` o job aparece `queued`
@@ -158,7 +164,10 @@ ele, o `output_format` do `/transcribe`) e para jobs de imagem (`/images/*`): `j
 imagem foi criado (padrão `json`). Num job de imagem, `vtt`/`srt`/`txt` respondem `422`
 `IMAGE_RESULT_FORMAT_UNSUPPORTED`; um formato desconhecido responde `422`
 `RESULT_FORMAT_INVALID` (`detail.code`/`message` do catálogo de erros). Ver
-[vision.md](vision.md#saída-em-markdown-output_format). `assets`/`assets_skipped` vêm de
+[vision.md](vision.md#saída-em-markdown-output_format). Até a API 1.3.0,
+`?format=markdown` num job de imagem devolvia o envelope JSON; quem lia JSON deve usar
+`?format=json`. Um formato inválido responde `detail` como objeto do catálogo (antes,
+string). `assets`/`assets_skipped` vêm de
 `jobs.assets_manifest` (o Elasticsearch guarda só o Markdown) e são `null` num job sem
 `image_mode`/`page_images`; o resultado de um job PAGE traz as imagens da própria página.
 Com `describe_images`/`ocr_images`: `figures_described`, `figures_ocr`, `figures_skipped`
