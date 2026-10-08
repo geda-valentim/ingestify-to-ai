@@ -151,7 +151,14 @@ para sempre. Entre tentativas automáticas de `process_conversion` o job aparece
 
 Resposta: `{job_id, type, status: "completed", result: {markdown, metadata, assets,
 assets_skipped}, completed_at}` e, para jobs PAGE, `page_number` e `parent_job_id`. O
-parâmetro `?format=` só tem efeito em transcrições. `assets`/`assets_skipped` vêm de
+parâmetro `?format=` vale para transcrições (`markdown`, `vtt`, `srt`, `txt`, `json`; sem
+ele, o `output_format` do `/transcribe`) e para jobs de imagem (`/images/*`): `json` ou
+`markdown` (`text/markdown; charset=utf-8`, renderizado por
+`backend/shared/vision_markdown.py`); sem ele vale o `output_format` com que o job de
+imagem foi criado (padrão `json`). Num job de imagem, `vtt`/`srt`/`txt` respondem `422`
+`IMAGE_RESULT_FORMAT_UNSUPPORTED`; um formato desconhecido responde `422`
+`RESULT_FORMAT_INVALID` (`detail.code`/`message` do catálogo de erros). Ver
+[vision.md](vision.md#saída-em-markdown-output_format). `assets`/`assets_skipped` vêm de
 `jobs.assets_manifest` (o Elasticsearch guarda só o Markdown) e são `null` num job sem
 `image_mode`/`page_images`; o resultado de um job PAGE traz as imagens da própria página.
 Com `describe_images`/`ocr_images`: `figures_described`, `figures_ocr`, `figures_skipped`
@@ -161,6 +168,11 @@ em cada asset, `description` / `ocr_text` (`null` quando não pedidos ou ausente
 ```bash
 curl -H "X-API-Key: $INGESTIFY_API_KEY" http://localhost:8000/jobs/$JOB_ID/result \
   | jq -r .result.markdown > saida.md
+```
+
+```bash
+# job de imagem: o resultado renderizado em Markdown
+curl -H "X-API-Key: $INGESTIFY_API_KEY" "http://localhost:8000/jobs/$JOB_ID/result?format=markdown" > imagem.md
 ```
 
 ### Páginas

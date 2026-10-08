@@ -100,6 +100,26 @@ def save_purge_option(db, job: Job) -> None:
     _set_requested_option(db, job, PURGE_OPTION, True)
 
 
+# Default result format of an image job (/images/*: `output_format`)
+OUTPUT_FORMAT_OPTION = "output_format"
+
+
+def save_output_format_option(db, job: Job, output_format: Optional[str]) -> None:
+    """
+    An image request asked for `output_format=markdown` (no commit: the caller
+    commits with the job). Only a non-default format is written, so a job created
+    without the option keeps exactly the configuration it always had.
+    """
+    if output_format and output_format != "json":
+        _set_requested_option(db, job, OUTPUT_FORMAT_OPTION, output_format)
+
+
+def requested_output_format(job: Optional[Job]) -> Optional[str]:
+    """The `output_format` an image job was created with (None: the JSON default)."""
+    value = _options(job).get(OUTPUT_FORMAT_OPTION)
+    return value if isinstance(value, str) else None
+
+
 def record_purge_option(db, job: Job) -> None:
     """
     A later request (a duplicate with `purge_source=true`) asked for it: durable on

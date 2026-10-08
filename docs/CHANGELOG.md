@@ -2,6 +2,25 @@
 
 > **Registro histórico (2025-10).** Não é mantido; para mudanças posteriores use `git log`. Observação: `workers/tasks_old.py`, citado abaixo, não existe (há um `workers/tasks.py.backup`). Exceção: mudanças de comportamento intencionais que uma spec manda registrar aqui entram na seção abaixo.
 
+## 2026-10: Saída em Markdown nas rotas de imagem (API 1.4.0)
+
+- As oito rotas de imagem (`/images/describe`, `/images/ocr`, `/images/analyze`,
+  `/images/faces` e as variantes `/upload`) aceitam `output_format`: `json` (padrão, o
+  corpo de sempre, byte a byte) ou `markdown`. Com `markdown`, a resposta síncrona de
+  sucesso (200) é `text/markdown; charset=utf-8`; 202 (enfileirado), 504 e erros
+  continuam JSON. Valor fora de `json|markdown` responde 422.
+- O formato fica gravado no job (`configuration.options.output_format`, só quando
+  `markdown`) e é o padrão de `GET /jobs/{job_id}/result`; `?format=json` ou
+  `?format=markdown` escolhem na leitura. Em full/faces, `?format=json` continua sendo o
+  relatório sem envelope. Formatos de transcrição num job de imagem respondem 422
+  `IMAGE_RESULT_FORMAT_UNSUPPORTED`; formato desconhecido, `RESULT_FORMAT_INVALID`.
+- `output_format` não entra na Idempotency-Key de full/faces: repetir a chave com outro
+  formato devolve o mesmo job, apenas renderizado no formato pedido.
+- Renderização em `backend/shared/vision_markdown.py` (determinística; o texto do modelo
+  é escapado e nunca abre HTML nem estrutura Markdown; nunca inclui `image_base64`).
+- Interface: o job de imagem tem "Download as Markdown" / "Download JSON" com o resultado
+  servido pela API.
+
 ## 2026-10: Descrição e OCR das figuras no Markdown (API 1.3.0)
 
 - `POST /upload` e `POST /convert` aceitam `describe_images` e `ocr_images` (padrão

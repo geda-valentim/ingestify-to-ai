@@ -18,6 +18,7 @@ import type {
   JobCreatedResponse,
   JobStatusResponse,
   JobResultResponse,
+  JobKind,
   JobPagesResponse,
   PartialTranscriptResponse,
   PagePdfUrlResponse,
@@ -339,10 +340,13 @@ export const jobsApi = {
     return response.json();
   },
 
-  async getResult(jobId: string): Promise<JobResultResponse> {
+  async getResult(jobId: string, kind?: JobKind | null): Promise<JobResultResponse> {
     // Explicit format: a transcription job created with output_format=vtt (or
     // srt/txt/json) answers a bare /result with that file, not with this JSON.
-    const response = await apiFetch(`${API_URL}/jobs/${jobId}/result?format=markdown`, {
+    // An image job answers ?format=markdown with rendered Markdown (and a bare
+    // /result with it when created with output_format=markdown): ask for its JSON.
+    const image = kind === "image";
+    const response = await apiFetch(`${API_URL}/jobs/${jobId}/result?format=${image ? "json" : "markdown"}`, {
       headers: getHeaders(true),
     });
 
@@ -350,7 +354,31 @@ export const jobsApi = {
       throw new Error(`Failed to fetch job result: ${response.statusText}`);
     }
 
-    return response.json();
+    const body = await response.json();
+    // A Full Analysis / faces job answers ?format=json with the bare report
+    if (image && body && !("result" in body)) {
+      return {
+        job_id: jobId,
+        type: "main",
+        status: body.image?.analysis_status ?? "completed",
+        result: body,
+        completed_at: "",
+      } as JobResultResponse;
+    }
+    return body;
+  },
+
+  /** An image job's result as served by the API: rendered Markdown or the JSON, as text. */
+  async getImageResultFile(jobId: string, format: "markdown" | "json"): Promise<string> {
+    const response = await apiFetch(`${API_URL}/jobs/${jobId}/result?format=${format}`, {
+      headers: getHeaders(true),
+    });
+
+    if (!response.ok) {
+      await throwApiError(response, `Failed to fetch the ${format} result`);
+    }
+
+    return response.text();
   },
 
   /**

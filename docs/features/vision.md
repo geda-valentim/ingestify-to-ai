@@ -97,6 +97,76 @@ As rotas `analyze` retornam **202** com `job_id` por padrão (`wait=false`).
 `wait=true` espera e retorna 200 com o resultado, ou 504 sem cancelar a tarefa.
 As rotas anteriores de descrição/OCR mantêm seu contrato síncrono.
 
+### Saída em Markdown (`output_format`)
+
+Todas as oito rotas de inferência (`/images/describe`, `/images/ocr`, `/images/analyze`,
+`/images/faces` e as variantes `/upload`) aceitam `output_format`: `json` (padrão; o
+corpo de sempre, idêntico byte a byte) ou `markdown`. É campo do corpo JSON ou campo do
+formulário multipart; outro valor responde `422`.
+
+| Situação | `output_format=json` | `output_format=markdown` |
+|---|---|---|
+| Sucesso síncrono (describe/ocr; analyze/faces com `wait=true`) | JSON (200; faces 202) | `200 text/markdown; charset=utf-8` |
+| Enfileirado (`wait=false`), `504`, erros | JSON | JSON (inalterado) |
+| `GET /jobs/{id}/result` sem `?format=` | JSON | Markdown (o formato fica gravado no job) |
+
+- O formato é gravado no job em `configuration.options.output_format` (só quando
+  `markdown`; um job criado sem a opção mantém a configuração de sempre) e vale como
+  padrão de `GET /jobs/{job_id}/result`. Na leitura, `?format=json` ou
+  `?format=markdown` escolhem explicitamente. Em full/faces, `?format=json` é o
+  relatório sem envelope (como antes). Formatos de transcrição (`vtt`, `srt`, `txt`) num
+  job de imagem respondem `422 IMAGE_RESULT_FORMAT_UNSUPPORTED`.
+- Em full/faces, `output_format` **não** entra na `Idempotency-Key`: repetir a chave com
+  outro formato devolve o mesmo job, renderizado no formato pedido; o padrão gravado é o
+  da tentativa que criou o job.
+- Renderização ([backend/shared/vision_markdown.py](../../backend/shared/vision_markdown.py)),
+  determinística, títulos em português, texto do modelo como produzido (inglês):
+  - describe: `# Descrição da imagem`, a descrição e `## Metadados` (arquivo, dimensões,
+    modelo/revisão, tarefa, job);
+  - ocr: `# Texto da imagem`, uma linha por linha detectada (quebra de linha Markdown),
+    ou "Nenhum texto detectado.";
+  - analyze single: `# <rótulo da tarefa>` (catálogo de `GET /images/capabilities`), o
+    texto e, havendo regiões, a tabela `Rótulo | x_min | y_min | x_max | y_max` (pixels da
+    imagem original, como no JSON; `Score` quando houver);
+  - full: estado, perfil, cobertura, `## Descrição`, `## Texto (OCR)`, `## Detecções`
+    (tabela por tarefa), `## Rostos e expressões` (v2) e `## Resultados por tarefa`;
+  - faces: estado, cobertura e a tabela de rostos (caixa em pixels, confiança da
+    detecção, movimentos, expressão) com os scores de expressão por rosto, marcados como
+    **não calibrados**.
+- O texto do modelo é escapado (`<`/`>` viram entidades; `*`, `_`, `` ` ``, `[`, `]`,
+  `|` e marcadores de bloco no início da linha recebem `\`), então uma legenda não abre
+  HTML nem estrutura Markdown. `image_base64` e prévias nunca entram no Markdown.
+
+```bash
+# descrição síncrona em Markdown
+curl -X POST "$API/images/describe/upload" -H "X-API-Key: $INGESTIFY_API_KEY" \
+  -F "file=@foto.png" -F "project=Imagens" -F "output_format=markdown"
+
+# o mesmo job depois, em qualquer formato
+curl "$API/jobs/$JOB_ID/result?format=markdown" -H "X-API-Key: $INGESTIFY_API_KEY"
+curl "$API/jobs/$JOB_ID/result?format=json" -H "X-API-Key: $INGESTIFY_API_KEY"
+```
+
+Exemplo (`/images/ocr` com `output_format=markdown`):
+
+```markdown
+# Texto da imagem
+
+INGESTIFY  
+nota fiscal
+
+## Metadados
+
+- Arquivo: nf.png
+- Dimensões: 200 × 100 px
+- Modelo: `florence-community/Florence-2-base-ft` (revisão `0b03b6f…`)
+- Tarefa: Extrair texto com regiões (`<OCR_WITH_REGION>`)
+- Job: `3f2a…`
+```
+
+A página do job na interface tem "Download as Markdown" e "Download JSON", que baixam
+o resultado exatamente como a API serve (`?format=markdown` / `?format=json`).
+
 ### Todas as tarefas do processor Florence
 
 O catálogo em `/images/capabilities` publica `tasks[]` com tarefa, rótulo,
@@ -304,9 +374,10 @@ pré-baixa os pesos.
 
 ## Consulta, persistência e limites
 
-`GET /jobs/{id}/result?format=markdown` retorna o envelope padrão com `markdown`,
+`GET /jobs/{id}/result` (ou `?format=json`) retorna o envelope padrão com `markdown`,
 `metadata` e `image`: tarefa, entrada/configuração, imagem original, dimensões,
-modelo e resultado próprio. O status é mantido no MySQL. Para describe/ocr/analyze
+modelo e resultado próprio; `?format=markdown` retorna o resultado renderizado (ver
+[Saída em Markdown](#saída-em-markdown-output_format)). O status é mantido no MySQL. Para describe/ocr/analyze
 single, o resultado completo é salvo em `images/{job_id}/result.json` no bucket privado
 de resultados, com referência em `jobs.minio_result_path` (é a cópia durável que a
 entrega ao datalake lê), mas `GET /jobs/{id}/result` lê o Elasticsearch e depois o Redis

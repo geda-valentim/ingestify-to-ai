@@ -113,6 +113,17 @@ CATALOG = {
         "Tente novamente em instantes.",
         ["retry"],
     ),
+    # GET /jobs/{job_id}/result?format=
+    "RESULT_FORMAT_INVALID": (
+        "format inválido: {format}. Use json ou markdown; transcrições aceitam também "
+        "vtt, srt e txt.",
+        ["fix_input"],
+    ),
+    "IMAGE_RESULT_FORMAT_UNSUPPORTED": (
+        "Este job é de {kind} e o resultado sai em format=json ou format=markdown; "
+        "'{format}' vale só para transcrições.",
+        ["fix_input"],
+    ),
     # --- setup / configuration -------------------------------------------------
     "RUNTIME_PROFILE_REQUIRED": (
         "Esta engine ainda não tem perfil de execução vinculado{for_feature}. "
@@ -603,7 +614,7 @@ def describe(code, *, feature=None, needs_connection=False, **context):
         for_feature=f" para {feature}" if feature else "",
         host=f" “{context['host']}”" if context.get("host") else "",
         since=_since(context.get("seen_at")) if "seen_at" in context else "",
-        **{k: context[k] for k in ("failed", "total", "deleted_at") if k in context},
+        **{k: context[k] for k in ("failed", "total", "deleted_at", "format", "kind") if k in context},
     )
     message = template.format_map(values)
     steps = list(steps)

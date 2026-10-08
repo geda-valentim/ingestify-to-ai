@@ -5,9 +5,11 @@ from sqlalchemy.orm import Session
 from shared.config import get_settings
 from shared.database import get_db
 from shared.models import User
-from shared.schemas import FACE_PURGE_SOURCE_DESCRIPTION, FaceAnalyzeRequest, FaceAnalyzeResponse, ImageFullQueuedResponse
+from shared.schemas import (FACE_PURGE_SOURCE_DESCRIPTION, IMAGE_OUTPUT_FORMAT_DESCRIPTION, IMAGE_OUTPUT_FORMAT_IDEMPOTENCY,
+                            FaceAnalyzeRequest, FaceAnalyzeResponse, ImageFullQueuedResponse, ImageOutputFormat)
 from shared.face_analysis import FaceOptions, FaceRequestOptions, FullFaceOptions
 from api.iam_deps import require
+from api.image_routes import markdown_responses
 
 router = APIRouter(prefix='/images/faces', tags=['Vision'])
 
@@ -45,6 +47,7 @@ def capabilities(user: User = Depends(require("images.analyze"))):
 
 
 @router.post('', response_model=FaceAnalyzeResponse | ImageFullQueuedResponse, status_code=202,
+             responses=markdown_responses("Relatório facial (wait=true com output_format=markdown)"),
              summary="Detectar rostos e expressões (JSON base64)")
 async def analyze(request: FaceAnalyzeRequest, http_request: Request,
                   user: User = Depends(require("images.analyze")), db: Session = Depends(get_db),
@@ -57,12 +60,15 @@ async def analyze(request: FaceAnalyzeRequest, http_request: Request,
 
 
 @router.post('/upload', response_model=FaceAnalyzeResponse | ImageFullQueuedResponse, status_code=202,
+             responses=markdown_responses("Relatório facial (wait=true com output_format=markdown)"),
              summary="Detectar rostos e expressões (multipart)")
 async def upload(http_request: Request, file: UploadFile = File(...), face_options: str | None = Form(None),
                  wait: bool = Form(False), project: str | None = Form(None), project_id: str | None = Form(None),
                  folder: str | None = Form(None), folder_id: str | None = Form(None), tags: str | None = Form(None),
                  datalake: str | None = Form(None),
                  purge_source: bool = Form(False, description=FACE_PURGE_SOURCE_DESCRIPTION),
+                 output_format: ImageOutputFormat = Form(
+                     'json', description=IMAGE_OUTPUT_FORMAT_DESCRIPTION + IMAGE_OUTPUT_FORMAT_IDEMPOTENCY),
                  idempotency_key: str = Header(..., min_length=1, max_length=128),
                  user: User = Depends(require("images.analyze")), db: Session = Depends(get_db)):
     from api.image_routes import _plan_location, _json_location
@@ -70,13 +76,13 @@ async def upload(http_request: Request, file: UploadFile = File(...), face_optio
     from shared.tags import parse_tags
     from pydantic import ValidationError
     fields = await http_request.form()
-    allowed = {'file', 'face_options', 'wait', 'project', 'project_id', 'folder', 'folder_id', 'tags', 'datalake', 'purge_source'}
+    allowed = {'file', 'face_options', 'wait', 'project', 'project_id', 'folder', 'folder_id', 'tags', 'datalake', 'purge_source', 'output_format'}
     if set(fields)-allowed or any(len(fields.getlist(name)) != 1 for name in fields):
         raise HTTPException(422, 'Campos desconhecidos ou repetidos no upload facial')
     try:
         request = FaceAnalyzeRequest(image_base64='multipart', filename=file.filename,
             project=project, project_id=project_id, folder=folder, folder_id=folder_id, wait=wait,
-            purge_source=purge_source,
+            purge_source=purge_source, output_format=output_format,
             face_options=json.loads(face_options) if face_options else {}, datalake=json.loads(datalake) if datalake else None)
         parsed_tags = parse_tags(tags)
     except (ValueError, TypeError, ValidationError) as exc:

@@ -1976,14 +1976,57 @@ async def delete_job_source(
                                  assets_deleted=bool(assets_deleted))
 
 
-@router.get("/jobs/{job_id}/result", summary="Resultado do job", response_model=JobResultResponse)
+IMAGE_RESULT_KINDS = {
+    "describe": "descrição de imagem",
+    "ocr": "OCR de imagem",
+    "analyze": "tarefa de visão",
+    "full": "análise completa de imagem",
+    "faces": "análise facial",
+}
+
+
+def _image_result_kind(job: Optional[Job]) -> Optional[str]:
+    """describe | ocr | analyze | full | faces for an image job (/images/*), else None."""
+    if job is None or getattr(job, "source_type", None) != "image":
+        return None
+    row = getattr(job, "configuration_row", None)
+    options = getattr(row, "options", None) if row is not None else None
+    options = options if isinstance(options, dict) else {}
+    if options.get("mode") in ("full", "faces"):
+        return options["mode"]
+    if "generation" in options:
+        return "analyze"
+    return "ocr" if options.get("task") == "<OCR_WITH_REGION>" else "describe"
+
+
+def _result_format_error(code: str, **context) -> HTTPException:
+    from shared import error_catalog
+
+    return HTTPException(status_code=422, detail=error_catalog.detail(code, context=context))
+
+
+@router.get(
+    "/jobs/{job_id}/result",
+    summary="Resultado do job",
+    response_model=JobResultResponse,
+    responses={200: {
+        "description": "O resultado. JSON por padrão; `text/markdown` para `format=markdown` de um "
+                       "job de imagem; `text/vtt`, `application/x-subrip` ou `text/plain` para os "
+                       "formatos de transcrição.",
+        "content": {"text/markdown": {"schema": {"type": "string"}},
+                    "text/vtt": {"schema": {"type": "string"}},
+                    "text/plain": {"schema": {"type": "string"}}},
+    }},
+)
 async def get_job_result(
     job_id: str,
     format_: Optional[str] = Query(
         None,
         alias="format",
-        description="Para transcrições: markdown (JSON padrão), vtt, srt, txt ou json. "
-                    "Sem este parâmetro vale o output_format escolhido no /transcribe.",
+        description="Transcrições: markdown (JSON padrão), vtt, srt, txt ou json; sem este "
+                    "parâmetro vale o output_format escolhido no /transcribe. Jobs de imagem "
+                    "(/images/*): json ou markdown; sem este parâmetro vale o output_format "
+                    "da criação (padrão json).",
     ),
     current_user: User = Depends(get_current_active_user),
     owned_job: Optional[Job] = Depends(_job_read),
@@ -1998,16 +2041,28 @@ async def get_job_result(
 
     Para jobs de transcrição (/transcribe), `?format=vtt|srt|txt|json` retorna o
     arquivo no formato pedido (ex.: legenda WebVTT com `Content-Type: text/vtt`).
+
+    Para jobs de imagem (describe, ocr, analyze, full, faces), `?format=markdown`
+    retorna o resultado renderizado (`text/markdown; charset=utf-8`) e
+    `?format=json` o JSON (em full/faces, o relatório sem o envelope). Sem
+    `?format=` vale o `output_format` com que o job foi criado (padrão json).
+    Outros formatos respondem 422 `IMAGE_RESULT_FORMAT_UNSUPPORTED`.
     """
     if format_ is not None:
         format_ = format_.lower()
         if format_ not in ["markdown"] + TRANSCRIPT_FORMATS:
-            raise HTTPException(
-                status_code=422,
-                detail=f"format inválido: {format_}. Use: markdown, {', '.join(TRANSCRIPT_FORMATS)}"
-            )
+            raise _result_format_error("RESULT_FORMAT_INVALID", format=format_)
 
-    if owned_job and getattr(owned_job, 'source_type', None) == 'image' and owned_job.configuration_row and owned_job.configuration_row.options.get('mode') in ('full', 'faces'):
+    image_kind = _image_result_kind(owned_job if (owned_job is not None and owned_job.id == job_id) else None)
+    image_format = None
+    if image_kind is not None:
+        if format_ not in (None, "json", "markdown"):
+            raise _result_format_error("IMAGE_RESULT_FORMAT_UNSUPPORTED",
+                                       kind=IMAGE_RESULT_KINDS[image_kind], format=format_)
+        from shared.job_source import requested_output_format
+        image_format = format_ or requested_output_format(owned_job) or "json"
+
+    if image_kind in ('full', 'faces'):
         from shared.image_full import TERMINAL
         if owned_job.status.value not in TERMINAL:
             return JSONResponse(status_code=202, content={'job_id': job_id, 'status': owned_job.status.value,
@@ -2023,8 +2078,8 @@ async def get_job_result(
             raise HTTPException(503, 'Relatório temporariamente indisponível; tente consultar o mesmo job novamente') from exc
         if format_ == 'json':
             return JSONResponse(payload, headers={'Cache-Control': 'private, no-store'})
-        if format_ not in (None, 'markdown'):
-            raise HTTPException(422, 'Full Analysis suporta markdown e json')
+        if image_format == 'markdown':
+            return _image_markdown_response(payload, job_id)
         return {'job_id': job_id, 'type': 'main', 'status': owned_job.status.value,
                 'result': payload, 'completed_at': owned_job.completed_at}
 
@@ -2078,7 +2133,8 @@ async def get_job_result(
 
     # Transcription formats (explicit ?format= or the default chosen at upload) are
     # served straight from Redis/MinIO, even if Elasticsearch has no result
-    requested_format = format_ or redis_client.get_job_output_format(job_id)
+    # Image jobs: json/markdown only, decided above (never a transcript format)
+    requested_format = "markdown" if image_kind else (format_ or redis_client.get_job_output_format(job_id))
     if requested_format and requested_format != "markdown":
         return _transcript_response(job_id, requested_format, redis_client, live_generation, transcript_attempt_id)
 
@@ -2152,7 +2208,18 @@ async def get_job_result(
         response_data["page_number"] = status_data.get("page_number")
         response_data["parent_job_id"] = status_data.get("parent_job_id")
 
+    if image_format == "markdown":
+        return _image_markdown_response(result_data, job_id)
+
     return JobResultResponse(**response_data)
+
+
+def _image_markdown_response(result: dict, job_id: str) -> Response:
+    """An image job's stored result rendered as Markdown (shared/vision_markdown.py)."""
+    from shared.vision_markdown import RESPONSE_MEDIA_TYPE, render_result
+
+    return Response(content=render_result(result, job_id=job_id), media_type=RESPONSE_MEDIA_TYPE,
+                    headers={"Cache-Control": "private, no-store"})
 
 
 ASSET_CHUNK_BYTES = 64 * 1024
