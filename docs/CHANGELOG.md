@@ -2,6 +2,15 @@
 
 > **Registro histórico (2025-10).** Não é mantido; para mudanças posteriores use `git log`. Observação: `workers/tasks_old.py`, citado abaixo, não existe (há um `workers/tasks.py.backup`). Exceção: mudanças de comportamento intencionais que uma spec manda registrar aqui entram na seção abaixo.
 
+## 2026-10: PDFs com avisos do qpdf não falham mais na divisão
+
+- O qpdf sai com código 3 quando conclui com avisos (ex.: tabela de referências cruzadas
+  danificada que ele reconstrói). O divisor tratava isso como falha e o job terminava com
+  `SPLIT_FAILED`. Agora todas as chamadas usam `--warning-exit-0` (avisos vão para o log),
+  a contagem e a extração caem para PyPDF2 quando o qpdf falha de verdade, e cada página
+  extraída é validada (abre e tem exatamente 1 página).
+- A mensagem de `SPLIT_FAILED` deixou de pedir para reenviar o mesmo arquivo.
+
 ## 2026-10: Pool de conexões do banco esgotava sob carga (correção)
 
 - Rotas de imagem com `wait=true` (`/images/describe`, `/images/ocr`, `/images/analyze` e
