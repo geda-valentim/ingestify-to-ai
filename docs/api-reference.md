@@ -2,7 +2,7 @@
 
 Gerado do OpenAPI da aplicação por `scripts/generate_api_docs.py`. Não edite este arquivo à mão.
 
-API `1.2.0`: **139 operações HTTP** e **1 WebSocket(s)**.
+API `1.3.0`: **139 operações HTTP** e **1 WebSocket(s)**.
 
 Base pública de desenvolvimento: `https://dev.ingestify.ai/api`. Os caminhos abaixo são relativos à base.
 
@@ -465,6 +465,36 @@ curl -X POST http://localhost:8000/upload \
   -F "image_mode=referenced" -F "page_images=true" -F "purge_source=true"
 ```
 
+## Descrição e OCR das figuras (`describe_images`, `ocr_images`)
+- `describe_images=true`: cada figura (PictureItem do Docling; nunca as páginas
+  renderizadas) é descrita pelo Florence-2 no worker de visão. **As descrições saem
+  em inglês** por enquanto. `ocr_images=true`: o texto dentro da figura é lido (`<OCR>`).
+- No markdown, na posição de cada figura (ordem do documento):
+  ```
+  ![Image](/jobs/{job_id}/assets/p0001-img01-<sha12>.png)   (só com image_mode=referenced)
+
+  > **Figure (description, English):** A bar chart comparing ...
+  > **Text in figure (OCR):** Revenue 2024
+  ```
+  Com `image_mode=none` o placeholder `<!-- image -->` é trocado pelo blockquote.
+  Linha sem texto é omitida; figura sem nenhum texto fica como estava.
+- Imagens idênticas (mesmo sha256, no documento inteiro) vão ao modelo uma vez só.
+  Figuras menores que `CONVERSION_ASSET_MIN_PX`, além de `CONVERSION_FIGURE_MAX_COUNT`
+  (padrão 50 imagens únicas) ou cuja análise falhou ficam sem texto e são contadas
+  em `figures_skipped`; nunca derrubam o job.
+- O job fica `processing` (progresso acima de 90%) até o texto entrar no markdown.
+  `GET /jobs/{job_id}/result` traz `figures_described`, `figures_ocr`,
+  `figures_skipped` e, em cada item de `assets`, `description` / `ocr_text`.
+- `purge_source` só roda depois disso. Outra combinação dessas opções é outro job
+  (não é duplicata).
+
+```bash
+curl -X POST http://localhost:8000/upload \
+  -H "X-API-Key: your-api-key" \
+  -F "file=@relatorio.pdf" -F "project=Relatórios" \
+  -F "image_mode=referenced" -F "describe_images=true" -F "ocr_images=true"
+```
+
 ## Arquivos de origem (`purge_source`)
 - O que é apagado: o arquivo enviado (MinIO `uploads/...` e cópia local) e, num
   PDF de várias páginas, os PDFs por página (`/jobs/{job_id}/pages/{n}/pdf`
@@ -521,6 +551,8 @@ Content-Type: `multipart/form-data`. Esquema: [Body_upload_and_convert_upload_po
 | `purge_source` | não | boolean | default=false | Se true, apaga os arquivos de origem do job — o arquivo enviado (MinIO e cópia local) e, num PDF dividido, os PDFs por página — quando o job termina: `completed`, ou `failed`/`partial` depois de esgotadas as tentativas automáticas (nunca enquanto houver retry ou página na fila). O resultado (markdown, markdown por página) fica. Depois disso o retry manual de página não é mais possível. GET /jobs/{job_id} informa `source_available` e `source_deleted_at`. Arquivo repetido no mesmo projeto: com true o job existente é devolvido (`duplicate: true`) e passa a apagar a origem (na hora, se já terminou); com false um job existente cuja origem foi (ou será) apagada não é reaproveitado e um job novo é criado. Padrão false (mantém). Para apagar depois: DELETE /jobs/{job_id}/source |
 | `image_mode` | não | string | default="none"; enum=["none", "referenced"] | Imagens do documento (PDF, DOCX...). `none` (padrão): como sempre, o markdown traz `<!-- image -->` no lugar de cada figura e nenhuma imagem é guardada. `referenced`: cada figura vira um PNG (`assets` em GET /jobs/{job_id}/result, kind `picture`, com página, bbox, sha256 e tamanho) e o markdown a referencia: `![Image](/jobs/{job_id}/assets/{name})`. Baixe com GET /jobs/{job_id}/assets/{name}. Figuras menores que CONVERSION_ASSET_MIN_PX ou além dos limites do job (CONVERSION_ASSET_MAX_COUNT, CONVERSION_ASSET_MAX_TOTAL_MB) ficam como placeholder e são contadas em `assets_skipped`. Com purge_source=true as imagens ficam ASSET_RETENTION_SECONDS (padrão 3600) depois do fim do job e então são apagadas |
 | `page_images` | não | boolean | default=false | Se true (só PDF), cada página é renderizada como PNG (CONVERSION_PAGE_IMAGE_DPI, padrão 150) e entra em `assets` com kind `page`; não aparece no markdown. Funciona com ou sem image_mode. Mesmas regras de retenção de image_mode. Padrão false |
+| `describe_images` | não | boolean | default=false | Se true, cada figura do documento (PictureItem do Docling; nunca as páginas renderizadas) é descrita pelo modelo de visão Florence-2 e a descrição entra no markdown logo depois da figura, num blockquote `> **Figure (description, English):** ...`. As descrições saem em INGLÊS por enquanto. Funciona com image_mode `none` (o placeholder `<!-- image -->` é trocado pelo blockquote) ou `referenced` (a referência à imagem fica e o blockquote vem em seguida). Imagens iguais (mesmo sha256) são descritas uma vez; figuras menores que CONVERSION_ASSET_MIN_PX ou além de CONVERSION_FIGURE_MAX_COUNT por documento são puladas. O job fica `processing` até o texto entrar no markdown. Contagens em `figures_described` / `figures_skipped` de GET /jobs/{job_id}/result. Padrão false |
+| `ocr_images` | não | boolean | default=false | Se true, o texto dentro de cada figura é lido (Florence-2 `<OCR>`) e entra no markdown depois da figura: `> **Text in figure (OCR):** ...`. Mesmas regras de describe_images (pode ser usado junto ou sozinho). Contagem em `figures_ocr`. Padrão false |
 | `project` | não | string / null |  | Nome do projeto (obrigatório, a menos que a API key esteja vinculada a um projeto). É criado se não existir; grafias equivalentes ('Reunião', ' reuniao ') são o mesmo projeto. |
 | `project_id` | não | string / null |  | ID de um projeto existente (alternativa a 'project'; nunca cria). |
 | `folder` | não | string / null |  | Nome da pasta dentro do projeto (opcional; criada se não existir; sem '/'). |
@@ -710,6 +742,14 @@ renderiza cada página do PDF. A lista sai em `assets` de
 `GET /jobs/{job_id}/result` e cada imagem em `GET /jobs/{job_id}/assets/{name}`.
 Mesmas regras de `/upload` (retenção com purge_source, deduplicação).
 
+## Descrição e OCR das figuras (`describe_images`, `ocr_images`)
+`describe_images=true` descreve cada figura com o Florence-2 (descrições em inglês);
+`ocr_images=true` lê o texto dentro dela. O texto entra no markdown, num blockquote
+logo depois da figura, e o job só termina depois disso. Mesmas regras de `/upload`.
+
+## Preset (`docling_preset`)
+`fast`, `balanced` ou `quality`, como em `/upload`. Omitido: padrões do servidor.
+
 ## Formatos suportados
 PDF, DOCX, DOC, HTML, PPTX, XLSX, RTF, ODT
 
@@ -734,6 +774,7 @@ Content-Type: `multipart/form-data`. Esquema: [Body_convert_document_convert_pos
 | `file` | não | string (binary) / null |  | Arquivo para upload direto (use quando source_type='file') |
 | `name` | não | string / null |  | Nome de identificação opcional (padrão: nome do arquivo ou URL) |
 | `tags` | não | string / null |  | Tags separadas por vírgula (ex.: 'cliente-x, reunião'). Viram minúsculas; até 20 tags de até 50 caracteres. Enviar um arquivo repetido adiciona as tags ao job existente. |
+| `docling_preset` | não | string / null |  | Preset do Docling para PDF: 'fast' (só texto, sem OCR), 'balanced' (com imagens), 'quality' (com OCR, para PDFs escaneados). Omitido: padrões do servidor (DOCLING_ENABLE_*) |
 | `diarize` | não | boolean / null |  | Identificar falantes; omitido usa o padrão do provider |
 | `min_speakers` | não | integer / null |  |  |
 | `max_speakers` | não | integer / null |  |  |
@@ -742,6 +783,8 @@ Content-Type: `multipart/form-data`. Esquema: [Body_convert_document_convert_pos
 | `purge_source` | não | boolean | default=false | Se true, apaga os arquivos de origem do job — o arquivo enviado (MinIO e cópia local) e, num PDF dividido, os PDFs por página — quando o job termina: `completed`, ou `failed`/`partial` depois de esgotadas as tentativas automáticas (nunca enquanto houver retry ou página na fila). O resultado (markdown, markdown por página) fica. Depois disso o retry manual de página não é mais possível. GET /jobs/{job_id} informa `source_available` e `source_deleted_at`. Arquivo repetido no mesmo projeto: com true o job existente é devolvido (`duplicate: true`) e passa a apagar a origem (na hora, se já terminou); com false um job existente cuja origem foi (ou será) apagada não é reaproveitado e um job novo é criado. Padrão false (mantém). Para apagar depois: DELETE /jobs/{job_id}/source |
 | `image_mode` | não | string | default="none"; enum=["none", "referenced"] | Imagens do documento (PDF, DOCX...). `none` (padrão): como sempre, o markdown traz `<!-- image -->` no lugar de cada figura e nenhuma imagem é guardada. `referenced`: cada figura vira um PNG (`assets` em GET /jobs/{job_id}/result, kind `picture`, com página, bbox, sha256 e tamanho) e o markdown a referencia: `![Image](/jobs/{job_id}/assets/{name})`. Baixe com GET /jobs/{job_id}/assets/{name}. Figuras menores que CONVERSION_ASSET_MIN_PX ou além dos limites do job (CONVERSION_ASSET_MAX_COUNT, CONVERSION_ASSET_MAX_TOTAL_MB) ficam como placeholder e são contadas em `assets_skipped`. Com purge_source=true as imagens ficam ASSET_RETENTION_SECONDS (padrão 3600) depois do fim do job e então são apagadas |
 | `page_images` | não | boolean | default=false | Se true (só PDF), cada página é renderizada como PNG (CONVERSION_PAGE_IMAGE_DPI, padrão 150) e entra em `assets` com kind `page`; não aparece no markdown. Funciona com ou sem image_mode. Mesmas regras de retenção de image_mode. Padrão false |
+| `describe_images` | não | boolean | default=false | Se true, cada figura do documento (PictureItem do Docling; nunca as páginas renderizadas) é descrita pelo modelo de visão Florence-2 e a descrição entra no markdown logo depois da figura, num blockquote `> **Figure (description, English):** ...`. As descrições saem em INGLÊS por enquanto. Funciona com image_mode `none` (o placeholder `<!-- image -->` é trocado pelo blockquote) ou `referenced` (a referência à imagem fica e o blockquote vem em seguida). Imagens iguais (mesmo sha256) são descritas uma vez; figuras menores que CONVERSION_ASSET_MIN_PX ou além de CONVERSION_FIGURE_MAX_COUNT por documento são puladas. O job fica `processing` até o texto entrar no markdown. Contagens em `figures_described` / `figures_skipped` de GET /jobs/{job_id}/result. Padrão false |
+| `ocr_images` | não | boolean | default=false | Se true, o texto dentro de cada figura é lido (Florence-2 `<OCR>`) e entra no markdown depois da figura: `> **Text in figure (OCR):** ...`. Mesmas regras de describe_images (pode ser usado junto ou sozinho). Contagem em `figures_ocr`. Padrão false |
 | `project` | não | string / null |  | Nome do projeto (obrigatório, a menos que a API key esteja vinculada a um projeto). É criado se não existir; grafias equivalentes ('Reunião', ' reuniao ') são o mesmo projeto. |
 | `project_id` | não | string / null |  | ID de um projeto existente (alternativa a 'project'; nunca cria). |
 | `folder` | não | string / null |  | Nome da pasta dentro do projeto (opcional; criada se não existir; sem '/'). |
@@ -5020,6 +5063,7 @@ Esquema JSON completo:
 | `file` | não | string (binary) / null |  | Arquivo para upload direto (use quando source_type='file') |
 | `name` | não | string / null |  | Nome de identificação opcional (padrão: nome do arquivo ou URL) |
 | `tags` | não | string / null |  | Tags separadas por vírgula (ex.: 'cliente-x, reunião'). Viram minúsculas; até 20 tags de até 50 caracteres. Enviar um arquivo repetido adiciona as tags ao job existente. |
+| `docling_preset` | não | string / null |  | Preset do Docling para PDF: 'fast' (só texto, sem OCR), 'balanced' (com imagens), 'quality' (com OCR, para PDFs escaneados). Omitido: padrões do servidor (DOCLING_ENABLE_*) |
 | `diarize` | não | boolean / null |  | Identificar falantes; omitido usa o padrão do provider |
 | `min_speakers` | não | integer / null |  |  |
 | `max_speakers` | não | integer / null |  |  |
@@ -5028,6 +5072,8 @@ Esquema JSON completo:
 | `purge_source` | não | boolean | default=false | Se true, apaga os arquivos de origem do job — o arquivo enviado (MinIO e cópia local) e, num PDF dividido, os PDFs por página — quando o job termina: `completed`, ou `failed`/`partial` depois de esgotadas as tentativas automáticas (nunca enquanto houver retry ou página na fila). O resultado (markdown, markdown por página) fica. Depois disso o retry manual de página não é mais possível. GET /jobs/{job_id} informa `source_available` e `source_deleted_at`. Arquivo repetido no mesmo projeto: com true o job existente é devolvido (`duplicate: true`) e passa a apagar a origem (na hora, se já terminou); com false um job existente cuja origem foi (ou será) apagada não é reaproveitado e um job novo é criado. Padrão false (mantém). Para apagar depois: DELETE /jobs/{job_id}/source |
 | `image_mode` | não | string | default="none"; enum=["none", "referenced"] | Imagens do documento (PDF, DOCX...). `none` (padrão): como sempre, o markdown traz `<!-- image -->` no lugar de cada figura e nenhuma imagem é guardada. `referenced`: cada figura vira um PNG (`assets` em GET /jobs/{job_id}/result, kind `picture`, com página, bbox, sha256 e tamanho) e o markdown a referencia: `![Image](/jobs/{job_id}/assets/{name})`. Baixe com GET /jobs/{job_id}/assets/{name}. Figuras menores que CONVERSION_ASSET_MIN_PX ou além dos limites do job (CONVERSION_ASSET_MAX_COUNT, CONVERSION_ASSET_MAX_TOTAL_MB) ficam como placeholder e são contadas em `assets_skipped`. Com purge_source=true as imagens ficam ASSET_RETENTION_SECONDS (padrão 3600) depois do fim do job e então são apagadas |
 | `page_images` | não | boolean | default=false | Se true (só PDF), cada página é renderizada como PNG (CONVERSION_PAGE_IMAGE_DPI, padrão 150) e entra em `assets` com kind `page`; não aparece no markdown. Funciona com ou sem image_mode. Mesmas regras de retenção de image_mode. Padrão false |
+| `describe_images` | não | boolean | default=false | Se true, cada figura do documento (PictureItem do Docling; nunca as páginas renderizadas) é descrita pelo modelo de visão Florence-2 e a descrição entra no markdown logo depois da figura, num blockquote `> **Figure (description, English):** ...`. As descrições saem em INGLÊS por enquanto. Funciona com image_mode `none` (o placeholder `<!-- image -->` é trocado pelo blockquote) ou `referenced` (a referência à imagem fica e o blockquote vem em seguida). Imagens iguais (mesmo sha256) são descritas uma vez; figuras menores que CONVERSION_ASSET_MIN_PX ou além de CONVERSION_FIGURE_MAX_COUNT por documento são puladas. O job fica `processing` até o texto entrar no markdown. Contagens em `figures_described` / `figures_skipped` de GET /jobs/{job_id}/result. Padrão false |
+| `ocr_images` | não | boolean | default=false | Se true, o texto dentro de cada figura é lido (Florence-2 `<OCR>`) e entra no markdown depois da figura: `> **Text in figure (OCR):** ...`. Mesmas regras de describe_images (pode ser usado junto ou sozinho). Contagem em `figures_ocr`. Padrão false |
 | `project` | não | string / null |  | Nome do projeto (obrigatório, a menos que a API key esteja vinculada a um projeto). É criado se não existir; grafias equivalentes ('Reunião', ' reuniao ') são o mesmo projeto. |
 | `project_id` | não | string / null |  | ID de um projeto existente (alternativa a 'project'; nunca cria). |
 | `folder` | não | string / null |  | Nome da pasta dentro do projeto (opcional; criada se não existir; sem '/'). |
@@ -5091,6 +5137,23 @@ Esquema JSON completo:
       ],
       "title": "Tags",
       "description": "Tags separadas por vírgula (ex.: 'cliente-x, reunião'). Viram minúsculas; até 20 tags de até 50 caracteres. Enviar um arquivo repetido adiciona as tags ao job existente."
+    },
+    "docling_preset": {
+      "anyOf": [
+        {
+          "type": "string",
+          "enum": [
+            "fast",
+            "balanced",
+            "quality"
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Docling Preset",
+      "description": "Preset do Docling para PDF: 'fast' (só texto, sem OCR), 'balanced' (com imagens), 'quality' (com OCR, para PDFs escaneados). Omitido: padrões do servidor (DOCLING_ENABLE_*)"
     },
     "diarize": {
       "anyOf": [
@@ -5173,6 +5236,18 @@ Esquema JSON completo:
       "type": "boolean",
       "title": "Page Images",
       "description": "Se true (só PDF), cada página é renderizada como PNG (CONVERSION_PAGE_IMAGE_DPI, padrão 150) e entra em `assets` com kind `page`; não aparece no markdown. Funciona com ou sem image_mode. Mesmas regras de retenção de image_mode. Padrão false",
+      "default": false
+    },
+    "describe_images": {
+      "type": "boolean",
+      "title": "Describe Images",
+      "description": "Se true, cada figura do documento (PictureItem do Docling; nunca as páginas renderizadas) é descrita pelo modelo de visão Florence-2 e a descrição entra no markdown logo depois da figura, num blockquote `> **Figure (description, English):** ...`. As descrições saem em INGLÊS por enquanto. Funciona com image_mode `none` (o placeholder `<!-- image -->` é trocado pelo blockquote) ou `referenced` (a referência à imagem fica e o blockquote vem em seguida). Imagens iguais (mesmo sha256) são descritas uma vez; figuras menores que CONVERSION_ASSET_MIN_PX ou além de CONVERSION_FIGURE_MAX_COUNT por documento são puladas. O job fica `processing` até o texto entrar no markdown. Contagens em `figures_described` / `figures_skipped` de GET /jobs/{job_id}/result. Padrão false",
+      "default": false
+    },
+    "ocr_images": {
+      "type": "boolean",
+      "title": "Ocr Images",
+      "description": "Se true, o texto dentro de cada figura é lido (Florence-2 `<OCR>`) e entra no markdown depois da figura: `> **Text in figure (OCR):** ...`. Mesmas regras de describe_images (pode ser usado junto ou sozinho). Contagem em `figures_ocr`. Padrão false",
       "default": false
     },
     "project": {
@@ -5677,6 +5752,8 @@ Esquema JSON completo:
 | `purge_source` | não | boolean | default=false | Se true, apaga os arquivos de origem do job — o arquivo enviado (MinIO e cópia local) e, num PDF dividido, os PDFs por página — quando o job termina: `completed`, ou `failed`/`partial` depois de esgotadas as tentativas automáticas (nunca enquanto houver retry ou página na fila). O resultado (markdown, markdown por página) fica. Depois disso o retry manual de página não é mais possível. GET /jobs/{job_id} informa `source_available` e `source_deleted_at`. Arquivo repetido no mesmo projeto: com true o job existente é devolvido (`duplicate: true`) e passa a apagar a origem (na hora, se já terminou); com false um job existente cuja origem foi (ou será) apagada não é reaproveitado e um job novo é criado. Padrão false (mantém). Para apagar depois: DELETE /jobs/{job_id}/source |
 | `image_mode` | não | string | default="none"; enum=["none", "referenced"] | Imagens do documento (PDF, DOCX...). `none` (padrão): como sempre, o markdown traz `<!-- image -->` no lugar de cada figura e nenhuma imagem é guardada. `referenced`: cada figura vira um PNG (`assets` em GET /jobs/{job_id}/result, kind `picture`, com página, bbox, sha256 e tamanho) e o markdown a referencia: `![Image](/jobs/{job_id}/assets/{name})`. Baixe com GET /jobs/{job_id}/assets/{name}. Figuras menores que CONVERSION_ASSET_MIN_PX ou além dos limites do job (CONVERSION_ASSET_MAX_COUNT, CONVERSION_ASSET_MAX_TOTAL_MB) ficam como placeholder e são contadas em `assets_skipped`. Com purge_source=true as imagens ficam ASSET_RETENTION_SECONDS (padrão 3600) depois do fim do job e então são apagadas |
 | `page_images` | não | boolean | default=false | Se true (só PDF), cada página é renderizada como PNG (CONVERSION_PAGE_IMAGE_DPI, padrão 150) e entra em `assets` com kind `page`; não aparece no markdown. Funciona com ou sem image_mode. Mesmas regras de retenção de image_mode. Padrão false |
+| `describe_images` | não | boolean | default=false | Se true, cada figura do documento (PictureItem do Docling; nunca as páginas renderizadas) é descrita pelo modelo de visão Florence-2 e a descrição entra no markdown logo depois da figura, num blockquote `> **Figure (description, English):** ...`. As descrições saem em INGLÊS por enquanto. Funciona com image_mode `none` (o placeholder `<!-- image -->` é trocado pelo blockquote) ou `referenced` (a referência à imagem fica e o blockquote vem em seguida). Imagens iguais (mesmo sha256) são descritas uma vez; figuras menores que CONVERSION_ASSET_MIN_PX ou além de CONVERSION_FIGURE_MAX_COUNT por documento são puladas. O job fica `processing` até o texto entrar no markdown. Contagens em `figures_described` / `figures_skipped` de GET /jobs/{job_id}/result. Padrão false |
+| `ocr_images` | não | boolean | default=false | Se true, o texto dentro de cada figura é lido (Florence-2 `<OCR>`) e entra no markdown depois da figura: `> **Text in figure (OCR):** ...`. Mesmas regras de describe_images (pode ser usado junto ou sozinho). Contagem em `figures_ocr`. Padrão false |
 | `project` | não | string / null |  | Nome do projeto (obrigatório, a menos que a API key esteja vinculada a um projeto). É criado se não existir; grafias equivalentes ('Reunião', ' reuniao ') são o mesmo projeto. |
 | `project_id` | não | string / null |  | ID de um projeto existente (alternativa a 'project'; nunca cria). |
 | `folder` | não | string / null |  | Nome da pasta dentro do projeto (opcional; criada se não existir; sem '/'). |
@@ -5811,6 +5888,18 @@ Esquema JSON completo:
       "type": "boolean",
       "title": "Page Images",
       "description": "Se true (só PDF), cada página é renderizada como PNG (CONVERSION_PAGE_IMAGE_DPI, padrão 150) e entra em `assets` com kind `page`; não aparece no markdown. Funciona com ou sem image_mode. Mesmas regras de retenção de image_mode. Padrão false",
+      "default": false
+    },
+    "describe_images": {
+      "type": "boolean",
+      "title": "Describe Images",
+      "description": "Se true, cada figura do documento (PictureItem do Docling; nunca as páginas renderizadas) é descrita pelo modelo de visão Florence-2 e a descrição entra no markdown logo depois da figura, num blockquote `> **Figure (description, English):** ...`. As descrições saem em INGLÊS por enquanto. Funciona com image_mode `none` (o placeholder `<!-- image -->` é trocado pelo blockquote) ou `referenced` (a referência à imagem fica e o blockquote vem em seguida). Imagens iguais (mesmo sha256) são descritas uma vez; figuras menores que CONVERSION_ASSET_MIN_PX ou além de CONVERSION_FIGURE_MAX_COUNT por documento são puladas. O job fica `processing` até o texto entrar no markdown. Contagens em `figures_described` / `figures_skipped` de GET /jobs/{job_id}/result. Padrão false",
+      "default": false
+    },
+    "ocr_images": {
+      "type": "boolean",
+      "title": "Ocr Images",
+      "description": "Se true, o texto dentro de cada figura é lido (Florence-2 `<OCR>`) e entra no markdown depois da figura: `> **Text in figure (OCR):** ...`. Mesmas regras de describe_images (pode ser usado junto ou sozinho). Contagem em `figures_ocr`. Padrão false",
       "default": false
     },
     "project": {
@@ -6763,6 +6852,8 @@ Imagem extraída de uma conversão (image_mode=referenced) ou página renderizad
 | `height` | sim | integer |  |  |
 | `size_bytes` | sim | integer |  |  |
 | `url` | sim | string |  | Caminho relativo na API: /jobs/{job_id}/assets/{name} (sempre o job principal) |
+| `description` | não | string / null |  | describe_images=true: descrição da figura (Florence-2, em inglês); null se não pedida, página renderizada ou falhou |
+| `ocr_text` | não | string / null |  | ocr_images=true: texto lido na figura; null se não pedido, página renderizada ou falhou |
 
 Esquema JSON completo:
 
@@ -6830,6 +6921,30 @@ Esquema JSON completo:
       "type": "string",
       "title": "Url",
       "description": "Caminho relativo na API: /jobs/{job_id}/assets/{name} (sempre o job principal)"
+    },
+    "description": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Description",
+      "description": "describe_images=true: descrição da figura (Florence-2, em inglês); null se não pedida, página renderizada ou falhou"
+    },
+    "ocr_text": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Ocr Text",
+      "description": "ocr_images=true: texto lido na figura; null se não pedido, página renderizada ou falhou"
     }
   },
   "type": "object",
@@ -6980,6 +7095,9 @@ Esquema JSON completo:
 | `image` | não | [ImageJobResult](#model-imagejobresult) / [ImageFullAnalysisResult](#model-imagefullanalysisresult) / [ImageFullV2Result](#model-imagefullv2result) / [FaceAnalysisResult](#model-faceanalysisresult) / null |  |  |
 | `assets` | não | array de [ConversionAsset](#model-conversionasset) / null |  |  |
 | `assets_skipped` | não | [ConversionAssetsSkipped](#model-conversionassetsskipped) / null |  |  |
+| `figures_described` | não | integer / null |  | Figuras que receberam descrição |
+| `figures_ocr` | não | integer / null |  | Figuras cujo texto foi lido (OCR) |
+| `figures_skipped` | não | integer / null |  | Figuras sem texto: pequenas demais, além do limite ou falha na análise |
 
 Esquema JSON completo:
 
@@ -7036,6 +7154,42 @@ Esquema JSON completo:
           "type": "null"
         }
       ]
+    },
+    "figures_described": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Figures Described",
+      "description": "Figuras que receberam descrição"
+    },
+    "figures_ocr": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Figures Ocr",
+      "description": "Figuras cujo texto foi lido (OCR)"
+    },
+    "figures_skipped": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Figures Skipped",
+      "description": "Figuras sem texto: pequenas demais, além do limite ou falha na análise"
     }
   },
   "type": "object",

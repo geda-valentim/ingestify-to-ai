@@ -84,6 +84,9 @@ celery_app.autodiscover_tasks(["workers"])
 # is actually loaded), and an unregistered task name under task_acks_late +
 # task_reject_on_worker_lost is redelivered forever rather than failing once.
 import workers.vision_tasks  # noqa: F401,E402
+# The describe stage of a conversion (describe_images / ocr_images): its vision task is
+# named workers.vision_tasks.* (vision queue), its finalize workers.tasks.* (default queue)
+import workers.figure_tasks  # noqa: F401,E402
 
 # Local workers announce which feature lane they serve and the GPU they see
 # (spec 0003); signal handlers only, nothing runs at import

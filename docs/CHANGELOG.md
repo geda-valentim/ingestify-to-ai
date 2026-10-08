@@ -2,6 +2,23 @@
 
 > **Registro histórico (2025-10).** Não é mantido; para mudanças posteriores use `git log`. Observação: `workers/tasks_old.py`, citado abaixo, não existe (há um `workers/tasks.py.backup`). Exceção: mudanças de comportamento intencionais que uma spec manda registrar aqui entram na seção abaixo.
 
+## 2026-10: Descrição e OCR das figuras no Markdown (API 1.3.0)
+
+- `POST /upload` e `POST /convert` aceitam `describe_images` e `ocr_images` (padrão
+  `false`): cada figura do documento é descrita (Florence-2, **em inglês**) e/ou tem o
+  texto lido (`<OCR>`) no worker de visão, e o texto entra no Markdown num blockquote
+  logo depois da figura (`> **Figure (description, English):** …`,
+  `> **Text in figure (OCR):** …`). Só figuras, nunca páginas renderizadas; imagens
+  iguais são analisadas uma vez; limites `CONVERSION_FIGURE_MAX_COUNT`,
+  `CONVERSION_FIGURE_TIMEOUT_SECONDS`, `CONVERSION_FIGURE_STALL_SECONDS`.
+- Nova etapa depois da conversão/merge (`workers/figure_tasks.py`), sem nenhum worker de
+  conversão esperando pela visão; o job fica `processing` (90–99%) até o texto entrar e o
+  `purge_source` só roda depois disso. Falha de uma figura não derruba o job.
+- Resultado: `figures_described`, `figures_ocr`, `figures_skipped`; `assets[].description`
+  e `assets[].ocr_text`. As opções entram no `operation_key` só quando `true`.
+- `POST /convert` aceita `docling_preset`. `/convert` (interface) reúne todas as opções de
+  PDF num grupo "PDF options".
+
 ## 2026-10: PDFs com avisos do qpdf não falham mais na divisão
 
 - O qpdf sai com código 3 quando conclui com avisos (ex.: tabela de referências cruzadas

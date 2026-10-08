@@ -85,10 +85,17 @@ function appendLocation(formData: FormData, location: UploadLocation) {
   else if (location.folder?.trim()) formData.append("folder", location.folder.trim());
 }
 
-/** image_mode / page_images of a document conversion, only when not the default. */
+/**
+ * The PDF/document options of a conversion (preset, image_mode, page_images,
+ * describe_images, ocr_images), only when not the default: an untouched form
+ * sends the same request as before.
+ */
 function appendImageOptions(formData: FormData, options: DocumentImageOptions) {
+  if (options.docling_preset) formData.append("docling_preset", options.docling_preset);
   if (options.image_mode === "referenced") formData.append("image_mode", "referenced");
   if (options.page_images) formData.append("page_images", "true");
+  if (options.describe_images) formData.append("describe_images", "true");
+  if (options.ocr_images) formData.append("ocr_images", "true");
 }
 
 export function getHeaders(includeAuth = false): HeadersInit {

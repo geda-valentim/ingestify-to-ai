@@ -305,6 +305,97 @@ curl -X POST http://localhost:8000/upload \
   -F "image_mode=referenced" -F "page_images=true" -F "purge_source=true"
 ```
 
+### Descrição e OCR das figuras (`describe_images`, `ocr_images`)
+
+Dois campos de form em `/upload` e `/convert` (padrão `false`):
+
+| Campo | Efeito |
+|---|---|
+| `describe_images` | Cada figura (`PictureItem` do Docling) recebe uma legenda do Florence-2 (`CONVERSION_FIGURE_CAPTION_TASK`, padrão `<MORE_DETAILED_CAPTION>`). **As legendas saem em inglês** (decisão de 2026-10-08: a pilha de visão atual). |
+| `ocr_images` | O texto dentro de cada figura é lido com a tarefa `<OCR>` do Florence-2. |
+
+Só figuras, nunca as páginas renderizadas (`page_images`). Qualquer um dos dois liga
+`generate_picture_images` no Docling (com `CONVERSION_IMAGES_SCALE`) mesmo com
+`image_mode=none`, mas só `image_mode=referenced` publica PNGs e referências.
+
+**Markdown**, na posição de cada figura (ordem do documento):
+
+```markdown
+![Image](/jobs/<job_id>/assets/p0001-img01-3f2a9c1b7d4e.png)
+
+> **Figure (description, English):** A bar chart comparing revenue across four quarters ...
+> **Text in figure (OCR):** Revenue 2024 Q1 Q2 Q3 Q4
+```
+
+- `image_mode=referenced`: a linha `![Image](...)` fica e o blockquote vem logo depois;
+  `image_mode=none`: o placeholder `<!-- image -->` é trocado pelo blockquote.
+- Linha cujo texto saiu vazio é omitida; figura sem nenhum texto (pulada ou falhou) fica
+  exatamente como sem as opções (`<!-- image -->` ou só a referência).
+- O texto é normalizado: caracteres de controle removidos, `\r\n` → `\n`, cada quebra de
+  linha continua o blockquote com `> `, `<!--`/`-->` neutralizados, tokens `</s>` do
+  Florence removidos, corte em `CONVERSION_FIGURE_MAX_CHARS` (4000) por texto.
+- `GET /jobs/{job_id}/result` ganha `figures_described`, `figures_ocr` e `figures_skipped`
+  (contados por posição de figura; `null` num job sem as opções) e cada item de `assets`
+  ganha `description` / `ocr_text` (`null` quando não pedido, para páginas renderizadas
+  ou quando falhou). As contagens ficam também em `metadata.figures` (o Elasticsearch,
+  que recebe o Markdown final, guarda só markdown + metadata) e em
+  `jobs.assets_manifest.figures`.
+
+**Pipeline** ([figure_tasks.py](../../backend/workers/figure_tasks.py),
+[figure_descriptions.py](../../backend/shared/figure_descriptions.py)):
+
+1. Na extração, cada figura vira uma entrada (`name`, `page`, `sha256`, objeto no MinIO,
+   âncora). Com `referenced` a figura é o próprio asset e a âncora é a URL dele; com
+   `none` o PNG vai para uma área temporária (`figures/{job_id}/` no bucket de
+   resultados, uma vez por imagem distinta) e o Markdown recebe `<!-- figure:{name} -->`
+   no lugar do placeholder. Um job PAGE guarda suas entradas em `figures` no resultado
+   da página.
+2. Depois da conversão (documento único) ou do merge (PDF dividido) começa a etapa de
+   descrição: o Markdown pendente vai para `figures/{job_id}/pending.json`, as imagens
+   únicas (sha256 no documento inteiro, na ordem do documento, até
+   `CONVERSION_FIGURE_MAX_COUNT` = 50) viram uma task `workers.vision_tasks.describe_figure_task`
+   cada, na fila de visão — colocadas pelo mesmo `dispatch.place_now(feature="vision")`
+   das rotas `/images/*`, então rota, vagas de engine e contabilidade valem igual; sem
+   rota, fila de visão como hoje; "nenhuma engine pode atender" pula a figura. A task
+   que conclui o conjunto (Redis `job:{id}:figures:results`/`:total`) enfileira
+   `workers.tasks.finalize_figures_task`.
+3. O finalize reescreve o Markdown, atualiza o manifesto, grava o resultado (Redis,
+   Elasticsearch, MySQL `completed`), apaga `figures/{job_id}/` e só então roda o
+   `purge_source`.
+
+Nenhum worker de conversão espera pela visão (a etapa anda por mensagens), então o pool
+geral não trava contra uma fila de visão ocupada. O job fica `processing` com progresso de
+90 a 99% (`stage: describing_figures`, `figures_done`/`figures_total` no status do Redis),
+e por isso `has_pending_work` segura o purge até o texto entrar.
+
+**Falhas e limites:** figura menor que `CONVERSION_ASSET_MIN_PX`, além do limite, ilegível,
+ou cuja task falhou (modelo ausente, `CONVERSION_FIGURE_TIMEOUT_SECONDS` = 120 por figura,
+sem engine) fica sem texto e conta em `figures_skipped`; nunca derruba o job. Um worker de
+visão morto no meio nunca responde: um watchdog (`CONVERSION_FIGURE_STALL_SECONDS` = 900,
+rearmado enquanto figuras continuam chegando) finaliza com o que houver. Se o finalize em
+si falhar depois das tentativas automáticas, o job vira `failed` (`FIGURES_FAILED`).
+Um PDF dividido que termina `partial` não passa pela etapa (as âncoras temporárias ficam
+como comentários HTML nos resultados das páginas) e `figures/{job_id}/` é apagado quando o
+job assenta.
+
+**Duráveis e deduplicação:** as duas opções ficam em `JobConfiguration.options` (só quando
+`true`), relidas por páginas, retries e merge, e entram no `operation_key` só quando
+`true` — chaves antigas continuam valendo, e um pedido com descrição/OCR nunca reaproveita
+um job sem elas.
+
+```bash
+curl -X POST http://localhost:8000/upload \
+  -H "X-API-Key: $INGESTIFY_API_KEY" \
+  -F "file=@relatorio.pdf" -F "project=Relatórios" \
+  -F "image_mode=referenced" -F "describe_images=true" -F "ocr_images=true"
+```
+
+**Na interface:** `/convert` reúne para documentos, num grupo "PDF options", o preset do
+Docling, "Extract images", "Render each page as an image", "Describe figures" (com o
+aviso de que as descrições são em inglês), "OCR text in figures" e "Don't keep the
+original file after converting". A aba "Images" do job mostra as contagens e o texto de
+cada figura.
+
 ### Presets do Docling
 
 Definidos em `get_converter()` ([converter.py](../../backend/workers/converter.py)):

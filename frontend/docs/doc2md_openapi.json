@@ -3,7 +3,7 @@
   "info": {
     "title": "Ingestify API",
     "description": "\nAPI assíncrona que converte documentos (PDF, DOCX, HTML, PPTX, XLSX...) em Markdown,\ntranscreve áudio e vídeo e analisa imagens. Todo pedido vira um **job**: a resposta\ntraz o `job_id` na hora e o trabalho segue em workers Celery. Guias completos no\nportal de documentação (`/pt/docs`); referência gerada em `/redoc` e `/openapi.json`.\n\n## Autenticação\n\n- **JWT** (`bearerAuth`): `POST /auth/login` devolve `access_token`; envie\n  `Authorization: Bearer <token>`. `POST /auth/refresh` renova a sessão.\n- **API key** (`apiKeyAuth`): crie em `POST /api-keys/` (com JWT) e envie\n  `X-API-Key: <chave>`. Uma key pode ser vinculada a um projeto\n  (`PATCH /api-keys/{key_id}`).\n- Com os dois no mesmo request, vale o JWT. Rotas marcadas como sessão de\n  administrador (`x-access: admin-session`) ou só JWT (`x-access: jwt`) recusam API key.\n- No Swagger, clique em **Authorize** e preencha `bearerAuth` (só o token, sem o\n  prefixo `Bearer`) e/ou `apiKeyAuth`. A autorização persiste entre recargas.\n- **Primeira instalação**: `GET /auth/setup` (público) diz se a instalação ainda não tem\n  usuário (`root_pending`) e se o registro exige token. O primeiro `POST /auth/register`\n  de uma instalação vazia cria o **root**, a identidade de bootstrap do IAM. Em produção\n  isso exige `setup_token` igual ao `ROOT_SETUP_TOKEN` do servidor (fora de produção,\n  só quando ele está configurado).\n\n## Permissões (IAM)\n\nCada usuário é dono dos próprios jobs, projetos, tags, API keys e conexões de datalake:\nrecurso de outro usuário responde 404. Rotas `/admin/*` exigem permissões de plataforma\nconcedidas por papéis IAM (`platform_admin`, `platform_operator`, `platform_auditor`,\n`remote_engine_user`), e as rotas de engines usam os papéis de engines (`observer`,\n`engine_operator`, `access_admin`...), hoje guardados como vínculos IAM em\n`/admin/iam/bindings`. Root e os administradores de bootstrap equivalem a\n`platform_admin`. `POST /iam/check` diz o que o chamador pode fazer; `GET /iam/permissions`\nlista o catálogo. O campo `x-access` de cada operação diz a credencial exigida. Guia:\n[Acesso e IAM](/pt/docs/engine-access).\n\n## Projetos e pastas\n\nTodo job pertence a um **projeto** (obrigatório) e, opcionalmente, a uma **pasta** do\nprojeto (um nível). Os endpoints que criam jobs (`/upload`, `/convert`, `/transcribe`,\n`/images/*`) aceitam:\n\n- `project`: nome do projeto. É criado se não existir (*get-or-add*). Caixa, espaços e\n  acentos sobre letras latinas não contam: `Reunião` e ` reuniao ` são o mesmo projeto;\n- `project_id`: ID de um projeto existente (nunca cria);\n- `folder` / `folder_id`: a pasta dentro do projeto (o nome não pode ter `/`).\n\nSem `project`/`project_id`, o job vai para o projeto **vinculado à API key** (veja\n`PATCH /api-keys/{key_id}`). Isso só vale para requests autenticados apenas pela key: com\nJWT, o vínculo é ignorado. Sem projeto no request e sem vínculo, a resposta é **422**.\nUm arquivo repetido só é reaproveitado dentro do mesmo projeto (`duplicate: true`).\n\n```bash\ncurl -H \"X-API-Key: ...\" -F \"file=@aula.mp3\" -F \"project=Aulas\" -F \"folder=Setembro\" .../transcribe\n```\n\n## Ciclo de vida do job\n\n`POST` devolve `job_id`; acompanhe com `GET /jobs/{job_id}` (`status`, `progress`) e\nbusque o resultado em `GET /jobs/{job_id}/result`. Estados (`status`):\n\n- `pending` / `queued`: aceito, aguardando worker;\n- `processing`: em execução (PDF de várias páginas: split → páginas em paralelo → merge;\n  `GET /jobs/{job_id}/pages` mostra cada página);\n- `completed`: concluído;\n- `partial`: terminou com lacunas (ex.: algumas páginas falharam); o resultado\n  preservado fica disponível e as páginas com falha podem ser refeitas\n  (`POST /jobs/{job_id}/pages/{n}/retry`);\n- `failed`: falhou depois das tentativas automáticas; `error` explica;\n- `cancelled`: cancelado (sessões ao vivo, análise composta de imagem).\n\n## Arquivos de origem (`purge_source`)\n\n`/upload`, `/convert`, `/transcribe` e as oito rotas `/images/*` aceitam\n`purge_source` (padrão `false`). Com `true`, os arquivos de origem (o arquivo enviado,\nos PDFs por página, as cópias da imagem) são apagados quando o job termina, depois das\ntentativas automáticas; o resultado fica. Para apagar depois, use\n`DELETE /jobs/{job_id}/source` (200; 404 sem origem; 409 `JOB_STILL_PROCESSING`;\n503 `SOURCE_DELETE_FAILED`). `GET /jobs/{job_id}` informa `source_available`,\n`source_deleted_at` e `source_deletable`. Sem origem, o PDF de página responde 410\n`SOURCE_PURGED` e o retry de página 409 `SOURCE_NOT_AVAILABLE`.\n\n## Imagens da conversão (`image_mode`, `page_images`)\n\n`/upload` e `/convert` aceitam `image_mode` (`none`, padrão: o markdown mantém\n`<!-- image -->`; `referenced`: cada figura vira um PNG referenciado no markdown como\n`![Image](/jobs/{job_id}/assets/{name})`) e `page_images` (`true`: cada página do PDF\nrenderizada como PNG). `GET /jobs/{job_id}/result` lista `assets` (`name`, `kind`\n`picture`|`page`, `page`, `bbox`, `sha256`, `mime`, `width`, `height`, `size_bytes`,\n`url`) e `assets_skipped`; cada imagem sai em `GET /jobs/{job_id}/assets/{name}` (sempre\no job principal, também num PDF dividido). Com `purge_source=true` as imagens ficam\n`ASSET_RETENTION_SECONDS` depois do fim do job (`assets_expire_at` em\n`GET /jobs/{job_id}`) e então são apagadas; `DELETE /jobs/{job_id}/source` apaga na hora.\nDepois disso a rota responde 410 `SOURCE_PURGED`.\n\n## Idempotência (Full Analysis e rostos)\n\n`/images/analyze` com `mode=full` e `/images/faces` exigem o header `Idempotency-Key`\n(1..128 caracteres). A mesma chave com o mesmo pedido devolve o mesmo job enquanto a\ntentativa está na fila, rodando ou concluída; depois que ela falha de vez, a mesma chave\nabre a tentativa seguinte (`attempt` + 1, job novo). Chave usada com outro pedido: 409;\njob da chave excluído: 410 (use outra chave). `purge_source` não entra na comparação.\n\n## Erros\n\nErros HTTP vêm em `{\"detail\": ...}`: texto, lista de validação (422) ou objeto. Recusas\ncom código (jobs, engines, perfis de execução, acesso, IAM, root) trazem\n`{\"detail\": {\"code\": \"...\", \"message\": \"...\", \"next_steps\": [...]}}`, com `cause`\n(o gate interno quando um código genérico embrulha outro) e `technical` (texto original)\nquando houver. Use `code` para decidir; `message` é para pessoas. Falhas não tratadas\nrespondem 500 com `{\"error\": {\"code\": \"INTERNAL_ERROR\", \"message\": \"...\"}}`.\n\n## Limites de taxa\n\nLogin: `RATE_LIMIT_PER_MINUTE` tentativas por IP por minuto (padrão 10) e bloqueio\ntemporário da conta após `LOGIN_MAX_FAILED_ATTEMPTS` falhas (padrão 5, por\n`LOGIN_LOCKOUT_SECONDS`, padrão 900 s). Registro: `REGISTER_LIMIT_PER_HOUR` por IP (padrão\n5). Excedido, a resposta é **429**. Uploads respeitam `MAX_FILE_SIZE_MB` (413).\n",
-    "version": "1.2.0"
+    "version": "1.3.0"
   },
   "paths": {
     "/auth/register": {
@@ -5990,7 +5990,7 @@
           "Conversion"
         ],
         "summary": "Enviar e converter arquivo",
-        "description": "Upload direto de arquivo para conversão\n\nEste endpoint é dedicado exclusivamente para upload de arquivos.\nUse os outros endpoints para converter de URL, Google Drive ou Dropbox.\n\n## Parâmetros:\n- `file`: Arquivo para upload\n- `name`: Nome de identificação opcional (se não fornecido, usa o nome do arquivo)\n- `docling_preset`: Quality/speed preset (apenas para PDFs):\n  - **fast** (padrão): Conversão rápida, apenas texto (~35s/MB)\n    - OCR: Desligado | Images: Desligadas | Tables: Ligadas\n  - **balanced**: Velocidade moderada, extrai imagens (~70-105s/MB)\n    - OCR: Desligado | Images: Ligadas | Tables: Ligadas\n  - **quality**: Máxima qualidade, inclui OCR para documentos escaneados (~350s/MB)\n    - OCR: Ligado | Images: Ligadas | Tables: Ligadas\n- `purge_source`: Se `true`, apaga os arquivos de origem (o arquivo enviado e os\n  PDFs por página) quando o job termina — `completed`, ou `failed`/`partial` depois\n  das tentativas automáticas — e fica só o resultado. Veja \"Arquivos de origem\".\n- `image_mode`: `none` (padrão) ou `referenced` (figuras viram PNGs referenciados\n  no markdown). Veja \"Imagens\".\n- `page_images`: `true` renderiza cada página do PDF como PNG. Veja \"Imagens\".\n\n## Imagens (`image_mode`, `page_images`)\n- `image_mode=referenced`: cada figura encontrada pelo Docling vira um PNG e o\n  markdown troca o placeholder `<!-- image -->` por\n  `![Image](/jobs/{job_id}/assets/p0001-img01-<sha12>.png)` (caminho relativo na API).\n- `page_images=true`: cada página do PDF vira um PNG (kind `page`), fora do markdown.\n- `GET /jobs/{job_id}/result` traz `assets` (`name`, `kind`, `page`, `bbox`, `sha256`,\n  `mime`, `width`, `height`, `size_bytes`, `url`), em ordem de página, e\n  `assets_skipped` (figuras pequenas demais ou além dos limites do job).\n- Baixe cada uma com `GET /jobs/{job_id}/assets/{name}` (mesma autenticação).\n- PDF de várias páginas: as imagens de todas as páginas ficam no job principal.\n- Com `purge_source=true` as imagens não são apagadas no fim do job: ficam\n  `ASSET_RETENTION_SECONDS` (padrão 1 h; `GET /jobs/{job_id}` informa\n  `assets_expire_at`) e então são apagadas; `DELETE /jobs/{job_id}/source` apaga na hora.\n- O mesmo arquivo com outro `image_mode`/`page_images` é outro job (não é duplicata).\n\n```bash\ncurl -X POST http://localhost:8000/upload \\\n  -H \"X-API-Key: your-api-key\" \\\n  -F \"file=@apostila.pdf\" -F \"project=Cursos\" \\\n  -F \"image_mode=referenced\" -F \"page_images=true\" -F \"purge_source=true\"\n```\n\n## Arquivos de origem (`purge_source`)\n- O que é apagado: o arquivo enviado (MinIO `uploads/...` e cópia local) e, num\n  PDF de várias páginas, os PDFs por página (`/jobs/{job_id}/pages/{n}/pdf`\n  passa a responder 410 `SOURCE_PURGED`). O markdown (inteiro e por página) fica.\n- Quando: ao terminar `completed`, ou `failed`/`partial` depois de esgotados os\n  retries automáticos; nunca enquanto houver retry ou página na fila. Depois\n  disso o retry manual de página responde 409 `SOURCE_NOT_AVAILABLE`.\n- `GET /jobs/{job_id}` informa `source_available`, `source_deleted_at` e\n  `source_deletable`. Para apagar depois: `DELETE /jobs/{job_id}/source`.\n- Arquivo repetido no mesmo projeto: com `purge_source=true` a resposta traz o\n  job existente com `duplicate: true` e ele passa a apagar a origem (na hora, se\n  já terminou; `source_available` diz o resultado). Com `false`, um job existente\n  cuja origem foi (ou será) apagada não é reaproveitado: um job novo é criado.\n\n```bash\ncurl -X POST http://localhost:8000/upload \\\n  -H \"X-API-Key: your-api-key\" \\\n  -F \"file=@contrato.pdf\" \\\n  -F \"project=Cliente X\" \\\n  -F \"purge_source=true\"\n```\n\n## Formatos suportados\nPDF, DOCX, DOC, HTML, PPTX, XLSX, RTF, ODT\n\n## Retorno\nRetorna imediatamente um `job_id` para consultar o progresso via `/jobs/{job_id}`,\ne onde o job ficou (`project`, `folder`)\n\n## Exemplos:\n```bash\n# Fast mode (default)\ncurl -X POST http://localhost:8000/upload       -H \"X-API-Key: your-api-key\"       -F \"file=@documento.pdf\"       -F \"project=Cliente X\"\n\n# Quality mode with OCR\ncurl -X POST http://localhost:8000/upload       -H \"X-API-Key: your-api-key\"       -F \"file=@documento_escaneado.pdf\"       -F \"docling_preset=quality\"\n```",
+        "description": "Upload direto de arquivo para conversão\n\nEste endpoint é dedicado exclusivamente para upload de arquivos.\nUse os outros endpoints para converter de URL, Google Drive ou Dropbox.\n\n## Parâmetros:\n- `file`: Arquivo para upload\n- `name`: Nome de identificação opcional (se não fornecido, usa o nome do arquivo)\n- `docling_preset`: Quality/speed preset (apenas para PDFs):\n  - **fast** (padrão): Conversão rápida, apenas texto (~35s/MB)\n    - OCR: Desligado | Images: Desligadas | Tables: Ligadas\n  - **balanced**: Velocidade moderada, extrai imagens (~70-105s/MB)\n    - OCR: Desligado | Images: Ligadas | Tables: Ligadas\n  - **quality**: Máxima qualidade, inclui OCR para documentos escaneados (~350s/MB)\n    - OCR: Ligado | Images: Ligadas | Tables: Ligadas\n- `purge_source`: Se `true`, apaga os arquivos de origem (o arquivo enviado e os\n  PDFs por página) quando o job termina — `completed`, ou `failed`/`partial` depois\n  das tentativas automáticas — e fica só o resultado. Veja \"Arquivos de origem\".\n- `image_mode`: `none` (padrão) ou `referenced` (figuras viram PNGs referenciados\n  no markdown). Veja \"Imagens\".\n- `page_images`: `true` renderiza cada página do PDF como PNG. Veja \"Imagens\".\n\n## Imagens (`image_mode`, `page_images`)\n- `image_mode=referenced`: cada figura encontrada pelo Docling vira um PNG e o\n  markdown troca o placeholder `<!-- image -->` por\n  `![Image](/jobs/{job_id}/assets/p0001-img01-<sha12>.png)` (caminho relativo na API).\n- `page_images=true`: cada página do PDF vira um PNG (kind `page`), fora do markdown.\n- `GET /jobs/{job_id}/result` traz `assets` (`name`, `kind`, `page`, `bbox`, `sha256`,\n  `mime`, `width`, `height`, `size_bytes`, `url`), em ordem de página, e\n  `assets_skipped` (figuras pequenas demais ou além dos limites do job).\n- Baixe cada uma com `GET /jobs/{job_id}/assets/{name}` (mesma autenticação).\n- PDF de várias páginas: as imagens de todas as páginas ficam no job principal.\n- Com `purge_source=true` as imagens não são apagadas no fim do job: ficam\n  `ASSET_RETENTION_SECONDS` (padrão 1 h; `GET /jobs/{job_id}` informa\n  `assets_expire_at`) e então são apagadas; `DELETE /jobs/{job_id}/source` apaga na hora.\n- O mesmo arquivo com outro `image_mode`/`page_images` é outro job (não é duplicata).\n\n```bash\ncurl -X POST http://localhost:8000/upload \\\n  -H \"X-API-Key: your-api-key\" \\\n  -F \"file=@apostila.pdf\" -F \"project=Cursos\" \\\n  -F \"image_mode=referenced\" -F \"page_images=true\" -F \"purge_source=true\"\n```\n\n## Descrição e OCR das figuras (`describe_images`, `ocr_images`)\n- `describe_images=true`: cada figura (PictureItem do Docling; nunca as páginas\n  renderizadas) é descrita pelo Florence-2 no worker de visão. **As descrições saem\n  em inglês** por enquanto. `ocr_images=true`: o texto dentro da figura é lido (`<OCR>`).\n- No markdown, na posição de cada figura (ordem do documento):\n  ```\n  ![Image](/jobs/{job_id}/assets/p0001-img01-<sha12>.png)   (só com image_mode=referenced)\n\n  > **Figure (description, English):** A bar chart comparing ...\n  > **Text in figure (OCR):** Revenue 2024\n  ```\n  Com `image_mode=none` o placeholder `<!-- image -->` é trocado pelo blockquote.\n  Linha sem texto é omitida; figura sem nenhum texto fica como estava.\n- Imagens idênticas (mesmo sha256, no documento inteiro) vão ao modelo uma vez só.\n  Figuras menores que `CONVERSION_ASSET_MIN_PX`, além de `CONVERSION_FIGURE_MAX_COUNT`\n  (padrão 50 imagens únicas) ou cuja análise falhou ficam sem texto e são contadas\n  em `figures_skipped`; nunca derrubam o job.\n- O job fica `processing` (progresso acima de 90%) até o texto entrar no markdown.\n  `GET /jobs/{job_id}/result` traz `figures_described`, `figures_ocr`,\n  `figures_skipped` e, em cada item de `assets`, `description` / `ocr_text`.\n- `purge_source` só roda depois disso. Outra combinação dessas opções é outro job\n  (não é duplicata).\n\n```bash\ncurl -X POST http://localhost:8000/upload \\\n  -H \"X-API-Key: your-api-key\" \\\n  -F \"file=@relatorio.pdf\" -F \"project=Relatórios\" \\\n  -F \"image_mode=referenced\" -F \"describe_images=true\" -F \"ocr_images=true\"\n```\n\n## Arquivos de origem (`purge_source`)\n- O que é apagado: o arquivo enviado (MinIO `uploads/...` e cópia local) e, num\n  PDF de várias páginas, os PDFs por página (`/jobs/{job_id}/pages/{n}/pdf`\n  passa a responder 410 `SOURCE_PURGED`). O markdown (inteiro e por página) fica.\n- Quando: ao terminar `completed`, ou `failed`/`partial` depois de esgotados os\n  retries automáticos; nunca enquanto houver retry ou página na fila. Depois\n  disso o retry manual de página responde 409 `SOURCE_NOT_AVAILABLE`.\n- `GET /jobs/{job_id}` informa `source_available`, `source_deleted_at` e\n  `source_deletable`. Para apagar depois: `DELETE /jobs/{job_id}/source`.\n- Arquivo repetido no mesmo projeto: com `purge_source=true` a resposta traz o\n  job existente com `duplicate: true` e ele passa a apagar a origem (na hora, se\n  já terminou; `source_available` diz o resultado). Com `false`, um job existente\n  cuja origem foi (ou será) apagada não é reaproveitado: um job novo é criado.\n\n```bash\ncurl -X POST http://localhost:8000/upload \\\n  -H \"X-API-Key: your-api-key\" \\\n  -F \"file=@contrato.pdf\" \\\n  -F \"project=Cliente X\" \\\n  -F \"purge_source=true\"\n```\n\n## Formatos suportados\nPDF, DOCX, DOC, HTML, PPTX, XLSX, RTF, ODT\n\n## Retorno\nRetorna imediatamente um `job_id` para consultar o progresso via `/jobs/{job_id}`,\ne onde o job ficou (`project`, `folder`)\n\n## Exemplos:\n```bash\n# Fast mode (default)\ncurl -X POST http://localhost:8000/upload       -H \"X-API-Key: your-api-key\"       -F \"file=@documento.pdf\"       -F \"project=Cliente X\"\n\n# Quality mode with OCR\ncurl -X POST http://localhost:8000/upload       -H \"X-API-Key: your-api-key\"       -F \"file=@documento_escaneado.pdf\"       -F \"docling_preset=quality\"\n```",
         "operationId": "upload_and_convert_upload_post",
         "requestBody": {
           "content": {
@@ -6092,7 +6092,7 @@
           "Conversion"
         ],
         "summary": "Converter documento (arquivo, URL, Drive ou Dropbox)",
-        "description": "Conversão de documentos para Markdown\n\n## Opções de uso:\n\n### 1. Upload de arquivo (multipart/form-data)\n- `source_type`: \"file\"\n- `file`: Selecione o arquivo para upload\n- `source`: Deixe vazio\n\n### 2. URL pública\n- `source_type`: \"url\"\n- `source`: \"https://example.com/document.pdf\"\n- `file`: Deixe vazio\n\n### 3. Google Drive\n- `source_type`: \"gdrive\"\n- `source`: \"1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms\" (file ID)\n- header `X-Source-Token`: \"ya29.a0AfH6SMB...\" (OAuth2 token do Google)\n- `file`: Deixe vazio\n\n### 4. Dropbox\n- `source_type`: \"dropbox\"\n- `source`: \"/documents/report.pdf\" (path do arquivo)\n- header `X-Source-Token`: \"sl.B1a2c3...\" (access token do Dropbox)\n\nO header `Authorization` autentica no Ingestify e nunca é repassado ao\nprovedor nem colocado na mensagem do Celery (S-01).\n- `file`: Deixe vazio\n\n## Projeto (obrigatório) e pasta\n`project` (nome; criado se não existir) ou `project_id`, e opcionalmente\n`folder`/`folder_id`. Uma API key vinculada a um projeto dispensa o campo\n(só sem JWT). Sem projeto: 422. Um arquivo repetido só é reaproveitado\ndentro do mesmo projeto.\n\n## Arquivos de origem (`purge_source`)\nCom `purge_source=true` os arquivos de origem (o enviado, ou o baixado da URL,\ne os PDFs por página) são apagados quando o job termina: `completed`, ou\n`failed`/`partial` depois das tentativas automáticas. O resultado fica. Mesmas\nregras de `/upload` (inclusive para arquivo repetido).\nPara apagar depois: `DELETE /jobs/{job_id}/source`\n\n## Imagens (`image_mode`, `page_images`)\n`image_mode=referenced` guarda cada figura como PNG e o markdown passa a\nreferenciá-la (`![Image](/jobs/{job_id}/assets/{name})`); `page_images=true`\nrenderiza cada página do PDF. A lista sai em `assets` de\n`GET /jobs/{job_id}/result` e cada imagem em `GET /jobs/{job_id}/assets/{name}`.\nMesmas regras de `/upload` (retenção com purge_source, deduplicação).\n\n## Formatos suportados\nPDF, DOCX, DOC, HTML, PPTX, XLSX, RTF, ODT\n\n## Retorno\nRetorna imediatamente um `job_id` para consultar o progresso via `/jobs/{job_id}`",
+        "description": "Conversão de documentos para Markdown\n\n## Opções de uso:\n\n### 1. Upload de arquivo (multipart/form-data)\n- `source_type`: \"file\"\n- `file`: Selecione o arquivo para upload\n- `source`: Deixe vazio\n\n### 2. URL pública\n- `source_type`: \"url\"\n- `source`: \"https://example.com/document.pdf\"\n- `file`: Deixe vazio\n\n### 3. Google Drive\n- `source_type`: \"gdrive\"\n- `source`: \"1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms\" (file ID)\n- header `X-Source-Token`: \"ya29.a0AfH6SMB...\" (OAuth2 token do Google)\n- `file`: Deixe vazio\n\n### 4. Dropbox\n- `source_type`: \"dropbox\"\n- `source`: \"/documents/report.pdf\" (path do arquivo)\n- header `X-Source-Token`: \"sl.B1a2c3...\" (access token do Dropbox)\n\nO header `Authorization` autentica no Ingestify e nunca é repassado ao\nprovedor nem colocado na mensagem do Celery (S-01).\n- `file`: Deixe vazio\n\n## Projeto (obrigatório) e pasta\n`project` (nome; criado se não existir) ou `project_id`, e opcionalmente\n`folder`/`folder_id`. Uma API key vinculada a um projeto dispensa o campo\n(só sem JWT). Sem projeto: 422. Um arquivo repetido só é reaproveitado\ndentro do mesmo projeto.\n\n## Arquivos de origem (`purge_source`)\nCom `purge_source=true` os arquivos de origem (o enviado, ou o baixado da URL,\ne os PDFs por página) são apagados quando o job termina: `completed`, ou\n`failed`/`partial` depois das tentativas automáticas. O resultado fica. Mesmas\nregras de `/upload` (inclusive para arquivo repetido).\nPara apagar depois: `DELETE /jobs/{job_id}/source`\n\n## Imagens (`image_mode`, `page_images`)\n`image_mode=referenced` guarda cada figura como PNG e o markdown passa a\nreferenciá-la (`![Image](/jobs/{job_id}/assets/{name})`); `page_images=true`\nrenderiza cada página do PDF. A lista sai em `assets` de\n`GET /jobs/{job_id}/result` e cada imagem em `GET /jobs/{job_id}/assets/{name}`.\nMesmas regras de `/upload` (retenção com purge_source, deduplicação).\n\n## Descrição e OCR das figuras (`describe_images`, `ocr_images`)\n`describe_images=true` descreve cada figura com o Florence-2 (descrições em inglês);\n`ocr_images=true` lê o texto dentro dela. O texto entra no markdown, num blockquote\nlogo depois da figura, e o job só termina depois disso. Mesmas regras de `/upload`.\n\n## Preset (`docling_preset`)\n`fast`, `balanced` ou `quality`, como em `/upload`. Omitido: padrões do servidor.\n\n## Formatos suportados\nPDF, DOCX, DOC, HTML, PPTX, XLSX, RTF, ODT\n\n## Retorno\nRetorna imediatamente um `job_id` para consultar o progresso via `/jobs/{job_id}`",
         "operationId": "convert_document_convert_post",
         "security": [
           {
@@ -7878,6 +7878,23 @@
             "title": "Tags",
             "description": "Tags separadas por vírgula (ex.: 'cliente-x, reunião'). Viram minúsculas; até 20 tags de até 50 caracteres. Enviar um arquivo repetido adiciona as tags ao job existente."
           },
+          "docling_preset": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "fast",
+                  "balanced",
+                  "quality"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Docling Preset",
+            "description": "Preset do Docling para PDF: 'fast' (só texto, sem OCR), 'balanced' (com imagens), 'quality' (com OCR, para PDFs escaneados). Omitido: padrões do servidor (DOCLING_ENABLE_*)"
+          },
           "diarize": {
             "anyOf": [
               {
@@ -7959,6 +7976,18 @@
             "type": "boolean",
             "title": "Page Images",
             "description": "Se true (só PDF), cada página é renderizada como PNG (CONVERSION_PAGE_IMAGE_DPI, padrão 150) e entra em `assets` com kind `page`; não aparece no markdown. Funciona com ou sem image_mode. Mesmas regras de retenção de image_mode. Padrão false",
+            "default": false
+          },
+          "describe_images": {
+            "type": "boolean",
+            "title": "Describe Images",
+            "description": "Se true, cada figura do documento (PictureItem do Docling; nunca as páginas renderizadas) é descrita pelo modelo de visão Florence-2 e a descrição entra no markdown logo depois da figura, num blockquote `> **Figure (description, English):** ...`. As descrições saem em INGLÊS por enquanto. Funciona com image_mode `none` (o placeholder `<!-- image -->` é trocado pelo blockquote) ou `referenced` (a referência à imagem fica e o blockquote vem em seguida). Imagens iguais (mesmo sha256) são descritas uma vez; figuras menores que CONVERSION_ASSET_MIN_PX ou além de CONVERSION_FIGURE_MAX_COUNT por documento são puladas. O job fica `processing` até o texto entrar no markdown. Contagens em `figures_described` / `figures_skipped` de GET /jobs/{job_id}/result. Padrão false",
+            "default": false
+          },
+          "ocr_images": {
+            "type": "boolean",
+            "title": "Ocr Images",
+            "description": "Se true, o texto dentro de cada figura é lido (Florence-2 `<OCR>`) e entra no markdown depois da figura: `> **Text in figure (OCR):** ...`. Mesmas regras de describe_images (pode ser usado junto ou sozinho). Contagem em `figures_ocr`. Padrão false",
             "default": false
           },
           "project": {
@@ -8489,6 +8518,18 @@
             "type": "boolean",
             "title": "Page Images",
             "description": "Se true (só PDF), cada página é renderizada como PNG (CONVERSION_PAGE_IMAGE_DPI, padrão 150) e entra em `assets` com kind `page`; não aparece no markdown. Funciona com ou sem image_mode. Mesmas regras de retenção de image_mode. Padrão false",
+            "default": false
+          },
+          "describe_images": {
+            "type": "boolean",
+            "title": "Describe Images",
+            "description": "Se true, cada figura do documento (PictureItem do Docling; nunca as páginas renderizadas) é descrita pelo modelo de visão Florence-2 e a descrição entra no markdown logo depois da figura, num blockquote `> **Figure (description, English):** ...`. As descrições saem em INGLÊS por enquanto. Funciona com image_mode `none` (o placeholder `<!-- image -->` é trocado pelo blockquote) ou `referenced` (a referência à imagem fica e o blockquote vem em seguida). Imagens iguais (mesmo sha256) são descritas uma vez; figuras menores que CONVERSION_ASSET_MIN_PX ou além de CONVERSION_FIGURE_MAX_COUNT por documento são puladas. O job fica `processing` até o texto entrar no markdown. Contagens em `figures_described` / `figures_skipped` de GET /jobs/{job_id}/result. Padrão false",
+            "default": false
+          },
+          "ocr_images": {
+            "type": "boolean",
+            "title": "Ocr Images",
+            "description": "Se true, o texto dentro de cada figura é lido (Florence-2 `<OCR>`) e entra no markdown depois da figura: `> **Text in figure (OCR):** ...`. Mesmas regras de describe_images (pode ser usado junto ou sozinho). Contagem em `figures_ocr`. Padrão false",
             "default": false
           },
           "project": {
@@ -9301,6 +9342,30 @@
             "type": "string",
             "title": "Url",
             "description": "Caminho relativo na API: /jobs/{job_id}/assets/{name} (sempre o job principal)"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description",
+            "description": "describe_images=true: descrição da figura (Florence-2, em inglês); null se não pedida, página renderizada ou falhou"
+          },
+          "ocr_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ocr Text",
+            "description": "ocr_images=true: texto lido na figura; null se não pedido, página renderizada ou falhou"
           }
         },
         "type": "object",
@@ -9451,6 +9516,42 @@
                 "type": "null"
               }
             ]
+          },
+          "figures_described": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Figures Described",
+            "description": "Figuras que receberam descrição"
+          },
+          "figures_ocr": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Figures Ocr",
+            "description": "Figuras cujo texto foi lido (OCR)"
+          },
+          "figures_skipped": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Figures Skipped",
+            "description": "Figuras sem texto: pequenas demais, além do limite ou falha na análise"
           }
         },
         "type": "object",

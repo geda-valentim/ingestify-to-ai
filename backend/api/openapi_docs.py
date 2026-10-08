@@ -10,7 +10,10 @@ from fastapi.routing import APIRoute, APIWebSocketRoute
 # (projects, IAM, purge_source, image analysis, live...); see docs/CHANGELOG.md.
 # 1.2.0: image assets of a document conversion (image_mode, page_images,
 # GET /jobs/{job_id}/assets/{name}), backward compatible.
-API_VERSION = "1.2.0"
+# 1.3.0: figure descriptions / OCR inlined in the markdown (describe_images,
+# ocr_images; figures_* counts and assets[].description / ocr_text in the result),
+# docling_preset on /convert, backward compatible.
+API_VERSION = "1.3.0"
 
 API_DESCRIPTION = """
 API assíncrona que converte documentos (PDF, DOCX, HTML, PPTX, XLSX...) em Markdown,

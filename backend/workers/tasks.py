@@ -117,7 +117,7 @@ def _with_durable_image_options(job_id: str, options: dict) -> dict:
     them whatever its Celery message carries. Unchanged for a job without assets.
     """
     durable = conversion_assets.durable_options(job_id, SessionLocal)
-    if conversion_assets.wants_assets(durable):
+    if conversion_assets.wants_assets(durable) or conversion_assets.wants_figures(durable):
         return {**options, **durable}
     return options
 
@@ -137,6 +137,23 @@ def _asset_collector(job_id: str, options: dict, page_number: int = None):
             max_bytes=int(settings.conversion_asset_max_total_mb) * 1024 * 1024)
     return AssetCollector(job_id, get_minio_client, page_offset=(page_number - 1) if page_number else 0,
                           budget=budget)
+
+
+def _figure_collector(job_id: str, options: dict, page_number: int = None):
+    """The FigureCollector of a run that asked for describe_images / ocr_images, else None."""
+    if not conversion_assets.wants_figures(options):
+        return None
+    from workers.image_assets import FigureCollector
+
+    return FigureCollector(job_id, get_minio_client, page_offset=(page_number - 1) if page_number else 0)
+
+
+def _converter_for(options: dict, collector, figures):
+    """get_converter exactly as before unless the run needs docling's picture images."""
+    preset = options.get("docling_preset")
+    if collector is not None or figures is not None:
+        return get_converter(preset=preset, picture_images=conversion_assets.wants_pictures(options))
+    return get_converter(preset=preset)
 
 
 def _publish_manifest(job_id: str, markdown: str, manifest):
@@ -170,11 +187,13 @@ def _publish_manifest(job_id: str, markdown: str, manifest):
         return markdown, None
 
 
-def _convert(converter, file_path, options: dict, collector):
-    """convert_to_markdown, called exactly as before when the job wants no assets."""
-    if collector is None:
+def _convert(converter, file_path, options: dict, collector, figures=None):
+    """convert_to_markdown, called exactly as before when the job wants no assets nor figure texts."""
+    if collector is None and figures is None:
         return converter.convert_to_markdown(file_path, options)
-    return converter.convert_to_markdown(file_path, options, assets=collector)
+    if figures is None:
+        return converter.convert_to_markdown(file_path, options, assets=collector)
+    return converter.convert_to_markdown(file_path, options, assets=collector, figures=figures)
 
 
 def _retry_or_settle(task, *, countdown, exc=None, settle=None, **retry_kwargs):
@@ -621,7 +640,7 @@ def process_conversion(
         # Image assets (image_mode / page_images): durable with the job, so every
         # retry and every page of a split honours them
         image_options = conversion_assets.job_options(job)
-        if conversion_assets.wants_assets(image_options):
+        if conversion_assets.wants_assets(image_options) or conversion_assets.wants_figures(image_options):
             options.update(image_options)
         if _strict_audio_task(options):
             current = job.transcript_attempt_id
@@ -720,11 +739,9 @@ def process_conversion(
             logger.info(f"[MAIN JOB {job_id}] Single document - converting directly")
 
             collector = _asset_collector(job_id, options)
-            if collector is not None:
-                converter = get_converter(preset=preset, picture_images=options.get('image_mode') == 'referenced')
-            else:
-                converter = get_converter(preset=preset)
-            result = _convert(converter, file_path, options, collector)
+            figures = _figure_collector(job_id, options)
+            converter = _converter_for(options, collector, figures)
+            result = _convert(converter, file_path, options, collector, figures)
             assets_manifest = None
             if collector is not None:
                 result["markdown"], assets_manifest = _publish_manifest(
@@ -737,6 +754,15 @@ def process_conversion(
 
             logger.info(f"[MAIN JOB {job_id}] Conversion complete")
             redis_client.update_job_progress(job_id, 80)
+
+            if figures is not None:
+                # describe_images / ocr_images: the job completes in the describe stage
+                # (workers/figure_tasks.py), once the texts are inlined; nothing waits here
+                from workers import figure_tasks
+
+                _remove_job_files(job_id)
+                return figure_tasks.begin(job_id, result, callback_url=callback_url,
+                                          has_manifest=assets_manifest is not None)
 
             # Store result in Redis
             redis_client.set_job_result(job_id, result)
@@ -1201,11 +1227,8 @@ def _run_page_conversion(
     es_client = get_es_client()
     # Page assets are stored under the MAIN job, with the absolute page number
     collector = _asset_collector(parent_job_id, options, page_number)
-    if collector is not None:
-        converter = get_converter(preset=options.get("docling_preset"),
-                                  picture_images=options.get("image_mode") == "referenced")
-    else:
-        converter = get_converter(preset=options.get("docling_preset"))
+    figures = _figure_collector(parent_job_id, options, page_number)
+    converter = _converter_for(options, collector, figures)
 
     log_prefix = f"[PAGE JOB {page_job_id}]"
     logger.info(f"{log_prefix} Processing page {page_number} of job {parent_job_id}")
@@ -1261,7 +1284,7 @@ def _run_page_conversion(
             logger.info(f"{log_prefix} Extracted page {page_number} to {page_path}")
 
         # Convert page
-        result = _convert(converter, page_path, options, collector)
+        result = _convert(converter, page_path, options, collector, figures)
 
         # Store page result in Redis
         redis_client.set_job_result(page_job_id, result)
@@ -1579,6 +1602,7 @@ def merge_pages_task(
 
         # Collect all page results in order
         page_results = []
+        page_figures = {}
         total_words = 0
 
         for page_job_id in page_job_ids:
@@ -1592,6 +1616,7 @@ def merge_pages_task(
             if page_result:
                 page_results.append((page_num, page_result["markdown"], page_result.get("assets") or [],
                                      page_result.get("assets_skipped")))
+                page_figures[page_num] = page_result.get("figures") or []
                 total_words += page_result.get("metadata", {}).get("words", 0)
 
         # Sort by page number
@@ -1630,6 +1655,20 @@ def merge_pages_task(
         if assets_manifest is not None:
             merged_result["assets"] = conversion_assets.public_assets(assets_manifest["assets"])
             merged_result["assets_skipped"] = assets_manifest["skipped"]
+
+        from workers import figure_tasks
+
+        if page_figures and figure_tasks.wanted(parent_job_id):
+            # describe_images / ocr_images: the figures of every page, in page order; the
+            # describe stage completes the MAIN job once their texts are inlined
+            merged_result["figures"] = [entry for page in sorted(page_figures) for entry in page_figures[page]]
+            redis_client.set_job_status(job_id=merge_job_id, job_type="merge", status="completed",
+                                        parent_job_id=parent_job_id, completed_at=datetime.utcnow())
+            _remove_job_files(parent_job_id)
+            figure_tasks.begin(parent_job_id, merged_result, total_pages=total_pages,
+                               has_manifest=assets_manifest is not None)
+            logger.info(f"[MERGE JOB {merge_job_id}] Merged; describe stage started for {parent_job_id}")
+            return {"merge_job_id": merge_job_id, "pages_merged": total_pages, "describing_figures": True}
 
         # Store merged result in main job (Redis)
         redis_client.set_job_result(parent_job_id, merged_result)

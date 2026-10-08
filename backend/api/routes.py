@@ -134,6 +134,34 @@ PAGE_IMAGES_FORM_DESCRIPTION = (
 )
 
 
+DESCRIBE_IMAGES_FORM_DESCRIPTION = (
+    "Se true, cada figura do documento (PictureItem do Docling; nunca as páginas "
+    "renderizadas) é descrita pelo modelo de visão Florence-2 e a descrição entra no "
+    "markdown logo depois da figura, num blockquote `> **Figure (description, English):** ...`. "
+    "As descrições saem em INGLÊS por enquanto. Funciona com image_mode `none` (o "
+    "placeholder `<!-- image -->` é trocado pelo blockquote) ou `referenced` (a referência "
+    "à imagem fica e o blockquote vem em seguida). Imagens iguais (mesmo sha256) são "
+    "descritas uma vez; figuras menores que CONVERSION_ASSET_MIN_PX ou além de "
+    "CONVERSION_FIGURE_MAX_COUNT por documento são puladas. O job fica `processing` até o "
+    "texto entrar no markdown. Contagens em `figures_described` / `figures_skipped` de "
+    "GET /jobs/{job_id}/result. Padrão false"
+)
+OCR_IMAGES_FORM_DESCRIPTION = (
+    "Se true, o texto dentro de cada figura é lido (Florence-2 `<OCR>`) e entra no "
+    "markdown depois da figura: `> **Text in figure (OCR):** ...`. Mesmas regras de "
+    "describe_images (pode ser usado junto ou sozinho). Contagem em `figures_ocr`. Padrão false"
+)
+
+
+def _figure_options(describe_images, ocr_images) -> Tuple[bool, bool]:
+    """(describe_images, ocr_images) of a request; direct Python callers pass the Form() defaults."""
+    from fastapi.params import Body, Param
+
+    describe_images = False if isinstance(describe_images, (Param, Body)) else describe_images is True
+    ocr_images = False if isinstance(ocr_images, (Param, Body)) else ocr_images is True
+    return describe_images, ocr_images
+
+
 def _image_options(image_mode, page_images) -> Tuple[str, bool]:
     """(image_mode, page_images) of a request; direct Python callers pass the Form() defaults."""
     from fastapi.params import Body, Param
@@ -198,6 +226,8 @@ async def upload_and_convert(
     ),
     image_mode: Literal["none", "referenced"] = Form("none", description=IMAGE_MODE_FORM_DESCRIPTION),
     page_images: bool = Form(False, description=PAGE_IMAGES_FORM_DESCRIPTION),
+    describe_images: bool = Form(False, description=DESCRIBE_IMAGES_FORM_DESCRIPTION),
+    ocr_images: bool = Form(False, description=OCR_IMAGES_FORM_DESCRIPTION),
     request: Request = None,
     location: LocationFields = Depends(upload_location_form),
     current_user: User = Depends(require("documents.convert")),
@@ -246,6 +276,36 @@ async def upload_and_convert(
       -H "X-API-Key: your-api-key" \\
       -F "file=@apostila.pdf" -F "project=Cursos" \\
       -F "image_mode=referenced" -F "page_images=true" -F "purge_source=true"
+    ```
+
+    ## Descrição e OCR das figuras (`describe_images`, `ocr_images`)
+    - `describe_images=true`: cada figura (PictureItem do Docling; nunca as páginas
+      renderizadas) é descrita pelo Florence-2 no worker de visão. **As descrições saem
+      em inglês** por enquanto. `ocr_images=true`: o texto dentro da figura é lido (`<OCR>`).
+    - No markdown, na posição de cada figura (ordem do documento):
+      ```
+      ![Image](/jobs/{job_id}/assets/p0001-img01-<sha12>.png)   (só com image_mode=referenced)
+
+      > **Figure (description, English):** A bar chart comparing ...
+      > **Text in figure (OCR):** Revenue 2024
+      ```
+      Com `image_mode=none` o placeholder `<!-- image -->` é trocado pelo blockquote.
+      Linha sem texto é omitida; figura sem nenhum texto fica como estava.
+    - Imagens idênticas (mesmo sha256, no documento inteiro) vão ao modelo uma vez só.
+      Figuras menores que `CONVERSION_ASSET_MIN_PX`, além de `CONVERSION_FIGURE_MAX_COUNT`
+      (padrão 50 imagens únicas) ou cuja análise falhou ficam sem texto e são contadas
+      em `figures_skipped`; nunca derrubam o job.
+    - O job fica `processing` (progresso acima de 90%) até o texto entrar no markdown.
+      `GET /jobs/{job_id}/result` traz `figures_described`, `figures_ocr`,
+      `figures_skipped` e, em cada item de `assets`, `description` / `ocr_text`.
+    - `purge_source` só roda depois disso. Outra combinação dessas opções é outro job
+      (não é duplicata).
+
+    ```bash
+    curl -X POST http://localhost:8000/upload \\
+      -H "X-API-Key: your-api-key" \\
+      -F "file=@relatorio.pdf" -F "project=Relatórios" \\
+      -F "image_mode=referenced" -F "describe_images=true" -F "ocr_images=true"
     ```
 
     ## Arquivos de origem (`purge_source`)
@@ -301,7 +361,8 @@ async def upload_and_convert(
 
     known_media = media_input_kind(filename, file.content_type)
     image_mode, page_images = _image_options(image_mode, page_images)
-    image_options = conversion_assets.requested_options(image_mode, page_images)
+    describe_images, ocr_images = _figure_options(describe_images, ocr_images)
+    image_options = conversion_assets.requested_options(image_mode, page_images, describe_images, ocr_images)
     options, transcription_profile, transcription_profile_hash = transcription_admission(
         settings, known_media=known_media, base_options={"docling_preset": docling_preset, **image_options},
         language=language, diarize=diarize, min_speakers=min_speakers,
@@ -320,7 +381,7 @@ async def upload_and_convert(
 
         # Check if file already processed by this user in this project
         operation_key = None if transcription_profile_hash else conversion_operation_key(
-            docling_preset, image_mode, page_images)
+            docling_preset, image_mode, page_images, describe_images, ocr_images)
         existing_job, reprocess_note = find_duplicate_job(
             db, current_user.id, file_checksum, upload_location,
             transcription_profile_hash=transcription_profile_hash,
@@ -384,7 +445,7 @@ async def upload_and_convert(
             if operation_key is not None:
                 save_operation_key(db, db_job, operation_key)
             if known_media is not True:  # a document, or a source not known yet
-                conversion_assets.save_options(db, db_job, image_mode, page_images)
+                conversion_assets.save_options(db, db_job, image_mode, page_images, describe_images, ocr_images)
             db.commit()
             logger.info(f"Job {job_id} created in MySQL with name: {job_name} and checksum: {file_checksum}")
         except Exception as e:
@@ -981,6 +1042,11 @@ async def convert_document(
         description="Nome de identificação opcional (padrão: nome do arquivo ou URL)"
     ),
     tags: Optional[str] = Form(None, description=TAGS_FORM_DESCRIPTION),
+    docling_preset: Optional[Literal["fast", "balanced", "quality"]] = Form(
+        None,
+        description="Preset do Docling para PDF: 'fast' (só texto, sem OCR), 'balanced' (com imagens), "
+                    "'quality' (com OCR, para PDFs escaneados). Omitido: padrões do servidor (DOCLING_ENABLE_*)",
+    ),
     authorization: Optional[str] = Header(
         None,
         description="Autenticação do Ingestify ('Bearer {jwt}'). Nunca é repassada a provedores externos."
@@ -1002,6 +1068,8 @@ async def convert_document(
     ),
     image_mode: Literal["none", "referenced"] = Form("none", description=IMAGE_MODE_FORM_DESCRIPTION),
     page_images: bool = Form(False, description=PAGE_IMAGES_FORM_DESCRIPTION),
+    describe_images: bool = Form(False, description=DESCRIBE_IMAGES_FORM_DESCRIPTION),
+    ocr_images: bool = Form(False, description=OCR_IMAGES_FORM_DESCRIPTION),
     request: Request = None,
     location: LocationFields = Depends(upload_location_form),
     current_user: User = Depends(require("documents.convert")),
@@ -1057,6 +1125,14 @@ async def convert_document(
     `GET /jobs/{job_id}/result` e cada imagem em `GET /jobs/{job_id}/assets/{name}`.
     Mesmas regras de `/upload` (retenção com purge_source, deduplicação).
 
+    ## Descrição e OCR das figuras (`describe_images`, `ocr_images`)
+    `describe_images=true` descreve cada figura com o Florence-2 (descrições em inglês);
+    `ocr_images=true` lê o texto dentro dela. O texto entra no markdown, num blockquote
+    logo depois da figura, e o job só termina depois disso. Mesmas regras de `/upload`.
+
+    ## Preset (`docling_preset`)
+    `fast`, `balanced` ou `quality`, como em `/upload`. Omitido: padrões do servidor.
+
     ## Formatos suportados
     PDF, DOCX, DOC, HTML, PPTX, XLSX, RTF, ODT
 
@@ -1091,9 +1167,15 @@ async def convert_document(
 
     known_media = media_input_kind(file.filename, file.content_type) if file else None
     image_mode, page_images = _image_options(image_mode, page_images)
-    image_options = conversion_assets.requested_options(image_mode, page_images)
+    describe_images, ocr_images = _figure_options(describe_images, ocr_images)
+    image_options = conversion_assets.requested_options(image_mode, page_images, describe_images, ocr_images)
+    from fastapi.params import Body, Param
+
+    if isinstance(docling_preset, (Param, Body)):  # called directly (tests): the Form() default
+        docling_preset = None
+    base_options = {**({"docling_preset": docling_preset} if docling_preset else {}), **image_options}
     options, transcription_profile, transcription_profile_hash = transcription_admission(
-        settings, known_media=known_media, base_options=image_options or None, language=language,
+        settings, known_media=known_media, base_options=base_options or None, language=language,
         diarize=diarize, min_speakers=min_speakers, max_speakers=max_speakers,
         include_word_timestamps=include_word_timestamps)
 
@@ -1136,7 +1218,7 @@ async def convert_document(
                 transcription_profile_hash=transcription_profile_hash,
                 purge_source=purge_source is True,
                 operation_key=None if transcription_profile_hash else conversion_operation_key(
-                    None, image_mode, page_images),
+                    docling_preset, image_mode, page_images, describe_images, ocr_images),
                 assets_requested=bool(image_options))
 
             if existing_job:
@@ -1203,9 +1285,10 @@ async def convert_document(
             if purge_source is True:
                 save_purge_option(db, db_job)
             if file_checksum and not transcription_profile_hash:
-                save_operation_key(db, db_job, conversion_operation_key(None, image_mode, page_images))
+                save_operation_key(db, db_job, conversion_operation_key(
+                    docling_preset, image_mode, page_images, describe_images, ocr_images))
             if known_media is not True:  # a document, or a source not known yet
-                conversion_assets.save_options(db, db_job, image_mode, page_images)
+                conversion_assets.save_options(db, db_job, image_mode, page_images, describe_images, ocr_images)
             db.commit()
             checksum_info = f" and checksum: {file_checksum}" if file_checksum else ""
             logger.info(f"Job {job_id} created in MySQL with name: {job_name} (source_type: {source_type}){checksum_info}")
@@ -2041,6 +2124,13 @@ async def get_job_result(
     elif isinstance(result_data.get("assets"), list):
         # A page job's raw Redis result: only the published fields
         result_data = {**result_data, "assets": conversion_assets.public_assets(result_data["assets"])}
+
+    # Figure descriptions / OCR counts: kept in the metadata (Elasticsearch keeps only
+    # markdown + metadata), lifted to the result's top level
+    figure_counts = (result_data.get("metadata") or {}).get("figures")
+    if isinstance(figure_counts, dict) and result_data.get("figures_described") is None:
+        result_data = {**result_data, **{key: int(figure_counts.get(key) or 0)
+                                         for key in conversion_assets.FIGURE_COUNTS}}
 
     # Build response
     response_data = {

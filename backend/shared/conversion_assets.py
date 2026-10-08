@@ -50,6 +50,9 @@ logger = logging.getLogger(__name__)
 
 IMAGE_MODE_OPTION = "image_mode"
 PAGE_IMAGES_OPTION = "page_images"
+# Figure descriptions / OCR (shared/figure_descriptions.py)
+DESCRIBE_IMAGES_OPTION = "describe_images"
+OCR_IMAGES_OPTION = "ocr_images"
 IMAGE_MODE_NONE = "none"
 IMAGE_MODE_REFERENCED = "referenced"
 IMAGE_MODES = (IMAGE_MODE_NONE, IMAGE_MODE_REFERENCED)
@@ -79,32 +82,40 @@ def normalize_options(image_mode: Optional[str], page_images) -> tuple:
     return mode, page_images is True
 
 
-def requested_options(image_mode: str, page_images: bool) -> dict:
+def requested_options(image_mode: str, page_images: bool, describe_images: bool = False,
+                      ocr_images: bool = False) -> dict:
     """The non-default options, as stored in the job's requested configuration."""
     options = {}
     if image_mode != IMAGE_MODE_NONE:
         options[IMAGE_MODE_OPTION] = image_mode
     if page_images:
         options[PAGE_IMAGES_OPTION] = True
+    if describe_images is True:
+        options[DESCRIBE_IMAGES_OPTION] = True
+    if ocr_images is True:
+        options[OCR_IMAGES_OPTION] = True
     return options
 
 
-def save_options(db, job: Job, image_mode: str, page_images: bool) -> None:
+def save_options(db, job: Job, image_mode: str, page_images: bool, describe_images: bool = False,
+                 ocr_images: bool = False) -> None:
     """Durable with the job (JobConfiguration.options); nothing stored for the defaults. No commit."""
     from shared.job_source import _set_requested_option
 
-    for key, value in requested_options(image_mode, page_images).items():
+    for key, value in requested_options(image_mode, page_images, describe_images, ocr_images).items():
         _set_requested_option(db, job, key, value)
 
 
 def job_options(job: Optional[Job]) -> dict:
-    """{"image_mode": ..., "page_images": ...} of a job, from its requested configuration."""
+    """{"image_mode", "page_images", "describe_images", "ocr_images"} of a job, from its requested configuration."""
     row = getattr(job, "configuration_row", None) if job is not None else None
     options = getattr(row, "options", None) if row is not None else None
     options = options if isinstance(options, dict) else {}
     mode = options.get(IMAGE_MODE_OPTION) or IMAGE_MODE_NONE
     return {IMAGE_MODE_OPTION: mode if mode in IMAGE_MODES else IMAGE_MODE_NONE,
-            PAGE_IMAGES_OPTION: options.get(PAGE_IMAGES_OPTION) is True}
+            PAGE_IMAGES_OPTION: options.get(PAGE_IMAGES_OPTION) is True,
+            DESCRIBE_IMAGES_OPTION: options.get(DESCRIBE_IMAGES_OPTION) is True,
+            OCR_IMAGES_OPTION: options.get(OCR_IMAGES_OPTION) is True}
 
 
 def durable_options(job_id: str, session_factory) -> dict:
@@ -120,6 +131,27 @@ def durable_options(job_id: str, session_factory) -> dict:
 def wants_assets(options: Optional[dict]) -> bool:
     options = options or {}
     return options.get(IMAGE_MODE_OPTION) == IMAGE_MODE_REFERENCED or options.get(PAGE_IMAGES_OPTION) is True
+
+
+def wants_figures(options: Optional[dict]) -> bool:
+    """describe_images and/or ocr_images: the figures go through the vision worker."""
+    options = options or {}
+    return options.get(DESCRIBE_IMAGES_OPTION) is True or options.get(OCR_IMAGES_OPTION) is True
+
+
+def wants_pictures(options: Optional[dict]) -> bool:
+    """Docling must produce the figures' images (referenced assets, or descriptions / OCR)."""
+    options = options or {}
+    return options.get(IMAGE_MODE_OPTION) == IMAGE_MODE_REFERENCED or wants_figures(options)
+
+
+def durable_conversion_options(options: Optional[dict]) -> dict:
+    """The image / figure options worth carrying into a run (none when all are defaults)."""
+    options = options or {}
+    if wants_assets(options) or wants_figures(options):
+        return {key: options[key] for key in (IMAGE_MODE_OPTION, PAGE_IMAGES_OPTION, DESCRIBE_IMAGES_OPTION,
+                                              OCR_IMAGES_OPTION) if key in options}
+    return {}
 
 
 # ---------------------------------------------------------------------------
@@ -148,6 +180,9 @@ def asset_url(job_id: str, name: str) -> str:
 
 _NAME_ORDER = re.compile(r"^p(\d{4})-(?:img(\d+)|page)-")
 PUBLIC_FIELDS = ("name", "kind", "page", "bbox", "sha256", "mime", "width", "height", "size_bytes", "url")
+# Published only when the stored asset carries them (describe_images / ocr_images)
+FIGURE_FIELDS = ("description", "ocr_text")
+FIGURE_COUNTS = ("figures_described", "figures_ocr", "figures_skipped")
 
 
 def sort_key(asset: dict):
@@ -160,7 +195,9 @@ def sort_key(asset: dict):
 
 def public_asset(asset: dict) -> dict:
     """Only the published fields of an asset, whatever a stored copy carries."""
-    return {field: asset.get(field) for field in PUBLIC_FIELDS}
+    public = {field: asset.get(field) for field in PUBLIC_FIELDS}
+    public.update({field: asset.get(field) for field in FIGURE_FIELDS if field in asset})
+    return public
 
 
 def public_assets(assets) -> list:
@@ -295,8 +332,12 @@ def result_fields(job: Optional[Job]) -> dict:
     manifest = manifest_of(job)
     if manifest is None:
         return {}
-    return {"assets": [public_asset(a) for a in assets_of(job)],
-            "assets_skipped": merge_skipped(manifest.get("skipped"))}
+    fields = {"assets": [public_asset(a) for a in assets_of(job)],
+              "assets_skipped": merge_skipped(manifest.get("skipped"))}
+    figures = manifest.get("figures")
+    if isinstance(figures, dict):  # describe_images / ocr_images counts
+        fields.update({key: int(figures.get(key) or 0) for key in FIGURE_COUNTS})
+    return fields
 
 
 _REFERENCE = r"!\[[^\]]*\]\({url}\)"

@@ -10,7 +10,30 @@ import { parseAssetPath, useAssetUrl } from "@/hooks/use-asset-url";
 import { useToast } from "@/hooks/use-toast";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import type { ConversionAsset, ConversionAssetsSkipped, JobStatusResponse } from "@/types/api";
+import type { ConversionAsset, ConversionAssetsSkipped, ConversionResult, JobStatusResponse } from "@/types/api";
+
+/** describe_images / ocr_images counts of a result; null when the job asked for neither. */
+export type FigureCounts = Pick<ConversionResult, "figures_described" | "figures_ocr" | "figures_skipped">;
+
+export function hasFigureCounts(counts?: FigureCounts | null): counts is FigureCounts {
+  return !!counts && [counts.figures_described, counts.figures_ocr, counts.figures_skipped].some((n) => typeof n === "number");
+}
+
+/** "3 figures described · 2 with text read (OCR) · 1 skipped", from the result's counts. */
+export function FigureSummary({ counts }: { counts: FigureCounts }) {
+  const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+  const parts = [
+    typeof counts.figures_described === "number" &&
+      `${plural(counts.figures_described, "figure", "figures")} described (English)`,
+    typeof counts.figures_ocr === "number" && `${plural(counts.figures_ocr, "figure", "figures")} with text read (OCR)`,
+    counts.figures_skipped ? `${counts.figures_skipped} skipped (too small or over the per-document limit)` : null,
+  ].filter(Boolean);
+  return (
+    <p className="text-xs text-muted-foreground" data-testid="job-figure-counts">
+      {parts.join(" · ")}. The text is inline in the Markdown, below each figure.
+    </p>
+  );
+}
 
 /** Thumbnails are fetched one request each: show them a page at a time. */
 const PAGE_SIZE = 24;
@@ -79,6 +102,18 @@ function AssetCard({ asset, jobId, available }: { asset: ConversionAsset; jobId:
         <p className="text-muted-foreground">
           {asset.width}×{asset.height} px · {formatBytes(asset.size_bytes)}
         </p>
+        {asset.description && (
+          <p className="line-clamp-4" title={asset.description} data-testid="job-asset-description">
+            <span className="font-medium">Description: </span>
+            {asset.description}
+          </p>
+        )}
+        {asset.ocr_text && (
+          <p className="line-clamp-4 whitespace-pre-line" title={asset.ocr_text} data-testid="job-asset-ocr">
+            <span className="font-medium">Text (OCR): </span>
+            {asset.ocr_text}
+          </p>
+        )}
         <Button
           variant="outline"
           size="sm"
@@ -106,11 +141,13 @@ export function JobImages({
   status,
   assets,
   skipped,
+  figures,
   fileName,
 }: {
   status: JobStatusResponse;
   assets: ConversionAsset[];
   skipped?: ConversionAssetsSkipped | null;
+  figures?: FigureCounts | null;
   fileName: string;
 }) {
   const { toast } = useToast();
@@ -173,6 +210,7 @@ export function JobImages({
               Kept with the job. &quot;Delete original files&quot; deletes them too.
             </p>
           )}
+          {hasFigureCounts(figures) && <FigureSummary counts={figures} />}
           {skippedTotal > 0 && (
             <p className="text-xs text-muted-foreground">
               {skippedTotal} picture{skippedTotal > 1 ? "s were" : " was"} not saved (

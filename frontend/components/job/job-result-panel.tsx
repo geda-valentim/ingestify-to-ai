@@ -114,6 +114,7 @@ export function JobResultPanel({
           status={status}
           assets={result.result.assets}
           assetsSkipped={result.result.assets_skipped}
+          figures={result.result}
         />
       )}
     </div>

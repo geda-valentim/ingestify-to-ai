@@ -159,6 +159,7 @@ class DoclingConverter:
         file_path: Path,
         options: Dict[str, Any] = None,
         assets=None,
+        figures=None,
     ) -> Dict[str, Any]:
         """
         Convert document to markdown
@@ -168,6 +169,9 @@ class DoclingConverter:
             options: Conversion options (`image_mode`, `page_images`: image assets)
             assets: A workers.image_assets.AssetCollector when the job asked for
                 image assets; None keeps today's output exactly.
+            figures: A workers.image_assets.FigureCollector when the job asked for
+                describe_images / ocr_images (the result then carries `figures`,
+                the entries the describe stage works from)
 
         Returns:
             Dictionary with markdown content and metadata (and `assets` /
@@ -223,9 +227,10 @@ extracted using Docling.
             else:
                 # Use Docling for conversion
                 result = self.converter.convert(str(file_path))
-                if assets is not None and options.get("image_mode") == "referenced":
+                referenced = assets is not None and options.get("image_mode") == "referenced"
+                if referenced or figures is not None:
                     from workers.image_assets import extract_pictures
-                    markdown_content = extract_pictures(result.document, assets)
+                    markdown_content = extract_pictures(result.document, assets if referenced else None, figures)
                 else:
                     markdown_content = result.document.export_to_markdown()
 
@@ -250,6 +255,8 @@ extracted using Docling.
                     from workers.image_assets import render_pages
                     render_pages(file_path, assets)
                 converted.update(assets.result_fields())
+            if figures is not None:
+                converted.update(figures.result_fields())
             return converted
 
         except Exception as e:
@@ -268,8 +275,9 @@ def get_converter(preset: str = None, picture_images: bool = False) -> DoclingCo
     Args:
         preset: Optional preset name ('fast', 'balanced', 'quality')
                 If None, uses config defaults
-        picture_images: image_mode=referenced needs docling's picture crops
-                (generate_picture_images) whatever the preset says
+        picture_images: image_mode=referenced (and describe_images / ocr_images)
+                need docling's picture crops (generate_picture_images) whatever
+                the preset says
 
     Returns:
         DoclingConverter instance
