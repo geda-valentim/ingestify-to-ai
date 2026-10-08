@@ -1638,3 +1638,24 @@ class TestTheHeartbeatAndTheRouteAgree:
         # One synchronous publish at start (so a request arriving immediately
         # after boot does not read an empty key), then the loop.
         assert len(published) >= 3
+
+
+def test_wait_gives_the_db_connection_back_before_waiting(app, db, users, dispatch, monkeypatch):
+    """A wait=true call must not hold a pooled connection while it waits on Celery.
+
+    Holding it through the wait (up to vision_request_timeout_seconds) let a burst of
+    describe/OCR calls exhaust the API's whole pool on 2026-10-08. A session outside a
+    transaction holds no pooled connection.
+    """
+    seen = {}
+    real = image_routes._wait_for_result
+
+    async def spy(async_result, timeout_seconds):
+        seen["in_transaction"] = db.in_transaction()
+        return await real(async_result, timeout_seconds)
+
+    monkeypatch.setattr(image_routes, "_wait_for_result", spy)
+    response = _post_json(app, "/images/describe", {"image_base64": PNG_B64, "filename": "f.png"}, user=users)
+
+    assert response.status_code == 200, response.body
+    assert seen == {"in_transaction": False}

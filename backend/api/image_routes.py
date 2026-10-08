@@ -690,6 +690,15 @@ async def _run_vision(
                 "project": location.project_info() if location else None,
                 "folder": location.folder_info() if location else None}
 
+    # Read what the response needs from the session now, then end its transaction so the
+    # connection goes back to the pool: the wait below can last
+    # vision_request_timeout_seconds, and holding a connection through it let a burst of
+    # wait=true calls exhaust the pool for the whole API (2026-10-08). Nothing below
+    # touches the database, so no connection is checked out again during the wait.
+    project_info = location.project_info() if location else None
+    folder_info = location.folder_info() if location else None
+    db.commit()
+
     result = await _wait_for_result(async_result, settings.vision_request_timeout_seconds)
 
     if result is None:
@@ -723,8 +732,8 @@ async def _run_vision(
         "height": payload["height"],
         "model": _model_info(payload),
         "duration_ms": int(payload.get("duration_ms", 0)),
-        "project": location.project_info() if location else None,
-        "folder": location.folder_info() if location else None,
+        "project": project_info,
+        "folder": folder_info,
         "_payload": payload,
     }
 

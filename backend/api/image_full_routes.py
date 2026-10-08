@@ -179,17 +179,34 @@ def submit(request, http_request, image_bytes, filename, current_user, db, tags,
     return job_id, attempt
 
 
+def _terminal_job(bind, job_id):
+    """A short-lived read of the job: (status, result path) once it has a result, else None."""
+    from sqlalchemy.orm import Session
+
+    with Session(bind=bind) as s:
+        job = s.get(Job, job_id)
+        if job and job.status.value in TERMINAL and job.minio_result_path:
+            return job.status.value, job.minio_result_path
+    return None
+
+
 async def run_full(request, http_request, image_bytes, filename, user, db, tags, plan):
     job_id, attempt = await run_in_threadpool(submit, request, http_request, image_bytes, filename, user, db, tags, plan)
     if request.wait:
+        # Give the request's connection back while waiting (up to the vision timeout):
+        # holding it, and polling it on the event loop, exhausted the pool under load.
+        # commit() ends the transaction (releasing the connection); polling below uses
+        # its own short-lived sessions off the event loop.
+        bind = db.get_bind()
+        db.commit()
         deadline = asyncio.get_running_loop().time()+get_settings().vision_request_timeout_seconds
         while asyncio.get_running_loop().time() < deadline:
-            db.expire_all()
-            job = db.get(Job, job_id)
-            if job and job.status.value in TERMINAL and job.minio_result_path:
+            settled = await run_in_threadpool(_terminal_job, bind, job_id)
+            if settled:
+                status, result_path = settled
                 storage = get_minio_client()
                 try:
-                    payload = json.loads(await run_in_threadpool(storage.download_file, storage.bucket_results, job.minio_result_path))
+                    payload = json.loads(await run_in_threadpool(storage.download_file, storage.bucket_results, result_path))
                 except Exception:
                     # The report can move (DELETE /jobs/{id}/source rewrites it under a
                     # new hash, then deletes the old one): re-read the path and retry
@@ -197,7 +214,7 @@ async def run_full(request, http_request, image_bytes, filename, user, db, tags,
                     continue
                 from shared.schemas import FaceAnalyzeResponse
                 response = FaceAnalyzeResponse if hasattr(request, 'face_options') else ImageFullAnalyzeResponse
-                return response(job_id=job_id, status=job.status.value, attempt=attempt, **payload)
+                return response(job_id=job_id, status=status, attempt=attempt, **payload)
             await asyncio.sleep(.25)
         raise HTTPException(504, {'error_code': 'VISION_TIMEOUT', 'message': 'Análise da imagem continua processando',
             'job_id': job_id, 'poll_url': f'/jobs/{job_id}', 'result_url': f'/jobs/{job_id}/result'})
