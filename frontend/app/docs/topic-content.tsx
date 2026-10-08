@@ -1198,7 +1198,7 @@ const MEDIA_COPY = {
       ],
       [
         "describe_images",
-        "Opcional, padrão false. true descreve cada figura (modelo de visão Florence-2, em inglês) logo abaixo dela no Markdown, com image_mode none ou referenced. Veja Descrição e OCR de figuras abaixo.",
+        "Opcional, padrão false. true descreve cada figura, em inglês, logo abaixo dela no Markdown, com image_mode none ou referenced. Veja Descrição e OCR de figuras abaixo.",
       ],
       [
         "ocr_images",
@@ -1277,12 +1277,12 @@ const MEDIA_COPY = {
       height: "Altura em pixels.",
       size_bytes: "Tamanho do PNG.",
       url: "Caminho relativo da API (/jobs/{job_id_principal}/assets/{name}); prefixe com a URL da API e envie a mesma credencial.",
-      description: "describe_images=true: legenda da figura (Florence-2, em inglês); null se não pedida, página renderizada ou falha.",
+      description: "describe_images=true: legenda da figura em inglês; null se não pedida, página renderizada ou falha.",
       ocr_text: "ocr_images=true: texto lido na figura; null se não pedido, página renderizada ou falha.",
     },
     figuresTitle: "Descrição e OCR de figuras (describe_images, ocr_images)",
     figuresIntro:
-      "Com describe_images=true, cada figura (picture do Docling) recebe uma legenda do modelo de visão Florence-2; com ocr_images=true, o texto dentro dela é lido (OCR). O texto entra no Markdown logo abaixo da figura: com image_mode=referenced a linha ![Image](...) fica e o bloco vem depois; com image_mode=none o placeholder <!-- image --> é substituído pelo bloco. As legendas são em inglês, por enquanto.",
+      "Com describe_images=true, cada figura extraída recebe uma legenda descritiva; com ocr_images=true, o texto dentro dela é lido (OCR). O texto entra no Markdown logo abaixo da figura: com image_mode=referenced a linha ![Image](...) fica e o bloco vem depois; com image_mode=none o placeholder <!-- image --> é substituído pelo bloco. As legendas são em inglês, por enquanto.",
     figuresRows: [
       [
         "O que é lido",
@@ -1388,7 +1388,7 @@ const MEDIA_COPY = {
       ],
       [
         "describe_images",
-        "Optional, default false. true describes every figure (Florence-2 vision model, in English) right below it in the Markdown, with image_mode none or referenced. See Figure descriptions and OCR below.",
+        "Optional, default false. true describes every figure, in English, right below it in the Markdown, with image_mode none or referenced. See Figure descriptions and OCR below.",
       ],
       [
         "ocr_images",
@@ -1467,12 +1467,12 @@ const MEDIA_COPY = {
       height: "Height in pixels.",
       size_bytes: "Size of the PNG.",
       url: "Relative API path (/jobs/{main_job_id}/assets/{name}); prefix it with the API URL and send the same credentials.",
-      description: "describe_images=true: the figure's caption (Florence-2, in English); null when not requested, for page renders, or on failure.",
+      description: "describe_images=true: the figure's caption in English; null when not requested, for page renders, or on failure.",
       ocr_text: "ocr_images=true: the text read in the figure; null when not requested, for page renders, or on failure.",
     },
     figuresTitle: "Figure descriptions and OCR (describe_images, ocr_images)",
     figuresIntro:
-      "With describe_images=true, every figure (a Docling picture) gets a caption from the Florence-2 vision model; with ocr_images=true, the text inside it is read (OCR). The text goes into the Markdown right below the figure: with image_mode=referenced the ![Image](...) line stays and the block follows it; with image_mode=none the <!-- image --> placeholder is replaced by the block. Captions are in English for now.",
+      "With describe_images=true, every extracted figure gets a descriptive caption; with ocr_images=true, the text inside it is read (OCR). The text goes into the Markdown right below the figure: with image_mode=referenced the ![Image](...) line stays and the block follows it; with image_mode=none the <!-- image --> placeholder is replaced by the block. Captions are in English for now.",
     figuresRows: [
       [
         "What is read",
