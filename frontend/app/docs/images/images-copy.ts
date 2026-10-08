@@ -48,7 +48,20 @@ export const IMAGE_COPY = {
     timeoutTitle: "Timeout e limites atuais",
     timeout:
       "Um 504 VISION_TIMEOUT traz detail.job_id, poll_url e result_url; a task continua. Consulte o mesmo job, sem reenviar a imagem. /jobs/{id}/result (ou ?format=json) retorna markdown, metadata e image, incluindo tarefa/configuração, imagem original, texto e regiões. Prefira wait=false para acompanhar a fila sem manter a conexão aberta.",
-    markdownTitle: "Saída em Markdown (output_format)",
+    formatTitle: "Formato da resposta: JSON (padrão) ou Markdown",
+    formatIntro:
+      "JSON é o padrão em todas as rotas de imagem e no resultado do job: se você não enviar nada, recebe o JSON de sempre, sem nenhuma mudança. Markdown é opcional e precisa ser pedido explicitamente.",
+    formatHead: ["Onde", "Sem enviar nada (padrão)", "Para receber Markdown", "Para pedir JSON explicitamente"],
+    formatRows: [
+      ["Envio em JSON: /images/describe, /images/ocr, /images/analyze, /images/faces", "JSON", "\"output_format\": \"markdown\" no corpo", "omita o campo ou \"output_format\": \"json\""],
+      ["Envio multipart: as mesmas rotas com /upload", "JSON", "-F \"output_format=markdown\"", "omita o campo ou -F \"output_format=json\""],
+      ["Leitura: GET /jobs/{job_id}/result", "o formato escolhido no envio (JSON se nada foi enviado)", "?format=markdown", "?format=json"],
+      ["202 enfileirado, 504 timeout e erros", "sempre JSON", "sempre JSON", "sempre JSON"],
+    ],
+    formatJsonExample: "Padrão — sem output_format, a resposta é JSON:",
+    formatMarkdownExample: "Opcional — com output_format=markdown, a resposta é text/markdown:",
+    formatReadExample: "Ler o mesmo job nos dois formatos, a qualquer momento:",
+    markdownTitle: "Detalhes da saída em Markdown",
     markdown:
       "As 8 rotas de envio aceitam output_format=json (padrão, corpo inalterado) ou markdown (campo JSON ou campo do formulário multipart; outro valor responde 422). Com markdown, o sucesso síncrono (describe/ocr; analyze e faces com wait=true) responde 200 text/markdown; charset=utf-8; 202 enfileirado, 504 e erros continuam JSON. O formato fica gravado no job e é o padrão de GET /jobs/{job_id}/result; ?format=json ou ?format=markdown escolhem na leitura (vtt/srt/txt num job de imagem: 422). Títulos em português; o texto do modelo vem como produzido e escapado; image_base64 nunca entra. describe: # Descrição da imagem e metadados; ocr: # Texto da imagem, uma linha por linha detectada (ou \"Nenhum texto detectado.\"); analyze: # rótulo da tarefa e tabela de regiões; full: descrição, OCR, detecções, rostos (v2) e estado de cada tarefa; faces: tabela de rostos com scores de expressão não calibrados. Em full/faces, output_format não entra na Idempotency-Key: repetir a chave com outro formato devolve o mesmo job, só renderizado no formato pedido.",
     retention:
@@ -105,7 +118,20 @@ export const IMAGE_COPY = {
     timeoutTitle: "Timeout and current limitations",
     timeout:
       "A 504 VISION_TIMEOUT includes detail.job_id, poll_url and result_url; the task continues. Follow that job instead of uploading again. /jobs/{id}/result (or ?format=json) returns markdown, metadata and image, including the task/settings, original image, text and regions. Prefer wait=false to follow the queue without keeping the connection open.",
-    markdownTitle: "Markdown output (output_format)",
+    formatTitle: "Response format: JSON (default) or Markdown",
+    formatIntro:
+      "JSON is the default on every image route and on the job result: if you send nothing, you get the same JSON as always, unchanged. Markdown is optional and must be requested explicitly.",
+    formatHead: ["Where", "Sending nothing (default)", "To get Markdown", "To ask for JSON explicitly"],
+    formatRows: [
+      ["JSON requests: /images/describe, /images/ocr, /images/analyze, /images/faces", "JSON", "\"output_format\": \"markdown\" in the body", "omit the field or \"output_format\": \"json\""],
+      ["Multipart requests: the same routes with /upload", "JSON", "-F \"output_format=markdown\"", "omit the field or -F \"output_format=json\""],
+      ["Reading: GET /jobs/{job_id}/result", "the format chosen at submission (JSON if none was sent)", "?format=markdown", "?format=json"],
+      ["202 queued, 504 timeout and errors", "always JSON", "always JSON", "always JSON"],
+    ],
+    formatJsonExample: "Default — without output_format the response is JSON:",
+    formatMarkdownExample: "Optional — with output_format=markdown the response is text/markdown:",
+    formatReadExample: "Read the same job in either format, at any time:",
+    markdownTitle: "Markdown output details",
     markdown:
       "All 8 submission routes accept output_format=json (default, unchanged body) or markdown (a JSON field or a multipart form field; any other value returns 422). With markdown, a synchronous success (describe/ocr; analyze and faces with wait=true) returns 200 text/markdown; charset=utf-8; a queued 202, a 504 and errors stay JSON. The format is stored on the job and is the default of GET /jobs/{job_id}/result; ?format=json or ?format=markdown choose at read time (vtt/srt/txt on an image job: 422). Headings are in Portuguese; model text is kept as produced and escaped; image_base64 is never included. describe: # Descrição da imagem plus metadata; ocr: # Texto da imagem, one line per detected line (or \"Nenhum texto detectado.\"); analyze: # task label and a regions table; full: caption, OCR, detections, faces (v2) and the state of every task; faces: a faces table with uncalibrated expression scores. For full/faces, output_format is not part of the Idempotency-Key: replaying the key with another format returns the same job, rendered in the requested format.",
     retention:
