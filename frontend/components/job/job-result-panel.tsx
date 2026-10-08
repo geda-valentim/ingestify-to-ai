@@ -47,6 +47,21 @@ export function JobResultPanel({
     return <LiveTranscriptView status={status} segments={liveSegments} preloaded={livePreloaded} />;
   }
 
+  // A split PDF whose pages did not all convert: there is no merged Markdown (nor
+  // image list) until a page retry completes it, but each converted page has its own
+  if (status.status === "partial") {
+    return (
+      <div className="flex-1 flex flex-col items-center justify-center p-8 text-center">
+        <XCircle className="h-12 w-12 text-destructive mb-4" />
+        <h3 className="text-lg font-semibold mb-1">Some pages could not be converted</h3>
+        <p className="text-sm text-muted-foreground max-w-md">
+          The merged document is created once every page converts. Open a page in the sidebar to read it, or
+          retry the failed ones.
+        </p>
+      </div>
+    );
+  }
+
   if (status.status !== "completed") {
     return (
       <div className="flex-1 flex flex-col items-center justify-center p-8 text-center">
@@ -93,7 +108,13 @@ export function JobResultPanel({
           token={token}
         />
       ) : (
-        <DocumentView markdown={result.result.markdown} fileName={fileName} />
+        <DocumentView
+          markdown={result.result.markdown}
+          fileName={fileName}
+          status={status}
+          assets={result.result.assets}
+          assetsSkipped={result.result.assets_skipped}
+        />
       )}
     </div>
   );
