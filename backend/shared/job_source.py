@@ -310,6 +310,10 @@ def _delete_temporary_figures(job: Job, minio_factory: Callable) -> None:
     try:
         if not wants_figures(job_options(job)):
             return
+        if getattr(job, "figures_stage", None) == "describing":
+            return  # the describe stage still owns them (pending.json holds the conversion)
+        if job.status == JobStatus.PARTIAL and not purge_requested(job):
+            return  # a page retry can still complete it and run the describe stage
         minio = minio_factory()
         minio.delete_folder(minio.bucket_results, figure_prefix(job.id))
     except Exception as e:  # noqa: BLE001 - never block the purge over it

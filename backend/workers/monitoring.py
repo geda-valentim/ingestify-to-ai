@@ -37,6 +37,23 @@ def _purge_source_if_requested(job_id: str) -> None:
     purge_source_if_requested(job_id, session_factory=SessionLocal, minio_factory=get_minio_client)
 
 
+def _finish_describe_stage(job_id: str) -> bool:
+    """
+    A stuck job in the describe stage of describe_images / ocr_images: its
+    conversion succeeded, so it is completed with the figure texts recorded so far
+    (workers/figure_tasks.py), never failed. False when it is not in that stage.
+    """
+    from workers import figure_tasks
+
+    with SessionLocal() as db:
+        job = db.get(Job, job_id)
+        if job is None or job.figures_stage != figure_tasks.STAGE_DESCRIBING:
+            return False
+    outcome = figure_tasks.force_finish(job_id, "stuck")
+    logger.info(f"[MONITORING] Stuck describe stage of job {job_id} finished: {outcome.get('status')}")
+    return outcome.get("status") == "completed"
+
+
 def _fail_stuck_job(job_id: str, redis_client) -> bool:
     """
     Mark a stuck job FAILED: re-read under its row lock in this session (the row
@@ -45,6 +62,8 @@ def _fail_stuck_job(job_id: str, redis_client) -> bool:
     """
     from shared.job_source import lock_job
 
+    if _finish_describe_stage(job_id):
+        return True
     error_message = (f"Job stuck in processing for >{settings.monitoring_stuck_job_threshold_minutes} "
                      f"minutes - marked as failed by monitoring system")
     db = SessionLocal()
@@ -168,6 +187,14 @@ def detect_stuck_jobs():
                 stuck_jobs_count += 1
         except Exception as e:
             logger.error(f"[MONITORING] Error processing stuck job {job_id}: {e}")
+
+    # Describe stages whose watchdog chain died: re-armed from the durable marker
+    try:
+        from workers import figure_tasks
+
+        figure_tasks.sweep(limit=settings.monitoring_batch_size)
+    except Exception as e:
+        logger.error(f"[MONITORING] Describe-stage sweep failed: {e}")
 
     # 2. Detect stuck PAGES
     stuck_pages = get_stuck_pages(

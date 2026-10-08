@@ -120,6 +120,11 @@ class Settings(BaseSettings):
     # (a vision worker killed mid-task, a vision queue nobody consumes)
     conversion_figure_stall_seconds: int = 900
     conversion_figure_max_chars: int = 4000  # per caption / OCR text inlined in the markdown
+    # Figures of one document queued on the vision worker at a time (the next one goes
+    # when one settles), so a big document never floods the queue
+    conversion_figure_window: int = 2
+    # Hard deadline of a describe stage, even while the vision queue keeps it waiting
+    conversion_figure_max_stage_seconds: int = 21600
 
     # Device / GPU
     # THE single device knob for the whole stack (Docling, Whisper, Florence-2).
@@ -552,6 +557,12 @@ class Settings(BaseSettings):
     def _visibility_timeout_must_outlast_tasks(self) -> "Settings":
         # Otherwise a task still inside its time limit is redelivered to a second
         # worker and runs twice (Celery's Redis broker, with task_acks_late)
+        if self.monitoring_stuck_job_threshold_minutes * 60 <= self.conversion_figure_stall_seconds:
+            raise ValueError(
+                f"MONITORING_STUCK_JOB_THRESHOLD_MINUTES ({self.monitoring_stuck_job_threshold_minutes}) must "
+                f"exceed CONVERSION_FIGURE_STALL_SECONDS ({self.conversion_figure_stall_seconds}) in seconds, or "
+                "the stuck-job monitor acts on a describe stage before its own watchdog does."
+            )
         if self.celery_visibility_timeout_seconds <= self.conversion_figure_stall_seconds:
             raise ValueError(
                 f"CELERY_VISIBILITY_TIMEOUT_SECONDS ({self.celery_visibility_timeout_seconds}) must be "

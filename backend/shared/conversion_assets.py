@@ -237,12 +237,21 @@ class JobAssetBudget:
     get the budget depends on the order the pages finish in.
     """
 
-    def __init__(self, redis_client, job_id: str, *, max_count: int, max_bytes: int):
+    def __init__(self, redis_client, job_id: str, *, max_count: int, max_bytes: int, namespace: str = "assets"):
+        # namespace "figures": the document-wide cap on the temporary figure PNGs of
+        # describe_images / ocr_images (slot = the image's sha256)
         self.redis = getattr(redis_client, "client", redis_client)
-        self.slots_key = f"job:{job_id}:assets:slots"
-        self.bytes_key = f"job:{job_id}:assets:bytes"
+        self.slots_key = f"job:{job_id}:{namespace}:slots"
+        self.bytes_key = f"job:{job_id}:{namespace}:bytes"
         self.max_count = max_count
         self.max_bytes = max_bytes
+
+    def has(self, slot: str) -> bool:
+        """The slot is already reserved (by this job, any page). False when unknown."""
+        try:
+            return bool(self.redis.hexists(self.slots_key, slot))
+        except Exception:  # noqa: BLE001
+            return False
 
     def precheck(self, slot: str) -> tuple:
         """(True | False | None, reason): may this slot still be stored?"""

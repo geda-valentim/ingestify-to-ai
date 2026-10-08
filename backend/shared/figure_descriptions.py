@@ -23,9 +23,13 @@ Pipeline (workers/figure_tasks.py runs it, this module holds the pure parts):
 3. the last vision task (or the stall watchdog) runs the finalize task, which
    `rewrite`s the markdown, completes the job and only then lets purge_source run.
 
-Redis keys (TTL cache; the stage's durable state is `figures/{job_id}/pending.json`):
-`job:{id}:figures:results` (HASH sha256 -> JSON outcome), `job:{id}:figures:total`,
-`job:{id}:figures:finalizing` (one finalize at a time).
+Durable state: `figures/{job_id}/pending.json` (the converted result, the entries,
+the work list) and `Job.figures_stage` / `figures_stage_at` (marker + heartbeat).
+Redis keys (TTL cache, rebuilt from pending.json when lost): `job:{id}:figures:results`
+(HASH sha256 -> JSON outcome), `:total`, `:stage` (work list + options), `:sent`
+(HASH sha256 -> dispatch time: the in-flight window), `:backoff` / `:tick` (dispatch
+retries), `:finalizing` (one finalize at a time); `job:{id}:figures:slots` /
+`:bytes` (document-wide cap on the temporary PNGs of a split PDF).
 """
 import json
 import re
@@ -77,6 +81,28 @@ def total_key(job_id: str) -> str:
 
 def finalizing_key(job_id: str) -> str:
     return f"job:{job_id}:figures:finalizing"
+
+
+def stage_key(job_id: str) -> str:
+    return f"job:{job_id}:figures:stage"
+
+
+def sent_key(job_id: str) -> str:
+    return f"job:{job_id}:figures:sent"
+
+
+def backoff_key(job_id: str) -> str:
+    return f"job:{job_id}:figures:backoff"
+
+
+def tick_key(job_id: str) -> str:
+    return f"job:{job_id}:figures:tick"
+
+
+def stage_keys(job_id: str) -> tuple:
+    """Every Redis key of a describe stage (the finalize lock expires on its own)."""
+    return (results_key(job_id), total_key(job_id), stage_key(job_id), sent_key(job_id), backoff_key(job_id),
+            tick_key(job_id))
 
 
 def caption_task(value: Optional[str]) -> str:
@@ -222,6 +248,30 @@ def rewrite(markdown: str, entries: List[dict], results: Dict[str, dict], *, des
 def strip_markers(markdown: str) -> str:
     """Every figure marker back to docling's placeholder (a stage that cannot finish)."""
     return _MARKER_RE.sub(PLACEHOLDER, markdown or "")
+
+
+def public_result(result):
+    """A stored result without the private fields the merge reads (`_figures`, `_figure_markdown`)."""
+    if not isinstance(result, dict):
+        return result
+    return {key: value for key, value in result.items() if not str(key).startswith("_")}
+
+
+def page_outputs(result: dict) -> dict:
+    """
+    A page job's result with figure entries (describe_images / ocr_images): every
+    public output (markdown, Elasticsearch, MySQL, MinIO) gets the markdown with the
+    markers turned back into placeholders; the marked markdown and the entries stay in
+    private fields only the merge reads.
+    """
+    entries = result.pop("figures", None)
+    if entries is None:
+        return result
+    marked = result.get("markdown") or ""
+    result["markdown"] = strip_markers(marked)
+    result["_figure_markdown"] = marked
+    result["_figures"] = entries
+    return result
 
 
 def annotate_assets(assets: Optional[list], texts: Dict[str, dict]) -> Optional[list]:

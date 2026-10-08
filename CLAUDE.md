@@ -313,6 +313,10 @@ assets:expiry:lock            # One asset-expiry sweep per minute across process
 job:{job_id}:figures:results  # HASH sha256 -> caption/OCR outcome of the describe stage (describe_images / ocr_images; 24h TTL)
 job:{job_id}:figures:total    # Unique figures sent to vision (24h TTL)
 job:{job_id}:figures:finalizing # One describe-stage finalize at a time (600s TTL)
+job:{job_id}:figures:stage    # Work list + options of the describe stage (24h TTL; rebuilt from figures/{id}/pending.json)
+job:{job_id}:figures:sent     # HASH sha256 -> dispatch time: the in-flight window (24h TTL)
+job:{job_id}:figures:backoff / :tick # Dispatch retries while the vision route is full
+job:{job_id}:figures:slots / :bytes # Document-wide cap on a split PDF's temporary figure PNGs (24h TTL)
 ```
 
 **There is no per-page key namespace.** Each page is modelled as a *job* in its own

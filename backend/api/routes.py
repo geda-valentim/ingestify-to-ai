@@ -1799,6 +1799,10 @@ async def delete_job(
         try:
             storage = get_minio_client()
             storage.delete_folder(storage.bucket_results, conversion_assets.asset_prefix(job_id))
+            # describe_images / ocr_images: temporary figure PNGs + pending.json
+            from shared.figure_descriptions import figure_prefix
+
+            storage.delete_folder(storage.bucket_results, figure_prefix(job_id))
         except Exception as e:
             logger.warning(f"Failed to delete the image assets of job {job_id}: {e}")
 
@@ -2096,7 +2100,9 @@ async def get_job_result(
         logger.info(f"Result not in Elasticsearch, trying Redis for job {job_id}")
         redis_result = redis_client.get_job_result(job_id)
         if redis_result:
-            result_data = redis_result
+            from shared.figure_descriptions import public_result
+
+            result_data = public_result(redis_result)
         else:
             raise HTTPException(status_code=404, detail="Resultado não encontrado ou expirado")
 
@@ -2629,8 +2635,10 @@ async def get_page_result_by_number(
             detail=f"Conversão da página {page_number} falhou: {page_status.get('error', 'Erro desconhecido')}"
         )
 
-    # Buscar resultado
-    result_data = redis_client.get_job_result(page_job_id)
+    # Buscar resultado (sem os campos internos do merge: `_figures`, `_figure_markdown`)
+    from shared.figure_descriptions import public_result
+
+    result_data = public_result(redis_client.get_job_result(page_job_id))
 
     if not result_data:
         raise HTTPException(

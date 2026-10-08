@@ -346,37 +346,66 @@ Só figuras, nunca as páginas renderizadas (`page_images`). Qualquer um dos doi
 
 1. Na extração, cada figura vira uma entrada (`name`, `page`, `sha256`, objeto no MinIO,
    âncora). Com `referenced` a figura é o próprio asset e a âncora é a URL dele; com
-   `none` o PNG vai para uma área temporária (`figures/{job_id}/` no bucket de
-   resultados, uma vez por imagem distinta) e o Markdown recebe `<!-- figure:{name} -->`
-   no lugar do placeholder. Um job PAGE guarda suas entradas em `figures` no resultado
-   da página.
-2. Depois da conversão (documento único) ou do merge (PDF dividido) começa a etapa de
-   descrição: o Markdown pendente vai para `figures/{job_id}/pending.json`, as imagens
-   únicas (sha256 no documento inteiro, na ordem do documento, até
-   `CONVERSION_FIGURE_MAX_COUNT` = 50) viram uma task `workers.vision_tasks.describe_figure_task`
-   cada, na fila de visão — colocadas pelo mesmo `dispatch.place_now(feature="vision")`
-   das rotas `/images/*`, então rota, vagas de engine e contabilidade valem igual; sem
-   rota, fila de visão como hoje; "nenhuma engine pode atender" pula a figura. A task
-   que conclui o conjunto (Redis `job:{id}:figures:results`/`:total`) enfileira
-   `workers.tasks.finalize_figures_task`.
-3. O finalize reescreve o Markdown, atualiza o manifesto, grava o resultado (Redis,
-   Elasticsearch, MySQL `completed`), apaga `figures/{job_id}/` e só então roda o
-   `purge_source`.
+   `none` o PNG vai para uma área temporária (`figures/{job_id}/{sha256}.png` no bucket
+   de resultados, um objeto por imagem distinta) e o Markdown recebe
+   `<!-- figure:{name} -->` no lugar do placeholder. Num PDF dividido o limite
+   `CONVERSION_FIGURE_MAX_COUNT` vale para o documento inteiro já antes do upload
+   (reserva no Redis `job:{id}:figures:slots`, como a dos assets; a mesma imagem em
+   várias páginas ocupa uma vaga só).
+2. As saídas públicas de uma página (Markdown do resultado, Elasticsearch,
+   `pages.markdown_content`, `results/{job}/page_N.md`) **nunca** têm os marcadores: saem
+   com `<!-- image -->`. O Markdown marcado e as entradas ficam em campos privados do
+   resultado da página no Redis (`_figure_markdown`, `_figures`), que só o merge lê.
+3. Depois da conversão (documento único) ou do merge (PDF dividido) começa a etapa de
+   descrição: o resultado pendente vai para `figures/{job_id}/pending.json` e o job
+   ganha `jobs.figures_stage = "describing"` e o heartbeat `jobs.figures_stage_at`
+   (migração `d4b80025f6c2`). As imagens únicas (sha256, ordem do documento) são
+   enviadas aos poucos: no máximo `CONVERSION_FIGURE_WINDOW` (2) por job na fila de
+   visão; quando uma termina, a próxima vai. Cada uma é colocada **na hora do envio**
+   pelo mesmo `dispatch.place_now(feature="vision")` das rotas `/images/*` (rota, vagas
+   de engine e contabilidade valem igual; sem rota, fila de visão como hoje). Rota sem
+   vaga agora → nova tentativa com backoff (10 s … 300 s), nunca "pulada" por isso.
+4. **Prioridade:** `workers.vision_tasks.describe_figure_task` vai para a fila de visão
+   com prioridade 9 (Redis: `priority_steps` 0–9, a menor sai primeiro); as tarefas
+   interativas (`/images/*`) não têm prioridade (0). Com `--concurrency=1`, prefetch 1
+   e `acks_late`, um pedido interativo espera no máximo a figura em execução.
+5. A task que conclui o conjunto (Redis `job:{id}:figures:results`) enfileira
+   `workers.tasks.finalize_figures_task`, que reescreve o Markdown, atualiza o
+   manifesto, grava o resultado (Redis, Elasticsearch, MySQL `completed`, marcador
+   `finishing`) e depois roda, cada passo por conta própria e idempotente, o status no
+   Redis, a limpeza de `figures/{job_id}/`, o `purge_source` e o callback. Um passo que
+   falha deixa o marcador em `finishing` e é refeito pelo próximo finalize / varredura —
+   sem refazer a reescrita.
 
-Nenhum worker de conversão espera pela visão (a etapa anda por mensagens), então o pool
-geral não trava contra uma fila de visão ocupada. O job fica `processing` com progresso de
-90 a 99% (`stage: describing_figures`, `figures_done`/`figures_total` no status do Redis),
-e por isso `has_pending_work` segura o purge até o texto entrar.
+Nenhum worker de conversão espera pela visão (a etapa anda por mensagens). O job fica
+`processing` com progresso de 90 a 99% (`stage: describing_figures`,
+`figures_done`/`figures_total` no status do Redis), e por isso `has_pending_work` segura
+o purge até o texto entrar.
 
 **Falhas e limites:** figura menor que `CONVERSION_ASSET_MIN_PX`, além do limite, ilegível,
-ou cuja task falhou (modelo ausente, `CONVERSION_FIGURE_TIMEOUT_SECONDS` = 120 por figura,
-sem engine) fica sem texto e conta em `figures_skipped`; nunca derruba o job. Um worker de
-visão morto no meio nunca responde: um watchdog (`CONVERSION_FIGURE_STALL_SECONDS` = 900,
-rearmado enquanto figuras continuam chegando) finaliza com o que houver. Se o finalize em
-si falhar depois das tentativas automáticas, o job vira `failed` (`FIGURES_FAILED`).
-Um PDF dividido que termina `partial` não passa pela etapa (as âncoras temporárias ficam
-como comentários HTML nos resultados das páginas) e `figures/{job_id}/` é apagado quando o
-job assenta.
+ou cuja task falhou (modelo ausente, `CONVERSION_FIGURE_TIMEOUT_SECONDS` = 120 por figura)
+fica sem texto e conta em `figures_skipped`; nunca derruba o job. A task de visão de um
+job que já saiu da etapa não roda inferência nem recria o estado.
+
+- **Watchdog:** a etapa termina com o que tiver quando nenhuma figura andou por
+  `CONVERSION_FIGURE_STALL_SECONDS` (900) **e** nada do job está em voo ou a fila de visão
+  está vazia (task perdida) — figuras só esperando atrás de uma fila ocupada estendem a
+  etapa (e o heartbeat) —, ou depois de `CONVERSION_FIGURE_MAX_STAGE_SECONDS` (6 h) no
+  total. O motivo fica em `metadata.figures.reason` (`stalled`, `deadline`, `stuck`…).
+  A corrente do watchdog é rearmada pela varredura do beat (`detect_stuck_jobs` →
+  `figure_tasks.sweep`) a partir do marcador durável.
+- **Monitor de jobs travados:** usa `figures_stage_at` em vez de `started_at`; um job
+  na etapa que mesmo assim passar do limite é **completado** com o que houver, nunca
+  `failed`. A configuração exige `MONITORING_STUCK_JOB_THRESHOLD_MINUTES` × 60 >
+  `CONVERSION_FIGURE_STALL_SECONDS`.
+- **Finalize que falha:** o job é completado com as figuras como placeholder (todas em
+  `figures_skipped`, `reason` com `finalize_failed`). Só um `pending.json` ilegível faz o
+  job falhar (`FIGURES_FAILED`). Um job marcado `failed` por outro caminho enquanto a
+  etapa rodava é completado do mesmo jeito: a conversão deu certo.
+- **PDF dividido `partial`:** não passa pela etapa; as saídas das páginas já saem sem
+  marcadores. As PNGs temporárias ficam para um retry de página completar o job (com
+  `purge_source=true` são apagadas quando ele assenta). `DELETE /jobs/{id}` apaga
+  `figures/{job_id}/` em qualquer caso.
 
 **Duráveis e deduplicação:** as duas opções ficam em `JobConfiguration.options` (só quando
 `true`), relidas por páginas, retries e merge, e entram no `operation_key` só quando

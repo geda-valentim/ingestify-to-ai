@@ -18,6 +18,12 @@
   e `assets[].ocr_text`. As opções entram no `operation_key` só quando `true`.
 - `POST /convert` aceita `docling_preset`. `/convert` (interface) reúne todas as opções de
   PDF num grupo "PDF options".
+- Robustez da etapa: marcador durável `jobs.figures_stage`/`figures_stage_at` (migração
+  `d4b80025f6c2`) que o monitor de jobs travados respeita (um job na etapa é completado,
+  nunca falhado); figuras com prioridade 9 na fila de visão (as rotas interativas saem
+  antes) e no máximo `CONVERSION_FIGURE_WINDOW` por job em voo, colocadas na rota de
+  visão na hora do envio, com backoff; finalize que falha completa com placeholders;
+  saídas públicas de página sem marcadores; limite de figuras temporárias por documento.
 
 ## 2026-10: PDFs com avisos do qpdf não falham mais na divisão
 

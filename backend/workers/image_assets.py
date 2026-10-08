@@ -184,7 +184,8 @@ class FigureCollector:
     those past the limit are entries with `skip` (they keep the placeholder).
     """
 
-    def __init__(self, job_id: str, storage_factory: Callable, *, page_offset: int = 0, settings=None):
+    def __init__(self, job_id: str, storage_factory: Callable, *, page_offset: int = 0, settings=None,
+                 budget=None):
         if settings is None:
             from shared.config import get_settings
 
@@ -193,6 +194,9 @@ class FigureCollector:
         self.page_offset = int(page_offset or 0)
         self.min_px = int(settings.conversion_asset_min_px)
         self.max_count = int(getattr(settings, "conversion_figure_max_count", 50))
+        # A split PDF's page jobs share the document-wide cap (JobAssetBudget, namespace
+        # "figures", slot = sha256), checked before each upload
+        self.budget = budget
         self._storage_factory = storage_factory
         self._storage = None
         self.entries = []
@@ -236,7 +240,18 @@ class FigureCollector:
         if obj is None:
             if len(self._stored) >= self.max_count:
                 return self.skipped(page, "count_limit")
-            obj = figure_object(self.job_id, name)
+            # One object per distinct image, named by its hash: the same image on
+            # several pages of a split PDF is stored (and counted) once
+            obj = figure_object(self.job_id, f"{sha256}.png")
+            if self.budget is not None:
+                if self.budget.has(sha256):
+                    self._stored[sha256] = obj
+                    return self._entry(name, page, sha256, obj, marker(name))
+                allowed, _reason = self.budget.precheck(sha256)
+                if allowed is not False:
+                    allowed, _reason = self.budget.commit(sha256, len(data))
+                if allowed is False:
+                    return self.skipped(page, "count_limit")
             storage = self._storage_client()
             stored = storage.upload_file(bucket_name=storage.bucket_results, object_name=obj, file_data=data,
                                          content_type=ASSET_MIME)

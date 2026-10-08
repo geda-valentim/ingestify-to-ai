@@ -145,7 +145,15 @@ def _figure_collector(job_id: str, options: dict, page_number: int = None):
         return None
     from workers.image_assets import FigureCollector
 
-    return FigureCollector(job_id, get_minio_client, page_offset=(page_number - 1) if page_number else 0)
+    budget = None
+    if page_number and options.get(conversion_assets.IMAGE_MODE_OPTION) != conversion_assets.IMAGE_MODE_REFERENCED:
+        # The temporary figure PNGs of a split PDF: one cap for the whole document
+        # (unique images; the same image on several pages shares its slot)
+        budget = conversion_assets.JobAssetBudget(
+            get_redis_client(), job_id, max_count=int(settings.conversion_figure_max_count),
+            max_bytes=int(settings.conversion_asset_max_total_mb) * 1024 * 1024, namespace="figures")
+    return FigureCollector(job_id, get_minio_client, page_offset=(page_number - 1) if page_number else 0,
+                           budget=budget)
 
 
 def _converter_for(options: dict, collector, figures):
@@ -230,17 +238,14 @@ def _record_main_failure(job_id: str, redis_client, error: str, *, retrying: boo
     still read the original. The last attempt marks it FAILED.
     """
     now = datetime.utcnow()
-    redis_client.set_job_status(
-        job_id=job_id,
-        job_type="main",
-        status="queued" if retrying else "failed",
-        progress=0,
-        error=error,
-        completed_at=None if retrying else now,
-    )
     db = SessionLocal()
     try:
         job = db.query(Job).filter(Job.id == job_id).first()
+        if job is not None and job.status in (JobStatus.COMPLETED, JobStatus.CANCELLED):
+            # A late failure (a redelivered task, a post-completion step) never
+            # un-completes a job
+            logger.warning(f"[MAIN JOB {job_id}] Failure after {job.status.value} ignored: {error}")
+            return
         if job:
             job.status = JobStatus.PENDING if retrying else JobStatus.FAILED
             job.error_message = error
@@ -250,6 +255,14 @@ def _record_main_failure(job_id: str, redis_client, error: str, *, retrying: boo
         logger.error(f"[MAIN JOB {job_id}] MySQL failure update error: {e}")
     finally:
         db.close()
+    redis_client.set_job_status(
+        job_id=job_id,
+        job_type="main",
+        status="queued" if retrying else "failed",
+        progress=0,
+        error=error,
+        completed_at=None if retrying else now,
+    )
     if not retrying:
         # Settled for good (no automatic retry left): purge_source applies now
         _purge_source_if_requested(job_id)
@@ -1285,6 +1298,10 @@ def _run_page_conversion(
 
         # Convert page
         result = _convert(converter, page_path, options, collector, figures)
+        if figures is not None:
+            from shared.figure_descriptions import page_outputs
+
+            result = page_outputs(result)  # public outputs never carry figure markers
 
         # Store page result in Redis
         redis_client.set_job_result(page_job_id, result)
@@ -1614,9 +1631,12 @@ def merge_pages_task(
             page_result = redis_client.get_job_result(page_job_id)
 
             if page_result:
-                page_results.append((page_num, page_result["markdown"], page_result.get("assets") or [],
-                                     page_result.get("assets_skipped")))
-                page_figures[page_num] = page_result.get("figures") or []
+                # describe_images / ocr_images: the marked markdown and the figure entries
+                # live in private fields of the page result
+                page_results.append((page_num, page_result.get("_figure_markdown") or page_result["markdown"],
+                                     page_result.get("assets") or [], page_result.get("assets_skipped")))
+                if "_figures" in page_result:
+                    page_figures[page_num] = page_result.get("_figures") or []
                 total_words += page_result.get("metadata", {}).get("words", 0)
 
         # Sort by page number

@@ -3,28 +3,39 @@ The describe stage of a document conversion (`describe_images` / `ocr_images`;
 shared/figure_descriptions.py has the pure parts).
 
     conversion (single document) / merge (split PDF)
-        -> begin(): pending.json in MinIO, one vision task per unique figure
-           (engine routing: dispatch.place_now on the `vision` feature, exactly
-           as the image routes place theirs), a stall watchdog; returns at once
-    describe_figure_task (vision queue, one per unique image): caption and/or
-           OCR, outcome recorded in Redis; the last one queues the finalize
+        -> begin(): pending.json in MinIO, Job.figures_stage="describing", and the
+           first figures dispatched; returns at once
+    dispatch_next(): keeps at most CONVERSION_FIGURE_WINDOW figures of the job on
+           the vision queue. Each one is placed when it is sent
+           (dispatch.place_now on the `vision` feature, like the image routes and
+           Full analysis): no route -> the vision queue as today; a route that
+           cannot take it now -> tried again later with backoff (never skipped
+           for being momentarily full)
+    describe_figure_task (vision queue, LOW priority: interactive /images/* tasks
+           are always taken first): caption and/or OCR of one unique image,
+           outcome recorded in Redis, then the next figure is dispatched; the one
+           that completes the set queues the finalize
     finalize_figures_task (default queue): rewrites the markdown, completes the
-           MAIN job, deletes the temporary figures, then purge_source
+           MAIN job, then the post-completion steps (status, temporary files,
+           purge_source, callback), retried on their own
 
 No conversion worker ever waits on the vision worker: the stage is driven by
-messages, so a full general pool cannot deadlock against a busy vision queue.
-The MAIN job stays PROCESSING (progress 90 -> 99) until the text is inlined, so
-`has_pending_work` keeps purge_source away from the images the vision worker reads.
+messages. The MAIN job stays PROCESSING (progress 90 -> 99) until the text is
+inlined, so `has_pending_work` keeps purge_source away from the images the vision
+worker reads; `Job.figures_stage_at` is the stage's heartbeat, read by the
+stuck-job monitor instead of started_at and by the beat sweep (`sweep`).
 
-A figure whose vision task fails (model missing, timeout, no engine) gets no
-text and is counted in `figures_skipped`; it never fails the job. A vision
-worker killed mid-task never reports: the watchdog finalizes with what it has
-once no figure settled for CONVERSION_FIGURE_STALL_SECONDS.
+Nothing here loses a good conversion: a figure that fails gets no text (counted in
+`figures_skipped`); a stage that stalls (no figure settled for
+CONVERSION_FIGURE_STALL_SECONDS while nothing of the job is in flight or the vision
+queue is idle, or CONVERSION_FIGURE_MAX_STAGE_SECONDS in all) finishes with what it
+has; a finalize that keeps failing completes the job with the figures as
+placeholders. Only a pending.json that cannot be read at all fails the job.
 """
 import json
 import logging
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Callable, Dict, Optional
 
@@ -41,10 +52,19 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 
 DESCRIBE_TASK = "workers.vision_tasks.describe_figure_task"
+DISPATCH_TASK = "workers.tasks.dispatch_figures_task"
 FINALIZE_TASK = "workers.tasks.finalize_figures_task"
+# Celery priority of a figure on the vision queue (Redis transport: 0 is served
+# first, 9 last; the interactive vision tasks carry none, i.e. 0)
+FIGURE_PRIORITY = 9
+STAGE_DESCRIBING = "describing"
+STAGE_FINISHING = "finishing"
 STAGE_PROGRESS_START = 90
 STAGE_PROGRESS_SPAN = 9
 FINALIZE_LOCK_SECONDS = 600
+DISPATCH_BACKOFF_MAX_SECONDS = 300
+# kombu's Redis transport keeps one list per priority step: "{queue}\x06\x16{step}"
+_KOMBU_PRIORITY_SEP = "\x06\x16"
 
 
 def _redis():
@@ -63,6 +83,46 @@ def _es():
     from shared.elasticsearch_client import get_es_client
 
     return get_es_client()
+
+
+def _now() -> datetime:
+    return datetime.utcnow()
+
+
+def _text(value) -> str:
+    return value.decode() if isinstance(value, bytes) else value
+
+
+# ---------------------------------------------------------------------------
+# Durable marker (Job.figures_stage / figures_stage_at)
+# ---------------------------------------------------------------------------
+
+def touch(job_id: str) -> None:
+    """Refresh the stage heartbeat (a figure dispatched, started or settled). Never raises."""
+    try:
+        with SessionLocal() as db:
+            db.query(Job).filter(Job.id == job_id, Job.figures_stage == STAGE_DESCRIBING) \
+                .update({Job.figures_stage_at: _now()}, synchronize_session=False)
+            db.commit()
+    except Exception as e:  # noqa: BLE001 - a missed heartbeat only makes the sweep look sooner
+        logger.warning(f"[MAIN JOB {job_id}] Could not refresh the describe-stage heartbeat: {e}")
+
+
+def _job_state(job_id: str):
+    """(status, figures_stage, figures_stage_at, user_id) of the MAIN job; None when it is gone."""
+    with SessionLocal() as db:
+        job = db.get(Job, job_id)
+        if job is None:
+            return None
+        return job.status, job.figures_stage, job.figures_stage_at, job.user_id
+
+
+def _describing(job_id: str) -> bool:
+    try:
+        state = _job_state(job_id)
+    except Exception:  # noqa: BLE001 - unknown: let the work go on
+        return True
+    return state is not None and state[1] == STAGE_DESCRIBING
 
 
 # ---------------------------------------------------------------------------
@@ -86,10 +146,13 @@ def wanted(job_id: str, options: Optional[dict] = None) -> bool:
 
 
 def begin(job_id: str, result: dict, *, total_pages: Optional[int] = None, callback_url: Optional[str] = None,
-          has_manifest: bool = False, dispatch: Optional[Callable] = None) -> dict:
+          has_manifest: bool = False) -> dict:
     """
     Start the describe stage of a converted document (`result`: markdown with the
     figure anchors, metadata, assets, and `figures`, the entries). Returns at once.
+
+    Idempotent: a redelivered conversion / merge that reaches here again keeps the
+    outcomes already recorded and only dispatches the figures still missing.
     """
     entries = list(result.pop("figures", None) or [])
     options = figure_options(job_id)
@@ -99,97 +162,214 @@ def begin(job_id: str, result: dict, *, total_pages: Optional[int] = None, callb
         "callback_url": callback_url, "has_manifest": has_manifest,
         "describe": options["describe"], "ocr": options["ocr"],
         "caption_task": fd.caption_task(settings.conversion_figure_caption_task),
+        "started": time.time(),
     }
     logger.info(f"[MAIN JOB {job_id}] Describe stage: {len(entries)} figures, {len(work)} unique to send "
                 f"(describe={options['describe']}, ocr={options['ocr']})")
+    if not _mark_describing(job_id):
+        logger.info(f"[MAIN JOB {job_id}] Describe stage not started: the job is no longer processing")
+        return {"job_id": job_id, "status": "discarded"}
     if not work or not (options["describe"] or options["ocr"]):
         return finalize(job_id, pending, {})
 
+    redis_client = _redis()
+    started = redis_client.client.get(fd.stage_key(job_id))
+    if started:  # a redelivery: the stage keeps its clock and its recorded outcomes
+        pending["started"] = json.loads(started).get("started") or pending["started"]
     storage = _minio()
     storage.upload_file(bucket_name=storage.bucket_results, object_name=fd.pending_object(job_id),
                         file_data=fd.dumps(pending).encode("utf-8"), content_type="application/json")
-    redis_client = _redis()
-    client = redis_client.client
-    client.delete(fd.results_key(job_id), fd.finalizing_key(job_id))
-    client.set(fd.total_key(job_id), len(work), ex=fd.RESULTS_TTL_SECONDS)
-    redis_client.update_job_progress(job_id, STAGE_PROGRESS_START, stage="describing_figures",
-                                     figures_done=0, figures_total=len(work))
-
-    user_id = _user_of(job_id)
-    for item in work:
-        kwargs = {"job_id": job_id, "sha256": item["sha256"], "object_name": item["object"],
-                  "describe": pending["describe"], "ocr": pending["ocr"], "caption_task": pending["caption_task"]}
-        try:
-            sent = (dispatch or _dispatch)(job_id, user_id, kwargs)
-        except Exception as e:  # noqa: BLE001 - that figure is skipped, the others go on
-            logger.warning(f"[MAIN JOB {job_id}] Could not queue figure {item['sha256'][:12]}: {e}")
-            sent = False
-        if not sent:
-            record(job_id, item["sha256"], {"description": None, "ocr_text": None, "error": "VISION_UNAVAILABLE"})
-    finalize_figures_task.apply_async(kwargs={"job_id": job_id, "watchdog": True, "seen": 0},
+    _save_stage(job_id, pending)
+    redis_client.update_job_progress(job_id, STAGE_PROGRESS_START + _progress_share(job_id),
+                                     stage=STAGE_DESCRIBING, figures_total=len(work))
+    dispatch_next(job_id)
+    finalize_figures_task.apply_async(kwargs={"job_id": job_id, "watchdog": True},
                                       countdown=int(settings.conversion_figure_stall_seconds))
     return {"job_id": job_id, "status": "describing_figures", "figures": len(work)}
 
 
-def _user_of(job_id: str) -> Optional[str]:
+def _mark_describing(job_id: str) -> bool:
+    """Job.figures_stage = describing, only for a job still PROCESSING (a redelivery of a
+    settled job's merge must not reopen it)."""
+    with SessionLocal() as db:
+        job = db.query(Job).filter(Job.id == job_id).with_for_update().first()
+        if job is None or job.status != JobStatus.PROCESSING or job.figures_stage not in (None, STAGE_DESCRIBING):
+            db.rollback()
+            return False
+        job.figures_stage = STAGE_DESCRIBING
+        job.figures_stage_at = _now()
+        db.commit()
+        return True
+
+
+def _save_stage(job_id: str, pending: dict) -> None:
+    """What dispatching needs, in Redis (pending.json in MinIO is the durable copy)."""
+    client = _redis().client
+    stage = {"work": pending["work"], "describe": pending["describe"], "ocr": pending["ocr"],
+             "caption_task": pending["caption_task"], "started": pending.get("started")}
+    client.set(fd.stage_key(job_id), fd.dumps(stage), ex=fd.RESULTS_TTL_SECONDS)
+    client.set(fd.total_key(job_id), len(pending["work"]), ex=fd.RESULTS_TTL_SECONDS)
+
+
+def _stage(job_id: str) -> dict:
+    """The stage description (work list, options), from Redis, else from pending.json."""
+    raw = _redis().client.get(fd.stage_key(job_id))
+    if raw:
+        return json.loads(raw)
+    pending = _load_pending(job_id)
+    _save_stage(job_id, pending)
+    return {"work": pending["work"], "describe": pending["describe"], "ocr": pending["ocr"],
+            "caption_task": pending["caption_task"], "started": pending.get("started")}
+
+
+def _progress_share(job_id: str) -> int:
     try:
-        with SessionLocal() as db:
-            job = db.get(Job, job_id)
-            return job.user_id if job else None
+        client = _redis().client
+        total = int(client.get(fd.total_key(job_id)) or 0)
+        done = int(client.hlen(fd.results_key(job_id)) or 0)
+        return int(min(done, total) / total * STAGE_PROGRESS_SPAN) if total else 0
     except Exception:  # noqa: BLE001
-        return None
+        return 0
 
 
-def _dispatch(job_id: str, user_id: Optional[str], kwargs: dict) -> bool:
-    """
-    One figure to the vision worker, through the vision route when there is one
-    (spec 0003: a free engine slot becomes a reservation the task claims; no route
-    or no slot with a local step -> the vision queue as today). False: no engine
-    can take it (the figure is skipped).
-    """
+# ---------------------------------------------------------------------------
+# Dispatching (bounded window, placed when sent)
+# ---------------------------------------------------------------------------
+
+def in_flight(job_id: str) -> set:
+    """Figures sent to the vision worker that have not reported yet."""
+    client = _redis().client
+    sent = {_text(s) for s in (client.hkeys(fd.sent_key(job_id)) or [])}
+    done = {_text(d) for d in (client.hkeys(fd.results_key(job_id)) or [])}
+    return sent - done
+
+
+def _place(job_id: str, user_id: Optional[str], sha256: str):
     from shared.engines import dispatch as engine_dispatch
 
     try:
         from shared.iam.remote import remote_use_of
 
-        placement = engine_dispatch.place_now(
-            feature="vision", subject_id=f"{job_id}:{kwargs['sha256'][:16]}", job_id=job_id, user_id=user_id,
+        return engine_dispatch.place_now(
+            feature="vision", subject_id=f"{job_id}:{sha256[:16]}", job_id=job_id, user_id=user_id,
             remote_use=remote_use_of(user_id, session_factory=SessionLocal), session_factory=SessionLocal)
     except Exception as e:  # noqa: BLE001 - routing never fails what would run without it
         logger.warning(f"[MAIN JOB {job_id}] Vision placement failed, using the vision queue: {e}")
-        placement = engine_dispatch.Placement("today")
-    if placement.outcome == "unavailable":
-        logger.warning(f"[MAIN JOB {job_id}] No vision engine for a figure: {placement.reason}")
-        return False
-    if placement.outcome == "placed":
-        kwargs = {**kwargs, "usage_id": placement.usage_id}
-        engine_dispatch.publish_sync(SessionLocal, placement.usage_id,
-                                     lambda: describe_figure_task.apply_async(kwargs=kwargs))
-        return True
-    describe_figure_task.apply_async(kwargs=kwargs)
-    return True
+        return engine_dispatch.Placement("today")
+
+
+def _send(kwargs: dict, usage_id: Optional[int]) -> None:
+    from shared.engines import dispatch as engine_dispatch
+
+    if usage_id is None:
+        describe_figure_task.apply_async(kwargs=kwargs, priority=FIGURE_PRIORITY)
+        return
+    kwargs = {**kwargs, "usage_id": usage_id}
+    engine_dispatch.publish_sync(SessionLocal, usage_id,
+                                 lambda: describe_figure_task.apply_async(kwargs=kwargs, priority=FIGURE_PRIORITY))
+
+
+def _schedule_retry(job_id: str) -> int:
+    """Try the dispatch again later, with backoff (one scheduled tick per job)."""
+    client = _redis().client
+    attempt = int(client.incr(fd.backoff_key(job_id)) or 1)
+    client.expire(fd.backoff_key(job_id), fd.RESULTS_TTL_SECONDS)
+    countdown = min(10 * (2 ** min(attempt - 1, 6)), DISPATCH_BACKOFF_MAX_SECONDS)
+    if client.set(fd.tick_key(job_id), "1", nx=True, ex=countdown):
+        dispatch_figures_task.apply_async(kwargs={"job_id": job_id}, countdown=countdown)
+    return countdown
+
+
+def dispatch_next(job_id: str) -> int:
+    """
+    Send figures until CONVERSION_FIGURE_WINDOW of this job are in flight. Each is
+    placed right before it is sent; a route that cannot take it now schedules a
+    retry with backoff instead. Returns how many were sent. Never raises.
+    """
+    try:
+        state = _job_state(job_id)
+        if state is None or state[1] != STAGE_DESCRIBING:
+            return 0
+        stage = _stage(job_id)
+        user_id = state[3]
+        client = _redis().client
+        window = max(1, int(settings.conversion_figure_window))
+        free = window - len(in_flight(job_id))
+        done = {_text(d) for d in (client.hkeys(fd.results_key(job_id)) or [])}
+        sent_count = 0
+        for item in stage["work"]:
+            if free <= 0:
+                break
+            sha = item["sha256"]
+            if sha in done or not client.hsetnx(fd.sent_key(job_id), sha, int(time.time())):
+                continue
+            client.expire(fd.sent_key(job_id), fd.RESULTS_TTL_SECONDS)
+            placement = _place(job_id, user_id, sha)
+            if placement.outcome not in ("placed", "today"):
+                # Nothing can take it right now: not a failure of the figure
+                client.hdel(fd.sent_key(job_id), sha)
+                countdown = _schedule_retry(job_id)
+                logger.info(f"[MAIN JOB {job_id}] No vision engine free ({placement.reason}); "
+                            f"figures retried in {countdown}s")
+                break
+            kwargs = {"job_id": job_id, "sha256": sha, "object_name": item["object"],
+                      "describe": stage["describe"], "ocr": stage["ocr"], "caption_task": stage["caption_task"]}
+            try:
+                _send(kwargs, placement.usage_id if placement.outcome == "placed" else None)
+            except Exception as e:  # noqa: BLE001 - broker down: retried later
+                client.hdel(fd.sent_key(job_id), sha)
+                logger.warning(f"[MAIN JOB {job_id}] Could not queue figure {sha[:12]}: {e}")
+                _schedule_retry(job_id)
+                break
+            client.delete(fd.backoff_key(job_id))
+            free -= 1
+            sent_count += 1
+        if sent_count:
+            touch(job_id)
+        return sent_count
+    except Exception as e:  # noqa: BLE001 - the watchdog / beat sweep take over
+        logger.warning(f"[MAIN JOB {job_id}] Could not dispatch figures: {e}")
+        return 0
+
+
+@celery_app.task(bind=True, max_retries=0, name=DISPATCH_TASK)
+def dispatch_figures_task(self, job_id: str):
+    """A backed-off dispatch of the describe stage (a route was full, the broker was down)."""
+    try:
+        _redis().client.delete(fd.tick_key(job_id))
+    except Exception:  # noqa: BLE001
+        pass
+    return {"job_id": job_id, "sent": dispatch_next(job_id)}
 
 
 # ---------------------------------------------------------------------------
 # The vision side
 # ---------------------------------------------------------------------------
 
-def record(job_id: str, sha256: str, outcome: dict, *, queue_finalize: bool = True) -> int:
-    """Store one image's outcome; the one that completes the set queues the finalize. Never raises."""
+def record(job_id: str, sha256: str, outcome: dict) -> int:
+    """
+    Store one image's outcome, dispatch the next figure, and queue the finalize once
+    the set is complete. A stage already cleaned up is not recreated. Never raises.
+    """
     try:
         redis_client = _redis()
         client = redis_client.client
+        if not client.exists(fd.total_key(job_id)):
+            return 0  # finished (or deleted) meanwhile: nothing to record into
         client.hset(fd.results_key(job_id), sha256, fd.dumps(outcome))
         client.expire(fd.results_key(job_id), fd.RESULTS_TTL_SECONDS)
         done = int(client.hlen(fd.results_key(job_id)) or 0)
         total = int(client.get(fd.total_key(job_id)) or 0)
+        touch(job_id)
         if total:
             share = min(done, total) / total
             redis_client.update_job_progress(job_id, STAGE_PROGRESS_START + int(share * STAGE_PROGRESS_SPAN),
-                                             stage="describing_figures", figures_done=min(done, total),
+                                             stage=STAGE_DESCRIBING, figures_done=min(done, total),
                                              figures_total=total)
-        if queue_finalize and total and done >= total:
+        if total and done >= total:
             celery_app.send_task(FINALIZE_TASK, kwargs={"job_id": job_id})
+        else:
+            dispatch_next(job_id)
         return done
     except Exception as e:  # noqa: BLE001 - the watchdog finalizes anyway
         logger.warning(f"[MAIN JOB {job_id}] Could not record figure {sha256[:12]}: {e}")
@@ -268,16 +448,30 @@ def _accounted(usage_id: Optional[int], work: Callable[[], dict]) -> dict:
     return payload
 
 
-@celery_app.task(bind=True, max_retries=0, name=DESCRIBE_TASK,
+def _release(usage_id: Optional[int]) -> None:
+    if usage_id is None:
+        return
+    from shared.engines import dispatch as engine_dispatch
+
+    engine_dispatch.release_sync(SessionLocal, usage_id, "JOB_SETTLED")
+
+
+@celery_app.task(bind=True, max_retries=0, name=DESCRIBE_TASK, priority=FIGURE_PRIORITY,
                  time_limit=int(settings.conversion_figure_timeout_seconds) + 15,
                  soft_time_limit=int(settings.conversion_figure_timeout_seconds))
 def describe_figure_task(self, job_id: str, sha256: str, object_name: str, describe: bool = True,
                          ocr: bool = False, caption_task: Optional[str] = None, usage_id: Optional[int] = None):
     """
     One unique figure of a conversion, on the vision worker: read the PNG from the
-    results bucket, caption it and/or read its text, record the outcome. Never
+    results bucket, caption it and/or read its text, record the outcome. Skipped
+    (nothing recorded, no inference) when the job left the describe stage. Never
     raises for a figure-level failure (the outcome says what failed).
     """
+    if not _describing(job_id):
+        _release(usage_id)
+        logger.info(f"[MAIN JOB {job_id}] Figure {sha256[:12]} skipped: the job left the describe stage")
+        return {"job_id": job_id, "sha256": sha256, "ok": False, "skipped": True}
+    touch(job_id)
     outcome = {"description": None, "ocr_text": None}
     directory = Path(settings.temp_storage_path) / "figures" / str(job_id)
     image_path = directory / f"{sha256}.png"
@@ -312,9 +506,8 @@ def _results(job_id: str) -> Dict[str, dict]:
     raw = _redis().client.hgetall(fd.results_key(job_id)) or {}
     out = {}
     for key, value in raw.items():
-        key = key.decode() if isinstance(key, bytes) else key
         try:
-            out[key] = json.loads(value)
+            out[_text(key)] = json.loads(value)
         except (TypeError, ValueError):
             continue
     return out
@@ -326,45 +519,75 @@ def _load_pending(job_id: str) -> dict:
     return json.loads(raw)
 
 
-def _cleanup(job_id: str) -> None:
+def cleanup(job_id: str) -> None:
     """The temporary figure PNGs + pending.json, and the stage's Redis keys. Never raises."""
     try:
         storage = _minio()
         storage.delete_folder(storage.bucket_results, fd.figure_prefix(job_id))
-    except Exception as e:  # noqa: BLE001 - DELETE /jobs/{id} and the purge remove them too
+    except Exception as e:  # noqa: BLE001 - the settle hook and DELETE /jobs/{id} remove them too
         logger.warning(f"[MAIN JOB {job_id}] Could not delete the temporary figures: {e}")
     try:
-        _redis().client.delete(fd.results_key(job_id), fd.total_key(job_id))
+        _redis().client.delete(*fd.stage_keys(job_id))
     except Exception:  # noqa: BLE001 - they expire
         pass
 
 
-def finalize(job_id: str, pending: dict, results: Dict[str, dict]) -> dict:
-    """
-    Inline the texts, complete the MAIN job (Redis result, Elasticsearch, MySQL),
-    then delete the temporary figures and let purge_source run. Raises when the
-    job could not be completed (the task retries, then fails the job).
-    """
-    from workers import tasks
+def vision_queue_busy() -> bool:
+    """Is anything waiting on the vision queue (any priority)? Unknown reads as busy."""
+    try:
+        client = _redis().client
+        queue = settings.vision_queue
+        names = [queue] + [f"{queue}{_KOMBU_PRIORITY_SEP}{step}" for step in range(1, 10)]
+        return any(int(client.llen(name) or 0) for name in names)
+    except Exception:  # noqa: BLE001
+        return True
 
+
+def stall_reason(job_id: str, figures_stage_at: Optional[datetime], started: Optional[float]) -> Optional[str]:
+    """
+    Why the stage should finish now with what it has, or None (keep waiting):
+    "deadline" past CONVERSION_FIGURE_MAX_STAGE_SECONDS; "stalled" when no figure
+    moved for CONVERSION_FIGURE_STALL_SECONDS and nothing of the job is in flight, or
+    the vision queue is idle (a lost task). Figures merely waiting behind a busy
+    vision queue extend the stage (and its heartbeat).
+    """
+    now = _now()
+    if started and time.time() - float(started) > int(settings.conversion_figure_max_stage_seconds):
+        return "deadline"
+    last = figures_stage_at or now
+    if (now - last).total_seconds() < int(settings.conversion_figure_stall_seconds):
+        return None
+    if not in_flight(job_id) or not vision_queue_busy():
+        return "stalled"
+    touch(job_id)  # legitimately queued behind other vision work
+    return None
+
+
+def finalize(job_id: str, pending: dict, results: Dict[str, dict], *, reason: Optional[str] = None) -> dict:
+    """
+    Inline the texts and complete the MAIN job (Redis result, Elasticsearch,
+    MySQL), then the post-completion steps. Raises when the job could not be
+    completed (the caller degrades). A job FAILED by someone else while its stage
+    was describing is completed all the same: the conversion itself succeeded.
+    """
     result = dict(pending["result"])
     markdown, counts, texts = fd.rewrite(result.get("markdown") or "", pending.get("entries") or [], results,
                                          describe=bool(pending.get("describe")), ocr=bool(pending.get("ocr")),
                                          max_chars=int(settings.conversion_figure_max_chars))
     metadata = dict(result.get("metadata") or {})
     metadata["words"] = len(markdown.split())
-    metadata["figures"] = counts
+    metadata["figures"] = {**counts, **({"reason": reason} if reason else {})}
     result.update({"markdown": markdown, "metadata": metadata, **counts})
     if result.get("assets") is not None:
         result["assets"] = fd.annotate_assets(result["assets"], texts)
 
-    redis_client = _redis()
     with SessionLocal() as db:
         job = db.query(Job).filter(Job.id == job_id).with_for_update().first()
-        if job is None or job.status != JobStatus.PROCESSING:
+        if not _finishable(job):
             db.rollback()
             logger.info(f"[MAIN JOB {job_id}] Describe stage discarded (job {getattr(job, 'status', None)})")
-            _cleanup(job_id)
+            if job is None or job.status == JobStatus.CANCELLED:
+                cleanup(job_id)
             return {"job_id": job_id, "status": "discarded"}
         user_id, filename = job.user_id, job.filename
         manifest = conversion_assets.manifest_of(job)
@@ -373,7 +596,7 @@ def finalize(job_id: str, pending: dict, results: Dict[str, dict]) -> dict:
                                    "figures": counts}
         db.commit()
 
-    redis_client.set_job_result(job_id, result)
+    _redis().set_job_result(job_id, result)
     try:
         es_success = _es().store_job_result(
             job_id=job_id, markdown_content=markdown, user_id=user_id, filename=filename,
@@ -384,89 +607,189 @@ def finalize(job_id: str, pending: dict, results: Dict[str, dict]) -> dict:
 
     with SessionLocal() as db:
         job = db.query(Job).filter(Job.id == job_id).with_for_update().first()
-        if job is None or job.status != JobStatus.PROCESSING:
+        if not _finishable(job):
             db.rollback()
-            _cleanup(job_id)
             return {"job_id": job_id, "status": "discarded"}
         job.status = JobStatus.COMPLETED
-        job.completed_at = datetime.utcnow()
+        job.completed_at = _now()
         job.char_count = len(markdown)
         job.has_elasticsearch_result = es_success
         job.error_message = None
+        job.figures_stage = STAGE_FINISHING
+        job.figures_stage_at = _now()
         db.commit()
-
-    redis_client.set_job_status(job_id=job_id, job_type="main", status="completed", progress=100,
-                                completed_at=datetime.utcnow())
-    _cleanup(job_id)
-    logger.info(f"[MAIN JOB {job_id}] Completed with figure texts: {counts}")
-    # Settled only now, after the descriptions were inlined: purge_source applies
-    tasks._remove_job_files(job_id)
-    tasks._purge_source_if_requested(job_id)
-    if pending.get("callback_url"):
-        try:
-            tasks.send_callback(pending["callback_url"], job_id, "completed", result)
-        except Exception as e:  # noqa: BLE001 - the job is done
-            logger.warning(f"[MAIN JOB {job_id}] Callback failed: {e}")
+    logger.info(f"[MAIN JOB {job_id}] Completed with figure texts: {counts}" + (f" ({reason})" if reason else ""))
+    after_complete(job_id, callback_url=pending.get("callback_url"), result=result)
     return {"job_id": job_id, "status": "completed", **counts}
 
 
-@celery_app.task(bind=True, max_retries=3, name=FINALIZE_TASK)
-def finalize_figures_task(self, job_id: str, watchdog: bool = False, seen: int = 0):
+def _finishable(job: Optional[Job]) -> bool:
+    return job is not None and job.figures_stage == STAGE_DESCRIBING and \
+        job.status in (JobStatus.PROCESSING, JobStatus.FAILED)
+
+
+def after_complete(job_id: str, *, callback_url: Optional[str] = None, result: Optional[dict] = None) -> bool:
     """
-    Finish the describe stage once every figure reported (queued by the last
-    vision task), or once nothing moved for CONVERSION_FIGURE_STALL_SECONDS
-    (`watchdog`: re-armed while figures keep settling). Idempotent.
+    The steps after the COMPLETED commit, each idempotent and on its own: the Redis
+    status, the temporary files, purge_source (settled only now, after the texts
+    were inlined), the callback (once). The marker goes back to NULL once they all
+    ran; a step that failed leaves it at "finishing" for the next finalize / beat
+    sweep to run them again (never the finalize itself). Returns whether all ran.
+    """
+    from workers import tasks
+
+    ok = True
+    steps = [
+        ("status", lambda: _redis().set_job_status(job_id=job_id, job_type="main", status="completed",
+                                                   progress=100, completed_at=_now())),
+        ("cleanup", lambda: cleanup(job_id)),
+        ("files", lambda: tasks._remove_job_files(job_id)),
+        ("purge", lambda: tasks._purge_source_if_requested(job_id)),
+    ]
+    if callback_url:
+        steps.append(("callback", lambda: tasks.send_callback(
+            callback_url, job_id, "completed", result or _redis().get_job_result(job_id))))
+    for name, step in steps:
+        try:
+            step()
+        except Exception as e:  # noqa: BLE001 - retried by the next finalize / sweep (not the callback)
+            logger.warning(f"[MAIN JOB {job_id}] Post-completion step {name} failed: {e}")
+            if name != "callback":
+                ok = False
+    if ok:
+        try:
+            with SessionLocal() as db:
+                db.query(Job).filter(Job.id == job_id, Job.figures_stage == STAGE_FINISHING) \
+                    .update({Job.figures_stage: None, Job.figures_stage_at: _now()}, synchronize_session=False)
+                db.commit()
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"[MAIN JOB {job_id}] Could not clear the describe-stage marker: {e}")
+            ok = False
+    return ok
+
+
+def degrade(job_id: str, reason: str) -> dict:
+    """
+    The finalize kept failing: complete the job with every figure as a placeholder
+    (all counted in figures_skipped), so a describe failure never loses a good
+    conversion. Only a pending.json that cannot be read fails the job.
+    """
+    from workers import tasks
+
+    try:
+        pending = _load_pending(job_id)
+    except Exception as e:  # noqa: BLE001 - nothing to complete with
+        logger.error(f"[MAIN JOB {job_id}] Describe stage lost its pending result: {e}")
+        tasks._record_main_failure(job_id, _redis(), tasks._catalog_error("FIGURES_FAILED", e), retrying=False)
+        return {"job_id": job_id, "status": "failed"}
+    return finalize(job_id, {**pending, "describe": False, "ocr": False}, {}, reason=reason)
+
+
+def force_finish(job_id: str, reason: Optional[str]) -> dict:
+    """
+    Finish a describing stage now with the outcomes recorded so far (all reported,
+    the watchdog, the stuck-job monitor). One at a time per job. A finalize that
+    raises degrades to the placeholders. Never raises.
     """
     try:
-        with SessionLocal() as db:
-            job = db.get(Job, job_id)
-            status = job.status if job is not None else None
-    except Exception as e:  # noqa: BLE001
-        raise self.retry(exc=e, countdown=30)
-    if status != JobStatus.PROCESSING:
-        if status != JobStatus.PENDING:  # settled or deleted: nothing will read the figures any more
-            _cleanup(job_id)
-        return {"job_id": job_id, "status": "discarded"}
-
-    try:
-        results = _results(job_id)
-        total = int(_redis().client.get(fd.total_key(job_id)) or 0)
-    except Exception as e:  # noqa: BLE001 - Redis down: the watchdog comes back
-        logger.warning(f"[MAIN JOB {job_id}] Describe stage state unavailable: {e}")
-        if watchdog:
-            finalize_figures_task.apply_async(kwargs={"job_id": job_id, "watchdog": True, "seen": seen},
-                                              countdown=int(settings.conversion_figure_stall_seconds))
-        return {"job_id": job_id, "status": "waiting"}
-
-    done = len(results)
-    if not total or done < total:
-        if not watchdog:
-            return {"job_id": job_id, "status": "waiting", "done": done, "total": total}
-        if done > seen:
-            finalize_figures_task.apply_async(kwargs={"job_id": job_id, "watchdog": True, "seen": done},
-                                              countdown=int(settings.conversion_figure_stall_seconds))
-            return {"job_id": job_id, "status": "waiting", "done": done, "total": total}
-        logger.warning(f"[MAIN JOB {job_id}] Describe stage stalled at {done}/{total}: finishing without the rest")
-
-    client = _redis().client
-    try:
+        client = _redis().client
         if not client.set(fd.finalizing_key(job_id), "1", nx=True, ex=FINALIZE_LOCK_SECONDS):
             return {"job_id": job_id, "status": "finalizing"}
     except Exception:  # noqa: BLE001 - the row lock in finalize() still guards completion
-        pass
+        client = None
     try:
-        pending = _load_pending(job_id)
-        return finalize(job_id, pending, results)
-    except Exception as exc:
-        logger.error(f"[MAIN JOB {job_id}] Describe stage could not finish: {exc}", exc_info=True)
         try:
-            client.delete(fd.finalizing_key(job_id))
-        except Exception:  # noqa: BLE001
-            pass
-        from workers import tasks
+            results = _results(job_id)
+        except Exception:  # noqa: BLE001 - Redis down: every figure skipped
+            results = {}
+        try:
+            return finalize(job_id, _load_pending(job_id), results, reason=reason)
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"[MAIN JOB {job_id}] Describe stage could not finish ({reason}): {e}", exc_info=True)
+            try:
+                return degrade(job_id, f"{reason or 'complete'}; finalize_failed")
+            except Exception as e2:  # noqa: BLE001 - the beat sweep comes back to it
+                logger.error(f"[MAIN JOB {job_id}] Describe stage could not degrade: {e2}", exc_info=True)
+                return {"job_id": job_id, "status": "error"}
+    finally:
+        if client is not None:
+            try:
+                client.delete(fd.finalizing_key(job_id))
+            except Exception:  # noqa: BLE001
+                pass
 
-        if tasks._will_retry(self):
-            raise self.retry(exc=exc, countdown=30 * (2 ** self.request.retries))
-        tasks._record_main_failure(job_id, _redis(), tasks._catalog_error("FIGURES_FAILED", exc), retrying=False)
-        _cleanup(job_id)
-        return {"job_id": job_id, "status": "failed"}
+
+@celery_app.task(bind=True, max_retries=8, name=FINALIZE_TASK)
+def finalize_figures_task(self, job_id: str, watchdog: bool = False):
+    """
+    Finish the describe stage once every figure reported (queued by the last
+    vision task), or, as the watchdog, once it stalled (`stall_reason`); also runs
+    again the post-completion steps of a job left "finishing". Idempotent; the beat
+    sweep (`sweep`) re-arms it when its own chain broke (a long DB outage).
+    """
+    try:
+        state = _job_state(job_id)
+    except Exception as e:  # noqa: BLE001 - DB down: back off; the beat sweep re-arms anyway
+        raise self.retry(exc=e, countdown=min(60 * (2 ** self.request.retries), 1800))
+    if state is None:
+        cleanup(job_id)
+        return {"job_id": job_id, "status": "discarded"}
+    status, stage, stage_at, _user = state
+    if stage == STAGE_FINISHING and status == JobStatus.COMPLETED:
+        after_complete(job_id)
+        return {"job_id": job_id, "status": "completed"}
+    if stage != STAGE_DESCRIBING or status not in (JobStatus.PROCESSING, JobStatus.FAILED):
+        if status == JobStatus.CANCELLED:
+            cleanup(job_id)
+        return {"job_id": job_id, "status": "discarded"}
+
+    try:
+        client = _redis().client
+        done = int(client.hlen(fd.results_key(job_id)) or 0)
+        total = int(client.get(fd.total_key(job_id)) or 0)
+        started = (_stage(job_id) or {}).get("started")
+    except Exception as e:  # noqa: BLE001 - Redis / MinIO down: the watchdog comes back
+        logger.warning(f"[MAIN JOB {job_id}] Describe stage state unavailable: {e}")
+        if watchdog:
+            finalize_figures_task.apply_async(kwargs={"job_id": job_id, "watchdog": True},
+                                              countdown=int(settings.conversion_figure_stall_seconds))
+        return {"job_id": job_id, "status": "waiting"}
+
+    reason = None
+    if not total or done < total:
+        if not watchdog:
+            return {"job_id": job_id, "status": "waiting", "done": done, "total": total}
+        reason = stall_reason(job_id, stage_at, started)
+        if reason is None:
+            finalize_figures_task.apply_async(kwargs={"job_id": job_id, "watchdog": True},
+                                              countdown=int(settings.conversion_figure_stall_seconds))
+            return {"job_id": job_id, "status": "waiting", "done": done, "total": total}
+        logger.warning(f"[MAIN JOB {job_id}] Describe stage {reason} at {done}/{total}: finishing without the rest")
+    elif status == JobStatus.FAILED:
+        reason = "failed_meanwhile"
+    return force_finish(job_id, reason)
+
+
+def sweep(limit: int = 50) -> int:
+    """
+    Beat: re-arm the watchdog of describe stages whose heartbeat is older than
+    CONVERSION_FIGURE_STALL_SECONDS (its countdown chain may have died), and run
+    again the post-completion steps of jobs left "finishing". Returns how many.
+    """
+    now = _now()
+    stale = now - timedelta(seconds=int(settings.conversion_figure_stall_seconds))
+    try:
+        with SessionLocal() as db:
+            rows = db.query(Job.id).filter(
+                ((Job.figures_stage == STAGE_DESCRIBING) & (Job.figures_stage_at < stale))
+                | ((Job.figures_stage == STAGE_FINISHING) & (Job.figures_stage_at < now - timedelta(minutes=5)))
+            ).limit(limit).all()
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"[FIGURES] Could not list stalled describe stages: {e}")
+        return 0
+    for (job_id,) in rows:
+        try:
+            finalize_figures_task.apply_async(kwargs={"job_id": job_id, "watchdog": True})
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"[FIGURES] Could not re-arm the watchdog of {job_id}: {e}")
+    return len(rows)
