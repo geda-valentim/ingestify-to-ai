@@ -30,6 +30,10 @@ for (const feature of FEATURES) {
   assert.ok(feature.example.code.includes("X-API-Key: $INGESTIFY_API_KEY"), feature.slug);
   for (const endpoint of feature.endpoints) assert.match(endpoint.path, /^\//);
   assert.ok(fs.existsSync(path.join(__dirname, `../app/features/${feature.slug}/page.tsx`)));
+  // Product copy, metadata and examples describe capabilities independently of
+  // the implementation chosen for an installation.
+  assert.doesNotMatch(JSON.stringify(feature), /docling|florence|whisper|mediapipe|emotiefflib|\bmodal\b/i);
+  assert.ok(feature.figure.operation, feature.slug);
 }
 
 // The Images table mirrors the Florence task catalog served by GET /images/capabilities.

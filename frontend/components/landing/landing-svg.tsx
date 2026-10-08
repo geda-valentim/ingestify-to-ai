@@ -254,7 +254,7 @@ export function ComputeDiagram({ cloud }: { cloud: boolean }) {
       className="compute-svg"
       viewBox="0 0 1000 520"
       role="img"
-      aria-label={`Documents and images use local workers. This audio example uses ${cloud ? "Modal" : "local transcription"}.`}
+      aria-label={`Documents and images use local workers. This audio example uses ${cloud ? "remote transcription" : "local transcription"}.`}
     >
       <defs>
         <Spectrum id={id} />
@@ -340,7 +340,7 @@ export function ComputeDiagram({ cloud }: { cloud: boolean }) {
         fill="#fff"
         fontSize="18"
       >
-        Modal
+        Remote transcription
       </text>
       <text className="compute-small" x="205" y="379" fill="#999" fontSize="12">
         Documents · images · audio

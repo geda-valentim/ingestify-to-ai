@@ -48,8 +48,8 @@ async def main():
             button = page.get_by_role('button', name=name, exact=True)
             await button.click()
             assert await button.get_attribute('aria-pressed') == 'true'
-        await page.get_by_role('button', name='Modal · audio').click()
-        assert 'runs on Modal' in await page.locator('.compute-selection').inner_text()
+        await page.get_by_role('button', name='Remote · audio').click()
+        assert 'remote transcription route' in await page.locator('.compute-selection').inner_text()
         await page.get_by_role('button', name='Local', exact=True).click()
         assert 'runs locally' in await page.locator('.compute-selection').inner_text()
         await page.get_by_role('button', name='Pause motion', exact=True).click()

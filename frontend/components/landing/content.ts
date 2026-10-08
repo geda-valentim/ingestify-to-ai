@@ -40,7 +40,7 @@ export const chapters = [
     name: "Compute",
     eyebrow: "04 / RUN ON YOUR INFRASTRUCTURE",
     title: "Your compute.\nYour workflow.",
-    body: "Run conversion workers locally. Add optional Modal transcription and configure execution around capacity and budget.",
+    body: "Run conversions on your own infrastructure. Enable supported remote transcription and manage processing capacity and budget.",
     action: "Explore compute",
     href: "/docs/compute",
     note: "",
@@ -102,10 +102,10 @@ export const faq = [
   ],
   [
     "What can I transform?",
-    "Documents such as PDF, DOCX, HTML, PPTX and XLSX into Markdown; recordings into transcripts and captions; images into OCR text or descriptions. The operation selector lists common formats and default size limits. See the docs for engine compatibility and deployment settings.",
+    "Documents such as PDF, DOCX, HTML, PPTX and XLSX into Markdown; recordings into transcripts and captions; images into OCR text or descriptions. The operation selector lists common formats and default size limits. See the docs for supported operations and deployment settings.",
   ],
   [
-    "Why use Ingestify around a conversion engine?",
+    "What does Ingestify add to file conversion?",
     "Ingestify adds an operational layer: API access, asynchronous jobs, projects and folders, document deduplication within a project, PDF page tracking and retries. Conversion results become inputs your own data workflows can retrieve and process.",
   ],
   [
@@ -118,11 +118,11 @@ export const faq = [
   ],
   [
     "Can I run it on my own infrastructure?",
-    "Yes. The repository includes Docker Compose deployment and local workers. Modal is an optional transcription route. Data handling also depends on the engines and providers you configure; the docs explain those choices.",
+    "Yes. The repository includes Docker Compose deployment and local workers. Optional remote transcription follows the processing route you configure. Your team controls where data is processed and stored.",
   ],
   [
     "What are the limits?",
-    "Defaults are 50 MB for document uploads, 50 MB for audio and 500 MB for video on the transcription endpoint, and 10 MB of decoded image data for image operations. Image operations also default to 50 million pixels. Deployment settings can change these limits; PDF processing limits depend on the configured engine.",
+    "Defaults are 50 MB for document uploads, 50 MB for audio and 500 MB for video on the transcription endpoint, and 10 MB of decoded image data for image operations. Image operations also default to 50 million pixels. Deployment settings can change these limits; PDF processing limits depend on the configured conversion settings.",
   ],
   [
     "Where are the code and license?",

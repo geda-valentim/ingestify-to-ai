@@ -1,7 +1,7 @@
 export const IMAGE_COPY = {
   pt: {
     imagesIntro:
-      "Florence-2 oferece 15 tarefas de descrição, OCR, detecção, localização e segmentação. Use /images/analyze (JSON) ou /images/analyze/upload (multipart): wait=false retorna 202 com job_id; wait=true espera pelo resultado. As rotas específicas de descrição/OCR mantêm a espera síncrona. O front /convert oferece todas as tarefas e opções do catálogo.",
+      "A análise de imagens oferece 15 tarefas de descrição, OCR, detecção, localização e segmentação. Use /images/analyze (JSON) ou /images/analyze/upload (multipart): wait=false retorna 202 com job_id; wait=true espera pelo resultado. As rotas específicas de descrição/OCR mantêm a espera síncrona. O front /convert oferece todas as tarefas e opções do catálogo.",
     imagesHead: ["Endpoint", "Entrada / saída"],
     imagesRows: [
       [
@@ -58,7 +58,7 @@ export const IMAGE_COPY = {
   },
   en: {
     imagesIntro:
-      "Florence-2 exposes 15 tasks for captioning, OCR, detection, grounding and segmentation. Use /images/analyze (JSON) or /images/analyze/upload (multipart): wait=false returns 202 with job_id; wait=true waits for inference. Existing description/OCR routes remain synchronous. /convert offers every task and option advertised in the catalog.",
+      "Image analysis exposes 15 tasks for captioning, OCR, detection, grounding and segmentation. Use /images/analyze (JSON) or /images/analyze/upload (multipart): wait=false returns 202 with job_id; wait=true waits for inference. Existing description/OCR routes remain synchronous. /convert offers every task and option advertised in the catalog.",
     imagesHead: ["Endpoint", "Input / output"],
     imagesRows: [
       [

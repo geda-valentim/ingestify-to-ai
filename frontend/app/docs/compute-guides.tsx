@@ -114,8 +114,8 @@ const guides: Record<string, Guide> = {
               "File transcription using transcription; remote containers and partial captions from the uploaded file.",
             ),
             x(
-              "Credenciais, identidade testada, orçamento, artifact compatível e worker-remote. Não executa Docling, visão ou captura contínua live. Concorrência remota por container: E=1.",
-              "Credentials, tested identity, budget, compatible artifact and worker-remote. It does not run Docling, vision or continuous live capture. Remote per-container concurrency: E=1.",
+              "Credenciais, identidade testada, orçamento, artifact compatível e worker-remote. Não executa conversão de documentos, análise de imagens ou captura contínua live. Concorrência remota por container: E=1.",
+              "Credentials, tested identity, budget, compatible artifact and worker-remote. It does not run document conversion, image analysis or continuous live capture. Remote per-container concurrency: E=1.",
             ),
           ],
           [
@@ -1052,8 +1052,8 @@ curl --fail "${DOCS_API_URL}/admin/engine-operations/OPERATION_ID/events?after=0
         ),
         paragraphs: [
           x(
-            "Exemplo ilustrativo de Docling em CPU; substitua IDs e valores pelo inventário real. A engine já deve estar classificada development e o agente deve registrar worker. As três escritas abaixo só mudam metadata/desejado; aplicação física exige o plano separado. Use os version retornados pelo servidor.",
-            "Illustrative CPU Docling example; replace IDs and values with actual inventory. The engine must already be classified development and the agent must register worker. These three writes only change metadata/desired state; physical application needs a separate plan. Use server-returned versions.",
+            "Exemplo ilustrativo de conversão de documentos em CPU; substitua IDs e valores pelo inventário real. A engine já deve estar classificada development e o agente deve registrar worker. As três escritas abaixo só mudam metadata/desejado; aplicação física exige o plano separado. Use os version retornados pelo servidor.",
+            "Illustrative CPU document conversion example; replace IDs and values with actual inventory. The engine must already be classified development and the agent must register worker. These three writes only change metadata/desired state; physical application needs a separate plan. Use server-returned versions.",
           ),
         ],
         code: `import requests
@@ -1067,7 +1067,7 @@ def call(method, path, **kwargs):
     return response.json()
 
 profile = call("POST", "/admin/execution-profiles", json={
-    "name": "Docling CPU dev", "description": "Document pipeline",
+    "name": "Document conversion CPU dev", "description": "Document pipeline",
     "adapter_type": "local", "feature": "document_conversion",
     "environment": "development", "warm_for_seconds": None,
     "settings": {

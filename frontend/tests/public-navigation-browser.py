@@ -63,12 +63,21 @@ async def main():
                         await expect(page.locator('meta[property="og:locale"]')).to_have_attribute('content','en_US')
                         canonical = await page.locator('link[rel="canonical"]').get_attribute('href')
                         assert canonical.endswith(path), (path, canonical)
-                        await expect(main.get_by_role('link',name='Create an account',exact=True).first).to_have_attribute('href','/register')
+                        await expect(main.get_by_role('link',name='Get started',exact=True).first).to_have_attribute('href','/register')
                         if path == '/features':
                             for feature in FEATURES:
-                                await expect(main.locator(f'a[href="{feature}"]')).to_have_count(1)
+                                await expect(main.locator(f'a[href="{feature}"]').first).to_be_visible()
                         else:
-                            await expect(main.locator('pre code')).to_contain_text('X-API-Key')
+                            await expect(main.locator('#api pre code')).to_contain_text('X-API-Key')
+                            await expect(main.get_by_label('Example output',exact=True)).not_to_be_empty()
+                            if enabled:
+                                outputs = main.get_by_role('group',name='Example output format').get_by_role('button')
+                                original = await main.get_by_label('Example output',exact=True).inner_text()
+                                await outputs.nth(1).click()
+                                await expect(outputs.nth(1)).to_have_attribute('aria-pressed','true')
+                                assert await main.get_by_label('Example output',exact=True).inner_text() != original
+                                await outputs.nth(0).click()
+                                await expect(main.get_by_label('Example output',exact=True)).to_have_text(original)
                             docs = await main.locator('a[href^="/docs/"]').evaluate_all('(l)=>[...new Set(l.map(a=>a.getAttribute("href")))]')
                             assert len(docs) >= 4, (path, docs)
                             if width == 1440 and not enabled:
