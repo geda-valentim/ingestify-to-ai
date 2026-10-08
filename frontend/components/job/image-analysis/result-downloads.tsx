@@ -7,7 +7,7 @@ import { jobsApi } from "@/lib/api";
 import { downloadText, formatApiError } from "@/lib/utils";
 
 const FORMATS = {
-  markdown: { label: "Download as Markdown", extension: "md", type: "text/markdown" },
+  markdown: { label: "Download Markdown", extension: "md", type: "text/markdown" },
   json: { label: "Download JSON", extension: "json", type: "application/json" },
 } as const;
 
