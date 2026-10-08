@@ -48,8 +48,8 @@ export function FullAnalysisGuide({ lang }: { lang: DocsLang }) {
           [
             "Idempotency-Key",
             pt
-              ? "Header obrigatório, 1–128 caracteres. Preserve a chave ao repetir a mesma solicitação após erro de rede."
-              : "Required header, 1–128 characters. Keep the key when retrying the same request after a network error.",
+              ? "Header obrigatório, 1–128 caracteres. Preserve a chave ao repetir a mesma solicitação após erro de rede: a mesma chave e o mesmo payload devolvem o mesmo job enquanto a última tentativa não terminou failed; depois de failed, a mesma chave cria a tentativa seguinte (attempt 2, 3…). Outro payload: 409; job excluído: 410. purge_source não faz parte da comparação: repetir a chave com outro purge_source devolve a tentativa existente sem mudá-la."
+              : "Required header, 1–128 characters. Keep the key when retrying the same request after a network error: the same key and payload return the same job while the latest attempt has not ended failed; after failed, the same key starts the next attempt (attempt 2, 3…). Another payload: 409; deleted job: 410. purge_source is not compared: replaying the key with another purge_source returns the existing attempt unchanged.",
           ],
           [
             "full_options.queries",

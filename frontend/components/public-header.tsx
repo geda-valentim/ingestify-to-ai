@@ -11,6 +11,7 @@ import styles from "./public-header.module.css";
 
 const LINKS = [
   { href: "/#operacoes", label: "Platform", path: "/" },
+  { href: "/features", label: "Features", path: "/features" },
   { href: "/agents", label: "Agents", path: "/agents" },
   { href: "/business", label: "Business", path: "/business" },
   { href: "/docs", label: "Docs", path: "/docs" },

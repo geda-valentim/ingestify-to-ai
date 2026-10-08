@@ -4,8 +4,9 @@ import os
 from playwright.async_api import async_playwright, expect
 
 URL = os.environ.get('LANDING_URL', 'http://localhost:3115').rstrip('/')
-PAGES = ('/', '/agents', '/business', '/docs', '/docs/platform-start', '/login', '/register')
-LINKS = ('/#operacoes', '/agents', '/business', '/docs',
+FEATURES = ('/features/documents', '/features/audio-video', '/features/images')
+PAGES = ('/', '/features', *FEATURES, '/agents', '/business', '/docs', '/docs/platform-start', '/login', '/register')
+LINKS = ('/#operacoes', '/features', '/agents', '/business', '/docs',
          'https://github.com/geda-valentim/ingestify-to-ai', '/login')
 
 async def main():
@@ -40,9 +41,9 @@ async def main():
                     await expect(nav).to_be_visible()
                     hrefs = await nav.locator('a').evaluate_all('(links)=>links.map(link=>link.getAttribute("href"))')
                     assert tuple(hrefs) == LINKS, (path, hrefs)
-                    for label in ('Platform', 'Agents', 'Business', 'Docs', 'Sign in'):
+                    for label in ('Platform', 'Features', 'Agents', 'Business', 'Docs', 'Sign in'):
                         await expect(nav.get_by_role('link', name=label, exact=True)).to_be_visible()
-                    current = {'/':'Platform','/agents':'Agents','/business':'Business',
+                    current = {'/':'Platform','/features':'Features',**{f:'Features' for f in FEATURES},'/agents':'Agents','/business':'Business',
                                '/docs':'Docs','/docs/platform-start':'Docs'}.get(path)
                     if current:
                         await expect(nav.get_by_role('link', name=current, exact=True)).to_have_attribute('aria-current','page')
@@ -56,6 +57,24 @@ async def main():
                         await page.keyboard.press('Escape')
                         await expect(toggle).to_be_focused()
                         assert await header.locator('details').get_attribute('open') is None
+                    if path.startswith('/features'):
+                        main = page.locator('main')
+                        await expect(main.locator('h1')).to_have_count(1)
+                        await expect(page.locator('meta[property="og:locale"]')).to_have_attribute('content','en_US')
+                        canonical = await page.locator('link[rel="canonical"]').get_attribute('href')
+                        assert canonical.endswith(path), (path, canonical)
+                        await expect(main.get_by_role('link',name='Create an account',exact=True).first).to_have_attribute('href','/register')
+                        if path == '/features':
+                            for feature in FEATURES:
+                                await expect(main.locator(f'a[href="{feature}"]')).to_have_count(1)
+                        else:
+                            await expect(main.locator('pre code')).to_contain_text('X-API-Key')
+                            docs = await main.locator('a[href^="/docs/"]').evaluate_all('(l)=>[...new Set(l.map(a=>a.getAttribute("href")))]')
+                            assert len(docs) >= 4, (path, docs)
+                            if width == 1440 and not enabled:
+                                for href in docs:
+                                    r = await context.request.get(URL+href)
+                                    assert r.status == 200, (path, href)
                     if path == '/business':
                         assert await page.locator('main').evaluate('(el)=>el.closest("[lang]").lang') == 'en'
                         await expect(page.locator('meta[property="og:locale"]')).to_have_attribute('content','en_US')
@@ -81,7 +100,7 @@ async def main():
         }));""")
         await context.route('**/api/**', lambda route: route.fulfill(status=200,content_type='application/json',body='{}'))
         page = await context.new_page()
-        for path in ('/','/agents','/business','/docs'):
+        for path in ('/','/features','/features/images','/agents','/business','/docs'):
             await page.goto(URL+path,wait_until='networkidle')
             account = page.locator('header').get_by_role('navigation',name='Main navigation',exact=True).get_by_role('link',name='Open dashboard',exact=True)
             await expect(account).to_have_attribute('href','/dashboard')

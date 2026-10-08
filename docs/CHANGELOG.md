@@ -13,6 +13,49 @@
 - Pool configurável por processo: `DB_POOL_SIZE` (20), `DB_MAX_OVERFLOW` (20),
   `DB_POOL_TIMEOUT` (15 s). O MariaDB do dev foi para `max_connections=500`.
 
+## 2026-10: Páginas públicas de funcionalidades (/features)
+
+- Novas páginas públicas em inglês: `/features` (índice), `/features/documents`,
+  `/features/audio-video` e `/features/images`, com metadata (title, description,
+  canonical, OpenGraph `en_US`), exemplo `curl` com os endpoints e campos reais e links
+  para os tópicos de `/docs` via `docsHref`.
+- Conteúdo derivado do código e de `docs/features/*`: presets Docling (`fast`/`balanced`/
+  `quality` só em `/upload`), páginas de PDF e retry, `image_mode`/`page_images`,
+  `purge_source`, dedup; `POST /transcribe` (faster-whisper `turbo` por padrão, formatos
+  markdown/srt/vtt/txt/json, live e diarização apenas quando habilitados); as 15 tarefas
+  Florence-2 de `GET /images/capabilities`, `wait`, Full Analysis, faces (desligado por
+  padrão) e entrega em datalake só para Full Analysis/faces.
+- Header público ganha o link **Features**; `app/sitemap.ts` lista as quatro rotas.
+- Testes: `frontend/tests/feature-pages.test.cjs` (slugs de docs, tarefas iguais a
+  `vision_capabilities.py`, header e sitemap) e `public-navigation-browser.py` estendido.
+
+## 2026-10: Imagens da conversão na interface e no portal /docs
+
+- `/convert`: documentos ganham "Extract images" (`image_mode=referenced`) e "Render each
+  page as an image" (`page_images=true`, com a orientação de usar em slides, escaneados e
+  páginas que são uma imagem só), nas quatro abas, e o aviso de retenção ligado a "Don't
+  keep the original file after converting" (as imagens ficam `ASSET_RETENTION_SECONDS`, ou
+  até "Delete original files"). As abas URL / Google Drive / Dropbox deixam de mostrar
+  "coming soon" e enviam para `POST /convert`; `jobsApi.convert` manda o token do provedor
+  no header `X-Source-Token` (o campo `auth_token` que enviava era ignorado pela API) e as
+  opções de imagem.
+- Página do job: aba "Images" com miniaturas carregadas com a credencial da sessão (o
+  mesmo loader do Markdown, agora `hooks/use-asset-url.ts`), página/tipo/dimensões/tamanho,
+  download de cada PNG, "Download all (.zip)" (ZIP sem compressão gerado no navegador),
+  `assets_expire_at`, figuras puladas (`assets_skipped`) e o estado de apagadas (410). O
+  botão "Delete original files" e a confirmação dizem que as imagens extraídas também são
+  apagadas; depois que o original já foi apagado, o botão vira "Delete extracted images"
+  enquanto `assets_available`. Um PDF `partial` deixa de aparecer como "Waiting in the
+  queue…".
+- Portal /docs (pt/en): campos de `assets[]` lidos do schema OpenAPI, `assets_available` /
+  `assets_expire_at` em "Acompanhar o job", ETag/304/404/410/503 da rota de assets, retenção,
+  `DELETE /jobs/{id}/source` apagando as imagens (`assets_deleted`), erros novos, a receita
+  "PDF → imagens → descrição/OCR" com curl, deduplicação por sha256 nas rotas de imagem e
+  tentativas de `Idempotency-Key`. Removidos: a seção de imagens morta de `MediaSections`
+  (dizia que o resultado de visão não persistia), "trocar o preset no reenvio não força
+  outra conversão" (o preset faz parte da chave) e "as abas URL/Drive/Dropbox ainda não
+  concluem o envio".
+
 ## 2026-10: Imagens da conversão de documentos (API 1.2.0)
 
 - `POST /upload` e `POST /convert` ganham `image_mode` (`none` padrão | `referenced`) e

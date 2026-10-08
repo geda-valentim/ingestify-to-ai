@@ -1,7 +1,8 @@
 import { DOCS_API_URL as API_URL } from "../config";
 import { CodeBlock } from "../code-block";
 import { P, Section, Subheading, Table } from "../docs-content-primitives";
-import type { DocsLang } from "../topics";
+import Link from "next/link";
+import { docsHref, type DocsLang } from "../topics";
 import openapi from "@/docs/doc2md_openapi.json";
 import { IMAGE_COPY } from "./images-copy";
 import { GenerationGuide } from "./generation-guide";
@@ -38,6 +39,15 @@ export function ImagesGuide({ lang }: { lang: DocsLang }) {
       <Table head={t.imagesHead} rows={t.imagesRows} />
       <P small>{t.imageOptions}</P>
       <P small>{t.imageTasks}</P>
+      <P small>
+        {pt
+          ? "Imagens de um PDF ou documento: converta com image_mode=referenced (e page_images=true para slides e escaneados), baixe cada item de assets com a mesma credencial, deduplique pelo sha256 (estas rotas não deduplicam) e envie-o a describe/ocr com purge_source=true. Passo a passo com curl em "
+          : "Images from a PDF or document: convert with image_mode=referenced (and page_images=true for slides and scans), download each assets item with the same credentials, deduplicate by sha256 (these routes do not deduplicate) and send it to describe/ocr with purge_source=true. Step by step with curl in "}
+        <Link className="text-primary underline underline-offset-4" href={docsHref("documents", lang)}>
+          {pt ? "PDF e documentos" : "PDF and documents"}
+        </Link>
+        .
+      </P>
       <FullAnalysisGuide lang={lang} />
       <FacesGuide lang={lang} />
       <Subheading>

@@ -6,17 +6,35 @@ import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { MarkdownView } from "@/components/markdown-view";
 import { CopyButton, Panel } from "./result-primitives";
+import { JobImages } from "./job-images";
+import type { ConversionAsset, ConversionAssetsSkipped, JobStatusResponse } from "@/types/api";
 
 /**
- * A converted document: rendered Markdown by default, source on demand.
+ * A converted document: rendered Markdown by default, source on demand, and the
+ * extracted images / page renders when the job asked for them (image_mode,
+ * page_images).
  */
-export function DocumentView({ markdown, fileName }: { markdown: string; fileName: string }) {
+export function DocumentView({
+  markdown,
+  fileName,
+  status,
+  assets,
+  assetsSkipped,
+}: {
+  markdown: string;
+  fileName: string;
+  status?: JobStatusResponse;
+  assets?: ConversionAsset[] | null;
+  assetsSkipped?: ConversionAssetsSkipped | null;
+}) {
+  const images = status && assets && assets.length > 0 ? assets : null;
   return (
     <Tabs defaultValue="preview">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <TabsList>
           <TabsTrigger value="preview">Preview</TabsTrigger>
           <TabsTrigger value="source">Markdown source</TabsTrigger>
+          {images && <TabsTrigger value="images">Images ({images.length})</TabsTrigger>}
         </TabsList>
         <div className="flex gap-2">
           <CopyButton text={markdown} />
@@ -40,6 +58,13 @@ export function DocumentView({ markdown, fileName }: { markdown: string; fileNam
           <pre className="text-sm whitespace-pre-wrap font-mono">{markdown}</pre>
         </Panel>
       </TabsContent>
+      {images && status && (
+        <TabsContent value="images" className="mt-4">
+          <Panel>
+            <JobImages status={status} assets={images} skipped={assetsSkipped} fileName={fileName} />
+          </Panel>
+        </TabsContent>
+      )}
     </Tabs>
   );
 }

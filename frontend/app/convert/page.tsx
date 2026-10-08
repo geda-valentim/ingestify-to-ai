@@ -25,6 +25,7 @@ import {
   TabsTrigger,
 } from "@/components/ui/tabs";
 import { ImageUploadOptions } from "@/components/upload/image-options";
+import { DocumentImageFields } from "@/components/upload/document-image-options";
 import { FileUpload } from "@/components/upload/file-upload";
 import { TagInput } from "@/components/tag-input";
 import { Input } from "@/components/ui/input";
@@ -38,7 +39,13 @@ import {
   useProjects,
   writeLastProject,
 } from "@/components/projects/use-projects";
-import type { UploadLocation, UploadRequest } from "@/types/api";
+import type {
+  ConvertRequest,
+  DocumentImageOptions,
+  JobCreatedResponse,
+  UploadLocation,
+  UploadRequest,
+} from "@/types/api";
 
 export default function ConversionPage() {
   // useSearchParams needs a Suspense boundary in the App Router.
@@ -80,6 +87,8 @@ function ConversionWorkspace() {
   const [customName, setCustomName] = useState("");
   const [tags, setTags] = useState<string[]>([]);
   const [purgeSource, setPurgeSource] = useState(false);
+  // Documents only (image_mode / page_images): /upload and /convert take them for every source type
+  const [documentImages, setDocumentImages] = useState<DocumentImageOptions>({});
   const [uploadSuccess, setUploadSuccess] = useState<string | null>(null);
   const [urlSource, setUrlSource] = useState("");
   const [gdriveSource, setGdriveSource] = useState("");
@@ -148,8 +157,13 @@ function ConversionWorkspace() {
     setProject(next);
   };
 
+  // One mutation for every tab: the file tab posts /upload (or an /images/* route),
+  // URL / Google Drive / Dropbox post /convert
   const uploadMutation = useMutation({
-    mutationFn: (request: UploadRequest) => jobsApi.upload(request),
+    mutationFn: (
+      request: { route: "upload"; body: UploadRequest } | { route: "convert"; body: ConvertRequest }
+    ): Promise<JobCreatedResponse> =>
+      request.route === "upload" ? jobsApi.upload(request.body) : jobsApi.convert(request.body),
     onSuccess: (data) => {
       setUploadSuccess(data.job_id);
       if (data.project && user) writeLastProject(user.id, data.project);
@@ -176,6 +190,7 @@ function ConversionWorkspace() {
       setCustomName("");
       setTags([]);
       setPurgeSource(false);
+      setDocumentImages({});
       setUrlSource("");
       setGdriveSource("");
       setGdriveToken("");
@@ -199,13 +214,19 @@ function ConversionWorkspace() {
       if (imageKey.current?.signature !== signature) imageKey.current = { signature, key: crypto.randomUUID() };
       image_idempotency_key = imageKey.current.key;
     }
+    // Document uploads have no client-side key: the server deduplicates them by
+    // checksum + operation (preset, image_mode, page_images), so changing an image
+    // option is already another job there
     uploadMutation.mutate({
-      ...(isImage ? { ...imageRequest, image_idempotency_key } : {}),
-      file: selectedFile,
-      name: isImage ? undefined : customName || undefined,
-      tags,
-      purge_source: purgeSource,
-      ...toUploadLocation(project, folder),
+      route: "upload",
+      body: {
+        ...(isImage ? { ...imageRequest, image_idempotency_key } : documentImages),
+        file: selectedFile,
+        name: isImage ? undefined : customName || undefined,
+        tags,
+        purge_source: purgeSource,
+        ...toUploadLocation(project, folder),
+      },
     });
   };
 
@@ -219,23 +240,48 @@ function ConversionWorkspace() {
     <p className="text-center text-xs text-muted-foreground">Choose or create a project</p>
   ) : null;
 
+  // POST /convert: the API downloads the document itself. The provider token goes in
+  // X-Source-Token (jobsApi.convert), never with the Ingestify credentials.
+  const convertFrom = (source_type: "url" | "gdrive" | "dropbox", source: string, sourceToken?: string) => {
+    if (!project) return;
+    uploadMutation.mutate({
+      route: "convert",
+      body: {
+        source_type,
+        source: source.trim(),
+        sourceToken,
+        name: customName || undefined,
+        tags,
+        ...documentImages,
+        ...toUploadLocation(project, folder),
+      },
+    });
+  };
+
   const handleUrlConvert = () => {
-    if (!urlSource) return;
-    // URL conversion not yet implemented in API
-    alert("URL conversion coming soon!");
+    if (!urlSource.trim()) return;
+    convertFrom("url", urlSource);
   };
 
   const handleGdriveConvert = () => {
-    if (!gdriveSource || !gdriveToken) return;
-    // Google Drive conversion not yet implemented in API
-    alert("Google Drive conversion coming soon!");
+    if (!gdriveSource.trim() || !gdriveToken) return;
+    convertFrom("gdrive", gdriveSource, gdriveToken);
   };
 
   const handleDropboxConvert = () => {
-    if (!dropboxSource || !dropboxToken) return;
-    // Dropbox conversion not yet implemented in API
-    alert("Dropbox conversion coming soon!");
+    if (!dropboxSource.trim() || !dropboxToken) return;
+    convertFrom("dropbox", dropboxSource, dropboxToken);
   };
+
+  const imageFields = (idPrefix: string, withPurge: boolean) => (
+    <DocumentImageFields
+      idPrefix={idPrefix}
+      value={documentImages}
+      onChange={setDocumentImages}
+      disabled={uploadMutation.isPending}
+      purgeSource={withPurge && purgeSource}
+    />
+  );
 
   if (!user) {
     return (
@@ -345,6 +391,8 @@ function ConversionWorkspace() {
                     <TagInput id="tagsFile" value={tags} onChange={setTags} />
                   </div>
 
+                  {!isImage && imageFields("file", true)}
+
                   <div className="flex items-start space-x-2">
                     <Checkbox
                       id="purgeSourceFile"
@@ -362,7 +410,7 @@ function ConversionWorkspace() {
                       <p className="text-xs text-muted-foreground">
                         {isImage
                           ? "Every stored copy of the image is deleted when the job finishes (also when it fails or is cancelled); only the analysis result is kept."
-                          : "The file and its page PDFs are deleted when the job finishes (also when it fails, after its automatic retries); only the Markdown result is kept, and failed pages can no longer be retried."}
+                          : "The file and its page PDFs are deleted when the job finishes (also when it fails, after its automatic retries); the Markdown result is kept, and failed pages can no longer be retried. Extracted images are kept for a limited time so you can download them."}
                       </p>
                     </div>
                   </div>
@@ -409,6 +457,8 @@ function ConversionWorkspace() {
                     <Label htmlFor="tagsUrl">Tags (Optional)</Label>
                     <TagInput id="tagsUrl" value={tags} onChange={setTags} />
                   </div>
+
+                  {imageFields("url", false)}
 
                   <Button
                     onClick={handleUrlConvert}
@@ -467,6 +517,8 @@ function ConversionWorkspace() {
                     <TagInput id="tagsGdrive" value={tags} onChange={setTags} />
                   </div>
 
+                  {imageFields("gdrive", false)}
+
                   <Button
                     onClick={handleGdriveConvert}
                     disabled={!gdriveSource || !gdriveToken || !project || uploadMutation.isPending}
@@ -523,6 +575,8 @@ function ConversionWorkspace() {
                     <Label htmlFor="tagsDropbox">Tags (Optional)</Label>
                     <TagInput id="tagsDropbox" value={tags} onChange={setTags} />
                   </div>
+
+                  {imageFields("dropbox", false)}
 
                   <Button
                     onClick={handleDropboxConvert}
