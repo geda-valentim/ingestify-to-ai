@@ -59,8 +59,8 @@ const guides: Record<string, Guide> = {
         title: t("Escolher o caminho disponível", "Choose an available path"),
         paragraphs: [
           t(
-            "O envio local de documentos e imagens funciona em /convert. As abas URL, Google Drive e Dropbox dessa tela ainda mostram uma mensagem de recurso futuro; use os endpoints documentados quando precisar integrar fontes externas. Para áudio/vídeo gravado, envie pela API de transcrição e consulte o job pela plataforma. O microfone tem sua própria tela /live.",
-            "Local document and image submission works in /convert. The URL, Google Drive and Dropbox tabs on that screen still show a future-feature message; use the documented endpoints for external-source integrations. Submit recorded audio/video through the transcription API and inspect its job in the platform. The microphone has its own /live screen.",
+            "Em /convert, a aba File envia documentos e imagens locais; as abas URL, Google Drive e Dropbox convertem um documento que a API baixa (URL pública, ID do arquivo no Drive ou caminho no Dropbox, com o token do provedor). Para áudio/vídeo gravado, envie pela API de transcrição e consulte o job pela plataforma. O microfone tem sua própria tela /live.",
+            "In /convert, the File tab submits local documents and images; the URL, Google Drive and Dropbox tabs convert a document the API downloads (a public URL, a Drive file ID or a Dropbox path, with the provider token). Submit recorded audio/video through the transcription API and inspect its job in the platform. The microphone has its own /live screen.",
           ),
         ],
       },
@@ -179,6 +179,14 @@ const guides: Record<string, Guide> = {
             "Open /convert, select a project/folder and add the document in the File tab. Use Custom Name and Tags to make it easier to locate in the history.",
           ),
           t(
+            "Para guardar as imagens do documento, marque Extract images (cada figura vira um PNG, mostrado no Markdown). Marque Render each page as an image em slides, PDFs escaneados ou páginas que são uma imagem só: o Docling não detecta uma imagem de página inteira como figura. As duas opções valem para todas as abas; num arquivo que não é PDF, só Extract images tem efeito.",
+            "To keep the document's images, check Extract images (every picture becomes a PNG, shown in the Markdown). Check Render each page as an image for slides, scanned PDFs or pages that are a single image: Docling does not detect a full-page image as a picture. Both options apply to every tab; for a file that is not a PDF, only Extract images has an effect.",
+          ),
+          t(
+            "Don't keep the original file after converting apaga o arquivo e os PDFs das páginas quando o job termina. Com imagens, elas não somem junto: ficam disponíveis por um prazo (1 hora por padrão) para você baixar e então são apagadas.",
+            "Don't keep the original file after converting deletes the file and its page PDFs when the job finishes. Images are not deleted with them: they stay available for a retention period (1 hour by default) for you to download, then they are deleted.",
+          ),
+          t(
             "Clique em Convert to Markdown e abra o job criado. Aguarde a conclusão; para PDF dividido, acompanhe o total de páginas concluídas e com falha.",
             "Click Convert to Markdown and open the created job. Wait for completion; for a split PDF, follow the completed and failed page counts.",
           ),
@@ -190,14 +198,22 @@ const guides: Record<string, Guide> = {
             "Use as opções de cópia/download do resultado para levar o Markdown à aplicação de destino. Para automatizar o consumo de JSON e metadados, consulte a referência de resultados.",
             "Use the result copy/download options to take Markdown to the destination application. To automate JSON and metadata consumption, see the results reference.",
           ),
+          t(
+            "Se pediu imagens, abra a aba Images do resultado: miniaturas com página, tipo (picture ou page), dimensões e tamanho, download de cada PNG e Download all (.zip). Quando o original não foi guardado, a aba mostra até quando as imagens ficam disponíveis; depois disso aparecem como indisponíveis.",
+            "If you asked for images, open the result's Images tab: thumbnails with page, kind (picture or page), dimensions and size, a download for each PNG and Download all (.zip). When the original was not kept, the tab shows until when the images stay available; afterwards they show as unavailable.",
+          ),
+          t(
+            "Delete original files, na barra lateral do job, apaga o arquivo enviado, os PDFs das páginas e as imagens extraídas de uma vez; o Markdown fica. Depois que o original já foi apagado, o mesmo botão aparece como Delete extracted images enquanto as imagens existirem.",
+            "Delete original files, in the job sidebar, deletes the uploaded file, the page PDFs and the extracted images at once; the Markdown stays. Once the original is already gone, the same button shows as Delete extracted images while the images exist.",
+          ),
         ],
       },
       {
         title: t("Escolher uma fonte", "Choose a source"),
         paragraphs: [
           t(
-            "O guia das telas usa upload local. As abas URL/Drive/Dropbox em /convert ainda não concluem o envio; os contratos de /convert descrevem a integração dessas fontes pela API. A entrega externa de documentos ainda não está ligada ao fluxo de conversão desta versão; o resultado fica disponível no job.",
-            "This screen guide uses local upload. URL/Drive/Dropbox tabs in /convert do not yet complete submission; /convert contracts describe API integration for those sources. External document delivery is not yet connected to this version conversion flow; the result remains available in the job.",
+            "Além do upload local, as abas URL, Google Drive e Dropbox de /convert enviam a fonte para POST /convert: uma URL pública HTTP(S), o ID do arquivo no Google Drive ou o caminho no Dropbox, com o token do provedor (enviado em X-Source-Token, separado da sua sessão). Nelas não há a opção de apagar o original: o arquivo baixado já é descartado quando o job completa, e as imagens extraídas duram o mesmo que o job. A entrega externa de documentos ainda não está ligada ao fluxo de conversão desta versão; o resultado fica disponível no job.",
+            "Besides local upload, the URL, Google Drive and Dropbox tabs of /convert send the source to POST /convert: a public HTTP(S) URL, the Google Drive file ID or the Dropbox path, with the provider token (sent in X-Source-Token, separate from your session). They have no delete-the-original option: the downloaded file is already discarded when the job completes, and extracted images live as long as the job. External document delivery is not yet connected to this version conversion flow; the result remains available in the job.",
           ),
         ],
       },

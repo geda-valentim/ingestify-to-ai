@@ -37,8 +37,8 @@ What is deliberately NOT pinned
     would fail on every unrelated docstring edit, and a test that cries wolf
     gets deleted. (Layer 4 compares the whole document, but only against the
     app that generated it, where the fix is one mechanical command.)
-  - Endpoints the frontend does not call (`/admin/*`, `/transcribe`,
-    `/convert`). They have their own callers and their own contracts.
+  - Endpoints the frontend does not call (`/admin/*`, `/transcribe`). They have
+    their own callers and their own contracts.
   - Business behaviour: ownership, retry limits, conversion. Covered elsewhere.
   - Exhaustive field lists. Assertions name the fields the frontend reads;
     adding a field to a response must not fail this file.
@@ -89,14 +89,14 @@ FRONTEND_OPERATIONS = [
     ("post", "/auth/register", "authApi.register"),
     ("post", "/auth/login", "authApi.login"),
     ("get", "/auth/me", "authApi.me"),
-    ("post", "/convert", "jobsApi.convert"),
+    ("post", "/convert", "jobsApi.convert - the URL / Google Drive / Dropbox tabs of /convert"),
     ("post", "/upload", "jobsApi.upload - dashboard upload"),
     ("get", "/jobs", "jobsApi.list - the 'My Jobs' page"),
     ("get", "/jobs/{job_id}", "jobsApi.getStatus - job detail polling"),
     ("delete", "/jobs/{job_id}", "jobsApi.delete - delete from list and detail"),
     ("delete", "/jobs/{job_id}/source", "jobsApi.deleteSource - 'Apagar arquivo original' on the detail page"),
     ("get", "/jobs/{job_id}/result", "jobsApi.getResult"),
-    ("get", "/jobs/{job_id}/assets/{name}", "jobsApi.getAssetBlob - images in the rendered markdown"),
+    ("get", "/jobs/{job_id}/assets/{name}", "jobsApi.getAssetBlob - images in the rendered markdown and the Images tab"),
     ("get", "/jobs/{job_id}/pages", "jobsApi.getPages"),
     ("get", "/jobs/{job_id}/pages/{page_number}/pdf", "jobsApi.getPagePdf"),
     ("post", "/jobs/{job_id}/pages/{page_number}/retry",

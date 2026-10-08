@@ -29,6 +29,33 @@
 - Testes: `frontend/tests/feature-pages.test.cjs` (slugs de docs, tarefas iguais a
   `vision_capabilities.py`, header e sitemap) e `public-navigation-browser.py` estendido.
 
+## 2026-10: Imagens da conversão na interface e no portal /docs
+
+- `/convert`: documentos ganham "Extract images" (`image_mode=referenced`) e "Render each
+  page as an image" (`page_images=true`, com a orientação de usar em slides, escaneados e
+  páginas que são uma imagem só), nas quatro abas, e o aviso de retenção ligado a "Don't
+  keep the original file after converting" (as imagens ficam `ASSET_RETENTION_SECONDS`, ou
+  até "Delete original files"). As abas URL / Google Drive / Dropbox deixam de mostrar
+  "coming soon" e enviam para `POST /convert`; `jobsApi.convert` manda o token do provedor
+  no header `X-Source-Token` (o campo `auth_token` que enviava era ignorado pela API) e as
+  opções de imagem.
+- Página do job: aba "Images" com miniaturas carregadas com a credencial da sessão (o
+  mesmo loader do Markdown, agora `hooks/use-asset-url.ts`), página/tipo/dimensões/tamanho,
+  download de cada PNG, "Download all (.zip)" (ZIP sem compressão gerado no navegador),
+  `assets_expire_at`, figuras puladas (`assets_skipped`) e o estado de apagadas (410). O
+  botão "Delete original files" e a confirmação dizem que as imagens extraídas também são
+  apagadas; depois que o original já foi apagado, o botão vira "Delete extracted images"
+  enquanto `assets_available`. Um PDF `partial` deixa de aparecer como "Waiting in the
+  queue…".
+- Portal /docs (pt/en): campos de `assets[]` lidos do schema OpenAPI, `assets_available` /
+  `assets_expire_at` em "Acompanhar o job", ETag/304/404/410/503 da rota de assets, retenção,
+  `DELETE /jobs/{id}/source` apagando as imagens (`assets_deleted`), erros novos, a receita
+  "PDF → imagens → descrição/OCR" com curl, deduplicação por sha256 nas rotas de imagem e
+  tentativas de `Idempotency-Key`. Removidos: a seção de imagens morta de `MediaSections`
+  (dizia que o resultado de visão não persistia), "trocar o preset no reenvio não força
+  outra conversão" (o preset faz parte da chave) e "as abas URL/Drive/Dropbox ainda não
+  concluem o envio".
+
 ## 2026-10: Imagens da conversão de documentos (API 1.2.0)
 
 - `POST /upload` e `POST /convert` ganham `image_mode` (`none` padrão | `referenced`) e

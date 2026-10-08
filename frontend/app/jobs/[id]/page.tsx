@@ -142,6 +142,14 @@ export default function JobStatusPage({ params }: PageProps) {
   const sourcePurged = !!status?.source_deleted_at;
   // A page retry re-reads the original: impossible once it is gone
   const canRetryPages = status?.source_available !== false;
+  // DELETE /jobs/{id}/source also deletes the extracted images. source_deletable only
+  // speaks for the original: once purge_source took it, the images left in their
+  // retention period can be deleted as soon as the job has settled.
+  const canDeleteSource =
+    !!status?.source_deletable ||
+    (status?.source_available === false &&
+      !!status?.assets_available &&
+      ["completed", "partial", "failed", "cancelled"].includes(status.status));
 
   // Fetch result when job is completed
   const { data: result, isError: isResultError, refetch: refetchResult } = useQuery({
@@ -282,15 +290,18 @@ export default function JobStatusPage({ params }: PageProps) {
     },
   });
 
-  // DELETE /jobs/{id}/source: drops the original file, keeps the job and its result
+  // DELETE /jobs/{id}/source: drops the original files and the extracted images,
+  // keeps the job and its Markdown result
   const deleteSourceMutation = useMutation({
     mutationFn: () => jobsApi.deleteSource(resolvedParams.id),
-    onSuccess: () => {
+    onSuccess: (data) => {
       setSourceDialogOpen(false);
       queryClient.invalidateQueries({ queryKey: ["job-status", resolvedParams.id] });
       toast({
-        title: "Original file deleted",
-        description: "The job and its conversion result were kept.",
+        title: data.source_deleted ? "Original files deleted" : "Extracted images deleted",
+        description: data.assets_deleted
+          ? "The extracted images were deleted too. The job and its Markdown result were kept."
+          : "The job and its conversion result were kept.",
       });
     },
     onError: (error: unknown) => {
@@ -704,21 +715,23 @@ export default function JobStatusPage({ params }: PageProps) {
                 <Trash2 className="h-4 w-4 mr-2" />
                 Delete Job
               </Button>
-              {status.source_available && (
+              {/* Also once purge_source took the original: the extracted images may still
+                  be within their retention period, and the same route deletes them */}
+              {(status.source_available || status.assets_available) && (
                 <Button
                   variant="outline"
                   className="w-full"
                   onClick={() => setSourceDialogOpen(true)}
-                  disabled={!status.source_deletable || deleteSourceMutation.isPending}
+                  disabled={!canDeleteSource || deleteSourceMutation.isPending}
                   title={
-                    !status.source_deletable
+                    !canDeleteSource
                       ? "Available when the job and its retries have finished"
                       : undefined
                   }
                   size="sm"
                 >
                   <Trash2 className="h-4 w-4 mr-2" />
-                  Delete original file
+                  {status.source_available ? "Delete original files" : "Delete extracted images"}
                 </Button>
               )}
               {status.source_deleted_at && (
@@ -1099,11 +1112,18 @@ export default function JobStatusPage({ params }: PageProps) {
         <AlertDialog open={sourceDialogOpen} onOpenChange={setSourceDialogOpen}>
           <AlertDialogContent>
             <AlertDialogHeader>
-              <AlertDialogTitle>Delete the original file?</AlertDialogTitle>
+              <AlertDialogTitle>
+                {status.source_available ? "Delete the original files?" : "Delete the extracted images?"}
+              </AlertDialogTitle>
               <AlertDialogDescription>
-                The uploaded file and the per-page PDFs will be permanently deleted. The job
-                and its conversion result (Markdown) stay available, but failed pages can no
-                longer be retried.
+                {status.source_available
+                  ? "The uploaded file and the per-page PDFs will be permanently deleted"
+                  : "The original files are already gone; this permanently deletes what is left"}
+                {status.assets_available
+                  ? ", together with the extracted images and page images of this conversion (they will no longer show in the Markdown or under Images)"
+                  : ""}
+                . The job and its conversion result (Markdown) stay available
+                {status.source_available ? ", but failed pages can no longer be retried" : ""}.
               </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>
@@ -1121,8 +1141,10 @@ export default function JobStatusPage({ params }: PageProps) {
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                     Deleting...
                   </>
+                ) : status.source_available ? (
+                  "Delete original files"
                 ) : (
-                  "Delete original file"
+                  "Delete extracted images"
                 )}
               </AlertDialogAction>
             </AlertDialogFooter>

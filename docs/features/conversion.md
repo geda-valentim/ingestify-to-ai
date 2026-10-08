@@ -117,9 +117,10 @@ nome e sentido do parâmetro do `/transcribe`):
 - **O que é apagado:** o original (objeto no MinIO e cópias locais em
   `{TEMP_STORAGE_PATH}/uploads/{job_id}/` e no diretório de trabalho
   `{TEMP_STORAGE_PATH}/{job_id}/`, onde fica o download de URL/Drive/Dropbox) e os PDFs
-  por página (MinIO e locais). A conversão de documentos não guarda imagens/assets
-  extraídos (o Markdown mantém marcadores de imagem), então não há mais nada a apagar.
-  **Ficam** o Markdown do documento e de cada página, e o índice de busca.
+  por página (MinIO e locais). **Ficam** o Markdown do documento e de cada página, e o
+  índice de busca. As imagens extraídas (`image_mode`/`page_images`) **não** são apagadas
+  aqui: seguem a [retenção própria](#imagens-do-documento-image_mode-page_images)
+  (`ASSET_RETENTION_SECONDS`).
 - **Quando:** quando o job MAIN termina de vez — `completed` (documento único ao fim da
   conversão; PDF dividido depois do merge), ou `failed` / `partial` **depois de
   esgotadas as tentativas automáticas** (retries do Celery de `process_conversion`,
@@ -166,13 +167,15 @@ curl -X DELETE "http://localhost:8000/jobs/$JOB_ID/source" -H "X-API-Key: $INGES
 (`code: JOB_STILL_PROCESSING`) enquanto o job, uma página ou um retry automático está
 pendente (o campo `source_deletable` de `GET /jobs/{id}` diz se pode agora). Ver
 [jobs-api.md](jobs-api.md#delete-jobsjob_idsource). Na interface: caixa "Don't keep the
-original file after converting" no formulário de arquivo, botão "Delete original file" e
+original file after converting" no formulário de arquivo, botão "Delete original files" e
 a data "Original files deleted on …" na página do job.
 
-Não há a opção nas abas URL / Google Drive / Dropbox: essas fontes não guardam original
-no MinIO; o arquivo baixado só existe no diretório de trabalho e já é apagado quando o job
-completa. A API aceita `purge_source` nelas (apaga o download e os PDFs por página quando
-o job falha de vez), mas a interface não oferece.
+Não há a opção nas abas URL / Google Drive / Dropbox (que enviam para `POST /convert`):
+essas fontes não guardam original no MinIO; o arquivo baixado só existe no diretório de
+trabalho e já é apagado quando o job completa. A API aceita `purge_source` nelas (apaga o
+download e os PDFs por página quando o job falha de vez, e dá às imagens extraídas a
+retenção de `ASSET_RETENTION_SECONDS`), mas a interface não oferece: nelas as imagens
+duram o mesmo que o job.
 
 ### Imagens do documento (`image_mode`, `page_images`)
 
@@ -284,9 +287,16 @@ um job cujas imagens já foram apagadas ou expiram em menos da metade de
 `ASSET_RETENTION_SECONDS` (aí um job novo é criado, em vez de devolver URLs prestes a
 responder 410).
 
-**Na interface:** a visualização do Markdown busca cada `/jobs/{id}/assets/{name}` na API
-com a credencial da sessão e mostra a imagem por um blob URL (liberado ao sair); imagem
-apagada ou inexistente aparece como "Image unavailable".
+**Na interface:** `/convert` oferece "Extract images" (`image_mode=referenced`) e "Render
+each page as an image" (`page_images=true`) para documentos, nas quatro abas (File, URL,
+Google Drive, Dropbox), com o aviso de retenção quando "Don't keep the original file after
+converting" está marcado. A visualização do Markdown busca cada `/jobs/{id}/assets/{name}`
+na API com a credencial da sessão e mostra a imagem por um blob URL (liberado ao sair);
+imagem apagada ou inexistente aparece como "Image unavailable". A página do job ganha a aba
+"Images" (miniaturas carregadas do mesmo jeito, página/tipo/tamanho, download de cada PNG e
+"Download all (.zip)", `assets_expire_at` ou o estado de apagadas). O botão "Delete original
+files" apaga também as imagens; depois que o original já foi apagado ele aparece como
+"Delete extracted images" enquanto houver imagens.
 
 ```bash
 curl -X POST http://localhost:8000/upload \

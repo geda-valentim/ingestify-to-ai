@@ -14,6 +14,7 @@ import type {
   ProjectsListResponse,
   NameResolveResponse,
   UploadLocation,
+  DocumentImageOptions,
   JobCreatedResponse,
   JobStatusResponse,
   JobResultResponse,
@@ -82,6 +83,12 @@ function appendLocation(formData: FormData, location: UploadLocation) {
   else if (location.project?.trim()) formData.append("project", location.project.trim());
   if (location.folder_id) formData.append("folder_id", location.folder_id);
   else if (location.folder?.trim()) formData.append("folder", location.folder.trim());
+}
+
+/** image_mode / page_images of a document conversion, only when not the default. */
+function appendImageOptions(formData: FormData, options: DocumentImageOptions) {
+  if (options.image_mode === "referenced") formData.append("image_mode", "referenced");
+  if (options.page_images) formData.append("page_images", "true");
 }
 
 export function getHeaders(includeAuth = false): HeadersInit {
@@ -216,19 +223,21 @@ export const jobsApi = {
       formData.append("tags", request.tags.join(","));
     }
 
-    if (request.authToken) {
-      formData.append("auth_token", request.authToken);
-    }
-
     if (request.purge_source) {
       formData.append("purge_source", "true");
     }
 
+    appendImageOptions(formData, request);
     appendLocation(formData, request);
+
+    // The provider's token goes in its own header: Authorization authenticates to
+    // Ingestify and is never forwarded to Drive/Dropbox (the API ignores a form field)
+    const headers: Record<string, string> = { ...(getHeaders(true) as Record<string, string>) };
+    if (request.sourceToken) headers["X-Source-Token"] = request.sourceToken;
 
     const response = await apiFetch(`${API_URL}/convert`, {
       method: "POST",
-      headers: getHeaders(true),
+      headers,
       body: formData,
     });
 
@@ -295,6 +304,7 @@ export const jobsApi = {
       formData.append("purge_source", "true");
     }
 
+    appendImageOptions(formData, request);
     appendLocation(formData, request);
 
     const response = await apiFetch(`${API_URL}/upload`, {

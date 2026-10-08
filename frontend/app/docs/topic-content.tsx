@@ -733,18 +733,18 @@ const COPY = {
       "403":
         "Sem permissão para a rota administrativa; API key numa rota que exige sessão; ROOT_SETUP_TOKEN_REQUIRED/ROOT_SETUP_TOKEN_INVALID no cadastro do root.",
       "404":
-        "Job, projeto ou pasta inexistente ou de outro usuário, formato pedido indisponível (ex.: ?format=vtt num job de documento), ou arquivo original inexistente em DELETE /jobs/{job_id}/source.",
+        "Job, projeto ou pasta inexistente ou de outro usuário, formato pedido indisponível (ex.: ?format=vtt num job de documento), arquivo original e imagens inexistentes em DELETE /jobs/{job_id}/source, ou ASSET_NOT_FOUND em GET /jobs/{job_id}/assets/{name} (nome fora de assets).",
       "409":
         "JOB_STILL_PROCESSING ao apagar o original de um job ainda na fila; SOURCE_NOT_AVAILABLE no retry de uma página cujo original foi apagado; Idempotency-Key reutilizada com outro payload.",
       "410":
-        "SOURCE_PURGED: o PDF de página foi apagado (purge_source ou DELETE /jobs/{job_id}/source; traz source_deleted_at); ou job excluído de uma Idempotency-Key.",
+        "SOURCE_PURGED: o PDF de página foi apagado (purge_source ou DELETE /jobs/{job_id}/source; traz source_deleted_at), ou, com cause ASSETS_PURGED, a imagem extraída pedida em /jobs/{job_id}/assets/{name} já foi apagada (retenção de purge_source ou DELETE /jobs/{job_id}/source; traz assets_deleted_at); ou job excluído de uma Idempotency-Key.",
       "413": "Arquivo acima do limite de tamanho.",
       "422":
-        "Formato de arquivo não suportado, output_format/format inválido, upload sem projeto, ou nome de projeto/pasta inválido.",
+        "Formato de arquivo não suportado, output_format/format inválido, image_mode diferente de none/referenced, upload sem projeto, ou nome de projeto/pasta inválido.",
       "429": "Limite de tentativas: login por IP e por conta, ou cadastros por IP.",
       "500": "Em /result: o job falhou (o motivo vem em detail).",
       "503":
-        "Transcrição/visão desabilitada, workers indisponíveis, ou SOURCE_DELETE_FAILED (o armazenamento recusou; chame de novo).",
+        "Transcrição/visão desabilitada, workers indisponíveis, SOURCE_DELETE_FAILED (o armazenamento recusou; chame de novo) ou ASSET_STORAGE_UNAVAILABLE ao baixar uma imagem extraída (tente de novo).",
       "504":
         "VISION_TIMEOUT com wait=true: o job continua; consulte poll_url.",
     },
@@ -1123,19 +1123,19 @@ const COPY = {
       "403":
         "No permission for an administrative route; an API key on a session-only route; ROOT_SETUP_TOKEN_REQUIRED/ROOT_SETUP_TOKEN_INVALID when registering root.",
       "404":
-        "Job, project or folder doesn't exist or belongs to another user, the requested format isn't available (e.g. ?format=vtt on a document job), or there is no original file on DELETE /jobs/{job_id}/source.",
+        "Job, project or folder doesn't exist or belongs to another user, the requested format isn't available (e.g. ?format=vtt on a document job), there are neither an original file nor images on DELETE /jobs/{job_id}/source, or ASSET_NOT_FOUND on GET /jobs/{job_id}/assets/{name} (a name not in assets).",
       "409":
         "JOB_STILL_PROCESSING when deleting the original of a job still queued; SOURCE_NOT_AVAILABLE when retrying a page whose original was deleted; an Idempotency-Key reused with another payload.",
       "410":
-        "SOURCE_PURGED: the page PDF was deleted (purge_source or DELETE /jobs/{job_id}/source; carries source_deleted_at); or the job of an Idempotency-Key was deleted.",
+        "SOURCE_PURGED: the page PDF was deleted (purge_source or DELETE /jobs/{job_id}/source; carries source_deleted_at), or, with cause ASSETS_PURGED, the extracted image requested from /jobs/{job_id}/assets/{name} was already deleted (purge_source retention or DELETE /jobs/{job_id}/source; carries assets_deleted_at); or the job of an Idempotency-Key was deleted.",
       "413": "File above the size limit.",
       "422":
-        "Unsupported file type, invalid output_format/format, an upload with no project, or an invalid project/folder name.",
+        "Unsupported file type, invalid output_format/format, an image_mode other than none/referenced, an upload with no project, or an invalid project/folder name.",
       "429":
         "Rate limit: logins per IP and per account, or registrations per IP.",
       "500": "On /result: the job failed (the reason is in detail).",
       "503":
-        "Transcription/vision disabled, no workers available, or SOURCE_DELETE_FAILED (storage refused; call again).",
+        "Transcription/vision disabled, no workers available, SOURCE_DELETE_FAILED (storage refused; call again) or ASSET_STORAGE_UNAVAILABLE when downloading an extracted image (try again).",
       "504":
         "VISION_TIMEOUT with wait=true: the job keeps running; poll poll_url.",
     },
@@ -1186,11 +1186,11 @@ const MEDIA_COPY = {
       ],
       [
         "image_mode",
-        "Opcional: none (padrão; o Markdown mantém <!-- image -->) ou referenced (cada figura vira um PNG referenciado no Markdown). Veja Imagens extraídas abaixo.",
+        "Opcional, em /upload e /convert (qualquer source_type): none (padrão; o Markdown mantém <!-- image -->) ou referenced (cada figura vira um PNG referenciado no Markdown). Outro valor: 422. Veja Imagens extraídas abaixo.",
       ],
       [
         "page_images",
-        "Opcional, padrão false. true renderiza cada página do PDF como PNG (fora do Markdown), com ou sem image_mode.",
+        "Opcional, padrão false. true renderiza cada página do PDF como PNG (fora do Markdown), com ou sem image_mode. Use em slides, PDFs escaneados e páginas que são uma imagem só: o Docling não detecta uma imagem de página inteira como figura.",
       ],
     ],
     presetsTitle: "Escolher velocidade e OCR",
@@ -1203,14 +1203,14 @@ const MEDIA_COPY = {
     formats:
       "PDF, DOCX, HTML, PPTX e XLSX dependem do suporte da versão instalada do Docling. A API aceita o upload antes de validar a conversão: um arquivo incompatível termina com status failed. DOC/PPT/XLS legados, RTF e ODT não têm sucesso garantido.",
     docsDuplicate:
-      "O mesmo arquivo no mesmo projeto reaproveita um job que não esteja failed e adiciona as tags. A pasta do job existente é preservada; trocar o preset no reenvio não força outra conversão. Um arquivo em outro projeto é processado novamente.",
+      "O mesmo arquivo no mesmo projeto, com as mesmas opções (docling_preset, image_mode, page_images), reaproveita o job existente (duplicate: true) e adiciona as tags; a pasta do job existente é preservada. Um job failed ou partial não é reaproveitado: reenviar é a nova tentativa. Outro preset ou outras opções de imagem criam outro job, e uma conversão com imagens não reaproveita um job cujas imagens já foram apagadas ou expiram em menos da metade de ASSET_RETENTION_SECONDS. Um arquivo em outro projeto é processado novamente.",
     docsResult:
-      "Consulte /jobs/{job_id} a cada poucos segundos e leia result.markdown de /jobs/{job_id}/result quando completed. Documentos não geram VTT/SRT. /result retorna 400 enquanto o job processa, 500 se falhou e 404 se o status/resultado expirou.",
+      "Consulte /jobs/{job_id} a cada poucos segundos e leia result.markdown (e result.assets, se pediu imagens) de /jobs/{job_id}/result quando completed. Documentos não geram VTT/SRT. /result retorna 400 enquanto o job processa, 500 se falhou e 404 se o status/resultado expirou.",
     sourceTitle: "Arquivos de origem (purge_source)",
     sourceRows: [
       [
         "O que é apagado",
-        "O arquivo enviado (ou o baixado da fonte externa no /convert; o áudio/vídeo no /transcribe), no MinIO e a cópia local, e, num PDF de várias páginas, os PDFs por página. O Markdown (inteiro e por página) e as transcrições ficam.",
+        "O arquivo enviado (ou o baixado da fonte externa no /convert; o áudio/vídeo no /transcribe), no MinIO e a cópia local, e, num PDF de várias páginas, os PDFs por página. O Markdown (inteiro e por página) e as transcrições ficam. As imagens extraídas (image_mode, page_images) não são apagadas no fim do job: ficam ASSET_RETENTION_SECONDS (padrão 3600) para você baixar; veja Imagens extraídas.",
       ],
       [
         "Quando",
@@ -1226,38 +1226,57 @@ const MEDIA_COPY = {
       ],
     ],
     sourceDelete:
-      "Para apagar o original depois, sem esperar purge_source, use DELETE /jobs/{job_id}/source (exige a permissão de excluir o job). 200: {job_id, source_deleted: true, source_deleted_at}. 404: job inexistente, de outro usuário ou sem arquivos de origem. 409 JOB_STILL_PROCESSING: o job ou uma página ainda está na fila, em processamento ou aguardando nova tentativa (consulte source_deletable). 503 SOURCE_DELETE_FAILED: o armazenamento recusou; o que não foi apagado continua referenciado e chamar de novo termina. Funciona igual para transcrições e jobs de imagem.",
+      "Para apagar o original depois, sem esperar purge_source, use DELETE /jobs/{job_id}/source (exige a permissão de excluir o job). Ele apaga também as imagens extraídas e as páginas renderizadas, mesmo que o original já tenha sido apagado. 200: {job_id, source_deleted, source_deleted_at, assets_deleted} (source_deleted=false quando só restavam imagens). 404: job inexistente, de outro usuário ou sem arquivos de origem nem imagens. 409 JOB_STILL_PROCESSING: o job ou uma página ainda está na fila, em processamento ou aguardando nova tentativa (consulte source_deletable). 503 SOURCE_DELETE_FAILED: o armazenamento recusou; o que não foi apagado continua referenciado e chamar de novo termina. Funciona igual para transcrições e jobs de imagem.",
     assetsTitle: "Imagens extraídas (image_mode, page_images)",
     assetsIntro:
       "Com image_mode=referenced, cada figura que o Docling encontra é guardada como PNG e o Markdown troca o placeholder por ![Image](/jobs/{job_id}/assets/{name}), um caminho relativo da API. Com page_images=true, cada página do PDF também vira um PNG. Todas aparecem em assets do /result, ordenadas por página (a página renderizada, depois as figuras na ordem do documento).",
     assetsRows: [
-      [
-        "assets[]",
-        "name, kind (picture | page), page (1-based, absoluta), bbox (só picture: l, t, r, b em pontos, origem no topo), sha256, mime (image/png), width, height, size_bytes, url.",
-      ],
       [
         "assets_skipped",
         "Contagem de figuras não guardadas: too_small (menor que CONVERSION_ASSET_MIN_PX, padrão 32 px), count_limit e size_limit (CONVERSION_ASSET_MAX_COUNT=500 e CONVERSION_ASSET_MAX_TOTAL_MB=200 por job), unavailable. Elas ficam como <!-- image --> no Markdown.",
       ],
       [
         "Download",
-        "GET /jobs/{job_id}/assets/{name} com a mesma autenticação: image/png, ETag = sha256, Cache-Control private, 304 com If-None-Match. Só nomes listados em assets; outro nome responde 404 ASSET_NOT_FOUND.",
+        "GET /jobs/{job_id}/assets/{name} com a mesma autenticação e permissão de GET /jobs/{job_id} (jobs.read): image/png, ETag = sha256 entre aspas, Cache-Control private, 304 com If-None-Match. Só nomes listados em assets; outro nome (ou caminho), job de outro usuário ou objeto ausente: 404 ASSET_NOT_FOUND. Depois de apagadas: 410 SOURCE_PURGED (cause ASSETS_PURGED, com assets_deleted_at). Armazenamento fora: 503 ASSET_STORAGE_UNAVAILABLE.",
       ],
       [
         "PDF de várias páginas",
-        "Cada página é convertida em paralelo e as imagens ficam no job principal: url sempre aponta para /jobs/{job_id_principal}/assets/...",
+        "Cada página é convertida em paralelo e as imagens ficam no job principal: url sempre aponta para /jobs/{job_id_principal}/assets/... Os limites valem para o documento inteiro. Num job partial (páginas que falharam) não há Markdown unificado nem lista em /result: as imagens das páginas convertidas continuam baixáveis (mesma retenção) e GET /jobs/{page_job_id}/result de cada página traz as dela; o retry que completa o job refaz a lista.",
       ],
       [
         "Retenção",
-        "Sem purge_source, as imagens duram o mesmo que o job (DELETE /jobs/{job_id} as apaga). Com purge_source=true elas não somem no fim do job: ficam ASSET_RETENTION_SECONDS (padrão 3600) para você baixar e então são apagadas; GET /jobs/{job_id} informa assets_available e assets_expire_at. DELETE /jobs/{job_id}/source as apaga na hora. Depois disso a rota responde 410 SOURCE_PURGED.",
+        "Sem purge_source, as imagens duram o mesmo que o job (DELETE /jobs/{job_id} as apaga). Com purge_source=true elas não somem no fim do job: ficam ASSET_RETENTION_SECONDS (padrão 3600) para você baixar e então são apagadas (uma task periódica confere a cada minuto); GET /jobs/{job_id} informa assets_available e assets_expire_at. DELETE /jobs/{job_id}/source as apaga na hora. Depois disso a rota responde 410 SOURCE_PURGED e o Markdown continua com os links (que também respondem 410).",
       ],
       [
         "Duplicatas",
-        "image_mode e page_images fazem parte da operação: o mesmo arquivo com outras opções de imagem gera outro job.",
+        "image_mode e page_images fazem parte da operação: o mesmo arquivo com outras opções de imagem gera outro job. As rotas /images/* não deduplicam: deduplique as imagens pelo sha256 antes de enviá-las.",
       ],
     ],
     assetsNote:
-      "Um fluxo típico: converter com image_mode=referenced, esperar completed, ler assets do /result, baixar cada url e enviar a /images/describe ou /images/ocr. Uma página que é só imagem (escaneada) nem sempre vira figura no Docling: use page_images=true para ter a página inteira.",
+      "Uma página que é só imagem (escaneada, slide exportado como figura) nem sempre vira figura no Docling, que trata a imagem de página inteira como fundo: use page_images=true para ter a página inteira. Na interface, /convert oferece as duas opções (Extract images, Render each page as an image) e a página do job mostra as imagens na aba Images, com download individual e em .zip.",
+    assetFields: {
+      name: "p{página:04d}-img{índice:02d}-{sha256[:12]}.png (figura) ou p{página:04d}-page-{sha256[:12]}.png (página); página 0000 em formatos sem página (DOCX…).",
+      kind: "picture (image_mode=referenced) ou page (page_images=true).",
+      page: "Página 1-based, absoluta no documento; null em formatos sem página.",
+      bbox: "Só picture: l, t, r, b em pontos PDF, origem no canto superior esquerdo, com page_width/page_height.",
+      sha256: "Hash do PNG; é também o ETag. Use para deduplicar (o mesmo logo em várias páginas).",
+      mime: "image/png.",
+      width: "Largura em pixels.",
+      height: "Altura em pixels.",
+      size_bytes: "Tamanho do PNG.",
+      url: "Caminho relativo da API (/jobs/{job_id_principal}/assets/{name}); prefixe com a URL da API e envie a mesma credencial.",
+    },
+    recipeTitle: "Receita: PDF → imagens → descrição e OCR",
+    recipeSteps: [
+      "Converta com image_mode=referenced (e page_images=true para slides, escaneados ou páginas que são uma imagem só). purge_source=true apaga o PDF no fim do job; as imagens ficam ASSET_RETENTION_SECONDS.",
+      "Consulte GET /jobs/{job_id} até completed (failed: pare; partial: há páginas que falharam — refaça-as com POST /jobs/{job_id}/pages/{n}/retry antes de ler a lista).",
+      "Leia result.assets de GET /jobs/{job_id}/result e deduplique pelo sha256: as rotas de imagem não deduplicam, e a mesma figura repetida viraria vários jobs.",
+      "Baixe cada url com a mesma credencial (X-API-Key ou Authorization). 410: as imagens já foram apagadas; converta de novo.",
+      "Envie cada PNG a /images/describe/upload e /images/ocr/upload com purge_source=true: cada análise apaga a própria cópia da imagem quando termina e o resultado fica. As duas rotas esperam o resultado na mesma requisição (504 VISION_TIMEOUT: siga detail.poll_url, sem reenviar).",
+      "Quando terminar, DELETE /jobs/{job_id}/source apaga as imagens (e o original, se ainda existir) sem esperar a retenção. O Markdown fica.",
+    ],
+    recipeNote:
+      "Para análises mais completas (detecção, regiões, rostos) use /images/analyze/upload com mode=full e um Idempotency-Key por imagem (por exemplo, o sha256). Guarde a página (page) e o bbox de cada asset para relacionar a descrição ao trecho do Markdown.",
     example: "Exemplos de requisição",
     resultExample: "Exemplo ilustrativo de resultado",
     pagesIntro:
@@ -1283,51 +1302,11 @@ const MEDIA_COPY = {
       ],
     ],
     pagesNote:
-      "Antes do split, /pages pode responder 404; durante a criação, pages[] pode estar incompleto e job_id pode ser null. Consulte novamente. Páginas failed bloqueiam o merge: quando todas as páginas terminam e alguma falhou de vez, o job principal fica partial (as convertidas continuam em /pages/{n}/result) e um retry de página o reabre; o merge conclui o job quando todas estão completed. Depois de purge_source ou DELETE /jobs/{job_id}/source, /pages/{n}/pdf responde 410 SOURCE_PURGED (com source_deleted_at) e o retry responde 409 SOURCE_NOT_AVAILABLE. Todos os endpoints exigem autenticação e verificam o dono.",
+      "Antes do split, /pages pode responder 404; durante a criação, pages[] pode estar incompleto e job_id pode ser null. Consulte novamente. Páginas failed bloqueiam o merge: quando todas as páginas terminam e alguma falhou de vez, o job principal fica partial (as convertidas continuam em /pages/{n}/result) e um retry de página o reabre; o merge conclui o job quando todas estão completed. Depois de purge_source ou DELETE /jobs/{job_id}/source, /pages/{n}/pdf responde 410 SOURCE_PURGED (com source_deleted_at) e o retry responde 409 SOURCE_NOT_AVAILABLE. Com image_mode/page_images, as imagens de todas as páginas ficam no job principal (assets de /jobs/{job_id}/result, numeradas pela página absoluta); veja Imagens extraídas em PDF e documentos. Todos os endpoints exigem autenticação e verificam o dono.",
     pdfNote:
       "Abra a url assinada diretamente, sem Authorization ou X-API-Key. Ela vale por 15 minutos; peça outra quando expirar e preserve toda a query string. Não acrescente parâmetros à URL.",
     engineNote:
       "O servidor pode rotear páginas por motores de execução quando configurado. Você continua usando os mesmos endpoints; presets e filas não são escolhidos por um parâmetro engine no upload.",
-    imagesIntro:
-      "Florence-2 descreve imagens ou extrai texto com regiões (OCR). As quatro rotas de inferência criam um job e esperam o resultado na mesma requisição. O prazo padrão é 60 segundos; a task pode continuar até o seu limite de 120 segundos, configuráveis no servidor.",
-    imagesHead: ["Endpoint", "Entrada / saída"],
-    imagesRows: [
-      [
-        "POST /images/describe/upload",
-        "multipart: file, task opcional, tags, project/project_id e folder/folder_id. Retorna description e task.",
-      ],
-      [
-        "POST /images/describe",
-        "JSON: image_base64, filename opcional, task, tags como lista e localização. Mesma resposta de descrição.",
-      ],
-      [
-        "POST /images/ocr/upload",
-        "multipart: file, tags e localização. Retorna text e lines[].",
-      ],
-      [
-        "POST /images/ocr",
-        "JSON: image_base64, filename opcional, tags como lista e localização. Mesmo OCR; não recebe task.",
-      ],
-      [
-        "GET /images/capabilities",
-        "Estado do worker: dependencies_installed, model_downloaded, model_loaded, device_resolved e reason. Exige autenticação; não inicia inferência.",
-      ],
-    ],
-    imageOptions:
-      "PNG, JPEG, WEBP, BMP, GIF e TIFF, detectados pelos bytes. Limite padrão: 10 MB de imagem decodificada e 50 milhões de pixels (VISION_MAX_IMAGE_SIZE_MB / VISION_MAX_IMAGE_PIXELS). Base64 aceita prefixo data:image/...;base64, e quebras de linha. O projeto é obrigatório pelas mesmas regras dos documentos; imagem repetida cria outro job.",
-    imageTasks:
-      "task aceita apenas <CAPTION>, <DETAILED_CAPTION> e <MORE_DETAILED_CAPTION> (padrão, configurável por VISION_CAPTION_TASK). Não aceita um prompt livre. Em curl, use --form-string para esses valores: -F interpreta o caractere < como leitura de arquivo.",
-    imageResponse:
-      "Sucesso (200): job_id, status=completed, project, folder, image_base64 (eco dos bytes originais), image_mime_type, image_bytes, image_sha256, width, height, model (model_id, revision, device, dtype) e duration_ms, além da descrição ou do OCR. duration_ms mede o processamento reportado pelo worker; não é o tempo total da requisição.",
-    ocrNote:
-      "Cada linha tem text, quad_box=[x1,y1,x2,y2,x3,y3,x4,y4] e bbox=[x_min,y_min,x_max,y_max], em pixels da imagem original. Imagem sem texto retorna 200, text vazio e lines=[]. O exemplo abaixo mostra apenas os campos de OCR.",
-    timeoutTitle: "Timeout e limites atuais",
-    timeout:
-      "Um 504 VISION_TIMEOUT traz detail.job_id, poll_url e result_url; a task continua. Consulte poll_url para o status e evite reenviar automaticamente. Limitação atual: /jobs/{id}/result exige Markdown, mas o resultado de visão não tem esse campo; após completar, essa recuperação pode falhar com 500. Salve a resposta de sucesso da própria chamada de imagem.",
-    retention:
-      "O resultado de visão fica no Redis por RESULT_TTL_SECONDS (1 hora por padrão), sem persistência em Elasticsearch/MinIO. A imagem temporária é apagada pelo worker. O status de sucesso não é atualizado no MySQL; após expirar o cache, a listagem pode voltar a queued.",
-    imageErrors:
-      "Erros de visão geralmente usam detail={error_code,message,job_id}; erros de autenticação e validação podem ter outro formato. 413: tamanho; 422: base64, formato, task, pixels ou localização inválidos; 503: visão desabilitada, worker/modelo indisponível ou motor sem vaga (VISION_ENGINE_UNAVAILABLE, com Retry-After). /capabilities também responde 503 se a visão estiver desabilitada.",
   },
   en: {
     docsIntro:
@@ -1364,11 +1343,11 @@ const MEDIA_COPY = {
       ],
       [
         "image_mode",
-        "Optional: none (default; the Markdown keeps <!-- image -->) or referenced (each picture becomes a PNG referenced from the Markdown). See Extracted images below.",
+        "Optional, on /upload and /convert (any source_type): none (default; the Markdown keeps <!-- image -->) or referenced (each picture becomes a PNG referenced from the Markdown). Any other value: 422. See Extracted images below.",
       ],
       [
         "page_images",
-        "Optional, default false. true renders every PDF page to a PNG (not in the Markdown), with or without image_mode.",
+        "Optional, default false. true renders every PDF page to a PNG (not in the Markdown), with or without image_mode. Use it for slides, scanned PDFs and pages that are a single image: Docling does not detect a full-page image as a picture.",
       ],
     ],
     presetsTitle: "Choosing speed and OCR",
@@ -1381,14 +1360,14 @@ const MEDIA_COPY = {
     formats:
       "PDF, DOCX, HTML, PPTX and XLSX depend on the installed Docling version. The API accepts the upload before validating conversion: an incompatible file ends with status failed. Legacy DOC/PPT/XLS, RTF and ODT are not guaranteed to convert.",
     docsDuplicate:
-      "The same file in the same project reuses a job that is not failed and adds the supplied tags. The existing job's folder is preserved; changing the preset on re-upload does not force conversion. Uploading to another project processes the file again.",
+      "The same file in the same project, with the same options (docling_preset, image_mode, page_images), reuses the existing job (duplicate: true) and adds the supplied tags; the existing job's folder is preserved. A failed or partial job is not reused: sending the file again is the retry. Another preset or other image options create another job, and a conversion with images never reuses a job whose images were already deleted or expire in less than half of ASSET_RETENTION_SECONDS. Uploading to another project processes the file again.",
     docsResult:
-      "Poll /jobs/{job_id} every few seconds and read result.markdown from /jobs/{job_id}/result once completed. Documents do not produce VTT/SRT. /result returns 400 while processing, 500 on failure and 404 if the status/result has expired.",
+      "Poll /jobs/{job_id} every few seconds and read result.markdown (and result.assets, if you asked for images) from /jobs/{job_id}/result once completed. Documents do not produce VTT/SRT. /result returns 400 while processing, 500 on failure and 404 if the status/result has expired.",
     sourceTitle: "Source files (purge_source)",
     sourceRows: [
       [
         "What is deleted",
-        "The uploaded file (or the one downloaded from the external source on /convert; the audio/video on /transcribe), in MinIO and the local copy, and, for a multi-page PDF, the per-page PDFs. The Markdown (whole and per page) and transcripts stay.",
+        "The uploaded file (or the one downloaded from the external source on /convert; the audio/video on /transcribe), in MinIO and the local copy, and, for a multi-page PDF, the per-page PDFs. The Markdown (whole and per page) and transcripts stay. Extracted images (image_mode, page_images) are not deleted when the job ends: they stay ASSET_RETENTION_SECONDS (default 3600) for you to download; see Extracted images.",
       ],
       [
         "When",
@@ -1404,38 +1383,57 @@ const MEDIA_COPY = {
       ],
     ],
     sourceDelete:
-      "To delete the original later, without purge_source, call DELETE /jobs/{job_id}/source (requires permission to delete the job). 200: {job_id, source_deleted: true, source_deleted_at}. 404: the job doesn't exist, belongs to another user or has no source files. 409 JOB_STILL_PROCESSING: the job or a page is still queued, processing or waiting for a retry (check source_deletable). 503 SOURCE_DELETE_FAILED: storage refused; whatever was not deleted stays referenced and calling again finishes it. Works the same for transcripts and image jobs.",
+      "To delete the original later, without purge_source, call DELETE /jobs/{job_id}/source (requires permission to delete the job). It also deletes the extracted images and page renders, even when the original is already gone. 200: {job_id, source_deleted, source_deleted_at, assets_deleted} (source_deleted=false when only images were left). 404: the job doesn't exist, belongs to another user or has neither source files nor images. 409 JOB_STILL_PROCESSING: the job or a page is still queued, processing or waiting for a retry (check source_deletable). 503 SOURCE_DELETE_FAILED: storage refused; whatever was not deleted stays referenced and calling again finishes it. Works the same for transcripts and image jobs.",
     assetsTitle: "Extracted images (image_mode, page_images)",
     assetsIntro:
       "With image_mode=referenced, every picture Docling finds is stored as a PNG and the Markdown replaces the placeholder with ![Image](/jobs/{job_id}/assets/{name}), a relative API path. With page_images=true, every PDF page also becomes a PNG. All of them are listed in assets of /result, ordered by page (the page render, then the pictures in document order).",
     assetsRows: [
-      [
-        "assets[]",
-        "name, kind (picture | page), page (1-based, absolute), bbox (picture only: l, t, r, b in points, top-left origin), sha256, mime (image/png), width, height, size_bytes, url.",
-      ],
       [
         "assets_skipped",
         "Count of pictures not stored: too_small (under CONVERSION_ASSET_MIN_PX, default 32 px), count_limit and size_limit (CONVERSION_ASSET_MAX_COUNT=500 and CONVERSION_ASSET_MAX_TOTAL_MB=200 per job), unavailable. They stay as <!-- image --> in the Markdown.",
       ],
       [
         "Download",
-        "GET /jobs/{job_id}/assets/{name} with the same authentication: image/png, ETag = sha256, Cache-Control private, 304 with If-None-Match. Only names listed in assets; any other name answers 404 ASSET_NOT_FOUND.",
+        "GET /jobs/{job_id}/assets/{name} with the same authentication and permission as GET /jobs/{job_id} (jobs.read): image/png, ETag = quoted sha256, Cache-Control private, 304 with If-None-Match. Only names listed in assets; any other name (or path), another user's job or a missing object: 404 ASSET_NOT_FOUND. Once deleted: 410 SOURCE_PURGED (cause ASSETS_PURGED, with assets_deleted_at). Storage down: 503 ASSET_STORAGE_UNAVAILABLE.",
       ],
       [
         "Multi-page PDF",
-        "Pages are converted in parallel and the images belong to the main job: url always points to /jobs/{main_job_id}/assets/...",
+        "Pages are converted in parallel and the images belong to the main job: url always points to /jobs/{main_job_id}/assets/... The limits apply to the whole document. A partial job (failed pages) has no merged Markdown nor list in /result: the images of its converted pages stay downloadable (same retention) and GET /jobs/{page_job_id}/result of each page carries its own; the retry that completes the job rebuilds the list.",
       ],
       [
         "Retention",
-        "Without purge_source, images live as long as the job (DELETE /jobs/{job_id} removes them). With purge_source=true they are not deleted when the job finishes: they stay ASSET_RETENTION_SECONDS (default 3600) for you to download, then they are deleted; GET /jobs/{job_id} shows assets_available and assets_expire_at. DELETE /jobs/{job_id}/source deletes them at once. Afterwards the route answers 410 SOURCE_PURGED.",
+        "Without purge_source, images live as long as the job (DELETE /jobs/{job_id} removes them). With purge_source=true they are not deleted when the job finishes: they stay ASSET_RETENTION_SECONDS (default 3600) for you to download, then they are deleted (a periodic task checks every minute); GET /jobs/{job_id} shows assets_available and assets_expire_at. DELETE /jobs/{job_id}/source deletes them at once. Afterwards the route answers 410 SOURCE_PURGED and the Markdown keeps its links (which answer 410 too).",
       ],
       [
         "Duplicates",
-        "image_mode and page_images are part of the operation: the same file with other image options is another job.",
+        "image_mode and page_images are part of the operation: the same file with other image options is another job. /images/* routes do not deduplicate: deduplicate the images by sha256 before sending them.",
       ],
     ],
     assetsNote:
-      "A typical flow: convert with image_mode=referenced, wait for completed, read assets from /result, download each url and send it to /images/describe or /images/ocr. A page that is only an image (scanned) is not always a Docling picture: use page_images=true to get the whole page.",
+      "A page that is only an image (scanned, a slide exported as a picture) is not always a Docling picture, since Docling treats a full-page image as background: use page_images=true to get the whole page. In the interface, /convert offers both options (Extract images, Render each page as an image) and the job page shows the images in its Images tab, with single and .zip downloads.",
+    assetFields: {
+      name: "p{page:04d}-img{index:02d}-{sha256[:12]}.png (picture) or p{page:04d}-page-{sha256[:12]}.png (page); page 0000 for formats without pages (DOCX…).",
+      kind: "picture (image_mode=referenced) or page (page_images=true).",
+      page: "1-based page, absolute in the document; null for formats without pages.",
+      bbox: "Pictures only: l, t, r, b in PDF points, top-left origin, with page_width/page_height.",
+      sha256: "Hash of the PNG; also its ETag. Use it to deduplicate (the same logo on several pages).",
+      mime: "image/png.",
+      width: "Width in pixels.",
+      height: "Height in pixels.",
+      size_bytes: "Size of the PNG.",
+      url: "Relative API path (/jobs/{main_job_id}/assets/{name}); prefix it with the API URL and send the same credentials.",
+    },
+    recipeTitle: "Recipe: PDF → images → description and OCR",
+    recipeSteps: [
+      "Convert with image_mode=referenced (and page_images=true for slides, scans or pages that are a single image). purge_source=true deletes the PDF when the job ends; the images stay ASSET_RETENTION_SECONDS.",
+      "Poll GET /jobs/{job_id} until completed (failed: stop; partial: some pages failed — retry them with POST /jobs/{job_id}/pages/{n}/retry before reading the list).",
+      "Read result.assets from GET /jobs/{job_id}/result and deduplicate by sha256: image routes do not deduplicate, and a repeated picture would become several jobs.",
+      "Download each url with the same credentials (X-API-Key or Authorization). 410: the images were already deleted; convert again.",
+      "Send each PNG to /images/describe/upload and /images/ocr/upload with purge_source=true: each analysis deletes its own copy of the image when it finishes and the result stays. Both routes wait for the result in the same request (504 VISION_TIMEOUT: follow detail.poll_url, do not resend).",
+      "When you are done, DELETE /jobs/{job_id}/source deletes the images (and the original, if it still exists) without waiting for the retention. The Markdown stays.",
+    ],
+    recipeNote:
+      "For richer analysis (detection, regions, faces) use /images/analyze/upload with mode=full and one Idempotency-Key per image (for example its sha256). Keep each asset's page and bbox to relate the description to the Markdown.",
     example: "Request examples",
     resultExample: "Illustrative result example",
     pagesIntro:
@@ -1461,53 +1459,67 @@ const MEDIA_COPY = {
       ],
     ],
     pagesNote:
-      "Before splitting, /pages may return 404; during creation, pages[] may be incomplete and job_id may be null. Poll again. Failed pages block the merge: once every page has finished and some failed for good, the main job becomes partial (converted pages stay at /pages/{n}/result) and a page retry reopens it; the merge completes the job once every page is completed. After purge_source or DELETE /jobs/{job_id}/source, /pages/{n}/pdf answers 410 SOURCE_PURGED (with source_deleted_at) and a retry answers 409 SOURCE_NOT_AVAILABLE. Every endpoint requires authentication and checks ownership.",
+      "Before splitting, /pages may return 404; during creation, pages[] may be incomplete and job_id may be null. Poll again. Failed pages block the merge: once every page has finished and some failed for good, the main job becomes partial (converted pages stay at /pages/{n}/result) and a page retry reopens it; the merge completes the job once every page is completed. After purge_source or DELETE /jobs/{job_id}/source, /pages/{n}/pdf answers 410 SOURCE_PURGED (with source_deleted_at) and a retry answers 409 SOURCE_NOT_AVAILABLE. With image_mode/page_images, the images of every page belong to the main job (assets of /jobs/{job_id}/result, numbered by absolute page); see Extracted images under PDF and documents. Every endpoint requires authentication and checks ownership.",
     pdfNote:
       "Open the signed url directly, without Authorization or X-API-Key. It lasts 15 minutes; request another after it expires and preserve its entire query string. Do not add URL parameters.",
     engineNote:
       "The server may route pages through execution engines when configured. Use the same endpoints; an engine upload parameter does not select presets or queues.",
-    imagesIntro:
-      "Florence-2 describes images or extracts text with regions (OCR). All four inference routes create a job and wait for its result in the same request. The default request budget is 60 seconds; the task may continue up to its 120-second limit, both configurable on the server.",
-    imagesHead: ["Endpoint", "Input / output"],
-    imagesRows: [
-      [
-        "POST /images/describe/upload",
-        "multipart: file, optional task, tags, project/project_id and folder/folder_id. Returns description and task.",
-      ],
-      [
-        "POST /images/describe",
-        "JSON: image_base64, optional filename, task, tags as an array and location. Same description response.",
-      ],
-      [
-        "POST /images/ocr/upload",
-        "multipart: file, tags and location. Returns text and lines[].",
-      ],
-      [
-        "POST /images/ocr",
-        "JSON: image_base64, optional filename, tags as an array and location. Same OCR; no task parameter.",
-      ],
-      [
-        "GET /images/capabilities",
-        "Worker state: dependencies_installed, model_downloaded, model_loaded, device_resolved and reason. Authenticated; does not start inference.",
-      ],
-    ],
-    imageOptions:
-      "PNG, JPEG, WEBP, BMP, GIF and TIFF, detected from their bytes. Default limits: 10 MB of decoded image data and 50 million pixels (VISION_MAX_IMAGE_SIZE_MB / VISION_MAX_IMAGE_PIXELS). Base64 accepts a data:image/...;base64, prefix and line breaks. Projects follow the same requirements as documents; repeated images create new jobs.",
-    imageTasks:
-      "task only accepts <CAPTION>, <DETAILED_CAPTION> and <MORE_DETAILED_CAPTION> (default, configurable via VISION_CAPTION_TASK). Arbitrary prompts are not accepted. In curl, use --form-string for these values: -F interprets < as reading a file.",
-    imageResponse:
-      "Success (200): job_id, status=completed, project, folder, image_base64 (echo of the original bytes), image_mime_type, image_bytes, image_sha256, width, height, model (model_id, revision, device, dtype) and duration_ms, plus the description or OCR. duration_ms is processing time reported by the worker, not total request time.",
-    ocrNote:
-      "Every line has text, quad_box=[x1,y1,x2,y2,x3,y3,x4,y4] and bbox=[x_min,y_min,x_max,y_max], in original image pixels. Images without text return 200 with empty text and lines=[]. The example below shows only OCR fields.",
-    timeoutTitle: "Timeout and current limitations",
-    timeout:
-      "A 504 VISION_TIMEOUT includes detail.job_id, poll_url and result_url; the task continues. Poll poll_url for status and avoid automatically uploading again. Current limitation: /jobs/{id}/result requires Markdown, but the vision payload has no such field; recovery after completion may fail with 500. Save the successful response from the image request itself.",
-    retention:
-      "Vision results live in Redis for RESULT_TTL_SECONDS (1 hour by default), without Elasticsearch/MinIO persistence. The worker deletes the temporary image. Success status is not updated in MySQL; once the cache expires, the job list may revert to queued.",
-    imageErrors:
-      "Vision errors generally use detail={error_code,message,job_id}; authentication and validation errors may differ. 413: size; 422: invalid base64, format, task, pixels or location; 503: vision disabled, unavailable worker/model or no engine capacity (VISION_ENGINE_UNAVAILABLE, with Retry-After). /capabilities also returns 503 when vision is disabled.",
   },
 };
+
+/** The PDF → images → description/OCR recipe, as one shell script (curl + jq). */
+function recipeScript(pt: boolean, key: string) {
+  const project = pt ? "Apostilas" : "Handouts";
+  const c = pt
+    ? {
+        convert: "# 1. Converter com imagens (page_images=true para slides e escaneados)",
+        wait: "# 2. Esperar o fim do job",
+        list: "# 3. Ler os assets e deduplicar pelo sha256",
+        send: "# 4. Baixar cada imagem com a mesma credencial e mandar para descrição e OCR",
+        gone: "imagens já apagadas (410)",
+        done: "# 5. Apagar as imagens (e o original) sem esperar a retenção",
+      }
+    : {
+        convert: "# 1. Convert with images (page_images=true for slides and scans)",
+        wait: "# 2. Wait for the job to finish",
+        list: "# 3. Read the assets and deduplicate by sha256",
+        send: "# 4. Download each image with the same credentials and send it to description and OCR",
+        gone: "images already deleted (410)",
+        done: "# 5. Delete the images (and the original) without waiting for the retention",
+      };
+  return `API="${API_URL}"
+KEY="${key}"
+
+${c.convert}
+JOB=$(curl -s -X POST "$API/upload" -H "X-API-Key: $KEY" \\
+  -F "file=@${pt ? "apostila" : "handout"}.pdf" -F "project=${project}" \\
+  -F "image_mode=referenced" -F "page_images=true" -F "purge_source=true" | jq -r .job_id)
+
+${c.wait}
+while :; do
+  STATUS=$(curl -s "$API/jobs/$JOB" -H "X-API-Key: $KEY" | jq -r .status)
+  case "$STATUS" in completed|partial|failed|cancelled) break ;; esac
+  sleep 5
+done
+[ "$STATUS" = completed ] || { echo "job $STATUS"; exit 1; }
+
+${c.list}
+curl -s "$API/jobs/$JOB/result" -H "X-API-Key: $KEY" \\
+  | jq -r '.result.assets // [] | unique_by(.sha256)[] | [.name, .url] | @tsv' > assets.tsv
+
+${c.send}
+while IFS=$'\\t' read -r NAME URL; do
+  curl -sf "$API$URL" -H "X-API-Key: $KEY" -o "$NAME" || { echo "$NAME: ${c.gone}"; continue; }
+  curl -s -X POST "$API/images/describe/upload" -H "X-API-Key: $KEY" \\
+    -F "file=@$NAME" -F "project=${project}" -F "purge_source=true" > "$NAME.describe.json"
+  curl -s -X POST "$API/images/ocr/upload" -H "X-API-Key: $KEY" \\
+    -F "file=@$NAME" -F "project=${project}" -F "purge_source=true" > "$NAME.ocr.json"
+done < assets.tsv
+
+${c.done}
+curl -s -X DELETE "$API/jobs/$JOB/source" -H "X-API-Key: $KEY"
+# {"job_id":"…","source_deleted":false,"source_deleted_at":"…","assets_deleted":true}`;
+}
 
 function MediaSections({ lang, section }: { lang: Lang; section: string }) {
   const t = MEDIA_COPY[lang];
@@ -1568,6 +1580,10 @@ function MediaSections({ lang, section }: { lang: Lang; section: string }) {
           <Subheading>{t.assetsTitle}</Subheading>
           <Endpoint method="GET" path="/jobs/{job_id}/assets/{name}" />
           <P>{t.assetsIntro}</P>
+          <Table
+            head={pt ? ["Campo de assets[]", "Tipo", "Significado"] : ["assets[] field", "Type", "Meaning"]}
+            rows={schemaRows("ConversionAsset", t.assetFields)}
+          />
           <Table head={t.fields} rows={t.assetsRows} />
           {block(
             curl("/upload", [
@@ -1621,7 +1637,27 @@ function MediaSections({ lang, section }: { lang: Lang; section: string }) {
               "  -o p0001-img01.png",
             ].join(" \\\n"),
           )}
+          {block(
+            [
+              pt
+                ? "# Já baixou? Mande o ETag (o sha256 entre aspas): 304 sem corpo se não mudou"
+                : "# Already downloaded? Send the ETag (the quoted sha256): 304 with no body if unchanged",
+              [
+                `curl -i "${API_URL}/jobs/${EXAMPLE_JOB_ID}/assets/p0001-img01-3f2a9c1b7d4e.png"`,
+                `  -H "X-API-Key: ${key}"`,
+                `  -H 'If-None-Match: "3f2a9c1b7d4e…"'`,
+              ].join(" \\\n"),
+            ].join("\n"),
+          )}
           <P small>{t.assetsNote}</P>
+          <Subheading>{t.recipeTitle}</Subheading>
+          <ol className="list-decimal space-y-1 pl-6 text-muted-foreground">
+            {t.recipeSteps.map((step) => (
+              <li key={step}>{step}</li>
+            ))}
+          </ol>
+          {block(recipeScript(pt, key))}
+          <P small>{t.recipeNote}</P>
           <P>{t.docsResult}</P>
           {block(curl(`/jobs/${EXAMPLE_JOB_ID}/result`, [], "GET"))}
           <Subheading>{t.resultExample}</Subheading>
@@ -1663,70 +1699,6 @@ function MediaSections({ lang, section }: { lang: Lang; section: string }) {
         </Section>
       )}
 
-      {section === "imagens" && (
-        <Section id="imagens" title={COPY[lang].sections.images}>
-          <P>{t.imagesIntro}</P>
-          <Table head={t.imagesHead} rows={t.imagesRows} />
-          <P small>{t.imageOptions}</P>
-          <P small>{t.imageTasks}</P>
-          <Subheading>{t.example}</Subheading>
-          {block(
-            curl("/images/describe/upload", [
-              '  -F "file=@photo.jpg"',
-              `  -F "project=${project}"`,
-              '  --form-string "task=<CAPTION>"',
-            ]),
-          )}
-          {block(
-            curl("/images/ocr/upload", [
-              '  -F "file=@receipt.png"',
-              `  -F "project=${project}"`,
-              '  -F "tags=ocr"',
-            ]),
-          )}
-          {block(
-            `import base64\nimport requests\n\nwith open("receipt.png", "rb") as f:\n    image = base64.b64encode(f.read()).decode("ascii")\n\nr = requests.post(\n    "${API_URL}/images/ocr",\n    headers={"X-API-Key": "${key}"},\n    json={"image_base64": image, "filename": "receipt.png",\n          "project": "${project}", "tags": ["ocr"]},\n    timeout=75,\n)\nr.raise_for_status()\nprint(r.json()["text"])`,
-          )}
-          <P>{t.imageResponse}</P>
-          <P small>{t.ocrNote}</P>
-          {block(
-            JSON.stringify(
-              {
-                text: "TOTAL 42.00",
-                lines: [
-                  {
-                    text: "TOTAL 42.00",
-                    quad_box: [12, 20, 180, 20, 180, 40, 12, 40],
-                    bbox: [12, 20, 180, 40],
-                  },
-                ],
-              },
-              null,
-              2,
-            ),
-          )}
-          <Subheading>{t.timeoutTitle}</Subheading>
-          <P>{t.timeout}</P>
-          {block(
-            JSON.stringify(
-              {
-                detail: {
-                  error_code: "VISION_TIMEOUT",
-                  message: "O job continua processando.",
-                  job_id: EXAMPLE_JOB_ID,
-                  poll_url: `/jobs/${EXAMPLE_JOB_ID}`,
-                  result_url: `/jobs/${EXAMPLE_JOB_ID}/result`,
-                },
-              },
-              null,
-              2,
-            ),
-          )}
-          <P small>{t.retention}</P>
-          <P small>{t.imageErrors}</P>
-          {block(curl("/images/capabilities", [], "GET"))}
-        </Section>
-      )}
     </>
   );
 }
@@ -2411,10 +2383,36 @@ export function TopicContent({ topic, lang }: { topic: string; lang: Lang }) {
                   },
             )}
           />
+          <Subheading>
+            {lang === "pt" ? "Imagens extraídas" : "Extracted images"}
+          </Subheading>
+          <Table
+            head={
+              lang === "pt"
+                ? ["Campo", "Tipo", "Significado"]
+                : ["Field", "Type", "Meaning"]
+            }
+            rows={schemaRows(
+              "JobStatusResponse",
+              lang === "pt"
+                ? {
+                    assets_available:
+                      "As imagens extraídas e páginas renderizadas (image_mode, page_images) ainda podem ser baixadas em GET /jobs/{job_id}/assets/{name}. false quando o job não pediu imagens ou depois que foram apagadas (aí a rota responde 410).",
+                    assets_expire_at:
+                      "Só com purge_source=true: quando as imagens serão apagadas (UTC), ASSET_RETENTION_SECONDS depois do fim do job. null quando elas duram o mesmo que o job.",
+                  }
+                : {
+                    assets_available:
+                      "The extracted images and page renders (image_mode, page_images) can still be downloaded from GET /jobs/{job_id}/assets/{name}. false when the job asked for no images or once they were deleted (the route then answers 410).",
+                    assets_expire_at:
+                      "Only with purge_source=true: when the images will be deleted (UTC), ASSET_RETENTION_SECONDS after the job ended. null when they live as long as the job.",
+                  },
+            )}
+          />
           <P small>
             {lang === "pt"
-              ? "Apagar o original nunca apaga o resultado. Veja purge_source e DELETE /jobs/{job_id}/source em PDF e documentos."
-              : "Deleting the original never deletes the result. See purge_source and DELETE /jobs/{job_id}/source under PDF and documents."}{" "}
+              ? "Apagar o original nunca apaga o Markdown; DELETE /jobs/{job_id}/source apaga também as imagens extraídas. Veja purge_source, imagens e DELETE /jobs/{job_id}/source em PDF e documentos."
+              : "Deleting the original never deletes the Markdown; DELETE /jobs/{job_id}/source also deletes the extracted images. See purge_source, images and DELETE /jobs/{job_id}/source under PDF and documents."}{" "}
             <A href={lang === "pt" ? "/pt/docs/documents" : "/docs/documents"}>
               {COPY[lang].sections.documents}
             </A>
@@ -2441,8 +2439,8 @@ export function TopicContent({ topic, lang }: { topic: string; lang: Lang }) {
           {t.resultIntro}
           <P small>
             {lang === "pt"
-              ? "/result responde 400 enquanto o job está queued/processing e 500 se ele falhou. Full Analysis e análise facial respondem 202 enquanto rodam e entregam o relatório em partial e podem entregar um relatório de diagnóstico em failed e cancelled. Num PDF partial (páginas que falharam), o Markdown unificado só existe depois que todas as páginas concluem: leia as convertidas em /jobs/{job_id}/pages/{n}/result. purge_source e DELETE /jobs/{job_id}/source não apagam o resultado."
-              : "/result answers 400 while the job is queued/processing and 500 if it failed. Full Analysis and face analysis answer 202 while running and deliver the report for partial runs and may provide a diagnostic report for failed and cancelled ones. For a partial PDF (failed pages), the merged Markdown only exists once every page completes: read converted pages from /jobs/{job_id}/pages/{n}/result. purge_source and DELETE /jobs/{job_id}/source never delete the result."}
+              ? "/result responde 400 enquanto o job está queued/processing e 500 se ele falhou. Full Analysis e análise facial respondem 202 enquanto rodam e entregam o relatório em partial e podem entregar um relatório de diagnóstico em failed e cancelled. Num PDF partial (páginas que falharam), o Markdown unificado só existe depois que todas as páginas concluem: leia as convertidas em /jobs/{job_id}/pages/{n}/result. purge_source e DELETE /jobs/{job_id}/source não apagam o Markdown. Numa conversão com image_mode/page_images, result traz também assets[] (nome, tipo, página, bbox, sha256, tamanho e url de cada PNG) e assets_skipped; baixe cada url com a mesma credencial em GET /jobs/{job_id}/assets/{name} antes de assets_expire_at (purge_source) — DELETE /jobs/{job_id}/source apaga essas imagens."
+              : "/result answers 400 while the job is queued/processing and 500 if it failed. Full Analysis and face analysis answer 202 while running and deliver the report for partial runs and may provide a diagnostic report for failed and cancelled ones. For a partial PDF (failed pages), the merged Markdown only exists once every page completes: read converted pages from /jobs/{job_id}/pages/{n}/result. purge_source and DELETE /jobs/{job_id}/source never delete the Markdown. For a conversion with image_mode/page_images, result also carries assets[] (name, kind, page, bbox, sha256, size and url of each PNG) and assets_skipped; download each url with the same credentials from GET /jobs/{job_id}/assets/{name} before assets_expire_at (purge_source) — DELETE /jobs/{job_id}/source deletes those images."}
           </P>
           {block(code.curlResult)}
 

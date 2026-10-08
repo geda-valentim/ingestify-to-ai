@@ -241,10 +241,48 @@ export interface TranscriptJson {
   segments: TranscriptSegment[];
 }
 
+/** Where a picture sits on its page, in PDF points with a top-left origin. */
+export interface ConversionAssetBBox {
+  l: number;
+  t: number;
+  r: number;
+  b: number;
+  coord_origin?: string;
+  page_width?: number | null;
+  page_height?: number | null;
+}
+
+/** An image of a conversion: a picture (image_mode=referenced) or a rendered page (page_images=true). */
+export interface ConversionAsset {
+  name: string;
+  kind: "picture" | "page";
+  /** 1-based, absolute in the document; null for formats without pages */
+  page?: number | null;
+  bbox?: ConversionAssetBBox | null;
+  sha256: string;
+  mime: string;
+  width: number;
+  height: number;
+  size_bytes: number;
+  /** Relative API path: /jobs/{main_job_id}/assets/{name} (needs the same credentials) */
+  url: string;
+}
+
+/** Pictures that were not stored, by reason (they stay as <!-- image --> in the Markdown). */
+export interface ConversionAssetsSkipped {
+  too_small: number;
+  count_limit: number;
+  size_limit: number;
+  unavailable: number;
+}
+
 export interface ConversionResult {
   markdown: string;
   metadata: DocumentMetadata;
   image?: ImageJobResult | ImageFullAnalysisResult | ImageFullV2Result | FaceAnalysisResult | null;
+  /** Only when the job asked for image_mode=referenced and/or page_images=true (null otherwise) */
+  assets?: ConversionAsset[] | null;
+  assets_skipped?: ConversionAssetsSkipped | null;
 }
 
 export type CaptionTask = "<CAPTION>" | "<DETAILED_CAPTION>" | "<MORE_DETAILED_CAPTION>";
@@ -386,6 +424,10 @@ export interface JobStatusResponse {
   source_deleted_at?: string | null;
   /** Whether DELETE /jobs/{id}/source can run now (files exist, nothing queued or retrying) */
   source_deletable?: boolean;
+  /** Extracted images / rendered pages can still be downloaded from GET /jobs/{id}/assets/{name} */
+  assets_available?: boolean;
+  /** When they will be deleted (UTC ISO-8601): only with purge_source=true, ASSET_RETENTION_SECONDS after the job ended */
+  assets_expire_at?: string | null;
   parent_job_id?: string | null;
   total_pages?: number | null;
   pages_completed?: number | null;
@@ -477,20 +519,31 @@ export interface SourceDeletedResponse {
   job_id: string;
   source_deleted: boolean;
   source_deleted_at?: string | null;
+  /** The extracted images / rendered pages were deleted too */
+  assets_deleted?: boolean;
 }
 
-export interface ConvertRequest extends UploadLocation {
+/** Image options of a document conversion (/upload and /convert, every source type). */
+export interface DocumentImageOptions {
+  /** referenced: every picture Docling finds is stored as a PNG and referenced from the Markdown */
+  image_mode?: "none" | "referenced";
+  /** true: every PDF page is also rendered to a PNG (kind "page"), outside the Markdown */
+  page_images?: boolean;
+}
+
+export interface ConvertRequest extends UploadLocation, DocumentImageOptions {
   source_type: SourceType;
   source?: string;
   file?: File;
   name?: string;
   tags?: string[];
-  authToken?: string; // OAuth token for gdrive/dropbox
+  /** The provider's token for gdrive/dropbox, sent as the X-Source-Token header (never in Authorization) */
+  sourceToken?: string;
   /** Delete the source files (original + page PDFs) once the job settles: completed, or failed/partial after its automatic retries */
   purge_source?: boolean;
 }
 
-export interface UploadRequest extends UploadLocation {
+export interface UploadRequest extends UploadLocation, DocumentImageOptions {
   datalake?: import("./datalake").DatalakeDestination;
   image_operation?: "describe" | "ocr" | "analyze" | "full" | "faces";
   face_options?: FaceOptions;
