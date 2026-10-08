@@ -6,6 +6,7 @@ import { formatApiError } from "@/lib/utils";
 import { AppHeader } from "@/components/app-header";
 import { Button } from "@/components/ui/button";
 import { ImageView } from "./image-view";
+import { ResultDownloads } from "./image-analysis/result-downloads";
 import { FullAnalysisJobSidebar } from "./image-analysis/full-job-sidebar";
 import { AnalysisStatus } from "./image-analysis/analysis-status";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
@@ -26,7 +27,10 @@ export function ImageJobWorkspace({ status, result, resultError, retryResult, on
        <aside className="space-y-4 border-b p-4 lg:w-60 lg:border-b-0 lg:border-r"><h1 className="break-words font-semibold">{status.name || "Análise de imagem"}</h1><AnalysisStatus status={status.status} /><details><summary>Configuração solicitada</summary><pre className="mt-3 overflow-auto whitespace-pre-wrap break-all text-xs">{JSON.stringify(status.configuration, null, 2)}</pre></details><Button variant="outline" onClick={() => setConfirmDelete(true)}>Excluir job</Button></aside>}
      <main className="min-w-0 flex-1 space-y-4 overflow-y-auto p-4 md:p-6">
        {cancel.isError && <p role="alert" className="text-sm text-destructive">{formatApiError(cancel.error)}</p>}
-       {result?.result.image ? <ImageView image={result.result.image} fileName={status.name || status.job_id} /> :
+       {result?.result.image ? <>
+         <ResultDownloads jobId={status.job_id} fileName={status.name || status.job_id} />
+         <ImageView image={result.result.image} fileName={status.name || status.job_id} />
+       </> :
          <div className="rounded-xl border p-8 text-center text-sm text-muted-foreground">
            {running ? "Análise em andamento. O relatório ficará disponível neste mesmo job." : resultError ? "Não foi possível carregar o relatório. Consulte este job novamente." : "Carregando o relatório…"}
            {!running && <Button variant="outline" className="ml-3" onClick={retryResult}>Tentar novamente</Button>}

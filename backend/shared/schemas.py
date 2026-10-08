@@ -579,6 +579,23 @@ FACE_PURGE_SOURCE_DESCRIPTION = _IMAGE_PURGE_SOURCE_BASE + (
 ) + _IMAGE_PURGE_SOURCE_IDEMPOTENCY
 
 
+# `output_format` of every /images/* route (JSON field and multipart Form field)
+ImageOutputFormat = Literal["json", "markdown"]
+IMAGE_OUTPUT_FORMAT_DESCRIPTION = (
+    "Formato da resposta e padrão de `GET /jobs/{job_id}/result`: `json` (padrão, o "
+    "corpo de sempre) ou `markdown` (o mesmo resultado renderizado como "
+    "`text/markdown; charset=utf-8`, sem `image_base64`). Vale para a resposta síncrona "
+    "de sucesso (200); 202 (enfileirado), 504 e erros continuam JSON. Fica gravado no "
+    "job: `GET /jobs/{job_id}/result` sem `?format=` usa este formato, e `?format=json` "
+    "ou `?format=markdown` escolhe na leitura."
+)
+IMAGE_OUTPUT_FORMAT_IDEMPOTENCY = (
+    " Não faz parte da Idempotency-Key: repetir a chave com outro `output_format` "
+    "devolve o mesmo job, apenas renderizado no formato pedido (o padrão gravado no "
+    "job é o da primeira tentativa)."
+)
+
+
 class ImageDescribeRequest(BaseModel):
     """Corpo JSON de `POST /images/describe`."""
 
@@ -602,6 +619,7 @@ class ImageDescribeRequest(BaseModel):
     folder: Optional[str] = Field(None, description="Nome da pasta no projeto (opcional, get-or-add, sem '/').")
     folder_id: Optional[str] = Field(None, description="ID de uma pasta existente do projeto.")
     purge_source: bool = Field(False, description=IMAGE_PURGE_SOURCE_DESCRIPTION)
+    output_format: ImageOutputFormat = Field("json", description=IMAGE_OUTPUT_FORMAT_DESCRIPTION)
     task: Literal[
         "<MORE_DETAILED_CAPTION>",
         "<DETAILED_CAPTION>",
@@ -638,6 +656,7 @@ class ImageOcrRequest(BaseModel):
     folder: Optional[str] = Field(None, description="Nome da pasta no projeto (opcional, get-or-add, sem '/').")
     folder_id: Optional[str] = Field(None, description="ID de uma pasta existente do projeto.")
     purge_source: bool = Field(False, description=IMAGE_PURGE_SOURCE_DESCRIPTION)
+    output_format: ImageOutputFormat = Field("json", description=IMAGE_OUTPUT_FORMAT_DESCRIPTION)
 
 
 class OcrLine(BaseModel):
@@ -849,6 +868,8 @@ from shared.face_analysis import FaceRequestOptions, FullFaceOptions, FaceAnalys
 class FaceAnalyzeRequest(ImageOcrRequest):
     model_config = ConfigDict(extra='forbid')
     purge_source: bool = Field(False, description=FACE_PURGE_SOURCE_DESCRIPTION)
+    output_format: ImageOutputFormat = Field(
+        "json", description=IMAGE_OUTPUT_FORMAT_DESCRIPTION + IMAGE_OUTPUT_FORMAT_IDEMPOTENCY)
     face_options: FaceRequestOptions = Field(default_factory=FaceRequestOptions)
     wait: bool = False
     datalake: Optional['Destination'] = None
@@ -891,6 +912,8 @@ class ImageFullAnalyzeRequest(ImageOcrRequest):
     model_config = ConfigDict(extra="forbid")
     mode: Literal['full']
     purge_source: bool = Field(False, description=IMAGE_ANALYZE_PURGE_SOURCE_DESCRIPTION)
+    output_format: ImageOutputFormat = Field(
+        "json", description=IMAGE_OUTPUT_FORMAT_DESCRIPTION + IMAGE_OUTPUT_FORMAT_IDEMPOTENCY)
     full_options: ImageFullOptions = Field(default_factory=ImageFullOptions)
     wait: bool = False
     datalake: Optional['Destination'] = None

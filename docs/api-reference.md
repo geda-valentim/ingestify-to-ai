@@ -2,7 +2,7 @@
 
 Gerado do OpenAPI da aplicação por `scripts/generate_api_docs.py`. Não edite este arquivo à mão.
 
-API `1.3.0`: **139 operações HTTP** e **1 WebSocket(s)**.
+API `1.4.0`: **139 operações HTTP** e **1 WebSocket(s)**.
 
 Base pública de desenvolvimento: `https://dev.ingestify.ai/api`. Os caminhos abaixo são relativos à base.
 
@@ -942,18 +942,28 @@ Recuperar resultado de qualquer tipo de job (main ou page individual)
 Para jobs de transcrição (/transcribe), `?format=vtt|srt|txt|json` retorna o
 arquivo no formato pedido (ex.: legenda WebVTT com `Content-Type: text/vtt`).
 
+Para jobs de imagem (describe, ocr, analyze, full, faces), `?format=markdown`
+retorna o resultado renderizado (`text/markdown; charset=utf-8`) e
+`?format=json` o JSON (em full/faces, o relatório sem o envelope). Sem
+`?format=` vale o `output_format` com que o job foi criado (padrão json).
+Outros formatos respondem 422 `IMAGE_RESULT_FORMAT_UNSUPPORTED`.
+
 Parâmetros:
 
 | Nome | Local | Obrigatório | Tipo | Padrões/limites | Descrição |
 | --- | --- | --- | --- | --- | --- |
 | `job_id` | path | sim | string |  |  |
-| `format` | query | não | string / null |  | Para transcrições: markdown (JSON padrão), vtt, srt, txt ou json. Sem este parâmetro vale o output_format escolhido no /transcribe. |
+| `format` | query | não | string / null |  | Transcrições: markdown (JSON padrão), vtt, srt, txt ou json; sem este parâmetro vale o output_format escolhido no /transcribe. Jobs de imagem (/images/*): json ou markdown; sem este parâmetro vale o output_format da criação (padrão json). |
 
 Respostas declaradas:
 
 | Status | Content-Type | Esquema | Descrição |
 | --- | --- | --- | --- |
-| 200 | application/json | [JobResultResponse](#model-jobresultresponse) | Successful Response |
+| 200 | application/json | [JobResultResponse](#model-jobresultresponse) | O resultado. JSON por padrão; `text/markdown` para `format=markdown` de um job de imagem; `text/vtt` (vtt), `application/x-subrip` (srt), `text/plain` (txt) ou `application/json` (json) para os formatos de transcrição. |
+| 200 | text/markdown | string | O resultado. JSON por padrão; `text/markdown` para `format=markdown` de um job de imagem; `text/vtt` (vtt), `application/x-subrip` (srt), `text/plain` (txt) ou `application/json` (json) para os formatos de transcrição. |
+| 200 | text/vtt | string | O resultado. JSON por padrão; `text/markdown` para `format=markdown` de um job de imagem; `text/vtt` (vtt), `application/x-subrip` (srt), `text/plain` (txt) ou `application/json` (json) para os formatos de transcrição. |
+| 200 | application/x-subrip | string | O resultado. JSON por padrão; `text/markdown` para `format=markdown` de um job de imagem; `text/vtt` (vtt), `application/x-subrip` (srt), `text/plain` (txt) ou `application/json` (json) para os formatos de transcrição. |
+| 200 | text/plain | string | O resultado. JSON por padrão; `text/markdown` para `format=markdown` de um job de imagem; `text/vtt` (vtt), `application/x-subrip` (srt), `text/plain` (txt) ou `application/json` (json) para os formatos de transcrição. |
 | 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
 | 202 | — | objeto livre | Análise composta em andamento; consulte poll_url/result_url. |
 
@@ -1366,6 +1376,7 @@ Content-Type: `application/json`. Esquema: [FaceAnalyzeRequest](#model-faceanaly
 | `folder` | não | string / null |  | Nome da pasta no projeto (opcional, get-or-add, sem '/'). |
 | `folder_id` | não | string / null |  | ID de uma pasta existente do projeto. |
 | `purge_source` | não | boolean | default=false | Se true, apaga todas as cópias guardadas da imagem original enviada quando o job termina: `completed`, ou `failed`/`partial`/`cancelled` (as rotas de imagem não têm retry automático). Apaga a cópia local de processamento, o original e a cópia normalizada (prévia em tamanho real) da análise completa/facial no armazenamento, e a imagem embutida no resultado guardado (`image.image_base64` do resultado fica null). O resultado da inferência (descrição, OCR, regiões, rostos, markdown) fica. GET /jobs/{job_id} informa `source_available` e `source_deleted_at`. Padrão false (mantém). Para apagar depois: DELETE /jobs/{job_id}/source. A resposta (wait=true) e o relatório trazem `image.image_base64` null. `purge_source` não faz parte da Idempotency-Key: repetir a chave com outro purge_source devolve a tentativa existente, sem mudar nada. |
+| `output_format` | não | string | default="json"; enum=["json", "markdown"] | Formato da resposta e padrão de `GET /jobs/{job_id}/result`: `json` (padrão, o corpo de sempre) ou `markdown` (o mesmo resultado renderizado como `text/markdown; charset=utf-8`, sem `image_base64`). Vale para a resposta síncrona de sucesso (200); 202 (enfileirado), 504 e erros continuam JSON. Fica gravado no job: `GET /jobs/{job_id}/result` sem `?format=` usa este formato, e `?format=json` ou `?format=markdown` escolhe na leitura. Não faz parte da Idempotency-Key: repetir a chave com outro `output_format` devolve o mesmo job, apenas renderizado no formato pedido (o padrão gravado no job é o da primeira tentativa). |
 | `face_options` | não | [FaceRequestOptions](#model-facerequestoptions) |  |  |
 | `wait` | não | boolean | default=false |  |
 | `datalake` | não | [Destination](#model-destination) / null |  |  |
@@ -1375,6 +1386,7 @@ Respostas declaradas:
 | Status | Content-Type | Esquema | Descrição |
 | --- | --- | --- | --- |
 | 202 | application/json | [FaceAnalyzeResponse](#model-faceanalyzeresponse) / [ImageFullQueuedResponse](#model-imagefullqueuedresponse) | Successful Response |
+| 200 | text/markdown | string | Relatório facial (wait=true com output_format=markdown). Com `output_format=markdown`, o mesmo resultado como `text/markdown; charset=utf-8`. |
 | 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
 | 409 | — | objeto livre | Chave utilizada com outra solicitação. |
 | 410 | — | objeto livre | Job da chave excluído; envie uma chave nova. |
@@ -1409,12 +1421,14 @@ Content-Type: `multipart/form-data`. Esquema: [Body_upload_images_faces_upload_p
 | `tags` | não | string / null |  |  |
 | `datalake` | não | string / null |  |  |
 | `purge_source` | não | boolean | default=false | Se true, apaga todas as cópias guardadas da imagem original enviada quando o job termina: `completed`, ou `failed`/`partial`/`cancelled` (as rotas de imagem não têm retry automático). Apaga a cópia local de processamento, o original e a cópia normalizada (prévia em tamanho real) da análise completa/facial no armazenamento, e a imagem embutida no resultado guardado (`image.image_base64` do resultado fica null). O resultado da inferência (descrição, OCR, regiões, rostos, markdown) fica. GET /jobs/{job_id} informa `source_available` e `source_deleted_at`. Padrão false (mantém). Para apagar depois: DELETE /jobs/{job_id}/source. A resposta (wait=true) e o relatório trazem `image.image_base64` null. `purge_source` não faz parte da Idempotency-Key: repetir a chave com outro purge_source devolve a tentativa existente, sem mudar nada. |
+| `output_format` | não | string | default="json"; enum=["json", "markdown"] | Formato da resposta e padrão de `GET /jobs/{job_id}/result`: `json` (padrão, o corpo de sempre) ou `markdown` (o mesmo resultado renderizado como `text/markdown; charset=utf-8`, sem `image_base64`). Vale para a resposta síncrona de sucesso (200); 202 (enfileirado), 504 e erros continuam JSON. Fica gravado no job: `GET /jobs/{job_id}/result` sem `?format=` usa este formato, e `?format=json` ou `?format=markdown` escolhe na leitura. Não faz parte da Idempotency-Key: repetir a chave com outro `output_format` devolve o mesmo job, apenas renderizado no formato pedido (o padrão gravado no job é o da primeira tentativa). |
 
 Respostas declaradas:
 
 | Status | Content-Type | Esquema | Descrição |
 | --- | --- | --- | --- |
 | 202 | application/json | [FaceAnalyzeResponse](#model-faceanalyzeresponse) / [ImageFullQueuedResponse](#model-imagefullqueuedresponse) | Successful Response |
+| 200 | text/markdown | string | Relatório facial (wait=true com output_format=markdown). Com `output_format=markdown`, o mesmo resultado como `text/markdown; charset=utf-8`. |
 | 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
 | 409 | — | objeto livre | Chave utilizada com outra solicitação. |
 | 410 | — | objeto livre | Job da chave excluído; envie uma chave nova. |
@@ -1434,10 +1448,16 @@ Descreve uma imagem enviada em base64 e devolve a mesma imagem de volta.
 - `task`: `<MORE_DETAILED_CAPTION>` (padrão), `<DETAILED_CAPTION>` ou `<CAPTION>`
 - `project` / `project_id` (obrigatório, salvo API key vinculada a um projeto),
   `folder` / `folder_id` (opcional): onde o job fica
+- `output_format`: `json` (padrão) ou `markdown`
 
 ## Retorno
 A descrição, os metadados da imagem e o eco de `image_base64` — os bytes
 exatos que você enviou, re-codificados, nunca uma re-compressão.
+
+Com `output_format=markdown`: `text/markdown; charset=utf-8` com
+`# Descrição da imagem`, a descrição e uma lista de metadados (arquivo,
+dimensões, modelo, tarefa, job). O formato fica gravado no job e é o padrão
+de `GET /jobs/{job_id}/result`.
 
 ## Timeout
 Se a inferência passar de `VISION_REQUEST_TIMEOUT_SECONDS`, a resposta é
@@ -1458,13 +1478,15 @@ Content-Type: `application/json`. Esquema: [ImageDescribeRequest](#model-imagede
 | `folder` | não | string / null |  | Nome da pasta no projeto (opcional, get-or-add, sem '/'). |
 | `folder_id` | não | string / null |  | ID de uma pasta existente do projeto. |
 | `purge_source` | não | boolean | default=false | Se true, apaga todas as cópias guardadas da imagem original enviada quando o job termina: `completed`, ou `failed`/`partial`/`cancelled` (as rotas de imagem não têm retry automático). Apaga a cópia local de processamento, o original e a cópia normalizada (prévia em tamanho real) da análise completa/facial no armazenamento, e a imagem embutida no resultado guardado (`image.image_base64` do resultado fica null). O resultado da inferência (descrição, OCR, regiões, rostos, markdown) fica. GET /jobs/{job_id} informa `source_available` e `source_deleted_at`. Padrão false (mantém). Para apagar depois: DELETE /jobs/{job_id}/source. A resposta síncrona ainda ecoa `image_base64` no topo: vem dos bytes desta requisição, não de uma cópia guardada. |
+| `output_format` | não | string | default="json"; enum=["json", "markdown"] | Formato da resposta e padrão de `GET /jobs/{job_id}/result`: `json` (padrão, o corpo de sempre) ou `markdown` (o mesmo resultado renderizado como `text/markdown; charset=utf-8`, sem `image_base64`). Vale para a resposta síncrona de sucesso (200); 202 (enfileirado), 504 e erros continuam JSON. Fica gravado no job: `GET /jobs/{job_id}/result` sem `?format=` usa este formato, e `?format=json` ou `?format=markdown` escolhe na leitura. |
 | `task` | não | string | default="<MORE_DETAILED_CAPTION>"; enum=["<MORE_DETAILED_CAPTION>", "<DETAILED_CAPTION>", "<CAPTION>"] | Prompt de caption do Florence-2. |
 
 Respostas declaradas:
 
 | Status | Content-Type | Esquema | Descrição |
 | --- | --- | --- | --- |
-| 200 | application/json | [ImageDescribeResponse](#model-imagedescriberesponse) | Successful Response |
+| 200 | application/json | [ImageDescribeResponse](#model-imagedescriberesponse) | A descrição. Com `output_format=markdown`, o mesmo resultado como `text/markdown; charset=utf-8`. |
+| 200 | text/markdown | string | A descrição. Com `output_format=markdown`, o mesmo resultado como `text/markdown; charset=utf-8`. |
 | 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
 
 ### POST /images/analyze
@@ -1491,6 +1513,12 @@ Full rejeita task/text_input/region/generation na raiz. datalake opcional
 recebe Destination com partitioning/partition_values. Resultado full possui
 coverage/results/resolved_inputs e pode terminar partial/failed/cancelled.
 
+output_format=markdown (com wait=true) devolve o resultado como
+text/markdown: a tarefa e o texto, com tabela de regiões quando houver; em
+mode=full, descrição, OCR, detecções, rostos (v2) e o estado de cada tarefa.
+O formato fica gravado no job (padrão de /jobs/{job_id}/result); 202, 504 e
+erros continuam JSON. Não entra na Idempotency-Key.
+
 Operações compostas exigem Idempotency-Key. Mesma chave e payload retornam o mesmo job; payload divergente retorna 409 e job excluído retorna 410. wait=false retorna 202; wait=true pode retornar 504 mantendo o job. Full sem perfil conserva v1; v2 inclui rostos e expressões.
 
 Parâmetros:
@@ -1507,7 +1535,8 @@ Respostas declaradas:
 
 | Status | Content-Type | Esquema | Descrição |
 | --- | --- | --- | --- |
-| 200 | application/json | [ImageAnalyzeResponse](#model-imageanalyzeresponse) / [ImageFullAnalyzeResponse](#model-imagefullanalyzeresponse) / [ImageFullQueuedResponse](#model-imagefullqueuedresponse) / [JobCreatedResponse](#model-jobcreatedresponse) | Successful Response |
+| 200 | application/json | [ImageAnalyzeResponse](#model-imageanalyzeresponse) / [ImageFullAnalyzeResponse](#model-imagefullanalyzeresponse) / [ImageFullQueuedResponse](#model-imagefullqueuedresponse) / [JobCreatedResponse](#model-jobcreatedresponse) | Resultado (wait=true). Com `output_format=markdown`, o mesmo resultado como `text/markdown; charset=utf-8`. |
+| 200 | text/markdown | string | Resultado (wait=true). Com `output_format=markdown`, o mesmo resultado como `text/markdown; charset=utf-8`. |
 | 202 | application/json | [ImageFullQueuedResponse](#model-imagefullqueuedresponse) / [JobCreatedResponse](#model-jobcreatedresponse) | Accepted |
 | 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
 | 409 | — | objeto livre | Chave utilizada com outra solicitação. |
@@ -1555,6 +1584,7 @@ Content-Type: `multipart/form-data`. Esquema: [Body_analyze_image_upload_images_
 | `wait` | não | boolean | default=false | false retorna 202 com job_id; true espera pelo resultado. |
 | `tags` | não | string / null |  | Tags separadas por vírgula (ex.: 'cliente-x, reunião'). Viram minúsculas; até 20 tags de até 50 caracteres. Enviar um arquivo repetido adiciona as tags ao job existente. |
 | `purge_source` | não | boolean | default=false | Se true, apaga todas as cópias guardadas da imagem original enviada quando o job termina: `completed`, ou `failed`/`partial`/`cancelled` (as rotas de imagem não têm retry automático). Apaga a cópia local de processamento, o original e a cópia normalizada (prévia em tamanho real) da análise completa/facial no armazenamento, e a imagem embutida no resultado guardado (`image.image_base64` do resultado fica null). O resultado da inferência (descrição, OCR, regiões, rostos, markdown) fica. GET /jobs/{job_id} informa `source_available` e `source_deleted_at`. Padrão false (mantém). Para apagar depois: DELETE /jobs/{job_id}/source. mode=single com wait=true: a resposta ainda ecoa `image_base64` no topo (vem dos bytes desta requisição, não de uma cópia guardada). mode=full: a resposta (wait=true) e o relatório trazem `image.image_base64` null, e `purge_source` não faz parte da Idempotency-Key: repetir a chave com outro purge_source devolve a tentativa existente, sem mudar nada. |
+| `output_format` | não | string | default="json"; enum=["json", "markdown"] | Formato da resposta e padrão de `GET /jobs/{job_id}/result`: `json` (padrão, o corpo de sempre) ou `markdown` (o mesmo resultado renderizado como `text/markdown; charset=utf-8`, sem `image_base64`). Vale para a resposta síncrona de sucesso (200); 202 (enfileirado), 504 e erros continuam JSON. Fica gravado no job: `GET /jobs/{job_id}/result` sem `?format=` usa este formato, e `?format=json` ou `?format=markdown` escolhe na leitura. Não faz parte da Idempotency-Key: repetir a chave com outro `output_format` devolve o mesmo job, apenas renderizado no formato pedido (o padrão gravado no job é o da primeira tentativa). |
 | `project` | não | string / null |  | Nome do projeto (obrigatório, a menos que a API key esteja vinculada a um projeto). É criado se não existir; grafias equivalentes ('Reunião', ' reuniao ') são o mesmo projeto. |
 | `project_id` | não | string / null |  | ID de um projeto existente (alternativa a 'project'; nunca cria). |
 | `folder` | não | string / null |  | Nome da pasta dentro do projeto (opcional; criada se não existir; sem '/'). |
@@ -1564,7 +1594,8 @@ Respostas declaradas:
 
 | Status | Content-Type | Esquema | Descrição |
 | --- | --- | --- | --- |
-| 200 | application/json | [ImageAnalyzeResponse](#model-imageanalyzeresponse) / [ImageFullAnalyzeResponse](#model-imagefullanalyzeresponse) / [ImageFullQueuedResponse](#model-imagefullqueuedresponse) / [JobCreatedResponse](#model-jobcreatedresponse) | Successful Response |
+| 200 | application/json | [ImageAnalyzeResponse](#model-imageanalyzeresponse) / [ImageFullAnalyzeResponse](#model-imagefullanalyzeresponse) / [ImageFullQueuedResponse](#model-imagefullqueuedresponse) / [JobCreatedResponse](#model-jobcreatedresponse) | Resultado (wait=true). Com `output_format=markdown`, o mesmo resultado como `text/markdown; charset=utf-8`. |
+| 200 | text/markdown | string | Resultado (wait=true). Com `output_format=markdown`, o mesmo resultado como `text/markdown; charset=utf-8`. |
 | 202 | application/json | [ImageFullQueuedResponse](#model-imagefullqueuedresponse) / [JobCreatedResponse](#model-jobcreatedresponse) | Accepted |
 | 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
 | 409 | — | objeto livre | Chave utilizada com outra solicitação. |
@@ -1592,6 +1623,7 @@ Content-Type: `multipart/form-data`. Esquema: [Body_describe_image_upload_images
 | `task` | não | string | default="<MORE_DETAILED_CAPTION>" | <MORE_DETAILED_CAPTION>, <DETAILED_CAPTION> ou <CAPTION> |
 | `tags` | não | string / null |  | Tags separadas por vírgula (ex.: 'cliente-x, reunião'). Viram minúsculas; até 20 tags de até 50 caracteres. Enviar um arquivo repetido adiciona as tags ao job existente. |
 | `purge_source` | não | boolean | default=false | Se true, apaga todas as cópias guardadas da imagem original enviada quando o job termina: `completed`, ou `failed`/`partial`/`cancelled` (as rotas de imagem não têm retry automático). Apaga a cópia local de processamento, o original e a cópia normalizada (prévia em tamanho real) da análise completa/facial no armazenamento, e a imagem embutida no resultado guardado (`image.image_base64` do resultado fica null). O resultado da inferência (descrição, OCR, regiões, rostos, markdown) fica. GET /jobs/{job_id} informa `source_available` e `source_deleted_at`. Padrão false (mantém). Para apagar depois: DELETE /jobs/{job_id}/source. A resposta síncrona ainda ecoa `image_base64` no topo: vem dos bytes desta requisição, não de uma cópia guardada. |
+| `output_format` | não | string | default="json"; enum=["json", "markdown"] | Formato da resposta e padrão de `GET /jobs/{job_id}/result`: `json` (padrão, o corpo de sempre) ou `markdown` (o mesmo resultado renderizado como `text/markdown; charset=utf-8`, sem `image_base64`). Vale para a resposta síncrona de sucesso (200); 202 (enfileirado), 504 e erros continuam JSON. Fica gravado no job: `GET /jobs/{job_id}/result` sem `?format=` usa este formato, e `?format=json` ou `?format=markdown` escolhe na leitura. |
 | `project` | não | string / null |  | Nome do projeto (obrigatório, a menos que a API key esteja vinculada a um projeto). É criado se não existir; grafias equivalentes ('Reunião', ' reuniao ') são o mesmo projeto. |
 | `project_id` | não | string / null |  | ID de um projeto existente (alternativa a 'project'; nunca cria). |
 | `folder` | não | string / null |  | Nome da pasta dentro do projeto (opcional; criada se não existir; sem '/'). |
@@ -1601,7 +1633,8 @@ Respostas declaradas:
 
 | Status | Content-Type | Esquema | Descrição |
 | --- | --- | --- | --- |
-| 200 | application/json | [ImageDescribeResponse](#model-imagedescriberesponse) | Successful Response |
+| 200 | application/json | [ImageDescribeResponse](#model-imagedescriberesponse) | A descrição. Com `output_format=markdown`, o mesmo resultado como `text/markdown; charset=utf-8`. |
+| 200 | text/markdown | string | A descrição. Com `output_format=markdown`, o mesmo resultado como `text/markdown; charset=utf-8`. |
 | 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
 
 ### POST /images/ocr
@@ -1619,6 +1652,10 @@ pixels absolutos da imagem original.
 Uma imagem sem texto detectável é 200 com `text: ""` e `lines: []` — nunca
 um 4xx.
 
+Com `output_format=markdown`: `text/markdown; charset=utf-8` com
+`# Texto da imagem` e uma linha por linha detectada ("Nenhum texto
+detectado." quando vazio), seguido dos metadados.
+
 Corpo obrigatório: sim.
 
 Content-Type: `application/json`. Esquema: [ImageOcrRequest](#model-imageocrrequest).
@@ -1633,12 +1670,14 @@ Content-Type: `application/json`. Esquema: [ImageOcrRequest](#model-imageocrrequ
 | `folder` | não | string / null |  | Nome da pasta no projeto (opcional, get-or-add, sem '/'). |
 | `folder_id` | não | string / null |  | ID de uma pasta existente do projeto. |
 | `purge_source` | não | boolean | default=false | Se true, apaga todas as cópias guardadas da imagem original enviada quando o job termina: `completed`, ou `failed`/`partial`/`cancelled` (as rotas de imagem não têm retry automático). Apaga a cópia local de processamento, o original e a cópia normalizada (prévia em tamanho real) da análise completa/facial no armazenamento, e a imagem embutida no resultado guardado (`image.image_base64` do resultado fica null). O resultado da inferência (descrição, OCR, regiões, rostos, markdown) fica. GET /jobs/{job_id} informa `source_available` e `source_deleted_at`. Padrão false (mantém). Para apagar depois: DELETE /jobs/{job_id}/source. A resposta síncrona ainda ecoa `image_base64` no topo: vem dos bytes desta requisição, não de uma cópia guardada. |
+| `output_format` | não | string | default="json"; enum=["json", "markdown"] | Formato da resposta e padrão de `GET /jobs/{job_id}/result`: `json` (padrão, o corpo de sempre) ou `markdown` (o mesmo resultado renderizado como `text/markdown; charset=utf-8`, sem `image_base64`). Vale para a resposta síncrona de sucesso (200); 202 (enfileirado), 504 e erros continuam JSON. Fica gravado no job: `GET /jobs/{job_id}/result` sem `?format=` usa este formato, e `?format=json` ou `?format=markdown` escolhe na leitura. |
 
 Respostas declaradas:
 
 | Status | Content-Type | Esquema | Descrição |
 | --- | --- | --- | --- |
-| 200 | application/json | [ImageOcrResponse](#model-imageocrresponse) | Successful Response |
+| 200 | application/json | [ImageOcrResponse](#model-imageocrresponse) | O texto. Com `output_format=markdown`, o mesmo resultado como `text/markdown; charset=utf-8`. |
+| 200 | text/markdown | string | O texto. Com `output_format=markdown`, o mesmo resultado como `text/markdown; charset=utf-8`. |
 | 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
 
 ### POST /images/ocr/upload
@@ -1658,6 +1697,7 @@ Content-Type: `multipart/form-data`. Esquema: [Body_ocr_image_upload_images_ocr_
 | `file` | sim | string (binary) |  | Imagem (PNG, JPEG, WEBP, BMP, GIF, TIFF) |
 | `tags` | não | string / null |  | Tags separadas por vírgula (ex.: 'cliente-x, reunião'). Viram minúsculas; até 20 tags de até 50 caracteres. Enviar um arquivo repetido adiciona as tags ao job existente. |
 | `purge_source` | não | boolean | default=false | Se true, apaga todas as cópias guardadas da imagem original enviada quando o job termina: `completed`, ou `failed`/`partial`/`cancelled` (as rotas de imagem não têm retry automático). Apaga a cópia local de processamento, o original e a cópia normalizada (prévia em tamanho real) da análise completa/facial no armazenamento, e a imagem embutida no resultado guardado (`image.image_base64` do resultado fica null). O resultado da inferência (descrição, OCR, regiões, rostos, markdown) fica. GET /jobs/{job_id} informa `source_available` e `source_deleted_at`. Padrão false (mantém). Para apagar depois: DELETE /jobs/{job_id}/source. A resposta síncrona ainda ecoa `image_base64` no topo: vem dos bytes desta requisição, não de uma cópia guardada. |
+| `output_format` | não | string | default="json"; enum=["json", "markdown"] | Formato da resposta e padrão de `GET /jobs/{job_id}/result`: `json` (padrão, o corpo de sempre) ou `markdown` (o mesmo resultado renderizado como `text/markdown; charset=utf-8`, sem `image_base64`). Vale para a resposta síncrona de sucesso (200); 202 (enfileirado), 504 e erros continuam JSON. Fica gravado no job: `GET /jobs/{job_id}/result` sem `?format=` usa este formato, e `?format=json` ou `?format=markdown` escolhe na leitura. |
 | `project` | não | string / null |  | Nome do projeto (obrigatório, a menos que a API key esteja vinculada a um projeto). É criado se não existir; grafias equivalentes ('Reunião', ' reuniao ') são o mesmo projeto. |
 | `project_id` | não | string / null |  | ID de um projeto existente (alternativa a 'project'; nunca cria). |
 | `folder` | não | string / null |  | Nome da pasta dentro do projeto (opcional; criada se não existir; sem '/'). |
@@ -1667,7 +1707,8 @@ Respostas declaradas:
 
 | Status | Content-Type | Esquema | Descrição |
 | --- | --- | --- | --- |
-| 200 | application/json | [ImageOcrResponse](#model-imageocrresponse) | Successful Response |
+| 200 | application/json | [ImageOcrResponse](#model-imageocrresponse) | O texto. Com `output_format=markdown`, o mesmo resultado como `text/markdown; charset=utf-8`. |
+| 200 | text/markdown | string | O texto. Com `output_format=markdown`, o mesmo resultado como `text/markdown; charset=utf-8`. |
 | 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
 
 ### GET /images/capabilities
@@ -4864,6 +4905,7 @@ Esquema JSON completo:
 | `wait` | não | boolean | default=false | false retorna 202 com job_id; true espera pelo resultado. |
 | `tags` | não | string / null |  | Tags separadas por vírgula (ex.: 'cliente-x, reunião'). Viram minúsculas; até 20 tags de até 50 caracteres. Enviar um arquivo repetido adiciona as tags ao job existente. |
 | `purge_source` | não | boolean | default=false | Se true, apaga todas as cópias guardadas da imagem original enviada quando o job termina: `completed`, ou `failed`/`partial`/`cancelled` (as rotas de imagem não têm retry automático). Apaga a cópia local de processamento, o original e a cópia normalizada (prévia em tamanho real) da análise completa/facial no armazenamento, e a imagem embutida no resultado guardado (`image.image_base64` do resultado fica null). O resultado da inferência (descrição, OCR, regiões, rostos, markdown) fica. GET /jobs/{job_id} informa `source_available` e `source_deleted_at`. Padrão false (mantém). Para apagar depois: DELETE /jobs/{job_id}/source. mode=single com wait=true: a resposta ainda ecoa `image_base64` no topo (vem dos bytes desta requisição, não de uma cópia guardada). mode=full: a resposta (wait=true) e o relatório trazem `image.image_base64` null, e `purge_source` não faz parte da Idempotency-Key: repetir a chave com outro purge_source devolve a tentativa existente, sem mudar nada. |
+| `output_format` | não | string | default="json"; enum=["json", "markdown"] | Formato da resposta e padrão de `GET /jobs/{job_id}/result`: `json` (padrão, o corpo de sempre) ou `markdown` (o mesmo resultado renderizado como `text/markdown; charset=utf-8`, sem `image_base64`). Vale para a resposta síncrona de sucesso (200); 202 (enfileirado), 504 e erros continuam JSON. Fica gravado no job: `GET /jobs/{job_id}/result` sem `?format=` usa este formato, e `?format=json` ou `?format=markdown` escolhe na leitura. Não faz parte da Idempotency-Key: repetir a chave com outro `output_format` devolve o mesmo job, apenas renderizado no formato pedido (o padrão gravado no job é o da primeira tentativa). |
 | `project` | não | string / null |  | Nome do projeto (obrigatório, a menos que a API key esteja vinculada a um projeto). É criado se não existir; grafias equivalentes ('Reunião', ' reuniao ') são o mesmo projeto. |
 | `project_id` | não | string / null |  | ID de um projeto existente (alternativa a 'project'; nunca cria). |
 | `folder` | não | string / null |  | Nome da pasta dentro do projeto (opcional; criada se não existir; sem '/'). |
@@ -4994,6 +5036,16 @@ Esquema JSON completo:
       "title": "Purge Source",
       "description": "Se true, apaga todas as cópias guardadas da imagem original enviada quando o job termina: `completed`, ou `failed`/`partial`/`cancelled` (as rotas de imagem não têm retry automático). Apaga a cópia local de processamento, o original e a cópia normalizada (prévia em tamanho real) da análise completa/facial no armazenamento, e a imagem embutida no resultado guardado (`image.image_base64` do resultado fica null). O resultado da inferência (descrição, OCR, regiões, rostos, markdown) fica. GET /jobs/{job_id} informa `source_available` e `source_deleted_at`. Padrão false (mantém). Para apagar depois: DELETE /jobs/{job_id}/source. mode=single com wait=true: a resposta ainda ecoa `image_base64` no topo (vem dos bytes desta requisição, não de uma cópia guardada). mode=full: a resposta (wait=true) e o relatório trazem `image.image_base64` null, e `purge_source` não faz parte da Idempotency-Key: repetir a chave com outro purge_source devolve a tentativa existente, sem mudar nada.",
       "default": false
+    },
+    "output_format": {
+      "type": "string",
+      "enum": [
+        "json",
+        "markdown"
+      ],
+      "title": "Output Format",
+      "description": "Formato da resposta e padrão de `GET /jobs/{job_id}/result`: `json` (padrão, o corpo de sempre) ou `markdown` (o mesmo resultado renderizado como `text/markdown; charset=utf-8`, sem `image_base64`). Vale para a resposta síncrona de sucesso (200); 202 (enfileirado), 504 e erros continuam JSON. Fica gravado no job: `GET /jobs/{job_id}/result` sem `?format=` usa este formato, e `?format=json` ou `?format=markdown` escolhe na leitura. Não faz parte da Idempotency-Key: repetir a chave com outro `output_format` devolve o mesmo job, apenas renderizado no formato pedido (o padrão gravado no job é o da primeira tentativa).",
+      "default": "json"
     },
     "project": {
       "anyOf": [
@@ -5317,6 +5369,7 @@ Esquema JSON completo:
 | `task` | não | string | default="<MORE_DETAILED_CAPTION>" | <MORE_DETAILED_CAPTION>, <DETAILED_CAPTION> ou <CAPTION> |
 | `tags` | não | string / null |  | Tags separadas por vírgula (ex.: 'cliente-x, reunião'). Viram minúsculas; até 20 tags de até 50 caracteres. Enviar um arquivo repetido adiciona as tags ao job existente. |
 | `purge_source` | não | boolean | default=false | Se true, apaga todas as cópias guardadas da imagem original enviada quando o job termina: `completed`, ou `failed`/`partial`/`cancelled` (as rotas de imagem não têm retry automático). Apaga a cópia local de processamento, o original e a cópia normalizada (prévia em tamanho real) da análise completa/facial no armazenamento, e a imagem embutida no resultado guardado (`image.image_base64` do resultado fica null). O resultado da inferência (descrição, OCR, regiões, rostos, markdown) fica. GET /jobs/{job_id} informa `source_available` e `source_deleted_at`. Padrão false (mantém). Para apagar depois: DELETE /jobs/{job_id}/source. A resposta síncrona ainda ecoa `image_base64` no topo: vem dos bytes desta requisição, não de uma cópia guardada. |
+| `output_format` | não | string | default="json"; enum=["json", "markdown"] | Formato da resposta e padrão de `GET /jobs/{job_id}/result`: `json` (padrão, o corpo de sempre) ou `markdown` (o mesmo resultado renderizado como `text/markdown; charset=utf-8`, sem `image_base64`). Vale para a resposta síncrona de sucesso (200); 202 (enfileirado), 504 e erros continuam JSON. Fica gravado no job: `GET /jobs/{job_id}/result` sem `?format=` usa este formato, e `?format=json` ou `?format=markdown` escolhe na leitura. |
 | `project` | não | string / null |  | Nome do projeto (obrigatório, a menos que a API key esteja vinculada a um projeto). É criado se não existir; grafias equivalentes ('Reunião', ' reuniao ') são o mesmo projeto. |
 | `project_id` | não | string / null |  | ID de um projeto existente (alternativa a 'project'; nunca cria). |
 | `folder` | não | string / null |  | Nome da pasta dentro do projeto (opcional; criada se não existir; sem '/'). |
@@ -5356,6 +5409,16 @@ Esquema JSON completo:
       "title": "Purge Source",
       "description": "Se true, apaga todas as cópias guardadas da imagem original enviada quando o job termina: `completed`, ou `failed`/`partial`/`cancelled` (as rotas de imagem não têm retry automático). Apaga a cópia local de processamento, o original e a cópia normalizada (prévia em tamanho real) da análise completa/facial no armazenamento, e a imagem embutida no resultado guardado (`image.image_base64` do resultado fica null). O resultado da inferência (descrição, OCR, regiões, rostos, markdown) fica. GET /jobs/{job_id} informa `source_available` e `source_deleted_at`. Padrão false (mantém). Para apagar depois: DELETE /jobs/{job_id}/source. A resposta síncrona ainda ecoa `image_base64` no topo: vem dos bytes desta requisição, não de uma cópia guardada.",
       "default": false
+    },
+    "output_format": {
+      "type": "string",
+      "enum": [
+        "json",
+        "markdown"
+      ],
+      "title": "Output Format",
+      "description": "Formato da resposta e padrão de `GET /jobs/{job_id}/result`: `json` (padrão, o corpo de sempre) ou `markdown` (o mesmo resultado renderizado como `text/markdown; charset=utf-8`, sem `image_base64`). Vale para a resposta síncrona de sucesso (200); 202 (enfileirado), 504 e erros continuam JSON. Fica gravado no job: `GET /jobs/{job_id}/result` sem `?format=` usa este formato, e `?format=json` ou `?format=markdown` escolhe na leitura.",
+      "default": "json"
     },
     "project": {
       "anyOf": [
@@ -5455,6 +5518,7 @@ Esquema JSON completo:
 | `file` | sim | string (binary) |  | Imagem (PNG, JPEG, WEBP, BMP, GIF, TIFF) |
 | `tags` | não | string / null |  | Tags separadas por vírgula (ex.: 'cliente-x, reunião'). Viram minúsculas; até 20 tags de até 50 caracteres. Enviar um arquivo repetido adiciona as tags ao job existente. |
 | `purge_source` | não | boolean | default=false | Se true, apaga todas as cópias guardadas da imagem original enviada quando o job termina: `completed`, ou `failed`/`partial`/`cancelled` (as rotas de imagem não têm retry automático). Apaga a cópia local de processamento, o original e a cópia normalizada (prévia em tamanho real) da análise completa/facial no armazenamento, e a imagem embutida no resultado guardado (`image.image_base64` do resultado fica null). O resultado da inferência (descrição, OCR, regiões, rostos, markdown) fica. GET /jobs/{job_id} informa `source_available` e `source_deleted_at`. Padrão false (mantém). Para apagar depois: DELETE /jobs/{job_id}/source. A resposta síncrona ainda ecoa `image_base64` no topo: vem dos bytes desta requisição, não de uma cópia guardada. |
+| `output_format` | não | string | default="json"; enum=["json", "markdown"] | Formato da resposta e padrão de `GET /jobs/{job_id}/result`: `json` (padrão, o corpo de sempre) ou `markdown` (o mesmo resultado renderizado como `text/markdown; charset=utf-8`, sem `image_base64`). Vale para a resposta síncrona de sucesso (200); 202 (enfileirado), 504 e erros continuam JSON. Fica gravado no job: `GET /jobs/{job_id}/result` sem `?format=` usa este formato, e `?format=json` ou `?format=markdown` escolhe na leitura. |
 | `project` | não | string / null |  | Nome do projeto (obrigatório, a menos que a API key esteja vinculada a um projeto). É criado se não existir; grafias equivalentes ('Reunião', ' reuniao ') são o mesmo projeto. |
 | `project_id` | não | string / null |  | ID de um projeto existente (alternativa a 'project'; nunca cria). |
 | `folder` | não | string / null |  | Nome da pasta dentro do projeto (opcional; criada se não existir; sem '/'). |
@@ -5488,6 +5552,16 @@ Esquema JSON completo:
       "title": "Purge Source",
       "description": "Se true, apaga todas as cópias guardadas da imagem original enviada quando o job termina: `completed`, ou `failed`/`partial`/`cancelled` (as rotas de imagem não têm retry automático). Apaga a cópia local de processamento, o original e a cópia normalizada (prévia em tamanho real) da análise completa/facial no armazenamento, e a imagem embutida no resultado guardado (`image.image_base64` do resultado fica null). O resultado da inferência (descrição, OCR, regiões, rostos, markdown) fica. GET /jobs/{job_id} informa `source_available` e `source_deleted_at`. Padrão false (mantém). Para apagar depois: DELETE /jobs/{job_id}/source. A resposta síncrona ainda ecoa `image_base64` no topo: vem dos bytes desta requisição, não de uma cópia guardada.",
       "default": false
+    },
+    "output_format": {
+      "type": "string",
+      "enum": [
+        "json",
+        "markdown"
+      ],
+      "title": "Output Format",
+      "description": "Formato da resposta e padrão de `GET /jobs/{job_id}/result`: `json` (padrão, o corpo de sempre) ou `markdown` (o mesmo resultado renderizado como `text/markdown; charset=utf-8`, sem `image_base64`). Vale para a resposta síncrona de sucesso (200); 202 (enfileirado), 504 e erros continuam JSON. Fica gravado no job: `GET /jobs/{job_id}/result` sem `?format=` usa este formato, e `?format=json` ou `?format=markdown` escolhe na leitura.",
+      "default": "json"
     },
     "project": {
       "anyOf": [
@@ -5975,6 +6049,7 @@ Esquema JSON completo:
 | `tags` | não | string / null |  |  |
 | `datalake` | não | string / null |  |  |
 | `purge_source` | não | boolean | default=false | Se true, apaga todas as cópias guardadas da imagem original enviada quando o job termina: `completed`, ou `failed`/`partial`/`cancelled` (as rotas de imagem não têm retry automático). Apaga a cópia local de processamento, o original e a cópia normalizada (prévia em tamanho real) da análise completa/facial no armazenamento, e a imagem embutida no resultado guardado (`image.image_base64` do resultado fica null). O resultado da inferência (descrição, OCR, regiões, rostos, markdown) fica. GET /jobs/{job_id} informa `source_available` e `source_deleted_at`. Padrão false (mantém). Para apagar depois: DELETE /jobs/{job_id}/source. A resposta (wait=true) e o relatório trazem `image.image_base64` null. `purge_source` não faz parte da Idempotency-Key: repetir a chave com outro purge_source devolve a tentativa existente, sem mudar nada. |
+| `output_format` | não | string | default="json"; enum=["json", "markdown"] | Formato da resposta e padrão de `GET /jobs/{job_id}/result`: `json` (padrão, o corpo de sempre) ou `markdown` (o mesmo resultado renderizado como `text/markdown; charset=utf-8`, sem `image_base64`). Vale para a resposta síncrona de sucesso (200); 202 (enfileirado), 504 e erros continuam JSON. Fica gravado no job: `GET /jobs/{job_id}/result` sem `?format=` usa este formato, e `?format=json` ou `?format=markdown` escolhe na leitura. Não faz parte da Idempotency-Key: repetir a chave com outro `output_format` devolve o mesmo job, apenas renderizado no formato pedido (o padrão gravado no job é o da primeira tentativa). |
 
 Esquema JSON completo:
 
@@ -6073,6 +6148,16 @@ Esquema JSON completo:
       "title": "Purge Source",
       "description": "Se true, apaga todas as cópias guardadas da imagem original enviada quando o job termina: `completed`, ou `failed`/`partial`/`cancelled` (as rotas de imagem não têm retry automático). Apaga a cópia local de processamento, o original e a cópia normalizada (prévia em tamanho real) da análise completa/facial no armazenamento, e a imagem embutida no resultado guardado (`image.image_base64` do resultado fica null). O resultado da inferência (descrição, OCR, regiões, rostos, markdown) fica. GET /jobs/{job_id} informa `source_available` e `source_deleted_at`. Padrão false (mantém). Para apagar depois: DELETE /jobs/{job_id}/source. A resposta (wait=true) e o relatório trazem `image.image_base64` null. `purge_source` não faz parte da Idempotency-Key: repetir a chave com outro purge_source devolve a tentativa existente, sem mudar nada.",
       "default": false
+    },
+    "output_format": {
+      "type": "string",
+      "enum": [
+        "json",
+        "markdown"
+      ],
+      "title": "Output Format",
+      "description": "Formato da resposta e padrão de `GET /jobs/{job_id}/result`: `json` (padrão, o corpo de sempre) ou `markdown` (o mesmo resultado renderizado como `text/markdown; charset=utf-8`, sem `image_base64`). Vale para a resposta síncrona de sucesso (200); 202 (enfileirado), 504 e erros continuam JSON. Fica gravado no job: `GET /jobs/{job_id}/result` sem `?format=` usa este formato, e `?format=json` ou `?format=markdown` escolhe na leitura. Não faz parte da Idempotency-Key: repetir a chave com outro `output_format` devolve o mesmo job, apenas renderizado no formato pedido (o padrão gravado no job é o da primeira tentativa).",
+      "default": "json"
     }
   },
   "type": "object",
@@ -8266,6 +8351,7 @@ Esquema JSON completo:
 | `folder` | não | string / null |  | Nome da pasta no projeto (opcional, get-or-add, sem '/'). |
 | `folder_id` | não | string / null |  | ID de uma pasta existente do projeto. |
 | `purge_source` | não | boolean | default=false | Se true, apaga todas as cópias guardadas da imagem original enviada quando o job termina: `completed`, ou `failed`/`partial`/`cancelled` (as rotas de imagem não têm retry automático). Apaga a cópia local de processamento, o original e a cópia normalizada (prévia em tamanho real) da análise completa/facial no armazenamento, e a imagem embutida no resultado guardado (`image.image_base64` do resultado fica null). O resultado da inferência (descrição, OCR, regiões, rostos, markdown) fica. GET /jobs/{job_id} informa `source_available` e `source_deleted_at`. Padrão false (mantém). Para apagar depois: DELETE /jobs/{job_id}/source. A resposta (wait=true) e o relatório trazem `image.image_base64` null. `purge_source` não faz parte da Idempotency-Key: repetir a chave com outro purge_source devolve a tentativa existente, sem mudar nada. |
+| `output_format` | não | string | default="json"; enum=["json", "markdown"] | Formato da resposta e padrão de `GET /jobs/{job_id}/result`: `json` (padrão, o corpo de sempre) ou `markdown` (o mesmo resultado renderizado como `text/markdown; charset=utf-8`, sem `image_base64`). Vale para a resposta síncrona de sucesso (200); 202 (enfileirado), 504 e erros continuam JSON. Fica gravado no job: `GET /jobs/{job_id}/result` sem `?format=` usa este formato, e `?format=json` ou `?format=markdown` escolhe na leitura. Não faz parte da Idempotency-Key: repetir a chave com outro `output_format` devolve o mesmo job, apenas renderizado no formato pedido (o padrão gravado no job é o da primeira tentativa). |
 | `face_options` | não | [FaceRequestOptions](#model-facerequestoptions) |  |  |
 | `wait` | não | boolean | default=false |  |
 | `datalake` | não | [Destination](#model-destination) / null |  |  |
@@ -8360,6 +8446,16 @@ Esquema JSON completo:
       "title": "Purge Source",
       "description": "Se true, apaga todas as cópias guardadas da imagem original enviada quando o job termina: `completed`, ou `failed`/`partial`/`cancelled` (as rotas de imagem não têm retry automático). Apaga a cópia local de processamento, o original e a cópia normalizada (prévia em tamanho real) da análise completa/facial no armazenamento, e a imagem embutida no resultado guardado (`image.image_base64` do resultado fica null). O resultado da inferência (descrição, OCR, regiões, rostos, markdown) fica. GET /jobs/{job_id} informa `source_available` e `source_deleted_at`. Padrão false (mantém). Para apagar depois: DELETE /jobs/{job_id}/source. A resposta (wait=true) e o relatório trazem `image.image_base64` null. `purge_source` não faz parte da Idempotency-Key: repetir a chave com outro purge_source devolve a tentativa existente, sem mudar nada.",
       "default": false
+    },
+    "output_format": {
+      "type": "string",
+      "enum": [
+        "json",
+        "markdown"
+      ],
+      "title": "Output Format",
+      "description": "Formato da resposta e padrão de `GET /jobs/{job_id}/result`: `json` (padrão, o corpo de sempre) ou `markdown` (o mesmo resultado renderizado como `text/markdown; charset=utf-8`, sem `image_base64`). Vale para a resposta síncrona de sucesso (200); 202 (enfileirado), 504 e erros continuam JSON. Fica gravado no job: `GET /jobs/{job_id}/result` sem `?format=` usa este formato, e `?format=json` ou `?format=markdown` escolhe na leitura. Não faz parte da Idempotency-Key: repetir a chave com outro `output_format` devolve o mesmo job, apenas renderizado no formato pedido (o padrão gravado no job é o da primeira tentativa).",
+      "default": "json"
     },
     "face_options": {
       "$ref": "#/components/schemas/FaceRequestOptions"
@@ -9655,6 +9751,7 @@ Esquema JSON completo:
 | `folder` | não | string / null |  | Nome da pasta no projeto (opcional, get-or-add, sem '/'). |
 | `folder_id` | não | string / null |  | ID de uma pasta existente do projeto. |
 | `purge_source` | não | boolean | default=false | Se true, apaga todas as cópias guardadas da imagem original enviada quando o job termina: `completed`, ou `failed`/`partial`/`cancelled` (as rotas de imagem não têm retry automático). Apaga a cópia local de processamento, o original e a cópia normalizada (prévia em tamanho real) da análise completa/facial no armazenamento, e a imagem embutida no resultado guardado (`image.image_base64` do resultado fica null). O resultado da inferência (descrição, OCR, regiões, rostos, markdown) fica. GET /jobs/{job_id} informa `source_available` e `source_deleted_at`. Padrão false (mantém). Para apagar depois: DELETE /jobs/{job_id}/source. mode=single com wait=true: a resposta ainda ecoa `image_base64` no topo (vem dos bytes desta requisição, não de uma cópia guardada). mode=full: a resposta (wait=true) e o relatório trazem `image.image_base64` null, e `purge_source` não faz parte da Idempotency-Key: repetir a chave com outro purge_source devolve a tentativa existente, sem mudar nada. |
+| `output_format` | não | string | default="json"; enum=["json", "markdown"] | Formato da resposta e padrão de `GET /jobs/{job_id}/result`: `json` (padrão, o corpo de sempre) ou `markdown` (o mesmo resultado renderizado como `text/markdown; charset=utf-8`, sem `image_base64`). Vale para a resposta síncrona de sucesso (200); 202 (enfileirado), 504 e erros continuam JSON. Fica gravado no job: `GET /jobs/{job_id}/result` sem `?format=` usa este formato, e `?format=json` ou `?format=markdown` escolhe na leitura. |
 | `mode` | não | string | default="single"; const="single" |  |
 | `wait` | não | boolean | default=false | false cria um job e retorna 202; true espera pelo resultado (sujeito ao timeout de visão). |
 
@@ -9897,6 +9994,16 @@ Esquema JSON completo:
       "description": "Se true, apaga todas as cópias guardadas da imagem original enviada quando o job termina: `completed`, ou `failed`/`partial`/`cancelled` (as rotas de imagem não têm retry automático). Apaga a cópia local de processamento, o original e a cópia normalizada (prévia em tamanho real) da análise completa/facial no armazenamento, e a imagem embutida no resultado guardado (`image.image_base64` do resultado fica null). O resultado da inferência (descrição, OCR, regiões, rostos, markdown) fica. GET /jobs/{job_id} informa `source_available` e `source_deleted_at`. Padrão false (mantém). Para apagar depois: DELETE /jobs/{job_id}/source. mode=single com wait=true: a resposta ainda ecoa `image_base64` no topo (vem dos bytes desta requisição, não de uma cópia guardada). mode=full: a resposta (wait=true) e o relatório trazem `image.image_base64` null, e `purge_source` não faz parte da Idempotency-Key: repetir a chave com outro purge_source devolve a tentativa existente, sem mudar nada.",
       "default": false
     },
+    "output_format": {
+      "type": "string",
+      "enum": [
+        "json",
+        "markdown"
+      ],
+      "title": "Output Format",
+      "description": "Formato da resposta e padrão de `GET /jobs/{job_id}/result`: `json` (padrão, o corpo de sempre) ou `markdown` (o mesmo resultado renderizado como `text/markdown; charset=utf-8`, sem `image_base64`). Vale para a resposta síncrona de sucesso (200); 202 (enfileirado), 504 e erros continuam JSON. Fica gravado no job: `GET /jobs/{job_id}/result` sem `?format=` usa este formato, e `?format=json` ou `?format=markdown` escolhe na leitura.",
+      "default": "json"
+    },
     "mode": {
       "type": "string",
       "const": "single",
@@ -10094,6 +10201,7 @@ Corpo JSON de `POST /images/describe`.
 | `folder` | não | string / null |  | Nome da pasta no projeto (opcional, get-or-add, sem '/'). |
 | `folder_id` | não | string / null |  | ID de uma pasta existente do projeto. |
 | `purge_source` | não | boolean | default=false | Se true, apaga todas as cópias guardadas da imagem original enviada quando o job termina: `completed`, ou `failed`/`partial`/`cancelled` (as rotas de imagem não têm retry automático). Apaga a cópia local de processamento, o original e a cópia normalizada (prévia em tamanho real) da análise completa/facial no armazenamento, e a imagem embutida no resultado guardado (`image.image_base64` do resultado fica null). O resultado da inferência (descrição, OCR, regiões, rostos, markdown) fica. GET /jobs/{job_id} informa `source_available` e `source_deleted_at`. Padrão false (mantém). Para apagar depois: DELETE /jobs/{job_id}/source. A resposta síncrona ainda ecoa `image_base64` no topo: vem dos bytes desta requisição, não de uma cópia guardada. |
+| `output_format` | não | string | default="json"; enum=["json", "markdown"] | Formato da resposta e padrão de `GET /jobs/{job_id}/result`: `json` (padrão, o corpo de sempre) ou `markdown` (o mesmo resultado renderizado como `text/markdown; charset=utf-8`, sem `image_base64`). Vale para a resposta síncrona de sucesso (200); 202 (enfileirado), 504 e erros continuam JSON. Fica gravado no job: `GET /jobs/{job_id}/result` sem `?format=` usa este formato, e `?format=json` ou `?format=markdown` escolhe na leitura. |
 | `task` | não | string | default="<MORE_DETAILED_CAPTION>"; enum=["<MORE_DETAILED_CAPTION>", "<DETAILED_CAPTION>", "<CAPTION>"] | Prompt de caption do Florence-2. |
 
 Esquema JSON completo:
@@ -10186,6 +10294,16 @@ Esquema JSON completo:
       "title": "Purge Source",
       "description": "Se true, apaga todas as cópias guardadas da imagem original enviada quando o job termina: `completed`, ou `failed`/`partial`/`cancelled` (as rotas de imagem não têm retry automático). Apaga a cópia local de processamento, o original e a cópia normalizada (prévia em tamanho real) da análise completa/facial no armazenamento, e a imagem embutida no resultado guardado (`image.image_base64` do resultado fica null). O resultado da inferência (descrição, OCR, regiões, rostos, markdown) fica. GET /jobs/{job_id} informa `source_available` e `source_deleted_at`. Padrão false (mantém). Para apagar depois: DELETE /jobs/{job_id}/source. A resposta síncrona ainda ecoa `image_base64` no topo: vem dos bytes desta requisição, não de uma cópia guardada.",
       "default": false
+    },
+    "output_format": {
+      "type": "string",
+      "enum": [
+        "json",
+        "markdown"
+      ],
+      "title": "Output Format",
+      "description": "Formato da resposta e padrão de `GET /jobs/{job_id}/result`: `json` (padrão, o corpo de sempre) ou `markdown` (o mesmo resultado renderizado como `text/markdown; charset=utf-8`, sem `image_base64`). Vale para a resposta síncrona de sucesso (200); 202 (enfileirado), 504 e erros continuam JSON. Fica gravado no job: `GET /jobs/{job_id}/result` sem `?format=` usa este formato, e `?format=json` ou `?format=markdown` escolhe na leitura.",
+      "default": "json"
     },
     "task": {
       "type": "string",
@@ -10538,6 +10656,7 @@ Esquema JSON completo:
 | `folder` | não | string / null |  | Nome da pasta no projeto (opcional, get-or-add, sem '/'). |
 | `folder_id` | não | string / null |  | ID de uma pasta existente do projeto. |
 | `purge_source` | não | boolean | default=false | Se true, apaga todas as cópias guardadas da imagem original enviada quando o job termina: `completed`, ou `failed`/`partial`/`cancelled` (as rotas de imagem não têm retry automático). Apaga a cópia local de processamento, o original e a cópia normalizada (prévia em tamanho real) da análise completa/facial no armazenamento, e a imagem embutida no resultado guardado (`image.image_base64` do resultado fica null). O resultado da inferência (descrição, OCR, regiões, rostos, markdown) fica. GET /jobs/{job_id} informa `source_available` e `source_deleted_at`. Padrão false (mantém). Para apagar depois: DELETE /jobs/{job_id}/source. mode=single com wait=true: a resposta ainda ecoa `image_base64` no topo (vem dos bytes desta requisição, não de uma cópia guardada). mode=full: a resposta (wait=true) e o relatório trazem `image.image_base64` null, e `purge_source` não faz parte da Idempotency-Key: repetir a chave com outro purge_source devolve a tentativa existente, sem mudar nada. |
+| `output_format` | não | string | default="json"; enum=["json", "markdown"] | Formato da resposta e padrão de `GET /jobs/{job_id}/result`: `json` (padrão, o corpo de sempre) ou `markdown` (o mesmo resultado renderizado como `text/markdown; charset=utf-8`, sem `image_base64`). Vale para a resposta síncrona de sucesso (200); 202 (enfileirado), 504 e erros continuam JSON. Fica gravado no job: `GET /jobs/{job_id}/result` sem `?format=` usa este formato, e `?format=json` ou `?format=markdown` escolhe na leitura. Não faz parte da Idempotency-Key: repetir a chave com outro `output_format` devolve o mesmo job, apenas renderizado no formato pedido (o padrão gravado no job é o da primeira tentativa). |
 | `mode` | sim | string | const="full" |  |
 | `full_options` | não | [ImageFullOptions](#model-imagefulloptions) |  |  |
 | `wait` | não | boolean | default=false |  |
@@ -10633,6 +10752,16 @@ Esquema JSON completo:
       "title": "Purge Source",
       "description": "Se true, apaga todas as cópias guardadas da imagem original enviada quando o job termina: `completed`, ou `failed`/`partial`/`cancelled` (as rotas de imagem não têm retry automático). Apaga a cópia local de processamento, o original e a cópia normalizada (prévia em tamanho real) da análise completa/facial no armazenamento, e a imagem embutida no resultado guardado (`image.image_base64` do resultado fica null). O resultado da inferência (descrição, OCR, regiões, rostos, markdown) fica. GET /jobs/{job_id} informa `source_available` e `source_deleted_at`. Padrão false (mantém). Para apagar depois: DELETE /jobs/{job_id}/source. mode=single com wait=true: a resposta ainda ecoa `image_base64` no topo (vem dos bytes desta requisição, não de uma cópia guardada). mode=full: a resposta (wait=true) e o relatório trazem `image.image_base64` null, e `purge_source` não faz parte da Idempotency-Key: repetir a chave com outro purge_source devolve a tentativa existente, sem mudar nada.",
       "default": false
+    },
+    "output_format": {
+      "type": "string",
+      "enum": [
+        "json",
+        "markdown"
+      ],
+      "title": "Output Format",
+      "description": "Formato da resposta e padrão de `GET /jobs/{job_id}/result`: `json` (padrão, o corpo de sempre) ou `markdown` (o mesmo resultado renderizado como `text/markdown; charset=utf-8`, sem `image_base64`). Vale para a resposta síncrona de sucesso (200); 202 (enfileirado), 504 e erros continuam JSON. Fica gravado no job: `GET /jobs/{job_id}/result` sem `?format=` usa este formato, e `?format=json` ou `?format=markdown` escolhe na leitura. Não faz parte da Idempotency-Key: repetir a chave com outro `output_format` devolve o mesmo job, apenas renderizado no formato pedido (o padrão gravado no job é o da primeira tentativa).",
+      "default": "json"
     },
     "mode": {
       "type": "string",
@@ -11494,6 +11623,7 @@ chamador.
 | `folder` | não | string / null |  | Nome da pasta no projeto (opcional, get-or-add, sem '/'). |
 | `folder_id` | não | string / null |  | ID de uma pasta existente do projeto. |
 | `purge_source` | não | boolean | default=false | Se true, apaga todas as cópias guardadas da imagem original enviada quando o job termina: `completed`, ou `failed`/`partial`/`cancelled` (as rotas de imagem não têm retry automático). Apaga a cópia local de processamento, o original e a cópia normalizada (prévia em tamanho real) da análise completa/facial no armazenamento, e a imagem embutida no resultado guardado (`image.image_base64` do resultado fica null). O resultado da inferência (descrição, OCR, regiões, rostos, markdown) fica. GET /jobs/{job_id} informa `source_available` e `source_deleted_at`. Padrão false (mantém). Para apagar depois: DELETE /jobs/{job_id}/source. A resposta síncrona ainda ecoa `image_base64` no topo: vem dos bytes desta requisição, não de uma cópia guardada. |
+| `output_format` | não | string | default="json"; enum=["json", "markdown"] | Formato da resposta e padrão de `GET /jobs/{job_id}/result`: `json` (padrão, o corpo de sempre) ou `markdown` (o mesmo resultado renderizado como `text/markdown; charset=utf-8`, sem `image_base64`). Vale para a resposta síncrona de sucesso (200); 202 (enfileirado), 504 e erros continuam JSON. Fica gravado no job: `GET /jobs/{job_id}/result` sem `?format=` usa este formato, e `?format=json` ou `?format=markdown` escolhe na leitura. |
 
 Esquema JSON completo:
 
@@ -11585,6 +11715,16 @@ Esquema JSON completo:
       "title": "Purge Source",
       "description": "Se true, apaga todas as cópias guardadas da imagem original enviada quando o job termina: `completed`, ou `failed`/`partial`/`cancelled` (as rotas de imagem não têm retry automático). Apaga a cópia local de processamento, o original e a cópia normalizada (prévia em tamanho real) da análise completa/facial no armazenamento, e a imagem embutida no resultado guardado (`image.image_base64` do resultado fica null). O resultado da inferência (descrição, OCR, regiões, rostos, markdown) fica. GET /jobs/{job_id} informa `source_available` e `source_deleted_at`. Padrão false (mantém). Para apagar depois: DELETE /jobs/{job_id}/source. A resposta síncrona ainda ecoa `image_base64` no topo: vem dos bytes desta requisição, não de uma cópia guardada.",
       "default": false
+    },
+    "output_format": {
+      "type": "string",
+      "enum": [
+        "json",
+        "markdown"
+      ],
+      "title": "Output Format",
+      "description": "Formato da resposta e padrão de `GET /jobs/{job_id}/result`: `json` (padrão, o corpo de sempre) ou `markdown` (o mesmo resultado renderizado como `text/markdown; charset=utf-8`, sem `image_base64`). Vale para a resposta síncrona de sucesso (200); 202 (enfileirado), 504 e erros continuam JSON. Fica gravado no job: `GET /jobs/{job_id}/result` sem `?format=` usa este formato, e `?format=json` ou `?format=markdown` escolhe na leitura.",
+      "default": "json"
     }
   },
   "type": "object",

@@ -124,6 +124,24 @@ export function ImagesGuide({ lang }: { lang: DocsLang }) {
           2,
         ),
       )}
+      <Subheading>{t.markdownTitle}</Subheading>
+      <P small>{t.markdown}</P>
+      {block(
+        curl("/images/ocr/upload", [
+          '  -F "file=@receipt.png"',
+          `  -F "project=${project}"`,
+          '  -F "output_format=markdown"',
+        ]),
+      )}
+      {block(
+        [
+          `curl "${API_URL}/jobs/JOB_ID/result?format=markdown" \\`,
+          `  -H "X-API-Key: ${key}"`,
+        ].join("\n"),
+      )}
+      {block(
+        "# Texto da imagem\n\nTOTAL 42.00  \nTHANK YOU\n\n## Metadados\n\n- Arquivo: receipt.png\n- Dimensões: 640 × 480 px\n- Modelo: `florence-community/Florence-2-base-ft` (revisão `0b03b6f`)\n- Tarefa: Extrair texto com regiões (`<OCR_WITH_REGION>`)\n- Job: `JOB_ID`\n",
+      )}
       <Subheading>{t.timeoutTitle}</Subheading>
       <P>{t.timeout}</P>
       {block(

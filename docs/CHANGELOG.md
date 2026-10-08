@@ -2,6 +2,38 @@
 
 > **Registro histórico (2025-10).** Não é mantido; para mudanças posteriores use `git log`. Observação: `workers/tasks_old.py`, citado abaixo, não existe (há um `workers/tasks.py.backup`). Exceção: mudanças de comportamento intencionais que uma spec manda registrar aqui entram na seção abaixo.
 
+## 2026-10: Saída em Markdown nas rotas de imagem (API 1.4.0)
+
+- As oito rotas de imagem (`/images/describe`, `/images/ocr`, `/images/analyze`,
+  `/images/faces` e as variantes `/upload`) aceitam `output_format`: `json` (padrão, o
+  corpo de sempre, byte a byte) ou `markdown`. Com `markdown`, a resposta síncrona de
+  sucesso (200) é `text/markdown; charset=utf-8`; 202 (enfileirado), 504 e erros
+  continuam JSON. Valor fora de `json|markdown` responde 422.
+- O formato fica gravado no job (`configuration.options.output_format`, só quando
+  `markdown`) e é o padrão de `GET /jobs/{job_id}/result`; `?format=json` ou
+  `?format=markdown` escolhem na leitura. Em full/faces, `?format=json` continua sendo o
+  relatório sem envelope. Formatos de transcrição num job de imagem respondem 422
+  `IMAGE_RESULT_FORMAT_UNSUPPORTED`; formato desconhecido, `RESULT_FORMAT_INVALID`.
+- `output_format` não entra na Idempotency-Key de full/faces: repetir a chave com outro
+  formato devolve o mesmo job, apenas renderizado no formato pedido.
+- Renderização em `backend/shared/vision_markdown.py` (determinística; o texto do modelo
+  é escapado e nunca abre HTML nem estrutura Markdown; nunca inclui `image_base64`).
+- Interface: o job de imagem tem "Download Markdown" / "Download JSON" com o resultado
+  servido pela API.
+- **Mudança de comportamento: `?format=markdown` em jobs de imagem.** Até a API 1.3.0,
+  `GET /jobs/{job_id}/result?format=markdown` de um job de imagem (describe, ocr, analyze,
+  full, faces) devolvia o envelope JSON padrão; agora devolve o Markdown renderizado
+  (`text/markdown; charset=utf-8`). Afeta clientes que mandavam `?format=markdown` a jobs
+  de imagem e liam a resposta como JSON (a interface web fazia isso e foi ajustada).
+  Migração: use `?format=json` (em describe/ocr/analyze, o mesmo envelope; em full/faces,
+  o relatório sem envelope, como antes) ou omita `?format=` num job criado sem
+  `output_format=markdown` para receber o envelope padrão. Transcrições e documentos não
+  mudam.
+- **Mudança de comportamento: `?format=` inválido.** Um formato desconhecido em
+  `GET /jobs/{job_id}/result` (qualquer tipo de job) responde 422 com o objeto do catálogo
+  de erros (`detail: {code: "RESULT_FORMAT_INVALID", message, next_steps}`) em vez de uma
+  string em `detail`. Clientes que liam `detail` como texto devem ler `detail.message`.
+
 ## 2026-10: Descrição e OCR das figuras no Markdown (API 1.3.0)
 
 - `POST /upload` e `POST /convert` aceitam `describe_images` e `ocr_images` (padrão

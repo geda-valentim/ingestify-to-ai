@@ -72,8 +72,11 @@ from shared.schemas import (
     JobCreatedResponse,
     DEFAULT_VISION_CAPTION_TASK,
     VISION_CAPTION_TASKS,
+    IMAGE_OUTPUT_FORMAT_DESCRIPTION,
+    IMAGE_OUTPUT_FORMAT_IDEMPOTENCY,
     ImageDescribeRequest,
     ImageDescribeResponse,
+    ImageOutputFormat,
     ImageOcrRequest,
     ImageOcrResponse,
     OcrLine,
@@ -81,7 +84,8 @@ from shared.schemas import (
     VisionModelInfo,
 )
 from shared.vision_capabilities import VisionTask
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, Response
+from shared import vision_markdown
 from shared.tags import set_job_tags
 from shared.utils import calculate_file_checksum
 from api.tag_routes import TAGS_FORM_DESCRIPTION, parse_tags_or_422
@@ -136,6 +140,19 @@ NO_VISION_WORKER_REASON = (
 POLL_INTERVAL_SECONDS = 0.25
 
 SUPPORTED_IMAGE_FORMATS = "PNG, JPEG, WEBP, BMP, GIF, TIFF"
+
+
+def markdown_response(markdown: str) -> Response:
+    """A successful result rendered as Markdown (`output_format=markdown`)."""
+    return Response(content=markdown, status_code=200, media_type=vision_markdown.RESPONSE_MEDIA_TYPE)
+
+
+def markdown_responses(description: str = "Sucesso") -> Dict[Any, Any]:
+    """OpenAPI: the 200 of an image route is JSON (padrão) or Markdown (`output_format=markdown`)."""
+    return {200: {"description": description + ". Com `output_format=markdown`, o mesmo resultado "
+                  "como `text/markdown; charset=utf-8`.",
+                  "content": {"text/markdown": {"schema": {"type": "string"},
+                                                "example": "# Descrição da imagem\n\nA red car parked on a street.\n"}}}}
 
 
 # ============================================
@@ -355,6 +372,7 @@ def _create_vision_job(
     location: Optional[UploadLocation] = None,
     configuration: Optional[dict] = None,
     purge_source: bool = False,
+    output_format: str = "json",
 ) -> Job:
     """
     Cria o job antes do despacho, exatamente como `/transcribe`.
@@ -392,6 +410,9 @@ def _create_vision_job(
             # writes the result without the image and the purge runs when it settles
             from shared.job_source import save_purge_option
             save_purge_option(db, db_job)
+        # The default of GET /jobs/{id}/result (only `markdown` is written)
+        from shared.job_source import save_output_format_option
+        save_output_format_option(db, db_job, output_format)
         set_job_tags(db_job, tags or [])
         db.commit()
     except Exception as e:
@@ -574,6 +595,7 @@ async def _run_vision(
     options: Optional[dict] = None,
     wait: bool = True,
     purge_source: bool = False,
+    output_format: str = "json",
 ) -> Dict[str, Any]:
     """
     Valida, cria o job, despacha e espera — para os quatro pontos de entrada.
@@ -604,6 +626,7 @@ async def _run_vision(
         location=location,
         configuration=options if kind == 'analyze' else {'task': task or (DEFAULT_VISION_CAPTION_TASK if kind == 'describe' else '<OCR_WITH_REGION>')},
         purge_source=purge_source,
+        output_format=output_format,
     )
 
     logger.info(
@@ -735,6 +758,7 @@ async def _run_vision(
         "project": project_info,
         "folder": folder_info,
         "_payload": payload,
+        "_filename": safe_name,
     }
 
 
@@ -743,19 +767,30 @@ def _json_location(body) -> LocationFields:
                           folder=body.folder, folder_id=body.folder_id)
 
 
-def _describe_response(common: Dict[str, Any], requested_task: str) -> ImageDescribeResponse:
+def _rendered(response, operation: str, filename: Optional[str], output_format: str):
+    """The JSON model as built today, or that same data rendered as Markdown."""
+    if output_format != "markdown":
+        return response
+    return markdown_response(vision_markdown.render_image(
+        response.model_dump(mode="json"), operation=operation, job_id=response.job_id, filename=filename))
+
+
+def _describe_response(common: Dict[str, Any], requested_task: str, output_format: str = "json"):
     payload = common.pop("_payload")
-    return ImageDescribeResponse(
+    filename = common.pop("_filename", None)
+    response = ImageDescribeResponse(
         description=payload["description"],
         task=payload.get("task", requested_task),
         **common,
     )
+    return _rendered(response, "describe", filename, output_format)
 
 
-def _ocr_response(common: Dict[str, Any]) -> ImageOcrResponse:
+def _ocr_response(common: Dict[str, Any], output_format: str = "json"):
     payload = common.pop("_payload")
+    filename = common.pop("_filename", None)
     lines = [OcrLine(**line) for line in payload.get("lines", [])]
-    return ImageOcrResponse(text=payload["text"], lines=lines, **common)
+    return _rendered(ImageOcrResponse(text=payload["text"], lines=lines, **common), "ocr", filename, output_format)
 
 
 # ============================================
@@ -765,6 +800,7 @@ def _ocr_response(common: Dict[str, Any]) -> ImageOcrResponse:
 @router.post(
     "/describe",
     response_model=ImageDescribeResponse,
+    responses=markdown_responses("A descrição"),
     summary="Descrever imagem (JSON base64)",
 )
 async def describe_image(
@@ -783,10 +819,16 @@ async def describe_image(
     - `task`: `<MORE_DETAILED_CAPTION>` (padrão), `<DETAILED_CAPTION>` ou `<CAPTION>`
     - `project` / `project_id` (obrigatório, salvo API key vinculada a um projeto),
       `folder` / `folder_id` (opcional): onde o job fica
+    - `output_format`: `json` (padrão) ou `markdown`
 
     ## Retorno
     A descrição, os metadados da imagem e o eco de `image_base64` — os bytes
     exatos que você enviou, re-codificados, nunca uma re-compressão.
+
+    Com `output_format=markdown`: `text/markdown; charset=utf-8` com
+    `# Descrição da imagem`, a descrição e uma lista de metadados (arquivo,
+    dimensões, modelo, tarefa, job). O formato fica gravado no job e é o padrão
+    de `GET /jobs/{job_id}/result`.
 
     ## Timeout
     Se a inferência passar de `VISION_REQUEST_TIMEOUT_SECONDS`, a resposta é
@@ -809,20 +851,24 @@ async def describe_image(
         plan=plan,
         path=http_request.url.path,
         purge_source=request.purge_source,
+        output_format=request.output_format,
     )
-    return _describe_response(common, request.task)
+    return _describe_response(common, request.task, request.output_format)
 
 
-def _analyze_response(common: Dict[str, Any], wait: bool):
+def _analyze_response(common: Dict[str, Any], wait: bool, output_format: str = "json"):
     if not wait:
         return JSONResponse(status_code=202, content=JobCreatedResponse(**common).model_dump(mode="json"))
     payload = common.pop("_payload")
-    return ImageAnalyzeResponse(task=payload["task"], text=payload["text"],
+    filename = common.pop("_filename", None)
+    response = ImageAnalyzeResponse(task=payload["task"], text=payload["text"],
         output=payload["output"], regions=payload["regions"], request=payload["request"], **common)
+    return _rendered(response, "analyze", filename, output_format)
 
 
 @router.post("/analyze", response_model=ImageAnalyzeResponse | ImageFullAnalyzeResponse | ImageFullQueuedResponse | JobCreatedResponse,
-             responses={202: {"model": ImageFullQueuedResponse | JobCreatedResponse}}, summary="Executar tarefa de visão (JSON base64)")
+             responses={**markdown_responses("Resultado (wait=true)"), 202: {"model": ImageFullQueuedResponse | JobCreatedResponse}},
+             summary="Executar tarefa de visão (JSON base64)")
 async def analyze_image(request: ImageFullAnalyzeRequest | ImageAnalyzeRequest, http_request: Request,
                         idempotency_key: Optional[str] = Header(None, max_length=128, description="Obrigatória somente em mode=full; repetir mesma solicitação devolve o mesmo job."),
                         current_user: User = Depends(require("images.analyze")), db: Session = Depends(get_db)):
@@ -843,6 +889,12 @@ async def analyze_image(request: ImageFullAnalyzeRequest | ImageAnalyzeRequest, 
     Full rejeita task/text_input/region/generation na raiz. datalake opcional
     recebe Destination com partitioning/partition_values. Resultado full possui
     coverage/results/resolved_inputs e pode terminar partial/failed/cancelled.
+
+    output_format=markdown (com wait=true) devolve o resultado como
+    text/markdown: a tarefa e o texto, com tabela de regiões quando houver; em
+    mode=full, descrição, OCR, detecções, rostos (v2) e o estado de cada tarefa.
+    O formato fica gravado no job (padrão de /jobs/{job_id}/result); 202, 504 e
+    erros continuam JSON. Não entra na Idempotency-Key.
     """
     _require_vision_enabled()
     if isinstance(request, ImageFullAnalyzeRequest):
@@ -857,12 +909,13 @@ async def analyze_image(request: ImageFullAnalyzeRequest | ImageAnalyzeRequest, 
     common = await _run_vision(kind="analyze", image_bytes=_decode_base64_image(request.image_base64),
         filename=request.filename, task=request.task, current_user=current_user, db=db, tags=tags,
         plan=plan, path=http_request.url.path, options=options.model_dump(), wait=request.wait,
-        purge_source=request.purge_source)
-    return _analyze_response(common, request.wait)
+        purge_source=request.purge_source, output_format=request.output_format)
+    return _analyze_response(common, request.wait, request.output_format)
 
 
 @router.post("/analyze/upload", response_model=ImageAnalyzeResponse | ImageFullAnalyzeResponse | ImageFullQueuedResponse | JobCreatedResponse,
-             responses={202: {"model": ImageFullQueuedResponse | JobCreatedResponse}}, summary="Executar tarefa de visão (multipart)")
+             responses={**markdown_responses("Resultado (wait=true)"), 202: {"model": ImageFullQueuedResponse | JobCreatedResponse}},
+             summary="Executar tarefa de visão (multipart)")
 async def analyze_image_upload(
     mode: Literal["single", "full"] = Form("single"),
     idempotency_key: Optional[str] = Header(None, max_length=128, description="Obrigatória somente em mode=full (1..128 caracteres)."),
@@ -876,6 +929,7 @@ async def analyze_image_upload(
     wait: bool = Form(False, description="false retorna 202 com job_id; true espera pelo resultado."),
     tags: Optional[str] = Form(None, description=TAGS_FORM_DESCRIPTION),
     purge_source: bool = Form(False, description=IMAGE_ANALYZE_PURGE_SOURCE_DESCRIPTION),
+    output_format: ImageOutputFormat = Form("json", description=IMAGE_OUTPUT_FORMAT_DESCRIPTION + IMAGE_OUTPUT_FORMAT_IDEMPOTENCY),
     http_request: Request = None,
     location: LocationFields = Depends(upload_location_form),
     current_user: User = Depends(require("images.analyze")), db: Session = Depends(get_db),
@@ -897,13 +951,14 @@ async def analyze_image_upload(
     if mode == 'full':
         from api.image_full_routes import run_full
         fields = await http_request.form()
-        allowed = {'file', 'mode', 'full_options', 'datalake', 'wait', 'tags', 'purge_source', 'project', 'project_id', 'folder', 'folder_id'}
+        allowed = {'file', 'mode', 'full_options', 'datalake', 'wait', 'tags', 'purge_source', 'output_format', 'project', 'project_id', 'folder', 'folder_id'}
         if set(fields) - allowed:
             raise _error(422, 'INVALID_VISION_OPTIONS', 'Campos incompatíveis com mode=full: ' + ', '.join(sorted(set(fields)-allowed)))
         try:
             full = ImageFullAnalyzeRequest(mode='full', image_base64='multipart', filename=file.filename,
                 full_options=json.loads(full_options) if full_options else {},
                 datalake=json.loads(datalake) if datalake else None, wait=wait, purge_source=purge_source,
+                output_format=output_format,
                 **{key: getattr(location, key) for key in ("project", "project_id", "folder", "folder_id")})
         except (ValueError, TypeError) as exc:
             raise _error(422, 'INVALID_VISION_OPTIONS', str(exc)) from exc
@@ -924,13 +979,14 @@ async def analyze_image_upload(
     common = await _run_vision(kind="analyze", image_bytes=image_bytes, filename=file.filename,
         task=options.task, current_user=current_user, db=db, tags=tag_list,
         plan=plan, path=http_request.url.path, options=options.model_dump(), wait=wait,
-        purge_source=purge_source)
-    return _analyze_response(common, wait)
+        purge_source=purge_source, output_format=output_format)
+    return _analyze_response(common, wait, output_format)
 
 
 @router.post(
     "/describe/upload",
     response_model=ImageDescribeResponse,
+    responses=markdown_responses("A descrição"),
     summary="Descrever imagem (multipart)",
 )
 async def describe_image_upload(
@@ -941,6 +997,7 @@ async def describe_image_upload(
     ),
     tags: Optional[str] = Form(None, description=TAGS_FORM_DESCRIPTION),
     purge_source: bool = Form(False, description=IMAGE_PURGE_SOURCE_DESCRIPTION),
+    output_format: ImageOutputFormat = Form("json", description=IMAGE_OUTPUT_FORMAT_DESCRIPTION),
     http_request: Request = None,
     location: LocationFields = Depends(upload_location_form),
     current_user: User = Depends(require("images.analyze")),
@@ -980,11 +1037,13 @@ async def describe_image_upload(
         plan=plan,
         path=http_request.url.path if http_request is not None else "",
         purge_source=purge_source,
+        output_format=output_format,
     )
-    return _describe_response(common, task)
+    return _describe_response(common, task, output_format)
 
 
-@router.post("/ocr", response_model=ImageOcrResponse, summary="OCR de imagem (JSON base64)")
+@router.post("/ocr", response_model=ImageOcrResponse, responses=markdown_responses("O texto"),
+             summary="OCR de imagem (JSON base64)")
 async def ocr_image(
     request: ImageOcrRequest,
     http_request: Request,
@@ -1000,6 +1059,10 @@ async def ocr_image(
 
     Uma imagem sem texto detectável é 200 com `text: ""` e `lines: []` — nunca
     um 4xx.
+
+    Com `output_format=markdown`: `text/markdown; charset=utf-8` com
+    `# Texto da imagem` e uma linha por linha detectada ("Nenhum texto
+    detectado." quando vazio), seguido dos metadados.
     """
     _require_vision_enabled()
 
@@ -1017,15 +1080,18 @@ async def ocr_image(
         plan=plan,
         path=http_request.url.path,
         purge_source=request.purge_source,
+        output_format=request.output_format,
     )
-    return _ocr_response(common)
+    return _ocr_response(common, request.output_format)
 
 
-@router.post("/ocr/upload", response_model=ImageOcrResponse, summary="OCR de imagem (multipart)")
+@router.post("/ocr/upload", response_model=ImageOcrResponse, responses=markdown_responses("O texto"),
+             summary="OCR de imagem (multipart)")
 async def ocr_image_upload(
     file: UploadFile = File(..., description="Imagem (PNG, JPEG, WEBP, BMP, GIF, TIFF)"),
     tags: Optional[str] = Form(None, description=TAGS_FORM_DESCRIPTION),
     purge_source: bool = Form(False, description=IMAGE_PURGE_SOURCE_DESCRIPTION),
+    output_format: ImageOutputFormat = Form("json", description=IMAGE_OUTPUT_FORMAT_DESCRIPTION),
     http_request: Request = None,
     location: LocationFields = Depends(upload_location_form),
     current_user: User = Depends(require("images.analyze")),
@@ -1048,8 +1114,9 @@ async def ocr_image_upload(
         plan=plan,
         path=http_request.url.path if http_request is not None else "",
         purge_source=purge_source,
+        output_format=output_format,
     )
-    return _ocr_response(common)
+    return _ocr_response(common, output_format)
 
 
 @router.get(

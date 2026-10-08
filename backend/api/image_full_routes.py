@@ -82,7 +82,9 @@ def submit(request, http_request, image_bytes, filename, current_user, db, tags,
         'datalake': request.datalake.model_dump(mode='json') if request.datalake else None})
     # purge_source is deliberately not part of request_hash: a replay of the key
     # returns the existing attempt unchanged, whatever purge_source it carries (it
-    # neither turns purging on nor off for that job: DELETE /jobs/{id}/source does)
+    # neither turns purging on nor off for that job: DELETE /jobs/{id}/source does).
+    # Neither is output_format: it only chooses how this response is rendered (the
+    # default stored on the job is the one of the request that created it)
     previous = lookup(db, current_user.id, key_hash, request_hash)
     if previous is not None and not previous.failed:
         return previous.job_id, previous.attempt
@@ -135,6 +137,8 @@ def submit(request, http_request, image_bytes, filename, current_user, db, tags,
             # the purge runs once the job settles (shared.job_source, "Image jobs")
             from shared.job_source import save_purge_option
             save_purge_option(db, job)
+        from shared.job_source import save_output_format_option
+        save_output_format_option(db, job, getattr(request, 'output_format', 'json'))
         if previous is None:
             attempt = 1
             db.add(Submission(user_id=current_user.id, key_hash=key_hash, request_hash=request_hash,
@@ -212,6 +216,10 @@ async def run_full(request, http_request, image_bytes, filename, user, db, tags,
                     # new hash, then deletes the old one): re-read the path and retry
                     await asyncio.sleep(.25)
                     continue
+                if getattr(request, 'output_format', 'json') == 'markdown':
+                    from api.image_routes import markdown_response
+                    from shared.vision_markdown import render_result
+                    return markdown_response(render_result(payload, job_id=job_id))
                 from shared.schemas import FaceAnalyzeResponse
                 response = FaceAnalyzeResponse if hasattr(request, 'face_options') else ImageFullAnalyzeResponse
                 return response(job_id=job_id, status=status, attempt=attempt, **payload)
