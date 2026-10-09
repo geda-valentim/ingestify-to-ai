@@ -20,6 +20,17 @@
 # (b) Compose merges `deploy.resources.reservations.devices` by REPLACING the
 #     list. A GPU block in the base file could not be switched off by omission
 #     in an overlay - there would be no way back to CPU.
+#
+# (c) The GPU is injected through CDI (`driver: cdi`), not `driver: nvidia`.
+#     The nvidia hook adds the device nodes outside the OCI spec, so with
+#     Docker's systemd cgroup driver (cgroup v2) the container scope never
+#     lists them in DeviceAllow: the next `systemctl daemon-reload` on the
+#     host (a package install, snapd restarting...) revokes them, and every
+#     running worker answers "Failed to initialize NVML: Unknown Error" until
+#     it is recreated. CDI puts the devices in the spec and they survive.
+#     Needs nvidia-container-toolkit >= 1.17 with its nvidia-cdi-refresh
+#     service enabled (it writes /var/run/cdi/nvidia.yaml at boot); check with
+#     `docker info | grep -A3 "Discovered Devices"`.
 # ---------------------------------------------------------------------------
 
 services:
@@ -41,8 +52,8 @@ services:
       resources:
         reservations:
           devices:
-            - driver: nvidia
-              count: 1
+            - driver: cdi
+              device_ids: ["nvidia.com/gpu=0"]
               capabilities: [gpu]
 
   worker:
@@ -77,8 +88,8 @@ services:
       resources:
         reservations:
           devices:
-            - driver: nvidia
-              count: all
+            - driver: cdi
+              device_ids: ["nvidia.com/gpu=all"]
               capabilities: [gpu]
 
   # Transcription workers: N replicas, one resident Whisper model each, all on
@@ -111,6 +122,6 @@ services:
       resources:
         reservations:
           devices:
-            - driver: nvidia
-              count: all
+            - driver: cdi
+              device_ids: ["nvidia.com/gpu=all"]
               capabilities: [gpu]

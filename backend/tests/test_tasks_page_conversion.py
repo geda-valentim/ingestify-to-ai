@@ -354,6 +354,33 @@ def test_conversion_failure_marks_page_failed_and_retries(wired, monkeypatch, tm
     assert wired.merge.delay.call_count == 0
 
 
+@pytest.mark.parametrize("run_entry_point", [_run_via_split_path, _run_via_retry_path],
+                         ids=["split_path", "retry_path"])
+def test_converter_that_cannot_be_built_fails_the_page_instead_of_leaving_it_pending(
+        wired, monkeypatch, tmp_path, run_entry_point):
+    """A container that lost its GPU raises while the converter is built. That must
+    go through the failure path (page FAILED + retry), never escape with the page
+    still PENDING for the stuck monitor to kill the whole job 30 minutes later."""
+    from shared.device import DeviceUnavailableError
+
+    seed(wired.session_local, wired.redis, total_pages=1)
+
+    def no_gpu(*a, **kw):
+        raise DeviceUnavailableError("DEVICE=cuda was requested but torch reports no usable CUDA device")
+
+    monkeypatch.setattr(tasks, "get_converter", no_gpu)
+
+    with pytest.raises(RetryCalled):
+        run_entry_point(tmp_path, monkeypatch=monkeypatch)
+
+    page = get_page(wired.session_local)
+    assert page.status == JobStatus.FAILED
+    assert "no usable CUDA device" in page.error_message
+    assert get_job(wired.session_local).pages_failed == 1
+    assert len(wired.retries) == 1
+    assert isinstance(wired.retries[0].exc, DeviceUnavailableError)
+
+
 # ============================================
 # split_pdf_task fan-out
 # ============================================
