@@ -1238,10 +1238,6 @@ def _run_page_conversion(
 
     redis_client = get_redis_client()
     es_client = get_es_client()
-    # Page assets are stored under the MAIN job, with the absolute page number
-    collector = _asset_collector(parent_job_id, options, page_number)
-    figures = _figure_collector(parent_job_id, options, page_number)
-    converter = _converter_for(options, collector, figures)
 
     log_prefix = f"[PAGE JOB {page_job_id}]"
     logger.info(f"{log_prefix} Processing page {page_number} of job {parent_job_id}")
@@ -1271,6 +1267,15 @@ def _run_page_conversion(
     extracted_page_file = None
 
     try:
+        # Inside the try: a converter that cannot be built (a GPU lost by the
+        # container, a model that fails to load) must fail and retry the page like
+        # any other error, not escape and leave it PENDING until the stuck monitor
+        # fails the whole job half an hour later.
+        # Page assets are stored under the MAIN job, with the absolute page number
+        collector = _asset_collector(parent_job_id, options, page_number)
+        figures = _figure_collector(parent_job_id, options, page_number)
+        converter = _converter_for(options, collector, figures)
+
         # Mark page job as processing in Redis
         redis_client.set_job_status(
             job_id=page_job_id,
