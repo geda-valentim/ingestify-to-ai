@@ -7,7 +7,9 @@ ativação em produção antes dos gates da spec 0005.
 
 ## Uso
 
-Abra `/live`, selecione projeto e pasta, permita o microfone e inicie. A captura
+Abra `/live`, selecione projeto e pasta, permita o microfone e inicie. A página
+consulta `GET /transcribe/live/sessions/availability` ao abrir e a cada 5 s: com o
+worker fora do ar, desligado ou sem vaga, avisa antes e não deixa iniciar. A captura
 começa após `session.ready`; texto provisório substitui a revisão anterior, e
 segmentos confirmados aparecem imediatamente. **Finalizar** envia a cauda e espera
 persistência; o resultado abre na página existente do job, com TXT/JSON/VTT/SRT.

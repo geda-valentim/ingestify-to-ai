@@ -29,6 +29,24 @@ class LiveStore:
         value = self.redis.get(self.worker_key)
         return json.loads(value) if value else None
 
+    def availability(self, protocol=1):
+        """The code `reserve` would refuse with right now, or None. Reads only: nothing is reserved."""
+        worker = self.readiness()
+        if not worker or not worker.get('ready'):
+            return 'LIVE_NOT_READY'
+        if protocol == 2 and 'online_diarization' not in worker.get('capabilities', []):
+            return 'LIVE_DIARIZATION_NOT_READY'
+        if any(self.redis.get(f'live:lease:{job}') is None for job in worker.get('active_jobs', [])):
+            return 'LIVE_CAPACITY_FULL'
+        values = [self.redis.get(f'live:slot:{self.worker_id}:{i}') for i in range(worker['capacity'])]
+        if protocol == 2:
+            online = sum(bool(raw and json.loads(raw).get('protocol') == 2) for raw in values)
+            if online >= worker.get('diarization_capacity', worker['capacity']):
+                return 'LIVE_DIARIZATION_NOT_READY'
+        if all(raw is not None for raw in values):
+            return 'LIVE_CAPACITY_FULL'
+        return None
+
     def reserve(self, job_id, protocol=1):
         generation = secrets.randbits(53) or 1
         for _ in range(20):

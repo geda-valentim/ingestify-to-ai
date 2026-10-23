@@ -22,7 +22,9 @@ from fastapi.routing import APIRoute, APIWebSocketRoute
 # (INVALID_FILE_FORMAT, FOLDER_LIMIT, FILE_TOO_LARGE...). Behaviour change: those
 # details used to be text and are now {"code", "message"}; FastAPI's 422 keeps
 # `detail` as the list and gains a top-level `code` (FILE_MISSING / VALIDATION_ERROR).
-API_VERSION = "1.5.0"
+# 1.6.0: GET /transcribe/live/sessions/availability (would a live session be admitted
+# now, without reserving), and the live 503s gain a `message`; backward compatible.
+API_VERSION = "1.6.0"
 
 API_DESCRIPTION = """
 API assíncrona que converte documentos (PDF, DOCX, HTML, PPTX, XLSX...) em Markdown,

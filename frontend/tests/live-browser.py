@@ -58,6 +58,9 @@ def scenario(browser, url, mode):
                             "max_folders_per_project": 1000}}, headers=CORS)
         elif path == "/projects/resolve":
             route.fulfill(json={"valid": True, "match": {"id": PROJECT["id"], "name": PROJECT["name"]}}, headers=CORS)
+        elif path == "/transcribe/live/sessions/availability":
+            ready = {"available": True, "code": None, "message": None}
+            route.fulfill(json={**ready, "diarization": ready}, headers=CORS)
         elif path == "/transcribe/live/sessions" and method == "POST":
             creations.append(route.request.post_data_json)
             if mode == "late-admission" and len(creations) == 1:
