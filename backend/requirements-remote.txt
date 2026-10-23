@@ -14,7 +14,7 @@
 setuptools>=75.0.0
 celery==5.3.4
 redis==5.0.1
-pydantic>=2.9.0,<3.0.0
+pydantic>=2.9.0,<2.14  # same cap as requirements-base.txt
 pydantic-core>=2.23.0,<3.0.0
 pydantic-settings>=2.3.0,<3.0.0
 python-dotenv==1.0.0

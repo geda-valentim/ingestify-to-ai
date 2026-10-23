@@ -32,7 +32,9 @@ websockets==17.2  # private/public live protocol, bounded queues
 celery==5.3.4
 redis==5.0.1
 # Pydantic - versões compatíveis com Docling 2.x
-pydantic>=2.9.0,<3.0.0
+# <2.14: 2.14 changes the generated JSON Schema (Decimal loses its pattern),
+# which breaks the published OpenAPI and the frozen pre-0018 IAM alias schema.
+pydantic>=2.9.0,<2.14
 pydantic-core>=2.23.0,<3.0.0
 pydantic-settings>=2.3.0,<3.0.0
 httpx[socks]>=0.27.0,<0.28  # SOCKS proxy support for crawler; 0.28 breaks starlette 0.27 TestClient
@@ -55,7 +57,7 @@ python-socks>=2.4.0  # SOCKS proxy protocol support
 
 # Google Drive integration
 google-api-python-client==2.108.0
-google-auth==2.25.2
+google-auth==2.60.0
 google-auth-oauthlib==1.1.0
 google-auth-httplib2==0.2.0
 
