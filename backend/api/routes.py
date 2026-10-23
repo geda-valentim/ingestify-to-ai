@@ -337,6 +337,16 @@ async def upload_and_convert(
     Retorna imediatamente um `job_id` para consultar o progresso via `/jobs/{job_id}`,
     e onde o job ficou (`project`, `folder`)
 
+    ## Erros de arquivo
+    - 400: arquivo vazio
+    - 413: arquivo acima de `MAX_FILE_SIZE_MB`
+    - 422 `{"detail": {"code": "INVALID_FILE_FORMAT", "message": ...}}`: o conteúdo
+      contradiz a extensão (PDF sem `%PDF-` no primeiro 1 KB; DOCX/PPTX/XLSX/ODT/ODS/ODP
+      que não é ZIP; DOC/PPT/XLS que não é OLE; RTF sem `{\\rtf`). Reenviar o mesmo
+      arquivo não adianta. Nenhum job é criado.
+    - 422 com `detail` em lista (`loc: ["body", "file"]`): o campo `file` não chegou,
+      em geral um upload cortado no meio. Reenviar costuma resolver.
+
     ## Exemplos:
     ```bash
     # Fast mode (default)
@@ -372,6 +382,7 @@ async def upload_and_convert(
     staging_path = _upload_staging_path(filename)
     try:
         file_size_bytes, file_checksum = await _stream_upload_to_file(file, staging_path, settings.max_file_size_mb)
+        _ensure_document_format(staging_path, filename)
         file_size_mb = file_size_bytes / (1024 * 1024)
 
         logger.info(f"File uploaded: {filename} ({file_size_mb:.2f}MB)")
@@ -668,6 +679,45 @@ async def _stream_upload_to_file(file: UploadFile, destination: Path, max_size_m
         destination.unlink(missing_ok=True)
         raise
     return size, hasher.hexdigest()
+
+
+# Extension -> accepted leading signatures. Only formats with a fixed signature
+# are checked; anything else (HTML, TXT, CSV, media, unknown) goes on as before.
+_DOCUMENT_SIGNATURES = {
+    ".pdf": (b"%PDF-",),
+    ".docx": (b"PK\x03\x04",), ".pptx": (b"PK\x03\x04",), ".xlsx": (b"PK\x03\x04",),
+    ".odt": (b"PK\x03\x04",), ".ods": (b"PK\x03\x04",), ".odp": (b"PK\x03\x04",),
+    ".doc": (b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1",), ".ppt": (b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1",),
+    ".xls": (b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1",),
+    ".rtf": (b"{\\rtf",),
+}
+# Readers tolerate junk before "%PDF-" in the first 1024 bytes (PDF 1.7 annex H)
+_PDF_HEADER_WINDOW = 1024
+
+
+def _ensure_document_format(path: Path, filename: str) -> None:
+    """
+    422 INVALID_FILE_FORMAT when the bytes contradict the extension
+    (an HTML error page saved as .pdf, say), before any job exists.
+
+    A cut multipart upload never gets here: FastAPI answers it with its own 422
+    (`body.file` missing), so the code tells the two apart.
+    """
+    ext = Path(filename).suffix.lower()
+    signatures = _DOCUMENT_SIGNATURES.get(ext)
+    if not signatures:
+        return
+    with open(path, "rb") as f:
+        head = f.read(_PDF_HEADER_WINDOW)
+    if ext == ".pdf":
+        valid = signatures[0] in head
+    else:
+        valid = head.startswith(signatures)
+    if not valid:
+        raise HTTPException(status_code=422, detail={
+            "code": "INVALID_FILE_FORMAT",
+            "message": f"O conteúdo do arquivo não é {ext[1:].upper()} (assinatura ausente no início do arquivo)",
+        })
 
 
 @router.post("/transcribe", response_model=JobCreatedResponse, summary="Transcrever áudio ou vídeo (STT, legendas VTT/SRT)")
@@ -1202,6 +1252,7 @@ async def convert_document(
             # Rejects empty uploads (400) and files over the limit (413)
             staging_path = _upload_staging_path(filename)
             file_size_bytes, file_checksum = await _stream_upload_to_file(file, staging_path, settings.max_file_size_mb)
+            _ensure_document_format(staging_path, filename)
             file_size_mb = file_size_bytes / (1024 * 1024)
 
             logger.info(f"File uploaded: {filename} ({file_size_mb:.2f}MB)")
