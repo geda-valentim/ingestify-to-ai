@@ -62,7 +62,7 @@ from shared.engines import dispatch as engine_dispatch
 from shared import page_retry
 from shared.transcription import is_media_filename
 from api.transcription_options import admission as transcription_admission, media_input_kind
-from api.openapi_docs import job_creation_responses
+from api.openapi_docs import API_VERSION, job_creation_responses
 from api.tag_routes import TAGS_FORM_DESCRIPTION, add_tags_to_existing_job, parse_tags_or_422
 from api.projects_api import (
     LocationFields,
@@ -3321,6 +3321,7 @@ async def health_check():
 
     response = HealthCheckResponse(
         status=status,
+        version=API_VERSION,
         redis=redis_ok,
         workers={
             "active": worker_count,

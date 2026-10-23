@@ -160,3 +160,17 @@ def test_image_routes_keep_their_envelope_for_invalid_tags(env, monkeypatch):
                                files={"file": ("foto.png", b"\x89PNG\r\n\x1a\n", "image/png")})
     assert response.status_code == 422
     assert response.json()["detail"]["error_code"] == "INVALID_TAGS"
+
+
+def test_health_reports_the_api_version(monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+
+    from api import routes
+    from api.openapi_docs import API_VERSION
+
+    monkeypatch.setattr(routes, "get_redis_client", lambda: SimpleNamespace(ping=lambda: True))
+    monkeypatch.setattr(routes, "get_es_client", lambda: SimpleNamespace(health_check=lambda: True))
+    from workers.celery_app import celery_app
+    monkeypatch.setattr(celery_app.control, "inspect", lambda: SimpleNamespace(stats=lambda: {"w1": {}}))
+    assert asyncio.run(routes.health_check()).version == API_VERSION == "1.5.0"
