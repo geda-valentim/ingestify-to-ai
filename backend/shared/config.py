@@ -414,9 +414,10 @@ class Settings(BaseSettings):
 
     # Projects and folders (spec 0004)
     # Ceilings against client bugs (e.g. sending the file name as the project),
-    # not quotas.
+    # not quotas. 0 turns the check off.
     max_projects_per_user: int = 200
-    max_folders_per_project: int = 500
+    # 10000: a client that makes one folder per source link (the Radar) hit 500
+    max_folders_per_project: int = 10000
     # Emergency valve, EMPTY by default (= project is mandatory). When set, an
     # upload that names no project (and whose API key is not bound to one) goes
     # to this project (get-or-add) instead of answering 422, with a WARNING log.

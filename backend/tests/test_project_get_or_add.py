@@ -191,3 +191,12 @@ def test_folder_limit_is_a_422(db, monkeypatch):
     with pytest.raises(HTTPException) as exc:
         get_or_create_folder(db, project, "F2")
     assert exc.value.status_code == 422
+
+
+@pytest.mark.parametrize("setting", ["max_projects_per_user", "max_folders_per_project"])
+def test_zero_turns_the_limit_off(db, monkeypatch, setting):
+    monkeypatch.setattr(projects_module.get_settings(), setting, 0)
+    project, _ = get_or_create_project(db, ALICE, "P")
+    get_or_create_project(db, ALICE, "Q")
+    get_or_create_folder(db, project, "F1")
+    get_or_create_folder(db, project, "F2")

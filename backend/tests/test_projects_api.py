@@ -120,7 +120,7 @@ def test_list_projects_with_counts_and_folders(client, world):
     response = client.get("/projects", params={"include": "folders"})
     assert response.status_code == 200
     body = response.json()
-    assert body["limits"] == {"max_projects": 200, "max_folders_per_project": 500}
+    assert body["limits"] == {"max_projects": 200, "max_folders_per_project": 10000}
 
     projects = body["projects"]
     assert [p["name"] for p in projects] == ["Beta", "Cliente A", "Cia Vazia"]  # last_job_at desc, then name

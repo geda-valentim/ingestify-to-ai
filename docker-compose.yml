@@ -135,7 +135,7 @@ services:
       # project bound to its API key is rejected with 422.
       - UPLOAD_FALLBACK_PROJECT=${UPLOAD_FALLBACK_PROJECT:-}
       - MAX_PROJECTS_PER_USER=${MAX_PROJECTS_PER_USER:-200}
-      - MAX_FOLDERS_PER_PROJECT=${MAX_FOLDERS_PER_PROJECT:-500}
+      - MAX_FOLDERS_PER_PROJECT=${MAX_FOLDERS_PER_PROJECT:-10000}
       - MINIO_SECURE=false
       - MINIO_BUCKET_UPLOADS=ingestify-uploads
       - MINIO_BUCKET_PAGES=ingestify-pages
