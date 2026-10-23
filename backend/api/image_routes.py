@@ -196,8 +196,10 @@ def _location_step(fn, *args):
     try:
         return fn(*args)
     except LocationError as exc:
-        raise _error(exc.status_code, exc.error_code, str(exc.detail))
+        raise _error(exc.status_code, exc.error_code, exc.message)
     except HTTPException as exc:  # limits (422) and database errors (503) of get-or-add
+        if isinstance(exc.detail, dict):  # FOLDER_LIMIT / PROJECT_LIMIT
+            raise _error(exc.status_code, exc.detail["code"], exc.detail["message"])
         code = "DATABASE_UNAVAILABLE" if exc.status_code == 503 else "INVALID_LOCATION"
         raise _error(exc.status_code, code, str(exc.detail))
 

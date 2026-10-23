@@ -134,7 +134,8 @@ def _enforce_project_limit(db: Session, user_id: str) -> None:
         return
     count = db.query(func.count(Project.id)).filter(Project.user_id == user_id).scalar() or 0
     if count >= limit:
-        raise HTTPException(status_code=422, detail=f"Limite de {limit} projetos atingido")
+        raise HTTPException(status_code=422, detail={
+            "code": "PROJECT_LIMIT", "message": f"Limite de {limit} projetos atingido"})
 
 
 def _enforce_folder_limit(db: Session, project_id: str) -> None:
@@ -145,7 +146,8 @@ def _enforce_folder_limit(db: Session, project_id: str) -> None:
         return
     count = db.query(func.count(Folder.id)).filter(Folder.project_id == project_id).scalar() or 0
     if count >= limit:
-        raise HTTPException(status_code=422, detail=f"Limite de {limit} pastas atingido neste projeto")
+        raise HTTPException(status_code=422, detail={
+            "code": "FOLDER_LIMIT", "message": f"Limite de {limit} pastas atingido neste projeto"})
 
 
 # ---------------------------------------------------------------------------
