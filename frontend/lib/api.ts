@@ -74,7 +74,9 @@ export class ApiError extends Error {
 export async function throwApiError(response: Response, fallback: string): Promise<never> {
   const data = await response.json().catch(() => null);
   const detail = (data as { detail?: unknown } | null)?.detail;
-  const message = typeof detail === "string" && detail ? detail : `${fallback}: ${response.statusText}`;
+  // A 422 with a code is {"code", "message"}; the rest are text
+  const text = typeof detail === "string" ? detail : (detail as { message?: unknown } | null)?.message;
+  const message = typeof text === "string" && text ? text : `${fallback}: ${response.statusText}`;
   throw new ApiError(response.status, data, message);
 }
 
@@ -634,8 +636,9 @@ export const tagsApi = {
     });
 
     if (!response.ok) {
-      const detail = await response.json().catch(() => null);
-      throw new Error(detail?.detail || `Failed to save tags: ${response.statusText}`);
+      const body = await response.json().catch(() => null);
+      const detail = body?.detail?.message ?? body?.detail;
+      throw new Error(typeof detail === "string" && detail ? detail : `Failed to save tags: ${response.statusText}`);
     }
 
     return (await response.json()).tags;

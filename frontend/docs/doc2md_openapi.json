@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Ingestify API",
-    "description": "\nAPI assíncrona que converte documentos (PDF, DOCX, HTML, PPTX, XLSX...) em Markdown,\ntranscreve áudio e vídeo e analisa imagens. Todo pedido vira um **job**: a resposta\ntraz o `job_id` na hora e o trabalho segue em workers Celery. Guias completos no\nportal de documentação (`/pt/docs`); referência gerada em `/redoc` e `/openapi.json`.\n\n## Autenticação\n\n- **JWT** (`bearerAuth`): `POST /auth/login` devolve `access_token`; envie\n  `Authorization: Bearer <token>`. `POST /auth/refresh` renova a sessão.\n- **API key** (`apiKeyAuth`): crie em `POST /api-keys/` (com JWT) e envie\n  `X-API-Key: <chave>`. Uma key pode ser vinculada a um projeto\n  (`PATCH /api-keys/{key_id}`).\n- Com os dois no mesmo request, vale o JWT. Rotas marcadas como sessão de\n  administrador (`x-access: admin-session`) ou só JWT (`x-access: jwt`) recusam API key.\n- No Swagger, clique em **Authorize** e preencha `bearerAuth` (só o token, sem o\n  prefixo `Bearer`) e/ou `apiKeyAuth`. A autorização persiste entre recargas.\n- **Primeira instalação**: `GET /auth/setup` (público) diz se a instalação ainda não tem\n  usuário (`root_pending`) e se o registro exige token. O primeiro `POST /auth/register`\n  de uma instalação vazia cria o **root**, a identidade de bootstrap do IAM. Em produção\n  isso exige `setup_token` igual ao `ROOT_SETUP_TOKEN` do servidor (fora de produção,\n  só quando ele está configurado).\n\n## Permissões (IAM)\n\nCada usuário é dono dos próprios jobs, projetos, tags, API keys e conexões de datalake:\nrecurso de outro usuário responde 404. Rotas `/admin/*` exigem permissões de plataforma\nconcedidas por papéis IAM (`platform_admin`, `platform_operator`, `platform_auditor`,\n`remote_engine_user`), e as rotas de engines usam os papéis de engines (`observer`,\n`engine_operator`, `access_admin`...), hoje guardados como vínculos IAM em\n`/admin/iam/bindings`. Root e os administradores de bootstrap equivalem a\n`platform_admin`. `POST /iam/check` diz o que o chamador pode fazer; `GET /iam/permissions`\nlista o catálogo. O campo `x-access` de cada operação diz a credencial exigida. Guia:\n[Acesso e IAM](/pt/docs/engine-access).\n\n## Projetos e pastas\n\nTodo job pertence a um **projeto** (obrigatório) e, opcionalmente, a uma **pasta** do\nprojeto (um nível). Os endpoints que criam jobs (`/upload`, `/convert`, `/transcribe`,\n`/images/*`) aceitam:\n\n- `project`: nome do projeto. É criado se não existir (*get-or-add*). Caixa, espaços e\n  acentos sobre letras latinas não contam: `Reunião` e ` reuniao ` são o mesmo projeto;\n- `project_id`: ID de um projeto existente (nunca cria);\n- `folder` / `folder_id`: a pasta dentro do projeto (o nome não pode ter `/`).\n\nSem `project`/`project_id`, o job vai para o projeto **vinculado à API key** (veja\n`PATCH /api-keys/{key_id}`). Isso só vale para requests autenticados apenas pela key: com\nJWT, o vínculo é ignorado. Sem projeto no request e sem vínculo, a resposta é **422**.\nUm arquivo repetido só é reaproveitado dentro do mesmo projeto (`duplicate: true`).\n\n```bash\ncurl -H \"X-API-Key: ...\" -F \"file=@aula.mp3\" -F \"project=Aulas\" -F \"folder=Setembro\" .../transcribe\n```\n\n## Ciclo de vida do job\n\n`POST` devolve `job_id`; acompanhe com `GET /jobs/{job_id}` (`status`, `progress`) e\nbusque o resultado em `GET /jobs/{job_id}/result`. Estados (`status`):\n\n- `pending` / `queued`: aceito, aguardando worker;\n- `processing`: em execução (PDF de várias páginas: split → páginas em paralelo → merge;\n  `GET /jobs/{job_id}/pages` mostra cada página);\n- `completed`: concluído;\n- `partial`: terminou com lacunas (ex.: algumas páginas falharam); o resultado\n  preservado fica disponível e as páginas com falha podem ser refeitas\n  (`POST /jobs/{job_id}/pages/{n}/retry`);\n- `failed`: falhou depois das tentativas automáticas; `error` explica;\n- `cancelled`: cancelado (sessões ao vivo, análise composta de imagem).\n\n## Arquivos de origem (`purge_source`)\n\n`/upload`, `/convert`, `/transcribe` e as oito rotas `/images/*` aceitam\n`purge_source` (padrão `false`). Com `true`, os arquivos de origem (o arquivo enviado,\nos PDFs por página, as cópias da imagem) são apagados quando o job termina, depois das\ntentativas automáticas; o resultado fica. Para apagar depois, use\n`DELETE /jobs/{job_id}/source` (200; 404 sem origem; 409 `JOB_STILL_PROCESSING`;\n503 `SOURCE_DELETE_FAILED`). `GET /jobs/{job_id}` informa `source_available`,\n`source_deleted_at` e `source_deletable`. Sem origem, o PDF de página responde 410\n`SOURCE_PURGED` e o retry de página 409 `SOURCE_NOT_AVAILABLE`.\n\n## Imagens da conversão (`image_mode`, `page_images`)\n\n`/upload` e `/convert` aceitam `image_mode` (`none`, padrão: o markdown mantém\n`<!-- image -->`; `referenced`: cada figura vira um PNG referenciado no markdown como\n`![Image](/jobs/{job_id}/assets/{name})`) e `page_images` (`true`: cada página do PDF\nrenderizada como PNG). `GET /jobs/{job_id}/result` lista `assets` (`name`, `kind`\n`picture`|`page`, `page`, `bbox`, `sha256`, `mime`, `width`, `height`, `size_bytes`,\n`url`) e `assets_skipped`; cada imagem sai em `GET /jobs/{job_id}/assets/{name}` (sempre\no job principal, também num PDF dividido). Com `purge_source=true` as imagens ficam\n`ASSET_RETENTION_SECONDS` depois do fim do job (`assets_expire_at` em\n`GET /jobs/{job_id}`) e então são apagadas; `DELETE /jobs/{job_id}/source` apaga na hora.\nDepois disso a rota responde 410 `SOURCE_PURGED`.\n\n## Idempotência (Full Analysis e rostos)\n\n`/images/analyze` com `mode=full` e `/images/faces` exigem o header `Idempotency-Key`\n(1..128 caracteres). A mesma chave com o mesmo pedido devolve o mesmo job enquanto a\ntentativa está na fila, rodando ou concluída; depois que ela falha de vez, a mesma chave\nabre a tentativa seguinte (`attempt` + 1, job novo). Chave usada com outro pedido: 409;\njob da chave excluído: 410 (use outra chave). `purge_source` não entra na comparação.\n\n## Erros\n\nErros HTTP vêm em `{\"detail\": ...}`: texto, lista de validação (422) ou objeto. Recusas\ncom código (jobs, engines, perfis de execução, acesso, IAM, root) trazem\n`{\"detail\": {\"code\": \"...\", \"message\": \"...\", \"next_steps\": [...]}}`, com `cause`\n(o gate interno quando um código genérico embrulha outro) e `technical` (texto original)\nquando houver. Use `code` para decidir; `message` é para pessoas. Falhas não tratadas\nrespondem 500 com `{\"error\": {\"code\": \"INTERNAL_ERROR\", \"message\": \"...\"}}`.\n\n## Limites de taxa\n\nLogin: `RATE_LIMIT_PER_MINUTE` tentativas por IP por minuto (padrão 10) e bloqueio\ntemporário da conta após `LOGIN_MAX_FAILED_ATTEMPTS` falhas (padrão 5, por\n`LOGIN_LOCKOUT_SECONDS`, padrão 900 s). Registro: `REGISTER_LIMIT_PER_HOUR` por IP (padrão\n5). Excedido, a resposta é **429**. Uploads respeitam `MAX_FILE_SIZE_MB` (413).\n",
-    "version": "1.4.0"
+    "description": "\nAPI assíncrona que converte documentos (PDF, DOCX, HTML, PPTX, XLSX...) em Markdown,\ntranscreve áudio e vídeo e analisa imagens. Todo pedido vira um **job**: a resposta\ntraz o `job_id` na hora e o trabalho segue em workers Celery. Guias completos no\nportal de documentação (`/pt/docs`); referência gerada em `/redoc` e `/openapi.json`.\n\n## Autenticação\n\n- **JWT** (`bearerAuth`): `POST /auth/login` devolve `access_token`; envie\n  `Authorization: Bearer <token>`. `POST /auth/refresh` renova a sessão.\n- **API key** (`apiKeyAuth`): crie em `POST /api-keys/` (com JWT) e envie\n  `X-API-Key: <chave>`. Uma key pode ser vinculada a um projeto\n  (`PATCH /api-keys/{key_id}`).\n- Com os dois no mesmo request, vale o JWT. Rotas marcadas como sessão de\n  administrador (`x-access: admin-session`) ou só JWT (`x-access: jwt`) recusam API key.\n- No Swagger, clique em **Authorize** e preencha `bearerAuth` (só o token, sem o\n  prefixo `Bearer`) e/ou `apiKeyAuth`. A autorização persiste entre recargas.\n- **Primeira instalação**: `GET /auth/setup` (público) diz se a instalação ainda não tem\n  usuário (`root_pending`) e se o registro exige token. O primeiro `POST /auth/register`\n  de uma instalação vazia cria o **root**, a identidade de bootstrap do IAM. Em produção\n  isso exige `setup_token` igual ao `ROOT_SETUP_TOKEN` do servidor (fora de produção,\n  só quando ele está configurado).\n\n## Permissões (IAM)\n\nCada usuário é dono dos próprios jobs, projetos, tags, API keys e conexões de datalake:\nrecurso de outro usuário responde 404. Rotas `/admin/*` exigem permissões de plataforma\nconcedidas por papéis IAM (`platform_admin`, `platform_operator`, `platform_auditor`,\n`remote_engine_user`), e as rotas de engines usam os papéis de engines (`observer`,\n`engine_operator`, `access_admin`...), hoje guardados como vínculos IAM em\n`/admin/iam/bindings`. Root e os administradores de bootstrap equivalem a\n`platform_admin`. `POST /iam/check` diz o que o chamador pode fazer; `GET /iam/permissions`\nlista o catálogo. O campo `x-access` de cada operação diz a credencial exigida. Guia:\n[Acesso e IAM](/pt/docs/engine-access).\n\n## Projetos e pastas\n\nTodo job pertence a um **projeto** (obrigatório) e, opcionalmente, a uma **pasta** do\nprojeto (um nível). Os endpoints que criam jobs (`/upload`, `/convert`, `/transcribe`,\n`/images/*`) aceitam:\n\n- `project`: nome do projeto. É criado se não existir (*get-or-add*). Caixa, espaços e\n  acentos sobre letras latinas não contam: `Reunião` e ` reuniao ` são o mesmo projeto;\n- `project_id`: ID de um projeto existente (nunca cria);\n- `folder` / `folder_id`: a pasta dentro do projeto (o nome não pode ter `/`).\n\nSem `project`/`project_id`, o job vai para o projeto **vinculado à API key** (veja\n`PATCH /api-keys/{key_id}`). Isso só vale para requests autenticados apenas pela key: com\nJWT, o vínculo é ignorado. Sem projeto no request e sem vínculo, a resposta é **422**.\nUm arquivo repetido só é reaproveitado dentro do mesmo projeto (`duplicate: true`).\n\n```bash\ncurl -H \"X-API-Key: ...\" -F \"file=@aula.mp3\" -F \"project=Aulas\" -F \"folder=Setembro\" .../transcribe\n```\n\n## Ciclo de vida do job\n\n`POST` devolve `job_id`; acompanhe com `GET /jobs/{job_id}` (`status`, `progress`) e\nbusque o resultado em `GET /jobs/{job_id}/result`. Estados (`status`):\n\n- `pending` / `queued`: aceito, aguardando worker;\n- `processing`: em execução (PDF de várias páginas: split → páginas em paralelo → merge;\n  `GET /jobs/{job_id}/pages` mostra cada página);\n- `completed`: concluído;\n- `partial`: terminou com lacunas (ex.: algumas páginas falharam); o resultado\n  preservado fica disponível e as páginas com falha podem ser refeitas\n  (`POST /jobs/{job_id}/pages/{n}/retry`);\n- `failed`: falhou depois das tentativas automáticas; `error` explica;\n- `cancelled`: cancelado (sessões ao vivo, análise composta de imagem).\n\n## Arquivos de origem (`purge_source`)\n\n`/upload`, `/convert`, `/transcribe` e as oito rotas `/images/*` aceitam\n`purge_source` (padrão `false`). Com `true`, os arquivos de origem (o arquivo enviado,\nos PDFs por página, as cópias da imagem) são apagados quando o job termina, depois das\ntentativas automáticas; o resultado fica. Para apagar depois, use\n`DELETE /jobs/{job_id}/source` (200; 404 sem origem; 409 `JOB_STILL_PROCESSING`;\n503 `SOURCE_DELETE_FAILED`). `GET /jobs/{job_id}` informa `source_available`,\n`source_deleted_at` e `source_deletable`. Sem origem, o PDF de página responde 410\n`SOURCE_PURGED` e o retry de página 409 `SOURCE_NOT_AVAILABLE`.\n\n## Imagens da conversão (`image_mode`, `page_images`)\n\n`/upload` e `/convert` aceitam `image_mode` (`none`, padrão: o markdown mantém\n`<!-- image -->`; `referenced`: cada figura vira um PNG referenciado no markdown como\n`![Image](/jobs/{job_id}/assets/{name})`) e `page_images` (`true`: cada página do PDF\nrenderizada como PNG). `GET /jobs/{job_id}/result` lista `assets` (`name`, `kind`\n`picture`|`page`, `page`, `bbox`, `sha256`, `mime`, `width`, `height`, `size_bytes`,\n`url`) e `assets_skipped`; cada imagem sai em `GET /jobs/{job_id}/assets/{name}` (sempre\no job principal, também num PDF dividido). Com `purge_source=true` as imagens ficam\n`ASSET_RETENTION_SECONDS` depois do fim do job (`assets_expire_at` em\n`GET /jobs/{job_id}`) e então são apagadas; `DELETE /jobs/{job_id}/source` apaga na hora.\nDepois disso a rota responde 410 `SOURCE_PURGED`.\n\n## Idempotência (Full Analysis e rostos)\n\n`/images/analyze` com `mode=full` e `/images/faces` exigem o header `Idempotency-Key`\n(1..128 caracteres). A mesma chave com o mesmo pedido devolve o mesmo job enquanto a\ntentativa está na fila, rodando ou concluída; depois que ela falha de vez, a mesma chave\nabre a tentativa seguinte (`attempt` + 1, job novo). Chave usada com outro pedido: 409;\njob da chave excluído: 410 (use outra chave). `purge_source` não entra na comparação.\n\n## Erros\n\nErros HTTP vêm em `{\"detail\": ...}`: texto, lista de validação (422) ou objeto.\n\n**Criação de jobs** (`/upload`, `/convert`, `/transcribe`): toda recusa traz\n`{\"detail\": {\"code\": \"...\", \"message\": \"...\"}}`; o `code` diz o que fazer, sem casar texto.\nA seção *Responses* de cada rota lista os códigos. Os principais:\n\n| Código | Status | O que fazer |\n|---|---|---|\n| `INVALID_FILE_FORMAT` | 422 | o conteúdo contradiz a extensão; reenviar o mesmo arquivo não adianta |\n| `FILE_MISSING` | 422 | o campo `file` não chegou (em geral upload cortado); reenvie |\n| `FILE_EMPTY` / `FILE_TOO_LARGE` | 400 / 413 | arquivo vazio / acima do limite |\n| `FOLDER_LIMIT` / `PROJECT_LIMIT` | 422 | teto de pastas por projeto / projetos por usuário |\n| `PROJECT_REQUIRED`, `PROJECT_ARCHIVED`, `INVALID_LOCATION` | 422 | corrija `project`/`folder` |\n| `INVALID_TAGS` | 422 | corrija `tags` |\n| `QUEUE_UNAVAILABLE`, `DATABASE_UNAVAILABLE` | 503 | temporário; tente de novo |\n\nO 422 de validação do FastAPI mantém `detail` como lista e ganha `code` no topo:\n`{\"detail\": [...], \"code\": \"FILE_MISSING\" | \"VALIDATION_ERROR\"}`. Os 404 de projeto/pasta\n(`project_id`/`folder_id` de outro usuário ou inexistente) seguem em texto, iguais ao 404\nde job.\n\nOutras recusas com código (jobs, engines, perfis de execução, acesso, IAM, root) trazem\n`{\"detail\": {\"code\": \"...\", \"message\": \"...\", \"next_steps\": [...]}}`, com `cause`\n(o gate interno quando um código genérico embrulha outro) e `technical` (texto original)\nquando houver. Use `code` para decidir; `message` é para pessoas. Falhas não tratadas\nrespondem 500 com `{\"error\": {\"code\": \"INTERNAL_ERROR\", \"message\": \"...\"}}`.\n\n## Limites de taxa\n\nLogin: `RATE_LIMIT_PER_MINUTE` tentativas por IP por minuto (padrão 10) e bloqueio\ntemporário da conta após `LOGIN_MAX_FAILED_ATTEMPTS` falhas (padrão 5, por\n`LOGIN_LOCKOUT_SECONDS`, padrão 900 s). Registro: `REGISTER_LIMIT_PER_HOUR` por IP (padrão\n5). Excedido, a resposta é **429**. Uploads respeitam `MAX_FILE_SIZE_MB` (413).\n",
+    "version": "1.5.0"
   },
   "paths": {
     "/auth/register": {
@@ -6048,7 +6048,7 @@
           "Conversion"
         ],
         "summary": "Enviar e converter arquivo",
-        "description": "Upload direto de arquivo para conversão\n\nEste endpoint é dedicado exclusivamente para upload de arquivos.\nUse os outros endpoints para converter de URL, Google Drive ou Dropbox.\n\n## Parâmetros:\n- `file`: Arquivo para upload\n- `name`: Nome de identificação opcional (se não fornecido, usa o nome do arquivo)\n- `docling_preset`: Quality/speed preset (apenas para PDFs):\n  - **fast** (padrão): Conversão rápida, apenas texto (~35s/MB)\n    - OCR: Desligado | Images: Desligadas | Tables: Ligadas\n  - **balanced**: Velocidade moderada, extrai imagens (~70-105s/MB)\n    - OCR: Desligado | Images: Ligadas | Tables: Ligadas\n  - **quality**: Máxima qualidade, inclui OCR para documentos escaneados (~350s/MB)\n    - OCR: Ligado | Images: Ligadas | Tables: Ligadas\n- `purge_source`: Se `true`, apaga os arquivos de origem (o arquivo enviado e os\n  PDFs por página) quando o job termina — `completed`, ou `failed`/`partial` depois\n  das tentativas automáticas — e fica só o resultado. Veja \"Arquivos de origem\".\n- `image_mode`: `none` (padrão) ou `referenced` (figuras viram PNGs referenciados\n  no markdown). Veja \"Imagens\".\n- `page_images`: `true` renderiza cada página do PDF como PNG. Veja \"Imagens\".\n\n## Imagens (`image_mode`, `page_images`)\n- `image_mode=referenced`: cada figura encontrada pelo Docling vira um PNG e o\n  markdown troca o placeholder `<!-- image -->` por\n  `![Image](/jobs/{job_id}/assets/p0001-img01-<sha12>.png)` (caminho relativo na API).\n- `page_images=true`: cada página do PDF vira um PNG (kind `page`), fora do markdown.\n- `GET /jobs/{job_id}/result` traz `assets` (`name`, `kind`, `page`, `bbox`, `sha256`,\n  `mime`, `width`, `height`, `size_bytes`, `url`), em ordem de página, e\n  `assets_skipped` (figuras pequenas demais ou além dos limites do job).\n- Baixe cada uma com `GET /jobs/{job_id}/assets/{name}` (mesma autenticação).\n- PDF de várias páginas: as imagens de todas as páginas ficam no job principal.\n- Com `purge_source=true` as imagens não são apagadas no fim do job: ficam\n  `ASSET_RETENTION_SECONDS` (padrão 1 h; `GET /jobs/{job_id}` informa\n  `assets_expire_at`) e então são apagadas; `DELETE /jobs/{job_id}/source` apaga na hora.\n- O mesmo arquivo com outro `image_mode`/`page_images` é outro job (não é duplicata).\n\n```bash\ncurl -X POST http://localhost:8000/upload \\\n  -H \"X-API-Key: your-api-key\" \\\n  -F \"file=@apostila.pdf\" -F \"project=Cursos\" \\\n  -F \"image_mode=referenced\" -F \"page_images=true\" -F \"purge_source=true\"\n```\n\n## Descrição e OCR das figuras (`describe_images`, `ocr_images`)\n- `describe_images=true`: cada figura (PictureItem do Docling; nunca as páginas\n  renderizadas) é descrita pelo Florence-2 no worker de visão. **As descrições saem\n  em inglês** por enquanto. `ocr_images=true`: o texto dentro da figura é lido (`<OCR>`).\n- No markdown, na posição de cada figura (ordem do documento):\n  ```\n  ![Image](/jobs/{job_id}/assets/p0001-img01-<sha12>.png)   (só com image_mode=referenced)\n\n  > **Figure (description, English):** A bar chart comparing ...\n  > **Text in figure (OCR):** Revenue 2024\n  ```\n  Com `image_mode=none` o placeholder `<!-- image -->` é trocado pelo blockquote.\n  Linha sem texto é omitida; figura sem nenhum texto fica como estava.\n- Imagens idênticas (mesmo sha256, no documento inteiro) vão ao modelo uma vez só.\n  Figuras menores que `CONVERSION_ASSET_MIN_PX`, além de `CONVERSION_FIGURE_MAX_COUNT`\n  (padrão 50 imagens únicas) ou cuja análise falhou ficam sem texto e são contadas\n  em `figures_skipped`; nunca derrubam o job.\n- O job fica `processing` (progresso acima de 90%) até o texto entrar no markdown.\n  `GET /jobs/{job_id}/result` traz `figures_described`, `figures_ocr`,\n  `figures_skipped` e, em cada item de `assets`, `description` / `ocr_text`.\n- `purge_source` só roda depois disso. Outra combinação dessas opções é outro job\n  (não é duplicata).\n\n```bash\ncurl -X POST http://localhost:8000/upload \\\n  -H \"X-API-Key: your-api-key\" \\\n  -F \"file=@relatorio.pdf\" -F \"project=Relatórios\" \\\n  -F \"image_mode=referenced\" -F \"describe_images=true\" -F \"ocr_images=true\"\n```\n\n## Arquivos de origem (`purge_source`)\n- O que é apagado: o arquivo enviado (MinIO `uploads/...` e cópia local) e, num\n  PDF de várias páginas, os PDFs por página (`/jobs/{job_id}/pages/{n}/pdf`\n  passa a responder 410 `SOURCE_PURGED`). O markdown (inteiro e por página) fica.\n- Quando: ao terminar `completed`, ou `failed`/`partial` depois de esgotados os\n  retries automáticos; nunca enquanto houver retry ou página na fila. Depois\n  disso o retry manual de página responde 409 `SOURCE_NOT_AVAILABLE`.\n- `GET /jobs/{job_id}` informa `source_available`, `source_deleted_at` e\n  `source_deletable`. Para apagar depois: `DELETE /jobs/{job_id}/source`.\n- Arquivo repetido no mesmo projeto: com `purge_source=true` a resposta traz o\n  job existente com `duplicate: true` e ele passa a apagar a origem (na hora, se\n  já terminou; `source_available` diz o resultado). Com `false`, um job existente\n  cuja origem foi (ou será) apagada não é reaproveitado: um job novo é criado.\n\n```bash\ncurl -X POST http://localhost:8000/upload \\\n  -H \"X-API-Key: your-api-key\" \\\n  -F \"file=@contrato.pdf\" \\\n  -F \"project=Cliente X\" \\\n  -F \"purge_source=true\"\n```\n\n## Formatos suportados\nPDF, DOCX, DOC, HTML, PPTX, XLSX, RTF, ODT\n\n## Retorno\nRetorna imediatamente um `job_id` para consultar o progresso via `/jobs/{job_id}`,\ne onde o job ficou (`project`, `folder`)\n\n## Exemplos:\n```bash\n# Fast mode (default)\ncurl -X POST http://localhost:8000/upload       -H \"X-API-Key: your-api-key\"       -F \"file=@documento.pdf\"       -F \"project=Cliente X\"\n\n# Quality mode with OCR\ncurl -X POST http://localhost:8000/upload       -H \"X-API-Key: your-api-key\"       -F \"file=@documento_escaneado.pdf\"       -F \"docling_preset=quality\"\n```",
+        "description": "Upload direto de arquivo para conversão\n\nEste endpoint é dedicado exclusivamente para upload de arquivos.\nUse os outros endpoints para converter de URL, Google Drive ou Dropbox.\n\n## Parâmetros:\n- `file`: Arquivo para upload\n- `name`: Nome de identificação opcional (se não fornecido, usa o nome do arquivo)\n- `docling_preset`: Quality/speed preset (apenas para PDFs):\n  - **fast** (padrão): Conversão rápida, apenas texto (~35s/MB)\n    - OCR: Desligado | Images: Desligadas | Tables: Ligadas\n  - **balanced**: Velocidade moderada, extrai imagens (~70-105s/MB)\n    - OCR: Desligado | Images: Ligadas | Tables: Ligadas\n  - **quality**: Máxima qualidade, inclui OCR para documentos escaneados (~350s/MB)\n    - OCR: Ligado | Images: Ligadas | Tables: Ligadas\n- `purge_source`: Se `true`, apaga os arquivos de origem (o arquivo enviado e os\n  PDFs por página) quando o job termina — `completed`, ou `failed`/`partial` depois\n  das tentativas automáticas — e fica só o resultado. Veja \"Arquivos de origem\".\n- `image_mode`: `none` (padrão) ou `referenced` (figuras viram PNGs referenciados\n  no markdown). Veja \"Imagens\".\n- `page_images`: `true` renderiza cada página do PDF como PNG. Veja \"Imagens\".\n\n## Imagens (`image_mode`, `page_images`)\n- `image_mode=referenced`: cada figura encontrada pelo Docling vira um PNG e o\n  markdown troca o placeholder `<!-- image -->` por\n  `![Image](/jobs/{job_id}/assets/p0001-img01-<sha12>.png)` (caminho relativo na API).\n- `page_images=true`: cada página do PDF vira um PNG (kind `page`), fora do markdown.\n- `GET /jobs/{job_id}/result` traz `assets` (`name`, `kind`, `page`, `bbox`, `sha256`,\n  `mime`, `width`, `height`, `size_bytes`, `url`), em ordem de página, e\n  `assets_skipped` (figuras pequenas demais ou além dos limites do job).\n- Baixe cada uma com `GET /jobs/{job_id}/assets/{name}` (mesma autenticação).\n- PDF de várias páginas: as imagens de todas as páginas ficam no job principal.\n- Com `purge_source=true` as imagens não são apagadas no fim do job: ficam\n  `ASSET_RETENTION_SECONDS` (padrão 1 h; `GET /jobs/{job_id}` informa\n  `assets_expire_at`) e então são apagadas; `DELETE /jobs/{job_id}/source` apaga na hora.\n- O mesmo arquivo com outro `image_mode`/`page_images` é outro job (não é duplicata).\n\n```bash\ncurl -X POST http://localhost:8000/upload \\\n  -H \"X-API-Key: your-api-key\" \\\n  -F \"file=@apostila.pdf\" -F \"project=Cursos\" \\\n  -F \"image_mode=referenced\" -F \"page_images=true\" -F \"purge_source=true\"\n```\n\n## Descrição e OCR das figuras (`describe_images`, `ocr_images`)\n- `describe_images=true`: cada figura (PictureItem do Docling; nunca as páginas\n  renderizadas) é descrita pelo Florence-2 no worker de visão. **As descrições saem\n  em inglês** por enquanto. `ocr_images=true`: o texto dentro da figura é lido (`<OCR>`).\n- No markdown, na posição de cada figura (ordem do documento):\n  ```\n  ![Image](/jobs/{job_id}/assets/p0001-img01-<sha12>.png)   (só com image_mode=referenced)\n\n  > **Figure (description, English):** A bar chart comparing ...\n  > **Text in figure (OCR):** Revenue 2024\n  ```\n  Com `image_mode=none` o placeholder `<!-- image -->` é trocado pelo blockquote.\n  Linha sem texto é omitida; figura sem nenhum texto fica como estava.\n- Imagens idênticas (mesmo sha256, no documento inteiro) vão ao modelo uma vez só.\n  Figuras menores que `CONVERSION_ASSET_MIN_PX`, além de `CONVERSION_FIGURE_MAX_COUNT`\n  (padrão 50 imagens únicas) ou cuja análise falhou ficam sem texto e são contadas\n  em `figures_skipped`; nunca derrubam o job.\n- O job fica `processing` (progresso acima de 90%) até o texto entrar no markdown.\n  `GET /jobs/{job_id}/result` traz `figures_described`, `figures_ocr`,\n  `figures_skipped` e, em cada item de `assets`, `description` / `ocr_text`.\n- `purge_source` só roda depois disso. Outra combinação dessas opções é outro job\n  (não é duplicata).\n\n```bash\ncurl -X POST http://localhost:8000/upload \\\n  -H \"X-API-Key: your-api-key\" \\\n  -F \"file=@relatorio.pdf\" -F \"project=Relatórios\" \\\n  -F \"image_mode=referenced\" -F \"describe_images=true\" -F \"ocr_images=true\"\n```\n\n## Arquivos de origem (`purge_source`)\n- O que é apagado: o arquivo enviado (MinIO `uploads/...` e cópia local) e, num\n  PDF de várias páginas, os PDFs por página (`/jobs/{job_id}/pages/{n}/pdf`\n  passa a responder 410 `SOURCE_PURGED`). O markdown (inteiro e por página) fica.\n- Quando: ao terminar `completed`, ou `failed`/`partial` depois de esgotados os\n  retries automáticos; nunca enquanto houver retry ou página na fila. Depois\n  disso o retry manual de página responde 409 `SOURCE_NOT_AVAILABLE`.\n- `GET /jobs/{job_id}` informa `source_available`, `source_deleted_at` e\n  `source_deletable`. Para apagar depois: `DELETE /jobs/{job_id}/source`.\n- Arquivo repetido no mesmo projeto: com `purge_source=true` a resposta traz o\n  job existente com `duplicate: true` e ele passa a apagar a origem (na hora, se\n  já terminou; `source_available` diz o resultado). Com `false`, um job existente\n  cuja origem foi (ou será) apagada não é reaproveitado: um job novo é criado.\n\n```bash\ncurl -X POST http://localhost:8000/upload \\\n  -H \"X-API-Key: your-api-key\" \\\n  -F \"file=@contrato.pdf\" \\\n  -F \"project=Cliente X\" \\\n  -F \"purge_source=true\"\n```\n\n## Formatos suportados\nPDF, DOCX, DOC, HTML, PPTX, XLSX, RTF, ODT\n\n## Retorno\nRetorna imediatamente um `job_id` para consultar o progresso via `/jobs/{job_id}`,\ne onde o job ficou (`project`, `folder`)\n\n## Erros\nToda recusa traz `{\"detail\": {\"code\", \"message\"}}`; decida pelo `code` (lista\ncompleta por status em *Responses*, abaixo). Só `QUEUE_UNAVAILABLE` e\n`JOB_CREATE_FAILED` vêm depois de o job existir; ele fica `failed`.\n- 422 `INVALID_FILE_FORMAT`: o conteúdo contradiz a extensão (PDF sem `%PDF-` no\n  primeiro 1 KB; DOCX/PPTX/XLSX/ODT/ODS/ODP que não é ZIP; DOC/PPT/XLS que não é\n  OLE; RTF sem `{\\rtf`). Reenviar o mesmo arquivo não adianta.\n- 422 `FILE_MISSING` (validação do FastAPI: `{\"detail\": [...], \"code\": \"FILE_MISSING\"}`):\n  o campo `file` não chegou, em geral um upload cortado no meio. Reenvie.\n- 422 `FOLDER_LIMIT` / `PROJECT_LIMIT`: teto de `MAX_FOLDERS_PER_PROJECT` (padrão\n  10000) / `MAX_PROJECTS_PER_USER` atingido.\n- 400 `FILE_EMPTY`, 413 `FILE_TOO_LARGE` (`MAX_FILE_SIZE_MB`).\n- 503 `QUEUE_UNAVAILABLE` / `DATABASE_UNAVAILABLE`: temporário, tente de novo.\n\n## Exemplos:\n```bash\n# Fast mode (default)\ncurl -X POST http://localhost:8000/upload       -H \"X-API-Key: your-api-key\"       -F \"file=@documento.pdf\"       -F \"project=Cliente X\"\n\n# Quality mode with OCR\ncurl -X POST http://localhost:8000/upload       -H \"X-API-Key: your-api-key\"       -F \"file=@documento_escaneado.pdf\"       -F \"docling_preset=quality\"\n```",
         "operationId": "upload_and_convert_upload_post",
         "requestBody": {
           "content": {
@@ -6071,15 +6071,73 @@
               }
             }
           },
-          "422": {
-            "description": "Validation Error",
+          "400": {
+            "description": "`{\"detail\": {\"code\", \"message\"}}`. `code`: `FILE_EMPTY`",
             "content": {
               "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                "example": {
+                  "detail": {
+                    "code": "FILE_EMPTY",
+                    "message": "Arquivo enviado está vazio"
+                  }
                 }
               }
             }
+          },
+          "413": {
+            "description": "`{\"detail\": {\"code\", \"message\"}}`. `code`: `FILE_TOO_LARGE`",
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": {
+                    "code": "FILE_TOO_LARGE",
+                    "message": "Arquivo muito grande. Máximo: 50MB"
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`{\"detail\": {\"code\", \"message\"}}`. `code`: `INVALID_FILE_FORMAT`, `FOLDER_LIMIT`, `PROJECT_LIMIT`, `PROJECT_REQUIRED`, `PROJECT_ARCHIVED`, `INVALID_LOCATION`, `INVALID_TAGS`, `INVALID_TRANSCRIPTION_OPTIONS`. Ou o 422 de validação do FastAPI: `{\"detail\": [...], \"code\": \"FILE_MISSING\" | \"VALIDATION_ERROR\"}`",
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": {
+                    "code": "INVALID_FILE_FORMAT",
+                    "message": "O conteúdo do arquivo não é PDF (assinatura ausente no início do arquivo)"
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "`{\"detail\": {\"code\", \"message\"}}`. `code`: `JOB_CREATE_FAILED`",
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": {
+                    "code": "JOB_CREATE_FAILED",
+                    "message": "Erro ao criar job"
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`{\"detail\": {\"code\", \"message\"}}`. `code`: `QUEUE_UNAVAILABLE`, `DATABASE_UNAVAILABLE`, `DIARIZATION_NOT_READY`",
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": {
+                    "code": "QUEUE_UNAVAILABLE",
+                    "message": "Sistema de processamento indisponível"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`project_id` / `folder_id` inexistente ou de outro usuário (texto, igual ao 404 de job)"
           }
         },
         "security": [
@@ -6099,7 +6157,7 @@
           "Conversion"
         ],
         "summary": "Transcrever áudio ou vídeo (STT, legendas VTT/SRT)",
-        "description": "Transcrever áudio ou vídeo para texto usando Whisper (STT)\n\nAceita áudio ou vídeo (só a faixa de áudio do vídeo é transcrita).\nO job entra na fila própria de transcrição (`ingestify-audio`), consumida por\nworkers dedicados, e não disputa vaga com a conversão de documentos.\n\n## Autenticação\nObrigatória: header `X-API-Key: <chave>` ou `Authorization: Bearer <token JWT>`.\nSem ele a resposta é 401.\n\nTodos os formatos são gerados: Markdown, legendas WebVTT e SRT, texto puro e\nJSON com segmentos. Escolha o formato em `GET /jobs/{job_id}/result?format=vtt`\n(ou defina o padrão com `output_format`).\n\n## Parâmetros:\n- `file`: Arquivo de áudio ou vídeo para transcrição\n- `name`: Nome de identificação opcional\n- `tags`: Tags do job, separadas por vírgula (ex: `focus,aula`)\n- `language`: Código de idioma ISO 639-1 (ex: 'en', 'pt', 'es'). Auto-detecta se não fornecido\n- `include_timestamps`: Adicionar marcadores de tempo [MM:SS] na transcrição\n- `include_word_timestamps`: Adicionar timestamps em cada palavra (mais detalhado)\n- `output_format`: Formato padrão do resultado (`markdown`, `vtt`, `srt`, `txt`, `json`)\n- `purge_source`: Se `true`, apaga o arquivo enviado (disco e MinIO) quando o job\n  termina (com sucesso, ou com falha depois das tentativas automáticas); ficam só\n  as transcrições. `GET /jobs/{job_id}` informa `source_deleted_at`. `DELETE /jobs/{job_id}` também\n  apaga o arquivo de origem e as transcrições\n\n## Projeto\nTodo job pertence a um projeto: envie `project` (nome; criado se não existir) ou\n`project_id`, e opcionalmente `folder`/`folder_id`. Uma API key vinculada a um\nprojeto dispensa o campo. Sem projeto: 422.\n\n## Arquivo repetido\nReenviar um arquivo idêntico (mesmo SHA-256) que já tem job **não falho** no mesmo\nprojeto devolve esse job em vez de criar outro: as tags novas são somadas às dele e o\n`output_format` enviado passa a ser o padrão do resultado. Se o job anterior\nfalhou, o reenvio cria um job novo; é assim que se tenta de novo.\n\n## Formatos suportados\n- Áudio: MP3, WAV, M4A, FLAC, OGG, OPUS, WEBM, WMA, AAC\n- Vídeo: MP4, M4V, MKV, MOV, AVI, WEBM, WMV, FLV, MPEG, TS, 3GP\n\n## Limite de tamanho\n- Áudio: até 50MB (MAX_AUDIO_FILE_SIZE_MB)\n- Vídeo: até 500MB (MAX_VIDEO_FILE_SIZE_MB)\n\n## Tempo limite\nDefinido pelo worker de transcrição (`TRANSCRIPTION_TIMEOUT_SECONDS`, padrão 3h),\nindependente do `CONVERSION_TIMEOUT_SECONDS` dos documentos. Um job que estoura o\ntempo falha sem novas tentativas automáticas.\n\n## Retorno\nRetorna imediatamente um `job_id` para consultar o progresso via `/jobs/{job_id}`\n\n## Erros\n- 401: sem autenticação\n- 413: arquivo acima do limite\n- 422: formato não suportado, `output_format` inválido ou `tags` inválidas\n- 503: transcrição desabilitada ou workers indisponíveis\n\n## Exemplos:\n```bash\ncurl -X POST http://localhost:8080/transcribe \\\n  -H \"X-API-Key: $INGESTIFY_API_KEY\" \\\n  -F \"file=@meeting.mp3\" \\\n  -F \"project=Reuniões\" \\\n  -F \"language=pt\" \\\n  -F \"include_timestamps=true\"\n```\n\nVídeo com legenda SRT como padrão, tags e descarte do arquivo ao terminar:\n```bash\ncurl -X POST http://localhost:8080/transcribe \\\n  -H \"Authorization: Bearer $TOKEN\" \\\n  -F \"file=@aula.mp4\" \\\n  -F \"language=pt\" \\\n  -F \"output_format=srt\" \\\n  -F \"tags=focus,aula\" \\\n  -F \"purge_source=true\"\n```\n\n## Resultado\nConsulte o status em `/jobs/{job_id}` até `completed` e busque o resultado:\n- `GET /jobs/{job_id}/result`: JSON com markdown e metadados (idioma, duração, device)\n- `GET /jobs/{job_id}/result?format=vtt`: legenda WebVTT (`text/vtt`)\n- `?format=srt`, `?format=txt`, `?format=json`: SRT, texto puro, segmentos",
+        "description": "Transcrever áudio ou vídeo para texto usando Whisper (STT)\n\nAceita áudio ou vídeo (só a faixa de áudio do vídeo é transcrita).\nO job entra na fila própria de transcrição (`ingestify-audio`), consumida por\nworkers dedicados, e não disputa vaga com a conversão de documentos.\n\n## Autenticação\nObrigatória: header `X-API-Key: <chave>` ou `Authorization: Bearer <token JWT>`.\nSem ele a resposta é 401.\n\nTodos os formatos são gerados: Markdown, legendas WebVTT e SRT, texto puro e\nJSON com segmentos. Escolha o formato em `GET /jobs/{job_id}/result?format=vtt`\n(ou defina o padrão com `output_format`).\n\n## Parâmetros:\n- `file`: Arquivo de áudio ou vídeo para transcrição\n- `name`: Nome de identificação opcional\n- `tags`: Tags do job, separadas por vírgula (ex: `focus,aula`)\n- `language`: Código de idioma ISO 639-1 (ex: 'en', 'pt', 'es'). Auto-detecta se não fornecido\n- `include_timestamps`: Adicionar marcadores de tempo [MM:SS] na transcrição\n- `include_word_timestamps`: Adicionar timestamps em cada palavra (mais detalhado)\n- `output_format`: Formato padrão do resultado (`markdown`, `vtt`, `srt`, `txt`, `json`)\n- `purge_source`: Se `true`, apaga o arquivo enviado (disco e MinIO) quando o job\n  termina (com sucesso, ou com falha depois das tentativas automáticas); ficam só\n  as transcrições. `GET /jobs/{job_id}` informa `source_deleted_at`. `DELETE /jobs/{job_id}` também\n  apaga o arquivo de origem e as transcrições\n\n## Projeto\nTodo job pertence a um projeto: envie `project` (nome; criado se não existir) ou\n`project_id`, e opcionalmente `folder`/`folder_id`. Uma API key vinculada a um\nprojeto dispensa o campo. Sem projeto: 422.\n\n## Arquivo repetido\nReenviar um arquivo idêntico (mesmo SHA-256) que já tem job **não falho** no mesmo\nprojeto devolve esse job em vez de criar outro: as tags novas são somadas às dele e o\n`output_format` enviado passa a ser o padrão do resultado. Se o job anterior\nfalhou, o reenvio cria um job novo; é assim que se tenta de novo.\n\n## Formatos suportados\n- Áudio: MP3, WAV, M4A, FLAC, OGG, OPUS, WEBM, WMA, AAC\n- Vídeo: MP4, M4V, MKV, MOV, AVI, WEBM, WMV, FLV, MPEG, TS, 3GP\n\n## Limite de tamanho\n- Áudio: até 50MB (MAX_AUDIO_FILE_SIZE_MB)\n- Vídeo: até 500MB (MAX_VIDEO_FILE_SIZE_MB)\n\n## Tempo limite\nDefinido pelo worker de transcrição (`TRANSCRIPTION_TIMEOUT_SECONDS`, padrão 3h),\nindependente do `CONVERSION_TIMEOUT_SECONDS` dos documentos. Um job que estoura o\ntempo falha sem novas tentativas automáticas.\n\n## Retorno\nRetorna imediatamente um `job_id` para consultar o progresso via `/jobs/{job_id}`\n\n## Erros\nToda recusa traz `{\"detail\": {\"code\", \"message\"}}` (lista por status em *Responses*):\n- 401: sem autenticação\n- 413 `FILE_TOO_LARGE`: arquivo acima do limite\n- 422 `UNSUPPORTED_MEDIA_FORMAT`, `INVALID_OUTPUT_FORMAT`, `INVALID_TAGS`,\n  `FOLDER_LIMIT`, `PROJECT_REQUIRED`...; `FILE_MISSING` quando o `file` não chegou\n- 503 `TRANSCRIPTION_DISABLED` (transcrição desligada) ou `QUEUE_UNAVAILABLE`\n\n## Exemplos:\n```bash\ncurl -X POST http://localhost:8080/transcribe \\\n  -H \"X-API-Key: $INGESTIFY_API_KEY\" \\\n  -F \"file=@meeting.mp3\" \\\n  -F \"project=Reuniões\" \\\n  -F \"language=pt\" \\\n  -F \"include_timestamps=true\"\n```\n\nVídeo com legenda SRT como padrão, tags e descarte do arquivo ao terminar:\n```bash\ncurl -X POST http://localhost:8080/transcribe \\\n  -H \"Authorization: Bearer $TOKEN\" \\\n  -F \"file=@aula.mp4\" \\\n  -F \"language=pt\" \\\n  -F \"output_format=srt\" \\\n  -F \"tags=focus,aula\" \\\n  -F \"purge_source=true\"\n```\n\n## Resultado\nConsulte o status em `/jobs/{job_id}` até `completed` e busque o resultado:\n- `GET /jobs/{job_id}/result`: JSON com markdown e metadados (idioma, duração, device)\n- `GET /jobs/{job_id}/result?format=vtt`: legenda WebVTT (`text/vtt`)\n- `?format=srt`, `?format=txt`, `?format=json`: SRT, texto puro, segmentos",
         "operationId": "transcribe_audio_transcribe_post",
         "requestBody": {
           "content": {
@@ -6122,15 +6180,73 @@
               }
             }
           },
-          "422": {
-            "description": "Validation Error",
+          "400": {
+            "description": "`{\"detail\": {\"code\", \"message\"}}`. `code`: `FILE_EMPTY`",
             "content": {
               "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                "example": {
+                  "detail": {
+                    "code": "FILE_EMPTY",
+                    "message": "Arquivo enviado está vazio"
+                  }
                 }
               }
             }
+          },
+          "413": {
+            "description": "`{\"detail\": {\"code\", \"message\"}}`. `code`: `FILE_TOO_LARGE`",
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": {
+                    "code": "FILE_TOO_LARGE",
+                    "message": "Arquivo muito grande. Máximo: 50MB"
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`{\"detail\": {\"code\", \"message\"}}`. `code`: `UNSUPPORTED_MEDIA_FORMAT`, `INVALID_OUTPUT_FORMAT`, `FOLDER_LIMIT`, `PROJECT_LIMIT`, `PROJECT_REQUIRED`, `PROJECT_ARCHIVED`, `INVALID_LOCATION`, `INVALID_TAGS`, `INVALID_TRANSCRIPTION_OPTIONS`. Ou o 422 de validação do FastAPI: `{\"detail\": [...], \"code\": \"FILE_MISSING\" | \"VALIDATION_ERROR\"}`",
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": {
+                    "code": "UNSUPPORTED_MEDIA_FORMAT",
+                    "message": "Formato não suportado. MIME type: application/pdf, Extensão: .pdf. ..."
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "`{\"detail\": {\"code\", \"message\"}}`. `code`: `JOB_CREATE_FAILED`",
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": {
+                    "code": "JOB_CREATE_FAILED",
+                    "message": "Erro ao criar job"
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`{\"detail\": {\"code\", \"message\"}}`. `code`: `TRANSCRIPTION_DISABLED`, `QUEUE_UNAVAILABLE`, `DATABASE_UNAVAILABLE`, `DIARIZATION_NOT_READY`",
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": {
+                    "code": "QUEUE_UNAVAILABLE",
+                    "message": "Sistema de processamento indisponível"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`project_id` / `folder_id` inexistente ou de outro usuário (texto, igual ao 404 de job)"
           }
         },
         "security": [
@@ -6219,15 +6335,73 @@
               }
             }
           },
-          "422": {
-            "description": "Validation Error",
+          "400": {
+            "description": "`{\"detail\": {\"code\", \"message\"}}`. `code`: `FILE_EMPTY`, `INVALID_SOURCE_TYPE`, `FILE_REQUIRED`, `SOURCE_REQUIRED`, `SOURCE_TOKEN_REQUIRED`",
             "content": {
               "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                "example": {
+                  "detail": {
+                    "code": "FILE_EMPTY",
+                    "message": "Arquivo enviado está vazio"
+                  }
                 }
               }
             }
+          },
+          "413": {
+            "description": "`{\"detail\": {\"code\", \"message\"}}`. `code`: `FILE_TOO_LARGE`",
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": {
+                    "code": "FILE_TOO_LARGE",
+                    "message": "Arquivo muito grande. Máximo: 50MB"
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`{\"detail\": {\"code\", \"message\"}}`. `code`: `INVALID_FILE_FORMAT`, `FOLDER_LIMIT`, `PROJECT_LIMIT`, `PROJECT_REQUIRED`, `PROJECT_ARCHIVED`, `INVALID_LOCATION`, `INVALID_TAGS`, `INVALID_TRANSCRIPTION_OPTIONS`. Ou o 422 de validação do FastAPI: `{\"detail\": [...], \"code\": \"FILE_MISSING\" | \"VALIDATION_ERROR\"}`",
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": {
+                    "code": "INVALID_FILE_FORMAT",
+                    "message": "O conteúdo do arquivo não é PDF (assinatura ausente no início do arquivo)"
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "`{\"detail\": {\"code\", \"message\"}}`. `code`: `JOB_CREATE_FAILED`",
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": {
+                    "code": "JOB_CREATE_FAILED",
+                    "message": "Erro ao criar job"
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`{\"detail\": {\"code\", \"message\"}}`. `code`: `QUEUE_UNAVAILABLE`, `DATABASE_UNAVAILABLE`, `DIARIZATION_NOT_READY`",
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": {
+                    "code": "QUEUE_UNAVAILABLE",
+                    "message": "Sistema de processamento indisponível"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`project_id` / `folder_id` inexistente ou de outro usuário (texto, igual ao 404 de job)"
           }
         },
         "x-access": "user"
@@ -14652,11 +14826,13 @@
         "properties": {
           "max_projects": {
             "type": "integer",
-            "title": "Max Projects"
+            "title": "Max Projects",
+            "description": "0 = sem limite"
           },
           "max_folders_per_project": {
             "type": "integer",
-            "title": "Max Folders Per Project"
+            "title": "Max Folders Per Project",
+            "description": "0 = sem limite"
           }
         },
         "type": "object",

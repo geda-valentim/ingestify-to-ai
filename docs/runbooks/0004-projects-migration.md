@@ -38,7 +38,7 @@ docker run --rm -it --network host -v "$NEW":/mig:ro -w /mig --entrypoint python
 | 5 | API boot | automatic: the schema guard runs, then the one-shot tail backfill, then the invariant check. If the guard fails, the API exits with `SystemExit(1)`. |
 
 The process-level environment variables are `UPLOAD_FALLBACK_PROJECT` (empty by default),
-`MAX_PROJECTS_PER_USER` (200) and `MAX_FOLDERS_PER_PROJECT` (500); `docker-compose.yml`
+`MAX_PROJECTS_PER_USER` (200) and `MAX_FOLDERS_PER_PROJECT` (10000; `0` turns either limit off); `docker-compose.yml`
 passes them to the `api` service, so set them in `.env`.
 
 ## What the execution engines (spec 0003) change here

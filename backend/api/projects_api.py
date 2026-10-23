@@ -478,8 +478,8 @@ class ProjectSummary(BaseModel):
 
 
 class ProjectLimits(BaseModel):
-    max_projects: int
-    max_folders_per_project: int
+    max_projects: int = Field(..., description="0 = sem limite")
+    max_folders_per_project: int = Field(..., description="0 = sem limite")
 
 
 class ProjectListResponse(BaseModel):

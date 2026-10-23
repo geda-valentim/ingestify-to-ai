@@ -88,7 +88,7 @@ from starlette.responses import JSONResponse, Response
 from shared import vision_markdown
 from shared.tags import set_job_tags
 from shared.utils import calculate_file_checksum
-from api.tag_routes import TAGS_FORM_DESCRIPTION, parse_tags_or_422
+from api.tag_routes import TAGS_FORM_DESCRIPTION, parse_tags_or_422 as _parse_tags
 from api.projects_api import (
     LocationError,
     LocationFields,
@@ -182,6 +182,14 @@ def _error(
     return HTTPException(status_code=status_code, detail=detail)
 
 
+def parse_tags_or_422(raw) -> List[str]:
+    """Tags in this module's envelope: 422 `{"error_code": "INVALID_TAGS", "message", "job_id"}`."""
+    try:
+        return _parse_tags(raw)
+    except HTTPException as exc:
+        raise _error(exc.status_code, exc.detail["code"], exc.detail["message"])
+
+
 def _require_vision_enabled() -> None:
     if not settings.enable_image_description:
         raise _error(503, "VISION_DISABLED", VISION_DISABLED_MESSAGE)
@@ -196,8 +204,10 @@ def _location_step(fn, *args):
     try:
         return fn(*args)
     except LocationError as exc:
-        raise _error(exc.status_code, exc.error_code, str(exc.detail))
+        raise _error(exc.status_code, exc.error_code, exc.message)
     except HTTPException as exc:  # limits (422) and database errors (503) of get-or-add
+        if isinstance(exc.detail, dict):  # FOLDER_LIMIT / PROJECT_LIMIT
+            raise _error(exc.status_code, exc.detail["code"], exc.detail["message"])
         code = "DATABASE_UNAVAILABLE" if exc.status_code == 503 else "INVALID_LOCATION"
         raise _error(exc.status_code, code, str(exc.detail))
 

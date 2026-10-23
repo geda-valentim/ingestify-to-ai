@@ -59,12 +59,16 @@ class LocationError(HTTPException):
     HTTPException de projeto/pasta com um código legível por máquina.
 
     O `error_code` é usado pelas rotas de `/images/*`, cujo envelope de erro é
-    `{"detail": {"error_code", "message", "job_id"}}`.
+    `{"detail": {"error_code", "message", "job_id"}}`. Nas demais rotas um 422
+    responde `{"detail": {"code", "message"}}`, para o cliente ramificar sem casar
+    texto; 404 e 503 seguem em texto, iguais ao 404 de job (não revelam o que existe).
     """
 
     def __init__(self, status_code: int, error_code: str, detail: str):
-        super().__init__(status_code=status_code, detail=detail)
+        body = {"code": error_code, "message": detail} if status_code == 422 else detail
+        super().__init__(status_code=status_code, detail=body)
         self.error_code = error_code
+        self.message = detail
 
 # Profundidade máxima ao subir a hierarquia MAIN -> SPLIT/PAGE/MERGE.
 MAX_PARENT_CHAIN_DEPTH = ownership.MAX_PARENT_CHAIN_DEPTH

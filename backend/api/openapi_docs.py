@@ -18,7 +18,11 @@ from fastapi.routing import APIRoute, APIWebSocketRoute
 # default. Behaviour change: ?format=markdown on an image job used to return the
 # JSON envelope and now returns text/markdown (use ?format=json); an invalid
 # ?format= returns the error-catalog object (RESULT_FORMAT_INVALID), not a string.
-API_VERSION = "1.4.0"
+# 1.5.0: every refusal of /upload, /convert and /transcribe carries a machine code
+# (INVALID_FILE_FORMAT, FOLDER_LIMIT, FILE_TOO_LARGE...). Behaviour change: those
+# details used to be text and are now {"code", "message"}; FastAPI's 422 keeps
+# `detail` as the list and gains a top-level `code` (FILE_MISSING / VALIDATION_ERROR).
+API_VERSION = "1.5.0"
 
 API_DESCRIPTION = """
 API assíncrona que converte documentos (PDF, DOCX, HTML, PPTX, XLSX...) em Markdown,
@@ -124,8 +128,28 @@ job da chave excluído: 410 (use outra chave). `purge_source` não entra na comp
 
 ## Erros
 
-Erros HTTP vêm em `{"detail": ...}`: texto, lista de validação (422) ou objeto. Recusas
-com código (jobs, engines, perfis de execução, acesso, IAM, root) trazem
+Erros HTTP vêm em `{"detail": ...}`: texto, lista de validação (422) ou objeto.
+
+**Criação de jobs** (`/upload`, `/convert`, `/transcribe`): toda recusa traz
+`{"detail": {"code": "...", "message": "..."}}`; o `code` diz o que fazer, sem casar texto.
+A seção *Responses* de cada rota lista os códigos. Os principais:
+
+| Código | Status | O que fazer |
+|---|---|---|
+| `INVALID_FILE_FORMAT` | 422 | o conteúdo contradiz a extensão; reenviar o mesmo arquivo não adianta |
+| `FILE_MISSING` | 422 | o campo `file` não chegou (em geral upload cortado); reenvie |
+| `FILE_EMPTY` / `FILE_TOO_LARGE` | 400 / 413 | arquivo vazio / acima do limite |
+| `FOLDER_LIMIT` / `PROJECT_LIMIT` | 422 | teto de pastas por projeto / projetos por usuário |
+| `PROJECT_REQUIRED`, `PROJECT_ARCHIVED`, `INVALID_LOCATION` | 422 | corrija `project`/`folder` |
+| `INVALID_TAGS` | 422 | corrija `tags` |
+| `QUEUE_UNAVAILABLE`, `DATABASE_UNAVAILABLE` | 503 | temporário; tente de novo |
+
+O 422 de validação do FastAPI mantém `detail` como lista e ganha `code` no topo:
+`{"detail": [...], "code": "FILE_MISSING" | "VALIDATION_ERROR"}`. Os 404 de projeto/pasta
+(`project_id`/`folder_id` de outro usuário ou inexistente) seguem em texto, iguais ao 404
+de job.
+
+Outras recusas com código (jobs, engines, perfis de execução, acesso, IAM, root) trazem
 `{"detail": {"code": "...", "message": "...", "next_steps": [...]}}`, com `cause`
 (o gate interno quando um código genérico embrulha outro) e `technical` (texto original)
 quando houver. Use `code` para decidir; `message` é para pessoas. Falhas não tratadas
@@ -235,3 +259,55 @@ def annotate_openapi(schema, routes):
             'de diarização; consulte o guia de live. Controle finish/cancel em JSON.',
     } for route in routes if isinstance(route, APIWebSocketRoute)]
     return schema
+
+
+# ---------------------------------------------------------------------------
+# Refusals of the job-creating routes (Swagger "Responses")
+# ---------------------------------------------------------------------------
+
+_LOCATION_422 = ["FOLDER_LIMIT", "PROJECT_LIMIT", "PROJECT_REQUIRED", "PROJECT_ARCHIVED",
+                 "INVALID_LOCATION", "INVALID_TAGS"]
+_VALIDATION_422 = "FastAPI: `{\"detail\": [...], \"code\": \"FILE_MISSING\" | \"VALIDATION_ERROR\"}`"
+_JOB_CREATION_ERRORS = {
+    "upload": {
+        400: ["FILE_EMPTY"],
+        422: ["INVALID_FILE_FORMAT", *_LOCATION_422, "INVALID_TRANSCRIPTION_OPTIONS"],
+        503: ["QUEUE_UNAVAILABLE", "DATABASE_UNAVAILABLE", "DIARIZATION_NOT_READY"],
+    },
+    "convert": {
+        400: ["FILE_EMPTY", "INVALID_SOURCE_TYPE", "FILE_REQUIRED", "SOURCE_REQUIRED", "SOURCE_TOKEN_REQUIRED"],
+        422: ["INVALID_FILE_FORMAT", *_LOCATION_422, "INVALID_TRANSCRIPTION_OPTIONS"],
+        503: ["QUEUE_UNAVAILABLE", "DATABASE_UNAVAILABLE", "DIARIZATION_NOT_READY"],
+    },
+    "transcribe": {
+        400: ["FILE_EMPTY"],
+        422: ["UNSUPPORTED_MEDIA_FORMAT", "INVALID_OUTPUT_FORMAT", *_LOCATION_422, "INVALID_TRANSCRIPTION_OPTIONS"],
+        503: ["TRANSCRIPTION_DISABLED", "QUEUE_UNAVAILABLE", "DATABASE_UNAVAILABLE", "DIARIZATION_NOT_READY"],
+    },
+}
+_EXAMPLES = {
+    400: ("FILE_EMPTY", "Arquivo enviado está vazio"),
+    413: ("FILE_TOO_LARGE", "Arquivo muito grande. Máximo: 50MB"),
+    422: ("FOLDER_LIMIT", "Limite de 10000 pastas atingido neste projeto"),
+    500: ("JOB_CREATE_FAILED", "Erro ao criar job"),
+    503: ("QUEUE_UNAVAILABLE", "Sistema de processamento indisponível"),
+}
+
+
+def job_creation_responses(route: str) -> dict:
+    """`responses=` of /upload, /convert or /transcribe: the codes each status can carry."""
+    codes = {**_JOB_CREATION_ERRORS[route], 413: ["FILE_TOO_LARGE"], 500: ["JOB_CREATE_FAILED"]}
+    if route == "transcribe":
+        example_422 = ("UNSUPPORTED_MEDIA_FORMAT", "Formato não suportado. MIME type: application/pdf, Extensão: .pdf. ...")
+    else:
+        example_422 = ("INVALID_FILE_FORMAT", "O conteúdo do arquivo não é PDF (assinatura ausente no início do arquivo)")
+    out = {}
+    for status in sorted(codes):
+        description = "`{\"detail\": {\"code\", \"message\"}}`. `code`: " + ", ".join(f"`{c}`" for c in codes[status])
+        if status == 422:
+            description += ". Ou o 422 de validação do " + _VALIDATION_422
+        code, message = example_422 if status == 422 else _EXAMPLES[status]
+        out[status] = {"description": description,
+                       "content": {"application/json": {"example": {"detail": {"code": code, "message": message}}}}}
+    out[404] = {"description": "`project_id` / `folder_id` inexistente ou de outro usuário (texto, igual ao 404 de job)"}
+    return out

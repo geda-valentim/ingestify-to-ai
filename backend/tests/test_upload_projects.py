@@ -363,7 +363,24 @@ def test_project_limit_is_422(env, monkeypatch):
     response = post(env, "/upload", {"project": "Dois"})
     assert response.status_code == 422
     assert message(response) == "Limite de 1 projetos atingido"
+    assert response.json()["detail"]["code"] == "PROJECT_LIMIT"
     assert not [p for p in files_on_disk(env) if ".staging" in str(p)]  # staged upload removed
+
+
+@pytest.mark.parametrize("endpoint,code_key", [("/upload", "code"), ("/images/describe/upload", "error_code")])
+def test_folder_limit_is_422_folder_limit(env, monkeypatch, endpoint, code_key):
+    monkeypatch.setattr(projects_module.get_settings(), "max_folders_per_project", 1)
+    assert post(env, endpoint, {"project": "P", "folder": "link-1"}).status_code == 200
+    response = post(env, endpoint, {"project": "P", "folder": "link-2"})
+    assert response.status_code == 422
+    assert response.json()["detail"][code_key] == "FOLDER_LIMIT"
+    assert message(response) == "Limite de 1 pastas atingido neste projeto"
+    assert env.db.query(Folder).count() == 1
+
+
+def test_upload_location_422_carries_its_code(env):
+    response = post(env, "/upload")
+    assert response.json()["detail"] == {"code": "PROJECT_REQUIRED", "message": PROJECT_REQUIRED_DETAIL}
 
 
 def test_fallback_project_valve(env, monkeypatch, caplog):
