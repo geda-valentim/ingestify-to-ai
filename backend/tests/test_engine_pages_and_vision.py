@@ -442,7 +442,7 @@ def test_the_ingestify_jwt_never_reaches_the_task(convert):
 def test_a_cloud_source_needs_its_own_token_header(convert):
     with pytest.raises(HTTPException) as exc:
         convert("gdrive", "file-id", authorization="Bearer eyJ.user.jwt")
-    assert exc.value.status_code == 400 and "X-Source-Token" in exc.value.detail
+    assert exc.value.status_code == 400 and exc.value.detail["code"] == "SOURCE_TOKEN_REQUIRED"
     assert convert.enqueued == []
 
 

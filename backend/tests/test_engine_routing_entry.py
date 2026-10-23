@@ -73,10 +73,10 @@ def transcribe(world, user_id=ALICE, name="aula.mp3"):
         db.close()
 
 
-def upload_endpoint(world, name="aula.mp3", content_type="audio/mpeg"):
+def upload_endpoint(world, name="aula.mp3", content_type="audio/mpeg", data=None):
     db, who = user(world, ALICE)
     try:
-        return asyncio.run(routes.upload_and_convert(file=upload(name, content_type=content_type), name=None,
+        return asyncio.run(routes.upload_and_convert(file=upload(name, content_type=content_type, data=data), name=None,
                                                      tags=None, docling_preset="fast",
                                                      location=LocationFields(project="Engines"), current_user=who, db=db))
     finally:
@@ -222,7 +222,7 @@ def test_with_a_route_upload_and_convert_send_audio_to_the_backlog_and_documents
     world.dispatcher_alive()
     upload_endpoint(world)
     convert_endpoint(world, name="talk.m4a")
-    upload_endpoint(world, name="report.pdf", content_type="application/pdf")
+    upload_endpoint(world, name="report.pdf", content_type="application/pdf", data=b"%PDF-1.4 report")
 
     assert len(world.delayed) == 1 and world.delayed[0]["source"].endswith("report.pdf")
     with world.Session() as db:
