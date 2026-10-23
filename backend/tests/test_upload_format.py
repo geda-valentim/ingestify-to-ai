@@ -59,7 +59,18 @@ def test_pdf_header_after_the_first_kilobyte_is_refused(env):
     assert response.json()["detail"]["code"] == "INVALID_FILE_FORMAT"
 
 
-def test_cut_multipart_upload_keeps_the_validation_422_without_the_format_code(env):
+@pytest.fixture
+def app_env(env):
+    """`env` with the API's validation handler (api/main.py), as in production."""
+    from fastapi.exceptions import RequestValidationError
+    from api.main import validation_exception_handler
+
+    env.client.app.add_exception_handler(RequestValidationError, validation_exception_handler)
+    return env
+
+
+def test_cut_multipart_upload_is_422_file_missing(app_env):
+    env = app_env
     add_project(env.db, ALICE, "P")
     body = (f"--{BOUNDARY}\r\nContent-Disposition: form-data; name=\"project\"\r\n\r\nP\r\n"
             f"--{BOUNDARY}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"edital.pdf\"\r\n"
@@ -67,6 +78,85 @@ def test_cut_multipart_upload_keeps_the_validation_422_without_the_format_code(e
     response = env.client.post("/upload", content=body, headers={
         **jwt(), "Content-Type": f"multipart/form-data; boundary={BOUNDARY}"})
     assert response.status_code == 422
+    assert response.json()["code"] == "FILE_MISSING"
     detail = response.json()["detail"]
     assert isinstance(detail, list) and detail[0]["loc"] == ["body", "file"]
     assert env.db.query(Job).count() == 0
+
+
+def test_other_validation_errors_are_validation_error(app_env):
+    add_project(app_env.db, ALICE, "P")
+    response = app_env.client.post("/upload", headers=jwt(), data={"project": "P", "image_mode": "bogus"},
+                                   files={"file": ("a.pdf", b"%PDF-1.4", "application/pdf")})
+    assert response.status_code == 422
+    assert response.json()["code"] == "VALIDATION_ERROR"
+    assert isinstance(response.json()["detail"], list)
+
+
+def _code(response):
+    return response.status_code, response.json()["detail"]["code"]
+
+
+def test_empty_and_too_large_files_carry_their_code(env, monkeypatch):
+    from api import routes
+
+    add_project(env.db, ALICE, "P")
+    assert _code(_send(env, "/upload", "a.pdf", b"")) == (400, "FILE_EMPTY")
+    monkeypatch.setattr(routes.settings, "max_file_size_mb", 0)
+    assert _code(_send(env, "/upload", "a.pdf", b"%PDF-1.4")) == (413, "FILE_TOO_LARGE")
+
+
+def test_invalid_tags_carry_their_code(env):
+    add_project(env.db, ALICE, "P")
+    response = env.client.post("/upload", headers=jwt(), data={"project": "P", "tags": "x" * 500},
+                               files={"file": ("a.pdf", b"%PDF-1.4", "application/pdf")})
+    assert _code(response) == (422, "INVALID_TAGS")
+
+
+@pytest.mark.parametrize("data,files,headers,expected", [
+    ({"source_type": "ftp", "source": "x"}, None, {}, "INVALID_SOURCE_TYPE"),
+    ({"source_type": "file"}, None, {}, "FILE_REQUIRED"),
+    ({"source_type": "url"}, None, {}, "SOURCE_REQUIRED"),
+    ({"source_type": "gdrive", "source": "abc"}, None, {}, "SOURCE_TOKEN_REQUIRED"),
+])
+def test_convert_400s_carry_their_code(env, data, files, headers, expected):
+    add_project(env.db, ALICE, "P")
+    response = env.client.post("/convert", headers={**jwt(), **headers}, data={"project": "P", **data})
+    assert _code(response) == (400, expected)
+
+
+@pytest.mark.parametrize("data,filename,expected", [
+    ({"output_format": "docx"}, "talk.mp3", (422, "INVALID_OUTPUT_FORMAT")),
+    ({}, "talk.pdf", (422, "UNSUPPORTED_MEDIA_FORMAT")),
+])
+def test_transcribe_refusals_carry_their_code(env, data, filename, expected):
+    add_project(env.db, ALICE, "P")
+    response = env.client.post("/transcribe", headers=jwt(), data={"project": "P", **data},
+                               files={"file": (filename, b"ID3audio", "application/octet-stream")})
+    assert _code(response) == expected
+
+
+def test_transcription_disabled_carries_its_code(env, monkeypatch):
+    from api import routes
+
+    monkeypatch.setattr(routes.settings, "enable_audio_transcription", False)
+    response = env.client.post("/transcribe", headers=jwt(), data={"project": "P"},
+                               files={"file": ("talk.mp3", b"ID3audio", "audio/mpeg")})
+    assert _code(response) == (503, "TRANSCRIPTION_DISABLED")
+
+
+@pytest.mark.parametrize("path", ["/upload", "/convert", "/transcribe"])
+def test_swagger_lists_the_codes_of_each_status(env, path):
+    responses = env.client.app.openapi()["paths"][path]["post"]["responses"]
+    assert {"400", "404", "413", "422", "500", "503"} <= set(responses)
+    assert "FOLDER_LIMIT" in responses["422"]["description"]
+    assert "FILE_MISSING" in responses["422"]["description"]
+    assert responses["422"]["content"]["application/json"]["example"]["detail"]["code"]
+
+
+def test_image_routes_keep_their_envelope_for_invalid_tags(env, monkeypatch):
+    add_project(env.db, ALICE, "P")
+    response = env.client.post("/images/describe/upload", headers=jwt(), data={"project": "P", "tags": "x" * 500},
+                               files={"file": ("foto.png", b"\x89PNG\r\n\x1a\n", "image/png")})
+    assert response.status_code == 422
+    assert response.json()["detail"]["error_code"] == "INVALID_TAGS"

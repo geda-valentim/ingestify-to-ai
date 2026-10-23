@@ -34,7 +34,7 @@ def parse_tags_or_422(raw) -> List[str]:
     try:
         return parse_tags(raw)
     except InvalidTagsError as e:
-        raise HTTPException(status_code=422, detail=str(e))
+        raise HTTPException(status_code=422, detail={"code": "INVALID_TAGS", "message": str(e)})
 
 
 def add_tags_to_existing_job(db: Session, job: Job, tags: List[str]) -> None:
@@ -46,7 +46,7 @@ def add_tags_to_existing_job(db: Session, job: Job, tags: List[str]) -> None:
         db.commit()
     except InvalidTagsError as e:
         db.rollback()
-        raise HTTPException(status_code=422, detail=str(e))
+        raise HTTPException(status_code=422, detail={"code": "INVALID_TAGS", "message": str(e)})
     except Exception as e:
         db.rollback()
         logger.warning(f"Could not add tags to existing job {job.id}: {e}")
@@ -114,7 +114,7 @@ async def replace_job_tags(
         db.commit()
     except InvalidTagsError as e:
         db.rollback()
-        raise HTTPException(status_code=422, detail=str(e))
+        raise HTTPException(status_code=422, detail={"code": "INVALID_TAGS", "message": str(e)})
 
     db.refresh(owned_job)
     return JobTagsResponse(job_id=job_id, tags=owned_job.tags)

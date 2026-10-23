@@ -88,7 +88,7 @@ from starlette.responses import JSONResponse, Response
 from shared import vision_markdown
 from shared.tags import set_job_tags
 from shared.utils import calculate_file_checksum
-from api.tag_routes import TAGS_FORM_DESCRIPTION, parse_tags_or_422
+from api.tag_routes import TAGS_FORM_DESCRIPTION, parse_tags_or_422 as _parse_tags
 from api.projects_api import (
     LocationError,
     LocationFields,
@@ -180,6 +180,14 @@ def _error(
     }
     detail.update(extra)
     return HTTPException(status_code=status_code, detail=detail)
+
+
+def parse_tags_or_422(raw) -> List[str]:
+    """Tags in this module's envelope: 422 `{"error_code": "INVALID_TAGS", "message", "job_id"}`."""
+    try:
+        return _parse_tags(raw)
+    except HTTPException as exc:
+        raise _error(exc.status_code, exc.detail["code"], exc.detail["message"])
 
 
 def _require_vision_enabled() -> None:

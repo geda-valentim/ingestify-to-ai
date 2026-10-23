@@ -636,8 +636,9 @@ export const tagsApi = {
     });
 
     if (!response.ok) {
-      const detail = await response.json().catch(() => null);
-      throw new Error(detail?.detail || `Failed to save tags: ${response.statusText}`);
+      const body = await response.json().catch(() => null);
+      const detail = body?.detail?.message ?? body?.detail;
+      throw new Error(typeof detail === "string" && detail ? detail : `Failed to save tags: ${response.statusText}`);
     }
 
     return (await response.json()).tags;

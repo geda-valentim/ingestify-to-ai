@@ -2,7 +2,7 @@
 
 Gerado do OpenAPI da aplicação por `scripts/generate_api_docs.py`. Não edite este arquivo à mão.
 
-API `1.4.0`: **139 operações HTTP** e **1 WebSocket(s)**.
+API `1.5.0`: **139 operações HTTP** e **1 WebSocket(s)**.
 
 Base pública de desenvolvimento: `https://dev.ingestify.ai/api`. Os caminhos abaixo são relativos à base.
 
@@ -524,6 +524,20 @@ PDF, DOCX, DOC, HTML, PPTX, XLSX, RTF, ODT
 Retorna imediatamente um `job_id` para consultar o progresso via `/jobs/{job_id}`,
 e onde o job ficou (`project`, `folder`)
 
+## Erros
+Toda recusa traz `{"detail": {"code", "message"}}`; decida pelo `code` (lista
+completa por status em *Responses*, abaixo). Só `QUEUE_UNAVAILABLE` e
+`JOB_CREATE_FAILED` vêm depois de o job existir; ele fica `failed`.
+- 422 `INVALID_FILE_FORMAT`: o conteúdo contradiz a extensão (PDF sem `%PDF-` no
+  primeiro 1 KB; DOCX/PPTX/XLSX/ODT/ODS/ODP que não é ZIP; DOC/PPT/XLS que não é
+  OLE; RTF sem `{\rtf`). Reenviar o mesmo arquivo não adianta.
+- 422 `FILE_MISSING` (validação do FastAPI: `{"detail": [...], "code": "FILE_MISSING"}`):
+  o campo `file` não chegou, em geral um upload cortado no meio. Reenvie.
+- 422 `FOLDER_LIMIT` / `PROJECT_LIMIT`: teto de `MAX_FOLDERS_PER_PROJECT` (padrão
+  10000) / `MAX_PROJECTS_PER_USER` atingido.
+- 400 `FILE_EMPTY`, 413 `FILE_TOO_LARGE` (`MAX_FILE_SIZE_MB`).
+- 503 `QUEUE_UNAVAILABLE` / `DATABASE_UNAVAILABLE`: temporário, tente de novo.
+
 ## Exemplos:
 ```bash
 # Fast mode (default)
@@ -563,7 +577,12 @@ Respostas declaradas:
 | Status | Content-Type | Esquema | Descrição |
 | --- | --- | --- | --- |
 | 200 | application/json | [JobCreatedResponse](#model-jobcreatedresponse) | Successful Response |
-| 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
+| 400 | application/json | objeto livre | `{"detail": {"code", "message"}}`. `code`: `FILE_EMPTY` |
+| 413 | application/json | objeto livre | `{"detail": {"code", "message"}}`. `code`: `FILE_TOO_LARGE` |
+| 422 | application/json | objeto livre | `{"detail": {"code", "message"}}`. `code`: `INVALID_FILE_FORMAT`, `FOLDER_LIMIT`, `PROJECT_LIMIT`, `PROJECT_REQUIRED`, `PROJECT_ARCHIVED`, `INVALID_LOCATION`, `INVALID_TAGS`, `INVALID_TRANSCRIPTION_OPTIONS`. Ou o 422 de validação do FastAPI: `{"detail": [...], "code": "FILE_MISSING" &#124; "VALIDATION_ERROR"}` |
+| 500 | application/json | objeto livre | `{"detail": {"code", "message"}}`. `code`: `JOB_CREATE_FAILED` |
+| 503 | application/json | objeto livre | `{"detail": {"code", "message"}}`. `code`: `QUEUE_UNAVAILABLE`, `DATABASE_UNAVAILABLE`, `DIARIZATION_NOT_READY` |
+| 404 | — | objeto livre | `project_id` / `folder_id` inexistente ou de outro usuário (texto, igual ao 404 de job) |
 
 ### POST /transcribe
 
@@ -626,10 +645,12 @@ tempo falha sem novas tentativas automáticas.
 Retorna imediatamente um `job_id` para consultar o progresso via `/jobs/{job_id}`
 
 ## Erros
+Toda recusa traz `{"detail": {"code", "message"}}` (lista por status em *Responses*):
 - 401: sem autenticação
-- 413: arquivo acima do limite
-- 422: formato não suportado, `output_format` inválido ou `tags` inválidas
-- 503: transcrição desabilitada ou workers indisponíveis
+- 413 `FILE_TOO_LARGE`: arquivo acima do limite
+- 422 `UNSUPPORTED_MEDIA_FORMAT`, `INVALID_OUTPUT_FORMAT`, `INVALID_TAGS`,
+  `FOLDER_LIMIT`, `PROJECT_REQUIRED`...; `FILE_MISSING` quando o `file` não chegou
+- 503 `TRANSCRIPTION_DISABLED` (transcrição desligada) ou `QUEUE_UNAVAILABLE`
 
 ## Exemplos:
 ```bash
@@ -685,7 +706,12 @@ Respostas declaradas:
 | Status | Content-Type | Esquema | Descrição |
 | --- | --- | --- | --- |
 | 200 | application/json | [JobCreatedResponse](#model-jobcreatedresponse) | Successful Response |
-| 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
+| 400 | application/json | objeto livre | `{"detail": {"code", "message"}}`. `code`: `FILE_EMPTY` |
+| 413 | application/json | objeto livre | `{"detail": {"code", "message"}}`. `code`: `FILE_TOO_LARGE` |
+| 422 | application/json | objeto livre | `{"detail": {"code", "message"}}`. `code`: `UNSUPPORTED_MEDIA_FORMAT`, `INVALID_OUTPUT_FORMAT`, `FOLDER_LIMIT`, `PROJECT_LIMIT`, `PROJECT_REQUIRED`, `PROJECT_ARCHIVED`, `INVALID_LOCATION`, `INVALID_TAGS`, `INVALID_TRANSCRIPTION_OPTIONS`. Ou o 422 de validação do FastAPI: `{"detail": [...], "code": "FILE_MISSING" &#124; "VALIDATION_ERROR"}` |
+| 500 | application/json | objeto livre | `{"detail": {"code", "message"}}`. `code`: `JOB_CREATE_FAILED` |
+| 503 | application/json | objeto livre | `{"detail": {"code", "message"}}`. `code`: `TRANSCRIPTION_DISABLED`, `QUEUE_UNAVAILABLE`, `DATABASE_UNAVAILABLE`, `DIARIZATION_NOT_READY` |
+| 404 | — | objeto livre | `project_id` / `folder_id` inexistente ou de outro usuário (texto, igual ao 404 de job) |
 
 ### POST /convert
 
@@ -795,7 +821,12 @@ Respostas declaradas:
 | Status | Content-Type | Esquema | Descrição |
 | --- | --- | --- | --- |
 | 200 | application/json | [JobCreatedResponse](#model-jobcreatedresponse) | Successful Response |
-| 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
+| 400 | application/json | objeto livre | `{"detail": {"code", "message"}}`. `code`: `FILE_EMPTY`, `INVALID_SOURCE_TYPE`, `FILE_REQUIRED`, `SOURCE_REQUIRED`, `SOURCE_TOKEN_REQUIRED` |
+| 413 | application/json | objeto livre | `{"detail": {"code", "message"}}`. `code`: `FILE_TOO_LARGE` |
+| 422 | application/json | objeto livre | `{"detail": {"code", "message"}}`. `code`: `INVALID_FILE_FORMAT`, `FOLDER_LIMIT`, `PROJECT_LIMIT`, `PROJECT_REQUIRED`, `PROJECT_ARCHIVED`, `INVALID_LOCATION`, `INVALID_TAGS`, `INVALID_TRANSCRIPTION_OPTIONS`. Ou o 422 de validação do FastAPI: `{"detail": [...], "code": "FILE_MISSING" &#124; "VALIDATION_ERROR"}` |
+| 500 | application/json | objeto livre | `{"detail": {"code", "message"}}`. `code`: `JOB_CREATE_FAILED` |
+| 503 | application/json | objeto livre | `{"detail": {"code", "message"}}`. `code`: `QUEUE_UNAVAILABLE`, `DATABASE_UNAVAILABLE`, `DIARIZATION_NOT_READY` |
+| 404 | — | objeto livre | `project_id` / `folder_id` inexistente ou de outro usuário (texto, igual ao 404 de job) |
 
 ### GET /jobs/{job_id}
 
@@ -13680,8 +13711,8 @@ Esquema JSON completo:
 
 | Campo | Obrigatório | Tipo | Padrões/limites | Descrição |
 | --- | --- | --- | --- | --- |
-| `max_projects` | sim | integer |  |  |
-| `max_folders_per_project` | sim | integer |  |  |
+| `max_projects` | sim | integer |  | 0 = sem limite |
+| `max_folders_per_project` | sim | integer |  | 0 = sem limite |
 
 Esquema JSON completo:
 
@@ -13690,11 +13721,13 @@ Esquema JSON completo:
   "properties": {
     "max_projects": {
       "type": "integer",
-      "title": "Max Projects"
+      "title": "Max Projects",
+      "description": "0 = sem limite"
     },
     "max_folders_per_project": {
       "type": "integer",
-      "title": "Max Folders Per Project"
+      "title": "Max Folders Per Project",
+      "description": "0 = sem limite"
     }
   },
   "type": "object",

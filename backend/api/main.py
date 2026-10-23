@@ -1,4 +1,6 @@
 from fastapi import FastAPI, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.security import HTTPBearer, APIKeyHeader
@@ -131,6 +133,21 @@ app.add_middleware(
 
 
 # Exception handlers
+def validation_error_code(errors) -> str:
+    """FILE_MISSING when the multipart `file` field never arrived (often a cut upload)."""
+    for error in errors:
+        if error.get("type") == "missing" and tuple(error.get("loc") or ()) == ("body", "file"):
+            return "FILE_MISSING"
+    return "VALIDATION_ERROR"
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    """FastAPI's 422 (`detail` stays the list of errors) plus a top-level `code`."""
+    errors = jsonable_encoder(exc.errors())
+    return JSONResponse(status_code=422, content={"detail": errors, "code": validation_error_code(errors)})
+
+
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
     """Global exception handler"""

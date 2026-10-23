@@ -2,6 +2,31 @@
 
 > **Registro histórico (2025-10).** Não é mantido; para mudanças posteriores use `git log`. Observação: `workers/tasks_old.py`, citado abaixo, não existe (há um `workers/tasks.py.backup`). Exceção: mudanças de comportamento intencionais que uma spec manda registrar aqui entram na seção abaixo.
 
+## 2026-10: Códigos de erro na criação de jobs (API 1.5.0)
+
+- Toda recusa de `POST /upload`, `POST /convert` e `POST /transcribe` traz
+  `{"detail": {"code", "message"}}`, e o Swagger lista os códigos de cada status
+  (*Responses*). Códigos: `INVALID_FILE_FORMAT` (novo: o conteúdo contradiz a extensão,
+  ex.: HTML salvo como `.pdf`, que antes era aceito e falhava no worker), `FILE_EMPTY`,
+  `FILE_TOO_LARGE`, `FOLDER_LIMIT`, `PROJECT_LIMIT`, `PROJECT_REQUIRED`,
+  `PROJECT_ARCHIVED`, `INVALID_LOCATION`, `INVALID_TAGS`, `INVALID_SOURCE_TYPE`,
+  `FILE_REQUIRED`, `SOURCE_REQUIRED`, `SOURCE_TOKEN_REQUIRED`, `INVALID_OUTPUT_FORMAT`,
+  `UNSUPPORTED_MEDIA_FORMAT`, `TRANSCRIPTION_DISABLED`, `QUEUE_UNAVAILABLE`,
+  `DATABASE_UNAVAILABLE` (ganhou `message`), `JOB_CREATE_FAILED`.
+- O 422 de validação do FastAPI (todas as rotas) mantém `detail` como lista e ganha `code`
+  no topo: `FILE_MISSING` quando o campo `file` não chegou (em geral um upload cortado),
+  `VALIDATION_ERROR` nos demais.
+- `MAX_FOLDERS_PER_PROJECT` passa de 500 para 10000; `0` nele ou em
+  `MAX_PROJECTS_PER_USER` desliga o limite.
+- Nas rotas `/images/*`, o limite de pastas/projetos responde `error_code: FOLDER_LIMIT` /
+  `PROJECT_LIMIT` (antes `INVALID_LOCATION`), no envelope de sempre.
+- Tags inválidas: `INVALID_TAGS` em todas as rotas que aceitam `tags`; em `/images/*` e
+  `/images/faces` como `error_code`, no envelope delas.
+- **Mudança de comportamento: `detail` em texto vira objeto.** Os erros acima, e os 422 de
+  tags em `PUT /jobs/{job_id}/tags` e nas sessões ao vivo, respondiam `{"detail": "texto"}`. Clientes que
+  liam `detail` como texto devem ler `detail.message` (a interface web foi ajustada). Os
+  404 de projeto/pasta e os 401/403 de autenticação não mudam.
+
 ## 2026-10: Saída em Markdown nas rotas de imagem (API 1.4.0)
 
 - As oito rotas de imagem (`/images/describe`, `/images/ocr`, `/images/analyze`,
