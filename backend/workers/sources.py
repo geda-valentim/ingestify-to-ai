@@ -163,9 +163,12 @@ async def _resolve_public_ips(host: str, port: int) -> list:
     return addresses
 
 
-async def _send_pinned(client: httpx.AsyncClient, url: str) -> httpx.Response:
+async def _send_pinned(client: httpx.AsyncClient, url: str, *, method: str = 'GET',
+                       content: "bytes | None" = None,
+                       headers: "dict | None" = None) -> httpx.Response:
     """
-    Validate a URL and send a streamed GET to one of its already-validated IPs.
+    Validate a URL and send a streamed request (GET by default) to one of its
+    already-validated IPs. The job webhook (workers/webhook_tasks.py) POSTs through it.
 
     Connecting to the resolved IP (instead of letting the HTTP client resolve the
     name again) prevents DNS rebinding between the check and the connection.
@@ -192,9 +195,10 @@ async def _send_pinned(client: httpx.AsyncClient, url: str) -> httpx.Response:
     last_error = None
     for ip in addresses:
         request = client.build_request(
-            'GET',
+            method,
             parsed.copy_with(host=ip),
-            headers={'Host': host_header},
+            content=content,
+            headers={**(headers or {}), 'Host': host_header},
             extensions={'sni_hostname': host},
         )
         try:

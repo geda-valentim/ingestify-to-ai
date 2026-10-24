@@ -1,7 +1,7 @@
 from starlette.responses import JSONResponse
 import json
 from shared.job_configuration import job_configuration
-from shared import conversion_assets
+from shared import conversion_assets, webhooks
 from shared.job_source import (
     DUPLICATE_ALREADY_GONE,
     DUPLICATE_KEPT,
@@ -117,6 +117,18 @@ PURGE_SOURCE_FORM_DESCRIPTION = (
 )
 
 
+CALLBACK_URL_FORM_DESCRIPTION = (
+    "URL https que recebe um POST assinado quando o job principal termina "
+    "(`job.completed`, `job.failed` ou `job.partial`): só metadados, nunca o "
+    "markdown (busque-o em GET /jobs/{job_id}/result). A assinatura está em "
+    "`X-Ingestify-Signature` e o segredo em GET /webhooks/signing-secret. Hosts "
+    "locais, redes privadas e credenciais na URL são recusados (422 "
+    "`INVALID_CALLBACK_URL`). O estado da entrega aparece em `webhook` de GET "
+    "/jobs/{job_id}. Arquivo repetido: o job existente passa a notificar esta URL "
+    "(na hora, se já terminou). Detalhes: docs/features/webhooks.md"
+)
+
+
 IMAGE_MODE_FORM_DESCRIPTION = (
     "Imagens do documento (PDF, DOCX...). `none` (padrão): como sempre, o markdown "
     "traz `<!-- image -->` no lugar de cada figura e nenhuma imagem é guardada. "
@@ -172,14 +184,26 @@ def _image_options(image_mode, page_images) -> Tuple[str, bool]:
     return conversion_assets.normalize_options(image_mode, page_images)
 
 
+def _checked_callback_url(callback_url) -> Optional[str]:
+    """The `callback_url` form field, validated (422 INVALID_CALLBACK_URL), or None when it was not sent"""
+    if not isinstance(callback_url, str) or not callback_url.strip():  # not a str: called directly (tests)
+        return None
+    try:
+        return webhooks.validate_callback_url(callback_url)
+    except webhooks.InvalidCallbackUrl as e:
+        raise _coded(422, "INVALID_CALLBACK_URL", str(e)) from None
+
+
 def _duplicate_response(db: Session, existing_job: Job, upload_location, message: str,
-                        purge_source: bool) -> JobCreatedResponse:
+                        purge_source: bool, callback_url: Optional[str] = None) -> JobCreatedResponse:
     """
     The answer to a request for a file already processed in this project: the
     existing job. With `purge_source=true` the option is recorded on that job and,
     when it already completed, its original is deleted now (best effort; never
     fails the request). `find_duplicate_job` already refused to reuse a job whose
-    original is gone when the request keeps it.
+    original is gone when the request keeps it. A `callback_url` makes the existing
+    job notify that URL (last request wins) and, when it already finished, sends
+    its terminal event now.
     """
     from shared import error_catalog
 
@@ -191,6 +215,11 @@ def _duplicate_response(db: Session, existing_job: Job, upload_location, message
             DUPLICATE_ALREADY_GONE: ". O arquivo original já tinha sido apagado",
             DUPLICATE_KEPT: ". " + (error_catalog.describe("SOURCE_DELETE_FAILED")[0] or ""),
         }[outcome]
+    if callback_url:
+        url_changed = existing_job.callback_url != callback_url
+        existing_job.callback_url = callback_url
+        webhooks.schedule_current(db, existing_job, url_changed=url_changed)
+        db.commit()
     return JobCreatedResponse(
         job_id=existing_job.id,
         status="queued",
@@ -225,6 +254,7 @@ async def upload_and_convert(
         False,
         description=PURGE_SOURCE_FORM_DESCRIPTION,
     ),
+    callback_url: Optional[str] = Form(None, description=CALLBACK_URL_FORM_DESCRIPTION),
     image_mode: Literal["none", "referenced"] = Form("none", description=IMAGE_MODE_FORM_DESCRIPTION),
     page_images: bool = Form(False, description=PAGE_IMAGES_FORM_DESCRIPTION),
     describe_images: bool = Form(False, description=DESCRIBE_IMAGES_FORM_DESCRIPTION),
@@ -368,6 +398,7 @@ async def upload_and_convert(
     ```
     """
     tag_list = parse_tags_or_422(tags)
+    callback_url = _checked_callback_url(callback_url)
     # Where the job goes, decided before anything is written (422/404 here leave no file behind)
     plan = prepare_upload_location(db, current_user, request, location)
     redis_client = get_redis_client()
@@ -410,7 +441,7 @@ async def upload_and_convert(
             return _duplicate_response(
                 db, existing_job, upload_location,
                 f"Arquivo já foi processado anteriormente (job existente: {existing_job.id})",
-                purge_source)
+                purge_source, callback_url)
 
         # Generate job ID for new file
         job_id = uuid4()
@@ -453,6 +484,7 @@ async def upload_and_convert(
                 folder_id=upload_location.folder_id,
                 transcription_profile=transcription_profile,
                 transcription_profile_hash=transcription_profile_hash,
+                callback_url=callback_url,
             )
             db.add(db_job)
             set_job_tags(db_job, tag_list)
@@ -741,6 +773,7 @@ async def transcribe_audio(
         False,
         description="Apagar o áudio/vídeo enviado quando a transcrição terminar (com sucesso, ou com falha depois das tentativas automáticas); guarda só o texto",
     ),
+    callback_url: Optional[str] = Form(None, description=CALLBACK_URL_FORM_DESCRIPTION),
     diarize: Optional[bool] = Form(None, description="Identificar falantes; omitido usa o padrão do provider"),
     min_speakers: Optional[int] = Form(None, ge=1, le=20),
     max_speakers: Optional[int] = Form(None, ge=1, le=20),
@@ -844,6 +877,7 @@ async def transcribe_audio(
         raise _coded(503, "TRANSCRIPTION_DISABLED", "Audio transcription is currently disabled")
 
     tag_list = parse_tags_or_422(tags)
+    callback_url = _checked_callback_url(callback_url)
     redis_client = get_redis_client()
 
     filename = sanitize_upload_filename(file.filename)
@@ -906,7 +940,7 @@ async def transcribe_audio(
             return _duplicate_response(
                 db, existing_job, upload_location,
                 f"Arquivo de áudio já foi processado anteriormente (job existente: {existing_job.id})",
-                purge_source)
+                purge_source, callback_url)
 
         # Generate job ID for new file
         job_id = uuid4()
@@ -947,6 +981,7 @@ async def transcribe_audio(
                 folder_id=upload_location.folder_id,
                 transcription_profile=transcription_profile,
                 transcription_profile_hash=transcription_profile_hash,
+                callback_url=callback_url,
             )
             db.add(db_job)
             set_job_tags(db_job, tag_list)
@@ -1116,6 +1151,7 @@ async def convert_document(
         False,
         description=PURGE_SOURCE_FORM_DESCRIPTION,
     ),
+    callback_url: Optional[str] = Form(None, description=CALLBACK_URL_FORM_DESCRIPTION),
     image_mode: Literal["none", "referenced"] = Form("none", description=IMAGE_MODE_FORM_DESCRIPTION),
     page_images: bool = Form(False, description=PAGE_IMAGES_FORM_DESCRIPTION),
     describe_images: bool = Form(False, description=DESCRIBE_IMAGES_FORM_DESCRIPTION),
@@ -1211,6 +1247,7 @@ async def convert_document(
         raise _coded(400, "SOURCE_REQUIRED", f"source é obrigatório para source_type={source_type}")
 
     tag_list = parse_tags_or_422(tags)
+    callback_url = _checked_callback_url(callback_url)
 
     known_media = media_input_kind(file.filename, file.content_type) if file else None
     image_mode, page_images = _image_options(image_mode, page_images)
@@ -1275,7 +1312,7 @@ async def convert_document(
                 return _duplicate_response(
                     db, existing_job, upload_location,
                     f"Arquivo já foi processado anteriormente (job existente: {existing_job.id})",
-                    purge_source)
+                    purge_source, callback_url)
 
         # Generate job ID for new conversion
         job_id = uuid4()
@@ -1327,6 +1364,7 @@ async def convert_document(
                 folder_id=upload_location.folder_id,
                 transcription_profile=transcription_profile,
                 transcription_profile_hash=transcription_profile_hash,
+                callback_url=callback_url,
             )
             db.add(db_job)
             set_job_tags(db_job, tag_list)
@@ -1581,6 +1619,8 @@ async def get_job_status(
         # beat deletes them (purge_source + ASSET_RETENTION_SECONDS), from the DB
         "assets_available": conversion_assets.assets_available(db_job),
         "assets_expire_at": conversion_assets.assets_expire_at(db_job),
+        # Completion webhook (callback_url): host and delivery state, MAIN jobs only
+        "webhook": webhooks.public_state(db_job) if db_job is not None and job_type == "main" else None,
         # Children have no row of their own: they inherit the MAIN job's location
         **_job_location_refs(db, owned_job),
     }

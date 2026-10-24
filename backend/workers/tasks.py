@@ -610,7 +610,7 @@ def process_conversion(
     source_type: str,
     source: str,
     options: dict = None,
-    callback_url: str = None,
+    callback_url: str = None,  # unused: kept so messages queued before the webhook rework still deserialize
     auth_token: str = None,
     usage_id: int = None,
 ):
@@ -622,7 +622,7 @@ def process_conversion(
         source_type: Tipo de fonte (file, url, gdrive, dropbox)
         source: Fonte do documento
         options: Opções de conversão
-        callback_url: Webhook opcional
+        callback_url: Ignorado (o webhook de conclusão é enfileirado pelo commit do status, shared/webhooks.py)
         auth_token: Legacy - only messages queued before the S-01 fix carry it. The
             provider token of gdrive/dropbox is read from Redis (job:{id}:source_token)
         usage_id: Set only when the dispatcher (or its fallback) placed this item on
@@ -774,7 +774,7 @@ def process_conversion(
                 from workers import figure_tasks
 
                 _remove_job_files(job_id)
-                return figure_tasks.begin(job_id, result, callback_url=callback_url,
+                return figure_tasks.begin(job_id, result,
                                           has_manifest=assets_manifest is not None)
 
             # Store result in Redis
@@ -833,10 +833,6 @@ def process_conversion(
 
             logger.info(f"[MAIN JOB {job_id}] Completed successfully")
 
-            # Callback
-            if callback_url:
-                send_callback(callback_url, job_id, "completed", result)
-
         return {"job_id": job_id, "status": "completed"}
 
     except SoftTimeLimitExceeded:
@@ -882,7 +878,7 @@ def process_conversion(
                 options.pop('_transcript_attempt_id', None)
                 raise self.retry(exc=exc, countdown=60 * (2 ** self.request.retries), args=(), kwargs={
                     'job_id': job_id, 'source_type': source_type, 'source': source, 'options': options,
-                    'callback_url': callback_url, 'auth_token': auth_token})
+                    'auth_token': auth_token})
             return {"job_id": job_id, "status": "failed", "error": str(exc)}
 
         retrying = _will_retry(self)
@@ -1807,33 +1803,4 @@ def _delete_dropped_assets(job_id: str, dropped: list) -> None:
             minio.delete_file(minio.bucket_results, conversion_assets.object_name(job_id, asset["name"]))
     except Exception as e:  # noqa: BLE001 - unlisted, never served; DELETE /jobs/{id} removes them
         logger.warning(f"[MERGE] Could not delete {len(dropped)} assets over the limits of job {job_id}: {e}")
-
-
-# ============================================
-# Helper functions
-# ============================================
-
-def send_callback(callback_url: str, job_id: str, status: str, result: dict = None):
-    """Send webhook callback"""
-    import httpx
-
-    payload = {
-        "job_id": job_id,
-        "status": status,
-        "completed_at": datetime.utcnow().isoformat(),
-        "result_url": f"/jobs/{job_id}/result",
-    }
-
-    if result:
-        payload["result"] = result
-
-    try:
-        with httpx.Client(timeout=10.0) as client:
-            response = client.post(callback_url, json=payload)
-            response.raise_for_status()
-            logger.info(f"Callback sent successfully to {callback_url}")
-    except Exception as e:
-        logger.error(f"Failed to send callback: {e}")
-        raise
-
 

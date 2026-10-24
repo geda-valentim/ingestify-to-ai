@@ -27,7 +27,10 @@ from fastapi.routing import APIRoute, APIWebSocketRoute
 # 1.6.1: GET /search answers 503 SEARCH_UNAVAILABLE when Elasticsearch fails (it used to
 # answer 200 with no results), and a worker without Docling fails the job (it used to
 # complete it with placeholder Markdown).
-API_VERSION = "1.6.1"
+# 1.7.0: completion webhook (`callback_url` on /upload, /convert and /transcribe,
+# GET /webhooks/signing-secret, `webhook` in GET /jobs/{job_id}); backward compatible,
+# new 422 code INVALID_CALLBACK_URL.
+API_VERSION = "1.7.0"
 
 API_DESCRIPTION = """
 API assíncrona que converte documentos (PDF, DOCX, HTML, PPTX, XLSX...) em Markdown,
@@ -109,6 +112,21 @@ tentativas automáticas; o resultado fica. Para apagar depois, use
 503 `SOURCE_DELETE_FAILED`). `GET /jobs/{job_id}` informa `source_available`,
 `source_deleted_at` e `source_deletable`. Sem origem, o PDF de página responde 410
 `SOURCE_PURGED` e o retry de página 409 `SOURCE_NOT_AVAILABLE`.
+
+## Webhooks (`callback_url`)
+
+`/upload`, `/convert` e `/transcribe` aceitam `callback_url` (https). Quando o job
+principal termina, a plataforma envia um POST assinado a essa URL com o evento
+`job.completed`, `job.failed` ou `job.partial` (só metadados: o markdown se busca em
+`GET /jobs/{job_id}/result`). Cabeçalhos: `X-Ingestify-Event`, `X-Ingestify-Delivery`
+(id para deduplicar) e `X-Ingestify-Signature: t=<unix>,v1=<hex>`, o HMAC-SHA256 de
+`{t}.{corpo}` com o segredo de `GET /webhooks/signing-secret` (um por usuário). 2xx
+confirma; 5xx, 408, 429 e falha de rede são repetidos até 6 vezes (30 s a 2 h); outros
+4xx e redirecionamentos não. A mesma conversão pode gerar mais de um evento (uma
+página refeita depois de `job.partial` gera `job.completed`): deduplique por
+`X-Ingestify-Delivery`. `GET /jobs/{job_id}` traz o bloco `webhook` (estado da
+entrega). URL local, privada ou com credenciais: 422 `INVALID_CALLBACK_URL`.
+Guia: docs/features/webhooks.md.
 
 ## Imagens da conversão (`image_mode`, `page_images`)
 
@@ -276,17 +294,17 @@ _VALIDATION_422 = "FastAPI: `{\"detail\": [...], \"code\": \"FILE_MISSING\" | \"
 _JOB_CREATION_ERRORS = {
     "upload": {
         400: ["FILE_EMPTY"],
-        422: ["INVALID_FILE_FORMAT", *_LOCATION_422, "INVALID_TRANSCRIPTION_OPTIONS"],
+        422: ["INVALID_FILE_FORMAT", *_LOCATION_422, "INVALID_TRANSCRIPTION_OPTIONS", "INVALID_CALLBACK_URL"],
         503: ["QUEUE_UNAVAILABLE", "DATABASE_UNAVAILABLE", "DIARIZATION_NOT_READY"],
     },
     "convert": {
         400: ["FILE_EMPTY", "INVALID_SOURCE_TYPE", "FILE_REQUIRED", "SOURCE_REQUIRED", "SOURCE_TOKEN_REQUIRED"],
-        422: ["INVALID_FILE_FORMAT", *_LOCATION_422, "INVALID_TRANSCRIPTION_OPTIONS"],
+        422: ["INVALID_FILE_FORMAT", *_LOCATION_422, "INVALID_TRANSCRIPTION_OPTIONS", "INVALID_CALLBACK_URL"],
         503: ["QUEUE_UNAVAILABLE", "DATABASE_UNAVAILABLE", "DIARIZATION_NOT_READY"],
     },
     "transcribe": {
         400: ["FILE_EMPTY"],
-        422: ["UNSUPPORTED_MEDIA_FORMAT", "INVALID_OUTPUT_FORMAT", *_LOCATION_422, "INVALID_TRANSCRIPTION_OPTIONS"],
+        422: ["UNSUPPORTED_MEDIA_FORMAT", "INVALID_OUTPUT_FORMAT", *_LOCATION_422, "INVALID_TRANSCRIPTION_OPTIONS", "INVALID_CALLBACK_URL"],
         503: ["TRANSCRIPTION_DISABLED", "QUEUE_UNAVAILABLE", "DATABASE_UNAVAILABLE", "DIARIZATION_NOT_READY"],
     },
 }

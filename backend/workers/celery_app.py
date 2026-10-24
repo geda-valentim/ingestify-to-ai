@@ -97,6 +97,8 @@ import workers.vision_tasks  # noqa: F401,E402
 # The describe stage of a conversion (describe_images / ocr_images): its vision task is
 # named workers.vision_tasks.* (vision queue), its finalize workers.tasks.* (default queue)
 import workers.figure_tasks  # noqa: F401,E402
+# Delivery of the completion webhook of a job (callback_url)
+import workers.webhook_tasks  # noqa: F401,E402
 
 # Local workers announce which feature lane they serve and the GPU they see
 # (spec 0003); signal handlers only, nothing runs at import

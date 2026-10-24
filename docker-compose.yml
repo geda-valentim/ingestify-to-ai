@@ -128,6 +128,10 @@ services:
       - MINIO_ACCESS_KEY=${MINIO_ROOT_USER:?MINIO_ROOT_USER is required - set it in .env (see .env.example)}
       - MINIO_SECRET_KEY=${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD is required - set it in .env (see .env.example)}
       - JWT_SECRET_KEY=${JWT_SECRET_KEY:?JWT_SECRET_KEY is required - generate one with 'openssl rand -hex 32' and set it in .env}
+      # Job completion webhook (callback_url): the API validates the URL and serves the signing secret
+      - WEBHOOK_SIGNING_SECRET=${WEBHOOK_SIGNING_SECRET:-}
+      - WEBHOOK_QUEUE=${WEBHOOK_QUEUE:-}
+      - WEBHOOK_ALLOW_HTTP=${WEBHOOK_ALLOW_HTTP:-false}
       - DATALAKE_ENCRYPTION_KEY=${DATALAKE_ENCRYPTION_KEY:-}
       - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
       # Projects (spec 0004). UPLOAD_FALLBACK_PROJECT is the emergency valve:
@@ -217,6 +221,10 @@ services:
       - MINIO_ACCESS_KEY=${MINIO_ROOT_USER:?MINIO_ROOT_USER is required - set it in .env (see .env.example)}
       - MINIO_SECRET_KEY=${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD is required - set it in .env (see .env.example)}
       - JWT_SECRET_KEY=${JWT_SECRET_KEY:?JWT_SECRET_KEY is required - generate one with 'openssl rand -hex 32' and set it in .env}
+      # Job completion webhook (callback_url): delivered here; signing-secret key (empty: derived from JWT_SECRET_KEY)
+      - WEBHOOK_SIGNING_SECRET=${WEBHOOK_SIGNING_SECRET:-}
+      - WEBHOOK_QUEUE=${WEBHOOK_QUEUE:-}
+      - WEBHOOK_ALLOW_HTTP=${WEBHOOK_ALLOW_HTTP:-false}
       - DATALAKE_ENCRYPTION_KEY=${DATALAKE_ENCRYPTION_KEY:-}
       - MINIO_SECURE=false
       - MINIO_BUCKET_UPLOADS=ingestify-uploads

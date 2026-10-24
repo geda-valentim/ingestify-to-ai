@@ -126,6 +126,9 @@ _ADDED_COLUMNS = {
         # alembic d4b80025f6c2: describe stage of describe_images / ocr_images
         "figures_stage": "VARCHAR(16) NULL",
         "figures_stage_at": "DATETIME NULL",
+        # alembic e5c90026a7d3: completion webhook of a MAIN job
+        "callback_url": "VARCHAR(2048) NULL",
+        "webhook_state": "JSON NULL",
     },
     "engine_feature_state": {
         "workers_seen_at": "DATETIME(6) NULL",  # alembic 5d2e8f1a6c47 (spec 0003, slice 3b)
