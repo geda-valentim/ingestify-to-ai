@@ -87,6 +87,8 @@ que aquela geração tentou escrever. Sessão não é reexecutada após restart.
 4. Suba o perfil opt-in com os overlays base/GPU/live e `--profile live`. O worker
    aquece antes de publicar readiness, heartbeat 2 s / TTL 10 s. A API permanece
    desligada até `LIVE_TRANSCRIPTION_ENABLED=true`, após validação dos gates.
+   O worker sobe com `ENVIRONMENT=development` por padrão, como os demais serviços
+   da stack hoje. Em produção defina `LIVE_WORKER_ENVIRONMENT=production` no `.env`.
 5. Confirme inventário em `/admin/gpus`: o footprint live entra no orçamento e
    aparece separado das lanes Celery. Verifique VRAM real sob concorrência planejada.
 

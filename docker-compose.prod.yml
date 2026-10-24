@@ -58,12 +58,6 @@ services:
     deploy:
       replicas: 1
 
-  worker-live:
-    # Only exists when docker-compose.live.yml is merged. Same reason as `beat`:
-    # it would inherit ENVIRONMENT=development otherwise.
-    environment:
-      - ENVIRONMENT=production
-
   beat:
     # Celery Beat inherits ENVIRONMENT=development from the base file otherwise,
     # which would bypass the production-only credential checks in shared/config.py
