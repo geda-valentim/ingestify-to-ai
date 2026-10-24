@@ -318,7 +318,7 @@ def bind_request_destination(db, job, destination, source_type=None):
         return
     try:
         service.bind_destination(db, job, destination, source_type=source_type)
-    except PartitionError as exc:
+    except DatalakeError as exc:
         raise to_http(exc) from None
 
 

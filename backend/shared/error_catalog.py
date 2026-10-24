@@ -594,6 +594,8 @@ CATALOG = _bilingual(_PT)
 _overlap = CATALOG.keys() & API_CATALOG.keys()
 assert not _overlap, f"codes defined in both catalogs: {sorted(_overlap)}"
 CATALOG.update(API_CATALOG)
+_overlap = CATALOG.keys() & IMAGES_CATALOG.keys()
+assert not _overlap, f"codes defined in both catalogs: {sorted(_overlap)}"
 CATALOG.update(IMAGES_CATALOG)
 
 _CODE = re.compile(r"^([A-Z][A-Z0-9_]{3,})(?:\s*:\s*(.*))?$", re.S)

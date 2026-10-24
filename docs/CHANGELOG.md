@@ -13,11 +13,15 @@
   nome, conexão vinculada/desativada, 502 de provedor), de `POST /jobs/{id}/datalake/retry`
   (`DATALAKE_JOB_NOT_COMPLETED` 409, `DATALAKE_DESTINATION_MISSING` 404), da validação de
   destino/particionamento (`DATALAKE_*`, `PARTITION_*`) e das recusas de
-  `mode=full` e do upload facial (`IMAGE_IDEMPOTENCY_KEY_REQUIRED` 422,
-  `IMAGE_IDEMPOTENCY_KEY_REUSED` 409, `IMAGE_JOB_DELETED` 410, `FLORENCE_NOT_READY` 503,
-  `IMAGE_SUBMISSION_CONFLICT` 503, `IMAGE_PERSIST_FAILED` 503, `FACE_UPLOAD_FIELDS_INVALID`
-  422, `FACE_REQUEST_INVALID` 422). Quem casava o texto deve ler `detail.code`.
-- **Não mudam de forma:** o envelope de `/images/*` (`{"detail": {"error_code", "message",
+  `mode=full` e do upload facial, que agora usam o envelope de `/images/*`
+  (abaixo): `IMAGE_IDEMPOTENCY_KEY_REQUIRED` 422, `IMAGE_IDEMPOTENCY_KEY_REUSED` 409,
+  `IMAGE_JOB_DELETED` 410, `FLORENCE_NOT_READY` 503, `IMAGE_SUBMISSION_CONFLICT` 503,
+  `IMAGE_PERSIST_FAILED` 503, `FACE_UPLOAD_FIELDS_INVALID` 422, `FACE_REQUEST_INVALID` 422,
+  e os do destino de datalake (`DATALAKE_NOT_FOUND` 404, `DATALAKE_*` 422). Quem casava o
+  texto deve ler `detail.error_code` (em `/images/*`) ou `detail.code` (demais rotas).
+- **`/images/*` mantém `error_code` em toda parte:** todas as recusas dessas rotas (inclusive
+  `mode=full`, `/images/faces/*` e o destino de datalake) respondem
+  `{"detail": {"error_code", "message", "job_id"}}`. O envelope de `/images/*` (`{"detail": {"error_code", "message",
   "job_id"}}`, inclusive `VISION_TIMEOUT` com `poll_url`/`result_url`, `FACE_UNAVAILABLE` com
   `stages` e `VISION_ENGINE_UNAVAILABLE` com `retry_after`); só `message` segue o idioma.
   Os 404 que não revelam o que existe (conexão de datalake, Full Analysis) continuam texto,
@@ -28,7 +32,11 @@
   visão, continuam em inglês.
 - Mensagens de `workers/vision` (`VisionError`): inglês, como sempre; as checagens de imagem
   feitas pela API (base64, tamanho, formato) agora saem também em português com `pt-BR`.
-  Textos de entrega ao datalake gravados pelo worker saem em inglês.
+  O texto de falha de entrega ao datalake gravado pelo worker (`destination.error` em
+  `GET /jobs/{id}/datalake`) sai em inglês (`DATALAKE_DELIVERY_FAILED`); os já gravados
+  continuam em português.
+- No 422 de validação do FastAPI, o `ctx.error` de um erro de datalake (`DatalakeError`)
+  passa a serializar como `{"code", "params"}`; `msg` continua o texto no idioma pedido.
 
 ## 2026-10: API bilíngue, inglês por padrão — parte 2 (API 1.9.0)
 

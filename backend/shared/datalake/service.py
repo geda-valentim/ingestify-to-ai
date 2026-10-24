@@ -9,6 +9,7 @@ from shared.datalake.adapters import adapter_for
 from shared.datalake.schemas import Destination
 from shared.minio_client import get_minio_client
 from shared.models import DatalakeConnection, Job, JobDatalakeExport, JobDatalakePartition, JobStatus, LiveSession
+from shared.error_catalog import render
 from shared.datalake.errors import DatalakeError, datalake_not_found_detail
 from shared.datalake.partitioning import PartitionStrategy, PartitionError, job_context, resolve_layout, analytic_outputs
 from shared.transcripts import TRANSCRIPT_CONTENT_TYPES, transcript_result_object_name
@@ -84,7 +85,7 @@ def stage_result(job_id, payload, session_factory=None):
         minio = get_minio_client()
         if not minio.upload_file(bucket_name=minio.bucket_results, object_name=name,
             file_data=json.dumps(payload, ensure_ascii=False, default=str).encode(), content_type="application/json"):
-            raise RuntimeError("Não foi possível preservar o resultado para entrega ao datalake")
+            raise RuntimeError("Could not preserve the result for datalake delivery")
         dest.snapshot_path = name
         db.commit()
 
@@ -175,7 +176,8 @@ def export_result(job_id):
             dest.completed_at = datetime.utcnow()
         except Exception:
             dest.status = "failed"
-            dest.error = "Não foi possível entregar ao bucket. Verifique a conexão e as permissões e tente novamente."
+            # Stored text: the worker has no request language, so it is native English.
+            dest.error = render("DATALAKE_DELIVERY_FAILED", lang="en")
             db.commit()
             # Persist the failure independently, then let Celery schedule a retry.
             raise RuntimeError("Datalake delivery failed") from None

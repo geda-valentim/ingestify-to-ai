@@ -168,6 +168,13 @@ IMAGES_CATALOG = {
         },
         ["retry"],
     ),
+    "DATALAKE_DELIVERY_FAILED": (
+        {
+            "en": "Could not deliver to the bucket. Check the connection and the permissions and try again.",
+            "pt": "Não foi possível entregar ao bucket. Verifique a conexão e as permissões e tente novamente.",
+        },
+        ["retry"],
+    ),
     "DATALAKE_JOB_NOT_COMPLETED": (
         {"en": "Wait for the job to finish.", "pt": "Aguarde a conclusão do job"},
         ["retry"],
@@ -339,7 +346,7 @@ IMAGES_CATALOG = {
     ),
     "CELERY_UNAVAILABLE": (
         {
-            "en": "The processing system is unavailable right now. Try again in a moment.",
+            "en": "The processing system is unavailable.",
             "pt": "Sistema de processamento indisponível",
         },
         ["retry"],

@@ -181,7 +181,7 @@ def _error(
     """
     detail: Dict[str, Any] = {
         "error_code": error_code,
-        "message": text if text is not None else render(key or error_code, **params),
+        "message": text if text is not None else render(key or error_code, **{"job_id": job_id, **params}),
         "job_id": job_id,
     }
     detail.update(extra or {})
