@@ -4,12 +4,13 @@ from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Reque
 from sqlalchemy.orm import Session
 from shared.config import get_settings
 from shared.database import get_db
+from shared.error_catalog import render
 from shared.models import User
 from shared.schemas import (FACE_PURGE_SOURCE_DESCRIPTION, IMAGE_OUTPUT_FORMAT_DESCRIPTION, IMAGE_OUTPUT_FORMAT_IDEMPOTENCY,
                             FaceAnalyzeRequest, FaceAnalyzeResponse, ImageFullQueuedResponse, ImageOutputFormat)
 from shared.face_analysis import FaceOptions, FaceRequestOptions, FullFaceOptions
 from api.iam_deps import require
-from api.image_routes import markdown_responses
+from api.image_routes import _error, markdown_responses
 
 router = APIRouter(prefix='/images/faces', tags=['Vision'])
 
@@ -36,7 +37,7 @@ def require_faces(mode):
     capabilities = face_capabilities()
     tasks = ['face_detection'] + (['face_movements', 'face_expression_classification'] if mode == 'expressions' else [])
     if not capabilities['enabled'] or not all(capabilities['stages'].get(task, {}).get('ready') for task in tasks):
-        raise HTTPException(503, {'error_code': 'FACE_UNAVAILABLE', 'message': 'As etapas faciais solicitadas não estão disponíveis',
+        raise HTTPException(503, {'error_code': 'FACE_UNAVAILABLE', 'message': render('FACE_UNAVAILABLE'),
                                   'stages': capabilities['stages']})
     return capabilities
 
@@ -78,7 +79,7 @@ async def upload(http_request: Request, file: UploadFile = File(...), face_optio
     fields = await http_request.form()
     allowed = {'file', 'face_options', 'wait', 'project', 'project_id', 'folder', 'folder_id', 'tags', 'datalake', 'purge_source', 'output_format'}
     if set(fields)-allowed or any(len(fields.getlist(name)) != 1 for name in fields):
-        raise HTTPException(422, 'Campos desconhecidos ou repetidos no upload facial')
+        raise _error(422, 'FACE_UPLOAD_FIELDS_INVALID')
     try:
         request = FaceAnalyzeRequest(image_base64='multipart', filename=file.filename,
             project=project, project_id=project_id, folder=folder, folder_id=folder_id, wait=wait,
@@ -86,6 +87,6 @@ async def upload(http_request: Request, file: UploadFile = File(...), face_optio
             face_options=json.loads(face_options) if face_options else {}, datalake=json.loads(datalake) if datalake else None)
         parsed_tags = parse_tags(tags)
     except (ValueError, TypeError, ValidationError) as exc:
-        raise HTTPException(422, 'Imagem/opções/tags inválidas') from exc
+        raise _error(422, 'FACE_REQUEST_INVALID') from exc
     plan = _plan_location(db, user, http_request, _json_location(request))
     return await run_full(request, http_request, await file.read(get_settings().vision_max_image_size_mb * 1024 * 1024 + 1), file.filename, user, db, parsed_tags, plan)

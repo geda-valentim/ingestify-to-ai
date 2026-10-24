@@ -30,8 +30,8 @@ Negociação (RFC 9110, simplificada):
 
 Toda resposta traz `Content-Language: en` ou `pt-BR` e `Vary: Accept-Language` (caches e
 proxies guardam uma cópia por idioma), inclusive o 500 de produção. A interface web pede
-`Accept-Language: en`, exceto as telas em português (`/live`, as opções de imagem do
-formulário de upload e o resultado de jobs de imagem), que pedem `pt-BR` nas suas chamadas.
+`Accept-Language: en`, exceto as telas em português (`/live`, as telas de imagem e o resultado de jobs de imagem, as opções
+de imagem do formulário de upload e as telas de datalake), que pedem `pt-BR` nas suas chamadas.
 
 ## O que muda de idioma
 
@@ -45,11 +45,17 @@ Parte 1 (API 1.8.0): recusas de `/upload`, `/convert` e `/transcribe`, localiza�
 upload (projeto/pasta), tags, sessões ao vivo (503 e `GET .../availability`), `GET /search`
 (503), `callback_url` inválido, erros de nome de projeto/pasta (inclusive o 422 de
 `POST /api-keys`), limites de projeto/pasta e tags nas rotas `/images/*` (no envelope
-`error_code`/`message`) e os 404 de job/projeto/pasta/API key. Datalake, imagens, admin, engines e IAM migram nas próximas partes e, até lá,
-continuam em português; o `code` é o mesmo em qualquer idioma.
+`error_code`/`message`) e os 404 de job/projeto/pasta/API key.
+
+Parte 3 (API 1.10.0): as rotas de datalake e todas as recusas de `/images/*` e
+`/images/faces/*`, inclusive `mode=full` e o destino de datalake: dentro de `/images/*` o
+envelope é sempre `{"detail": {"error_code", "message", "job_id"}}`, com `message` no idioma
+pedido. Admin, engines e IAM migram na próxima parte e, até lá, continuam em português; o
+`code` é o mesmo em qualquer idioma.
 
 Os 404 que não revelam o que existe continuam **texto** (não objeto), agora no idioma
-pedido. "Não existe" e "não é seu" respondem o mesmo corpo, em cada idioma.
+pedido (em `/images/*` só o de `POST /images/{id}/cancel`; o de conexão de datalake dentro de
+`/images/*` é `DATALAKE_NOT_FOUND` no envelope `error_code`). "Não existe" e "não é seu" respondem o mesmo corpo, em cada idioma.
 
 ## O que NÃO é traduzido
 

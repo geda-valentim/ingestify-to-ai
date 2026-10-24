@@ -6,6 +6,7 @@ from urllib.parse import quote
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from typing import Literal
 
+from shared.datalake.errors import DatalakeError
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 BUILTINS = ('date', 'year', 'month', 'day', 'hour', 'project_id', 'folder_id', 'source_type')
@@ -14,7 +15,7 @@ DATA_COLUMNS = {'schema_version': 'integer', 'job_id': 'string', 'created_at': '
     'text': 'string', 'metadata_json': 'string', 'payload_json': 'string', 'partition_values_json': 'string'}
 
 
-class PartitionError(ValueError):
+class PartitionError(DatalakeError):
     pass
 
 
@@ -27,9 +28,9 @@ class PartitionField(BaseModel):
     def field_key(self):
         if self.field == 'custom':
             if not self.key or self.key in BUILTINS or self.key in DATA_COLUMNS:
-                raise ValueError('Escolha uma chave personalizada única, sem usar nomes reservados')
+                raise DatalakeError('PARTITION_CUSTOM_KEY_RESERVED')
         elif self.key is not None and self.key != self.field:
-            raise ValueError('A chave de um campo do job deve manter seu nome')
+            raise DatalakeError('PARTITION_FIELD_KEY_NAME')
         else:
             self.key = self.field
         return self
@@ -51,7 +52,7 @@ class PartitionStrategy(BaseModel):
         try:
             ZoneInfo(value)
         except (ZoneInfoNotFoundError, ValueError):
-            raise ValueError('Informe um fuso horário IANA válido') from None
+            raise DatalakeError('PARTITION_TIMEZONE_INVALID') from None
         return value
 
     @field_validator('fallback')
@@ -59,7 +60,7 @@ class PartitionStrategy(BaseModel):
     def valid_fallback(cls, value):
         value = value.strip()
         if not value or any(ord(c) < 32 for c in value):
-            raise ValueError('Informe um valor substituto válido')
+            raise DatalakeError('PARTITION_SUBSTITUTE_INVALID')
         return value
 
     @model_validator(mode='after')
@@ -71,12 +72,12 @@ class PartitionStrategy(BaseModel):
         elif self.mode == 'project_date':
             self.fields = [PartitionField(field='project_id'), PartitionField(field='date')]
         elif not self.fields:
-            raise ValueError('Selecione ao menos um campo de particionamento')
+            raise DatalakeError('PARTITION_FIELDS_REQUIRED')
         keys = self.keys()
         if len(set(keys)) != len(keys):
-            raise ValueError('As chaves de particionamento não podem se repetir')
+            raise DatalakeError('PARTITION_KEYS_DUPLICATE')
         if len(keys) > 10:
-            raise ValueError('Use até 10 chaves de particionamento, incluindo ano, mês, dia e hora')
+            raise DatalakeError('PARTITION_KEYS_TOO_MANY')
         return self
 
     def date_keys(self):
@@ -100,12 +101,12 @@ PartitionValues = dict[str, str]
 def validate_values(values):
     import re
     if len(values) > 20:
-        raise ValueError('Informe até 20 campos personalizados')
+        raise DatalakeError('PARTITION_CUSTOM_TOO_MANY')
     for key, value in values.items():
         if not re.fullmatch(r'[a-z][a-z0-9_]{0,31}', key) or key in BUILTINS or key in DATA_COLUMNS:
-            raise ValueError('Chave personalizada inválida ou reservada')
+            raise DatalakeError('PARTITION_CUSTOM_KEY_INVALID')
         if len(value) > 128 or any(ord(c) < 32 for c in value):
-            raise ValueError('Valor personalizado inválido ou maior que 128 caracteres')
+            raise DatalakeError('PARTITION_CUSTOM_VALUE_INVALID')
     return values
 
 
@@ -130,7 +131,7 @@ def resolve_layout(strategy, prefix, context, values):
             value = date_values[key] if key in date_values else values.get(key) if field.field == 'custom' else context.get(key)
             if value is None or not str(value).strip():
                 if strategy.missing == 'require':
-                    raise PartitionError(f'Preencha o campo obrigatório de particionamento: {key}')
+                    raise PartitionError('PARTITION_REQUIRED_FIELD_MISSING', key=key)
                 value = strategy.fallback
             partitions[key] = str(value)
     layout_id = strategy.layout_id()
@@ -140,7 +141,7 @@ def resolve_layout(strategy, prefix, context, values):
     schema = '/'.join(part for part in [prefix, 'schemas', layout_id + '.json'] if part) if dataset else None
     for key in [base + '/transcript.json', dataset, schema]:
         if key and len(key.encode('utf-8')) > 1024:
-            raise PartitionError('O caminho completo excede 1.024 bytes. Reduza a pasta ou os campos personalizados.')
+            raise PartitionError('PARTITION_PATH_TOO_LONG')
     return {'layout_id': layout_id, 'resolved_path': base, 'partitions': partitions,
             'dataset_path': dataset, 'schema_path': schema}
 

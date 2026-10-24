@@ -40,7 +40,11 @@ from fastapi.routing import APIRoute, APIWebSocketRoute
 # inactive user), the 429 rate limits and API-key creation answer in the request language;
 # every text `detail` of those routes became `{"code", "message"}`, except the 404 that
 # does not reveal what exists (job, project, folder, API key), which stays text.
-API_VERSION = "1.9.0"
+# 1.10.0: bilingual API, part 3: the datalake routes (/datalakes, /jobs/{id}/datalake*)
+# and the image routes (/images/*, /images/faces/*) answer in the request language.
+# Text `detail`s of the datalake and Full Analysis refusals become {"code", "message"}
+# objects; the /images envelope {"error_code", "message", "job_id"} is unchanged.
+API_VERSION = "1.10.0"
 
 API_DESCRIPTION = """
 API assíncrona que converte documentos (PDF, DOCX, HTML, PPTX, XLSX...) em Markdown,

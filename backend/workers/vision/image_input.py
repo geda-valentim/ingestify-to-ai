@@ -70,7 +70,8 @@ def decode_base64_image(value: Optional[str]) -> bytes:
     if value is None or not str(value).strip():
         raise InvalidImageBase64Error(
             "image_base64 is empty. Send the raw base64 of the image bytes, "
-            "optionally prefixed with a data: URI header."
+            "optionally prefixed with a data: URI header.",
+            catalog_code="IMAGE_BASE64_EMPTY",
         )
 
     payload = _DATA_URI_PREFIX.sub("", str(value).strip(), count=1)
@@ -78,7 +79,8 @@ def decode_base64_image(value: Optional[str]) -> bytes:
 
     if not payload:
         raise InvalidImageBase64Error(
-            "image_base64 contains a data: URI header but no base64 payload."
+            "image_base64 contains a data: URI header but no base64 payload.",
+            catalog_code="IMAGE_BASE64_NO_PAYLOAD",
         )
 
     try:
@@ -89,11 +91,13 @@ def decode_base64_image(value: Optional[str]) -> bytes:
     except (binascii.Error, ValueError) as exc:
         raise InvalidImageBase64Error(
             f"image_base64 is not valid base64: {exc}. "
-            "Send the raw base64 of the image bytes (a data: URI prefix is accepted)."
+            "Send the raw base64 of the image bytes (a data: URI prefix is accepted).",
+            catalog_code="IMAGE_BASE64_INVALID",
+            reason=str(exc),
         ) from exc
 
     if not decoded:
-        raise InvalidImageBase64Error("image_base64 decoded to zero bytes.")
+        raise InvalidImageBase64Error("image_base64 decoded to zero bytes.", catalog_code="IMAGE_BASE64_ZERO_BYTES")
 
     return decoded
 
@@ -111,7 +115,10 @@ def ensure_within_size_limit(data: bytes, max_size_mb: int) -> None:
     if len(data) > limit_bytes:
         raise ImagePayloadTooLargeError(
             f"Image is {len(data) / 1024 / 1024:.2f}MB, over the {max_size_mb}MB "
-            "limit (VISION_MAX_IMAGE_SIZE_MB)."
+            "limit (VISION_MAX_IMAGE_SIZE_MB).",
+            catalog_code="IMAGE_TOO_LARGE",
+            size_mb=f"{len(data) / 1024 / 1024:.2f}",
+            max_size_mb=max_size_mb,
         )
 
 
@@ -134,7 +141,9 @@ def sniff_image_mime(data: bytes) -> str:
 
     raise VisionInvalidImageError(
         "Unsupported image format. Accepted formats: "
-        f"{', '.join(SUPPORTED_MIME_TYPES)}."
+        f"{', '.join(SUPPORTED_MIME_TYPES)}.",
+        catalog_code="UNSUPPORTED_IMAGE_FORMAT",
+        formats=", ".join(SUPPORTED_MIME_TYPES),
     )
 
 

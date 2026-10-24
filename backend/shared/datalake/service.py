@@ -9,6 +9,8 @@ from shared.datalake.adapters import adapter_for
 from shared.datalake.schemas import Destination
 from shared.minio_client import get_minio_client
 from shared.models import DatalakeConnection, Job, JobDatalakeExport, JobDatalakePartition, JobStatus, LiveSession
+from shared.error_catalog import render
+from shared.datalake.errors import DatalakeError, datalake_not_found_detail
 from shared.datalake.partitioning import PartitionStrategy, PartitionError, job_context, resolve_layout, analytic_outputs
 from shared.transcripts import TRANSCRIPT_CONTENT_TYPES, transcript_result_object_name
 
@@ -23,14 +25,14 @@ def prepare_destination(db, user_id, choice):
         return None
     connection = owned_connection(db, choice.connection_id, user_id)
     if connection is None:
-        raise LookupError("Conexão não encontrada")
+        raise LookupError(datalake_not_found_detail())
     if not connection.enabled:
-        raise ValueError("Conexão desativada")
+        raise DatalakeError("DATALAKE_DISABLED")
     allowed = connection.config.get("buckets") or []
     if allowed and choice.bucket not in allowed:
-        raise ValueError("Bucket não permitido para esta conexão")
+        raise DatalakeError("DATALAKE_BUCKET_NOT_ALLOWED")
     if not adapter_for(connection).bucket_exists(choice.bucket):
-        raise ValueError("Bucket não encontrado ou sem acesso")
+        raise DatalakeError("DATALAKE_BUCKET_INACCESSIBLE")
     return choice
 
 
@@ -41,13 +43,13 @@ def bind_destination(db, job, choice, source_type=None):
     existing = db.get(JobDatalakeExport, job.id)
     if existing is not None:
         if (existing.connection_id, existing.bucket, existing.prefix) != (choice.connection_id, choice.bucket, choice.prefix):
-            raise ValueError("Este job já possui outro destino")
+            raise DatalakeError("DATALAKE_JOB_HAS_DESTINATION")
         return
     db.add(JobDatalakeExport(job_id=job.id, connection_id=choice.connection_id,
                             bucket=choice.bucket, prefix=choice.prefix, status="pending"))
     connection = owned_connection(db, choice.connection_id, job.user_id)
     if connection is None:
-        raise PartitionError("Conexão não encontrada")
+        raise PartitionError("DATALAKE_NOT_FOUND")
     strategy = choice.partitioning or PartitionStrategy.model_validate(connection.config.get("partitioning") or {})
     values = {**(connection.config.get("default_partition_values") or {}), **choice.partition_values}
     context = job_context(job, source_type)
@@ -83,7 +85,7 @@ def stage_result(job_id, payload, session_factory=None):
         minio = get_minio_client()
         if not minio.upload_file(bucket_name=minio.bucket_results, object_name=name,
             file_data=json.dumps(payload, ensure_ascii=False, default=str).encode(), content_type="application/json"):
-            raise RuntimeError("Não foi possível preservar o resultado para entrega ao datalake")
+            raise RuntimeError("Could not preserve the result for datalake delivery")
         dest.snapshot_path = name
         db.commit()
 
@@ -174,7 +176,8 @@ def export_result(job_id):
             dest.completed_at = datetime.utcnow()
         except Exception:
             dest.status = "failed"
-            dest.error = "Não foi possível entregar ao bucket. Verifique a conexão e as permissões e tente novamente."
+            # Stored text: the worker has no request language, so it is native English.
+            dest.error = render("DATALAKE_DELIVERY_FAILED", lang="en")
             db.commit()
             # Persist the failure independently, then let Celery schedule a retry.
             raise RuntimeError("Datalake delivery failed") from None

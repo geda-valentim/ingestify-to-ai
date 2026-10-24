@@ -55,6 +55,7 @@ from sqlalchemy.orm import Session
 from shared.iam.remote import can_use_remote
 from api.iam_deps import authorized, require
 from shared.config import get_settings
+from shared.error_catalog import render
 from shared.database import SessionLocal, get_db
 from shared.engines import dispatch as engine_dispatch
 from shared.models import Job, JobStatus as DBJobStatus, User
@@ -119,20 +120,16 @@ settings = get_settings()
 
 # Uma flag só cobre `/images/describe` e `/images/ocr`: é um modelo atrás de um
 # carregador, e duas flags permitiriam um estado que não existe.
-VISION_DISABLED_MESSAGE = (
-    "Image description is currently disabled "
-    "(set ENABLE_IMAGE_DESCRIPTION=true to enable)"
-)
-
 # Idade máxima aceitável do heartbeat do worker de visão. Vem do mesmo lugar em
 # que a chave e o TTL são definidos (`shared/redis_client.py`), para que leitor e
 # escritor não possam discordar sobre o que ainda é "recente".
 HEARTBEAT_MAX_AGE_SECONDS = VISION_HEARTBEAT_TTL_SECONDS
 
-NO_VISION_WORKER_REASON = (
-    f"no vision worker heartbeat in the last {HEARTBEAT_MAX_AGE_SECONDS}s "
-    f"(no worker is consuming the vision queue)"
-)
+
+
+def no_vision_worker_reason() -> str:
+    """`reason` of a capabilities answer with no worker heartbeat, in the request language."""
+    return render("VISION_NO_WORKER", seconds=HEARTBEAT_MAX_AGE_SECONDS)
 
 # Intervalo entre dois `ready()`. Cada iteração é um GET no Redis; 250ms é
 # barato o suficiente para não aparecer no perfil e curto o suficiente para não
@@ -162,9 +159,13 @@ def markdown_responses(description: str = "Sucesso") -> Dict[Any, Any]:
 def _error(
     status_code: int,
     error_code: str,
-    message: str,
     job_id: Optional[str] = None,
-    **extra: Any,
+    *,
+    key: Optional[str] = None,
+    text: Optional[str] = None,
+    extra: Optional[Dict[str, Any]] = None,
+    headers: Optional[Dict[str, str]] = None,
+    **params: Any,
 ) -> HTTPException:
     """
     Todo corpo não-2xx daqui é `{"detail": {"error_code", "message", "job_id"}}`.
@@ -172,27 +173,32 @@ def _error(
     O `error_code` existe para o cliente ramificar sem casar string de mensagem,
     e `job_id` é o que transforma um 504 em "continue pelo polling" em vez de
     "o trabalho evaporou".
+
+    A mensagem vem do catálogo bilíngue, na língua da requisição: `key` (padrão:
+    o próprio `error_code`) escolhe a entrada e `params` preenche os `{campos}`.
+    `text` é uma mensagem já pronta (de um erro que a rota apenas repassa);
+    `extra` são campos a mais do envelope (`poll_url`, `retry_after`, ...).
     """
     detail: Dict[str, Any] = {
         "error_code": error_code,
-        "message": message,
+        "message": text if text is not None else render(key or error_code, **{"job_id": job_id, **params}),
         "job_id": job_id,
     }
-    detail.update(extra)
-    return HTTPException(status_code=status_code, detail=detail)
+    detail.update(extra or {})
+    return HTTPException(status_code=status_code, detail=detail, headers=headers)
 
 
 def parse_tags_or_422(raw) -> List[str]:
-    """Tags in this module's envelope: 422 `{"error_code": "INVALID_TAGS", "message", "job_id"}`."""
+    """Tags in this module's envelope: 422 `{"error_code", "message", "job_id"}` with error_code INVALID_TAGS."""
     try:
         return _parse_tags(raw)
     except HTTPException as exc:
-        raise _error(exc.status_code, exc.detail["code"], exc.detail["message"])
+        raise _error(exc.status_code, exc.detail["code"], text=exc.detail["message"])
 
 
 def _require_vision_enabled() -> None:
     if not settings.enable_image_description:
-        raise _error(503, "VISION_DISABLED", VISION_DISABLED_MESSAGE)
+        raise _error(503, "VISION_DISABLED")
 
 
 def _location_step(fn, *args):
@@ -204,12 +210,12 @@ def _location_step(fn, *args):
     try:
         return fn(*args)
     except LocationError as exc:
-        raise _error(exc.status_code, exc.error_code, exc.message)
+        raise _error(exc.status_code, exc.error_code, text=exc.message)
     except HTTPException as exc:  # limits (422) and database errors (503) of get-or-add
         if isinstance(exc.detail, dict):  # FOLDER_LIMIT / PROJECT_LIMIT
-            raise _error(exc.status_code, exc.detail["code"], exc.detail["message"])
+            raise _error(exc.status_code, exc.detail["code"], text=exc.detail["message"])
         code = "DATABASE_UNAVAILABLE" if exc.status_code == 503 else "INVALID_LOCATION"
-        raise _error(exc.status_code, code, str(exc.detail))
+        raise _error(exc.status_code, code, text=str(exc.detail))
 
 
 def _plan_location(db: Session, user: User, http_request: Request, fields: LocationFields) -> UploadPlan:
@@ -231,7 +237,9 @@ def _as_http_error(exc: VisionError) -> HTTPException:
     decode/tamanho/formato, usada igualmente pela rota JSON, pela multipart e
     por quem mais precisar validar bytes de imagem.
     """
-    return _error(exc.http_status, exc.error_code, str(exc))
+    if exc.catalog_code:
+        return _error(exc.http_status, exc.error_code, key=exc.catalog_code, **exc.params)
+    return _error(exc.http_status, exc.error_code, text=str(exc))
 
 
 def _decode_base64_image(payload: str) -> bytes:
@@ -428,11 +436,7 @@ def _create_vision_job(
     except Exception as e:
         logger.error(f"Error creating image job in MySQL: {e}", exc_info=True)
         db.rollback()
-        raise _error(
-            503,
-            "JOB_PERSISTENCE_UNAVAILABLE",
-            "Não foi possível salvar o job e sua configuração. Tente novamente.",
-        ) from e
+        raise _error(503, "JOB_PERSISTENCE_UNAVAILABLE") from e
 
     # SQL owns both the job and its configuration. A cache outage must not lose
     # that durable request or prevent the worker from processing it.
@@ -555,20 +559,16 @@ def _unwrap_task_payload(payload: Any, job_id: str, required: tuple) -> Dict[str
     if not isinstance(payload, dict):
         # `AsyncResult.result` de uma task que levantou é a própria exceção.
         logger.error(f"Vision task for job {job_id} failed: {payload!r}")
-        raise _error(
-            500,
-            "VISION_INFERENCE_FAILED",
-            "A inferência de visão falhou. Consulte os logs do worker de visão "
-            f"e o job {job_id} para o erro completo.",
-            job_id=job_id,
-        )
+        raise _error(500, "VISION_INFERENCE_FAILED", job_id)
 
     if payload.get("ok") is False:
+        # `detail` is what the vision worker wrote (English, like its logs).
         raise _error(
             int(payload.get("http_status", 503)),
             str(payload.get("error_code", "VISION_ERROR")),
-            str(payload.get("detail", "A inferência de visão falhou.")),
-            job_id=job_id,
+            job_id,
+            key="VISION_ERROR",
+            text=str(payload["detail"]) if payload.get("detail") else None,
         )
 
     missing = [key for key in required if key not in payload]
@@ -577,13 +577,8 @@ def _unwrap_task_payload(payload: Any, job_id: str, required: tuple) -> Dict[str
             f"Vision task for job {job_id} returned an unexpected payload "
             f"(missing {missing}): {sorted(payload)}"
         )
-        raise _error(
-            500,
-            "VISION_INFERENCE_FAILED",
-            f"O worker de visão devolveu um resultado incompleto (faltando: "
-            f"{', '.join(missing)}).",
-            job_id=job_id,
-        )
+        raise _error(500, "VISION_INFERENCE_FAILED", job_id, key="VISION_RESULT_INCOMPLETE",
+                     missing=", ".join(missing))
 
     return payload
 
@@ -652,12 +647,7 @@ async def _run_vision(
         # exatamente o lixo que ninguém mais viria recolher.
         _discard_image(job_id)
         _mark_job_failed(job_id, db, db_job, str(e))
-        raise _error(
-            500,
-            "VISION_INFERENCE_FAILED",
-            f"Não foi possível gravar a imagem para processamento: {e}",
-            job_id=job_id,
-        )
+        raise _error(500, "VISION_INFERENCE_FAILED", job_id, key="VISION_IMAGE_WRITE_FAILED", error=e)
 
     kwargs: Dict[str, Any] = {"job_id": job_id, "image_path": str(image_path)}
     if kind == "describe":
@@ -677,7 +667,7 @@ async def _run_vision(
             status_code=503,
             detail={
                 "error_code": "VISION_ENGINE_UNAVAILABLE",
-                "message": "Nenhum motor de visão pode atender agora. Tente de novo em instantes.",
+                "message": render("VISION_ENGINE_UNAVAILABLE"),
                 "job_id": job_id,
                 "retry_after": placement.retry_after,
             },
@@ -696,30 +686,19 @@ async def _run_vision(
         logger.error(f"Vision tasks not available: {e}")
         # Nenhuma task foi enfileirada, então ninguém mais vai apagar isto.
         _discard_image(job_id)
-        _mark_job_failed(job_id, db, db_job, "Celery workers não disponíveis")
-        raise _error(
-            503,
-            "CELERY_UNAVAILABLE",
-            "Sistema de processamento indisponível: as tasks de visão não puderam "
-            "ser carregadas. Verifique se o worker de visão está instalado e rodando.",
-            job_id=job_id,
-        )
+        _mark_job_failed(job_id, db, db_job, render("CELERY_UNAVAILABLE", lang="en"))  # stored job error: English
+        raise _error(503, "CELERY_UNAVAILABLE", job_id, key="VISION_TASKS_UNAVAILABLE")
     except Exception as e:
         # kombu.exceptions.OperationalError (broker fora do ar) e afins.
         logger.error(f"Error enqueueing vision job {job_id}: {e}", exc_info=True)
         _discard_image(job_id)
         _mark_job_failed(job_id, db, db_job, str(e))
-        raise _error(
-            503,
-            "CELERY_UNAVAILABLE",
-            f"Não foi possível enfileirar o job de visão: {e}",
-            job_id=job_id,
-        )
+        raise _error(503, "CELERY_UNAVAILABLE", job_id, key="VISION_ENQUEUE_FAILED", error=e)
 
     if not wait:
         return {"job_id": job_id, "status": "queued",
                 "created_at": db_job.created_at if db_job else datetime.utcnow(),
-                "message": "Análise de imagem enfileirada",
+                "message": render("IMAGE_ANALYSIS_QUEUED"),
                 "project": location.project_info() if location else None,
                 "folder": location.folder_info() if location else None}
 
@@ -744,11 +723,9 @@ async def _run_vision(
         raise _error(
             504,
             "VISION_TIMEOUT",
-            f"A descrição não ficou pronta em {settings.vision_request_timeout_seconds}s. "
-            f"O job continua processando.",
-            job_id=job_id,
-            poll_url=f"/jobs/{job_id}",
-            result_url=f"/jobs/{job_id}/result",
+            job_id,
+            seconds=settings.vision_request_timeout_seconds,
+            extra={"poll_url": f"/jobs/{job_id}", "result_url": f"/jobs/{job_id}/result"},
         )
 
     required = ("description",) if kind == "describe" else ("text",)
@@ -957,13 +934,14 @@ async def analyze_image_upload(
     """
     _require_vision_enabled()
     if mode not in ('single', 'full'):
-        raise _error(422, 'INVALID_VISION_OPTIONS', 'mode deve ser single ou full')
+        raise _error(422, 'INVALID_VISION_OPTIONS', key='IMAGE_MODE_INVALID')
     if mode == 'full':
         from api.image_full_routes import run_full
         fields = await http_request.form()
         allowed = {'file', 'mode', 'full_options', 'datalake', 'wait', 'tags', 'purge_source', 'output_format', 'project', 'project_id', 'folder', 'folder_id'}
         if set(fields) - allowed:
-            raise _error(422, 'INVALID_VISION_OPTIONS', 'Campos incompatíveis com mode=full: ' + ', '.join(sorted(set(fields)-allowed)))
+            raise _error(422, 'INVALID_VISION_OPTIONS', key='IMAGE_FIELDS_INCOMPATIBLE_FULL',
+                         fields=', '.join(sorted(set(fields)-allowed)))
         try:
             full = ImageFullAnalyzeRequest(mode='full', image_base64='multipart', filename=file.filename,
                 full_options=json.loads(full_options) if full_options else {},
@@ -971,18 +949,18 @@ async def analyze_image_upload(
                 output_format=output_format,
                 **{key: getattr(location, key) for key in ("project", "project_id", "folder", "folder_id")})
         except (ValueError, TypeError) as exc:
-            raise _error(422, 'INVALID_VISION_OPTIONS', str(exc)) from exc
+            raise _error(422, 'INVALID_VISION_OPTIONS', detail=str(exc)) from exc
         plan = _plan_location(db, current_user, http_request, location)
         data = await file.read(settings.vision_max_image_size_mb * 1024 * 1024 + 1)
         return await run_full(full, http_request, data, file.filename, current_user, db, parse_tags_or_422(tags), plan)
     if full_options is not None or datalake is not None:
-        raise _error(422, 'INVALID_VISION_OPTIONS', 'full_options/datalake exigem mode=full')
+        raise _error(422, 'INVALID_VISION_OPTIONS', key='IMAGE_OPTIONS_REQUIRE_FULL')
     try:
         options = ImageAnalyzeOptions(task=task, text_input=text_input,
             region=json.loads(region) if region else None,
             generation=json.loads(generation) if generation else {})
     except (ValueError, TypeError) as exc:
-        raise _error(422, "INVALID_VISION_OPTIONS", str(exc)) from exc
+        raise _error(422, "INVALID_VISION_OPTIONS", detail=str(exc)) from exc
     tag_list = parse_tags_or_422(tags)
     plan = _plan_location(db, current_user, http_request, location)
     image_bytes = await file.read(settings.vision_max_image_size_mb * 1024 * 1024 + 1)
@@ -1026,12 +1004,7 @@ async def describe_image_upload(
     # restrição é aplicada à mão — senão este caminho aceitaria um prompt
     # arbitrário que o caminho JSON recusa.
     if task not in VISION_CAPTION_TASKS:
-        raise _error(
-            422,
-            "UNSUPPORTED_CAPTION_TASK",
-            f"task inválido: {task}. Aceitos: <MORE_DETAILED_CAPTION>, "
-            f"<DETAILED_CAPTION>, <CAPTION>.",
-        )
+        raise _error(422, "UNSUPPORTED_CAPTION_TASK", task=task)
 
     tag_list = parse_tags_or_422(tags)
     plan = _plan_location(db, current_user, http_request, location)
@@ -1187,7 +1160,7 @@ async def vision_capabilities(
         model_downloaded=False,
         model_loaded=False,
         trust_remote_code=settings.vision_trust_remote_code,
-        reason=NO_VISION_WORKER_REASON,
+        reason=no_vision_worker_reason(),
         max_image_size_mb=settings.vision_max_image_size_mb,
         full_limits={"max_queries": 3, "max_regions": 4, "max_calls": 32, "deadline_seconds": min(settings.vision_full_task_timeout_seconds, 900)},
     )
@@ -1199,7 +1172,7 @@ async def vision_capabilities(
         # resposta tem que dizer — nunca o padrão otimista.
         logger.warning(f"Could not read the vision capabilities heartbeat: {e}")
         return degraded.model_copy(
-            update={"reason": f"could not read the vision worker heartbeat: {e}"}
+            update={"reason": render("VISION_HEARTBEAT_UNREADABLE", error=e)}
         )
 
     if heartbeat is None:
@@ -1222,7 +1195,9 @@ async def vision_capabilities(
     return VisionCapabilitiesResponse(**merged)
 
 
-FULL_ANALYSIS_NOT_FOUND = 'Full Analysis não encontrada'
+def full_analysis_not_found_detail() -> str:
+    """The 404 text of a missing and of a foreign Full Analysis: one function, one body."""
+    return render("FULL_ANALYSIS_NOT_FOUND")
 
 
 @router.post('/{job_id}/cancel', summary="Cancelar análise composta de imagem")
@@ -1230,7 +1205,7 @@ def cancel_full_image(
     job_id: str,
     # Owner only (spec 0014); missing and someone else's keep this route's own 404.
     owned_job: Optional[Job] = Depends(authorized(
-        Job, "jobs.cancel", not_found=lambda: HTTPException(404, FULL_ANALYSIS_NOT_FOUND))),
+        Job, "jobs.cancel", not_found=lambda: HTTPException(404, full_analysis_not_found_detail()))),
     db: Session = Depends(get_db),
 ):
     from shared.models import ImageAnalysisRun
@@ -1244,7 +1219,7 @@ def cancel_full_image(
         job = db.query(Job).filter(Job.id == job_id).with_for_update().first()
     run = db.get(ImageAnalysisRun, job_id) if job else None
     if run is None:
-        raise HTTPException(404, FULL_ANALYSIS_NOT_FOUND)
+        raise HTTPException(404, full_analysis_not_found_detail())
     from shared.image_full import TERMINAL
     terminal = run.status in TERMINAL
     if not terminal:

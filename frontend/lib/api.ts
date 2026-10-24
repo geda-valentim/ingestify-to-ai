@@ -60,11 +60,11 @@ export async function apiFetch(input: string, init?: RequestInit): Promise<Respo
 }
 
 /**
- * Screens written in Portuguese (/live, the image options of the upload form) show API
- * messages verbatim, so their calls ask for pt-BR explicitly (apiFetch keeps a header
+ * Screens written in Portuguese (/live, the image screens and upload options, the
+ * datalake screens) show API messages verbatim, so their calls ask for pt-BR explicitly (apiFetch keeps a header
  * that is already there). Everything else asks for English.
  */
-const PT_LANGUAGE: HeadersInit = { "Accept-Language": "pt-BR" };
+export const PT_LANGUAGE: HeadersInit = { "Accept-Language": "pt-BR" };
 
 /**
  * An HTTP error that keeps the server's body, so `formatApiError` can show
@@ -221,7 +221,7 @@ export const jobsApi = {
   },
 
   async cancelFullImage(jobId: string): Promise<void> {
-    const response = await apiFetch(`${API_URL}/images/${jobId}/cancel`, { method: "POST", headers: getHeaders(true) });
+    const response = await apiFetch(`${API_URL}/images/${jobId}/cancel`, { method: "POST", headers: { ...getHeaders(true), ...PT_LANGUAGE } });
     if (!response.ok) await throwApiError(response, "Não foi possível cancelar a análise");
   },
 
@@ -299,7 +299,7 @@ export const jobsApi = {
         if (request.image_generation && Object.keys(request.image_generation).length) body.append("generation", JSON.stringify(request.image_generation));
       } else if (operation === "describe" && request.image_task) body.append("task", request.image_task);
       const response = await apiFetch(faces ? `${API_URL}/images/faces/upload` : analyze ? `${API_URL}/images/analyze/upload` : operation === "ocr" ? `${API_URL}/images/ocr/upload` : `${API_URL}/images/describe/upload`, {
-        method: "POST", headers: { ...getHeaders(true), ...((full || faces) ? { "Idempotency-Key": request.image_idempotency_key ?? crypto.randomUUID() } : {}) }, body,
+        method: "POST", headers: { ...getHeaders(true), ...PT_LANGUAGE, ...((full || faces) ? { "Idempotency-Key": request.image_idempotency_key ?? crypto.randomUUID() } : {}) }, body,
       });
       const data = await response.json().catch(() => null);
       // The synchronous endpoint can time out while its owned job continues.

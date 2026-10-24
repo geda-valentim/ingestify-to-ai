@@ -1,4 +1,4 @@
-import { API_URL, apiFetch, getHeaders, throwApiError } from "@/lib/api";
+import { API_URL, apiFetch, getHeaders, PT_LANGUAGE, throwApiError } from "@/lib/api";
 import type { DatalakeConfig, DatalakeConnection, DatalakeDelivery, DatalakeDestination, DatalakeProvider, PartitionPreviewRequest, PartitionPreviewResponse } from "@/types/datalake";
 import type { JobCreatedResponse, UploadLocation } from "@/types/api";
 
@@ -9,9 +9,10 @@ export interface ConnectionWrite {
   enabled?: boolean;
 }
 
+// The datalake screens are in Portuguese and show the API messages: ask for pt-BR (P-13).
 async function call<T>(path: string, method = "GET", body?: unknown): Promise<T> {
   const response = await apiFetch(API_URL + path, {
-    method, headers: { ...getHeaders(true), ...(body !== undefined ? { "Content-Type": "application/json" } : {}) },
+    method, headers: { ...getHeaders(true), ...PT_LANGUAGE, ...(body !== undefined ? { "Content-Type": "application/json" } : {}) },
     ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
   });
   if (!response.ok) await throwApiError(response, "Não foi possível acessar o datalake");

@@ -8,6 +8,7 @@ from urllib.parse import urlparse
 import urllib3
 from minio import Minio
 
+from shared.datalake.errors import DatalakeError
 from shared.datalake.secrets import unseal
 
 
@@ -164,9 +165,9 @@ def validate_credentials(provider, config, credentials):
     required = {"s3": ("access_key", "secret_key"), "minio": ("access_key", "secret_key"),
                 "gcs": ("service_account_json",), "azure": ("connection_string",)}[provider]
     if any(not credentials.get(key, "").strip() for key in required):
-        raise ValueError("Informe todas as credenciais do provedor")
+        raise DatalakeError("DATALAKE_CREDENTIALS_INCOMPLETE")
     if provider == "minio" and not config.get("endpoint"):
-        raise ValueError("Informe o endpoint do MinIO")
+        raise DatalakeError("DATALAKE_ENDPOINT_REQUIRED")
     if provider == "gcs":
         try:
             account = json.loads(credentials["service_account_json"])
@@ -176,7 +177,7 @@ def validate_credentials(provider, config, credentials):
             if account["token_uri"] != "https://oauth2.googleapis.com/token":
                 raise ValueError()
         except (ValueError, TypeError, AttributeError):
-            raise ValueError("Informe um JSON de conta de serviço válido do Google") from None
+            raise DatalakeError("DATALAKE_GCS_JSON_INVALID") from None
 
 
 def adapter_for(connection):

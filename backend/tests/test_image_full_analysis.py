@@ -238,7 +238,7 @@ def test_cancel_requires_the_run_row_to_carry_the_callers_own_user_id(memory, mo
     app.dependency_overrides[get_current_active_user] = lambda: user
     client = TestClient(app)
     refused = client.post('/images/parented-image/cancel')
-    assert refused.status_code == 404 and refused.json()['detail'] == image_routes.FULL_ANALYSIS_NOT_FOUND
+    assert refused.status_code == 404 and refused.json()['detail'] == image_routes.full_analysis_not_found_detail()
     with factory() as db:
         assert not db.get(Run, 'parented-image').cancel_requested
     assert client.post('/images/own-image/cancel').status_code == 202

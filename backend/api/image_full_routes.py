@@ -16,7 +16,15 @@ from shared.job_configuration import save_configuration
 from shared.minio_client import get_minio_client
 from shared.tags import set_job_tags
 from shared.schemas import ImageFullAnalyzeResponse
+from shared.datalake.errors import DatalakeError
 from shared.datalake.service import prepare_destination, bind_destination
+from shared.error_catalog import render
+
+
+def _error(*args, **kwargs):
+    # api.image_routes imports this module lazily: import it lazily too.
+    from api.image_routes import _error as envelope
+    return envelope(*args, **kwargs)
 
 
 class _AttemptRace(Exception):
@@ -51,9 +59,9 @@ def lookup(db, user_id, key_hash, request_hash):
             db.delete(row)
             db.commit()
             return None
-        raise HTTPException(410, 'Job excluído; use nova Idempotency-Key para outra solicitação')
+        raise _error(410, 'IMAGE_JOB_DELETED')
     if row.request_hash != request_hash:
-        raise HTTPException(409, 'Idempotency-Key já utilizada com outra solicitação')
+        raise _error(409, 'IMAGE_IDEMPOTENCY_KEY_REUSED')
     return Previous(row=row, job_id=row.job_id, attempt=row.attempt or 1, failed=job.status == JobStatus.FAILED)
 
 
@@ -69,7 +77,7 @@ def submit(request, http_request, image_bytes, filename, current_user, db, tags,
     settings = get_settings()
     key = http_request.headers.get('Idempotency-Key')
     if not key or not key.strip() or len(key) > 128:
-        raise HTTPException(422, 'Idempotency-Key é obrigatória para análise composta (1..128 caracteres)')
+        raise _error(422, 'IMAGE_IDEMPOTENCY_KEY_REQUIRED')
     mime = _validate_image_bytes(image_bytes)
     name = _safe_filename(filename, mime)
     key_hash = hashlib.sha256(key.encode()).hexdigest()
@@ -99,13 +107,17 @@ def submit(request, http_request, image_bytes, filename, current_user, db, tags,
             except Exception:
                 native = {}
             if not native.get('dependencies_installed') or not native.get('model_downloaded'):
-                raise HTTPException(503, 'Florence não está pronto para Full Analysis v2')
+                raise _error(503, 'FLORENCE_NOT_READY')
     try:
         destination = prepare_destination(db, current_user.id, request.datalake)
     except LookupError as exc:
-        raise HTTPException(404, str(exc)) from exc
+        # Same text for a missing and a foreign connection (non-disclosure 404).
+        # Same text for a missing and a foreign connection (non-disclosure 404).
+        raise _error(404, 'DATALAKE_NOT_FOUND') from exc
+    except DatalakeError as exc:
+        raise _error(422, exc.code, text=str(exc)) from exc  # rendered in the request language
     except ValueError as exc:
-        raise HTTPException(422, str(exc)) from exc
+        raise _error(422, 'DATALAKE_DESTINATION_REJECTED') from exc
     location = _location_step(resolve_upload_location, db, current_user, plan, http_request.url.path)
     job_id = str(uuid4())
     storage = get_minio_client()
@@ -168,12 +180,12 @@ def submit(request, http_request, image_bytes, filename, current_user, db, tags,
         db.expire_all()
         previous = lookup(db, current_user.id, key_hash, request_hash)
         if previous is None or previous.failed:
-            raise HTTPException(503, 'Conflito ao preservar a solicitação; tente novamente')
+            raise _error(503, 'IMAGE_SUBMISSION_CONFLICT')
         return previous.job_id, previous.attempt
     except Exception as exc:
         db.rollback()
         storage.delete_folder(storage.bucket_results, f'images/{job_id}/')
-        raise HTTPException(503, 'Não foi possível preservar a imagem e sua configuração') from exc
+        raise _error(503, 'IMAGE_PERSIST_FAILED') from exc
     from workers.image_full_tasks import dispatch
     try:
         dispatch(job_id)
@@ -224,9 +236,9 @@ async def run_full(request, http_request, image_bytes, filename, user, db, tags,
                 response = FaceAnalyzeResponse if hasattr(request, 'face_options') else ImageFullAnalyzeResponse
                 return response(job_id=job_id, status=status, attempt=attempt, **payload)
             await asyncio.sleep(.25)
-        raise HTTPException(504, {'error_code': 'VISION_TIMEOUT', 'message': 'Análise da imagem continua processando',
+        raise HTTPException(504, {'error_code': 'VISION_TIMEOUT', 'message': render('VISION_TIMEOUT_FULL'),
             'job_id': job_id, 'poll_url': f'/jobs/{job_id}', 'result_url': f'/jobs/{job_id}/result'})
     job = db.get(Job, job_id)
     return JSONResponse(status_code=202, content={'job_id': job_id, 'status': 'queued' if job.status == JobStatus.PENDING else job.status.value,
-        'created_at': job.created_at.isoformat()+'Z', 'message': 'Análise da imagem enfileirada', 'attempt': attempt,
+        'created_at': job.created_at.isoformat()+'Z', 'message': render('IMAGE_FULL_ANALYSIS_QUEUED'), 'attempt': attempt,
         'poll_url': f'/jobs/{job_id}', 'result_url': f'/jobs/{job_id}/result'})

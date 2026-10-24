@@ -41,6 +41,13 @@ SCANNED = [
     "api/deps.py",
     "shared/projects.py",
     "shared/tags.py",
+    # P-13 slice 3
+    "api/datalake_routes.py",
+    "api/image_routes.py",
+    "api/image_full_routes.py",
+    "api/face_routes.py",
+    "shared/datalake",
+    "workers/vision/image_input.py",
 ]
 # Codes whose English text is still missing: they answer in Portuguese when English
 # is asked. P-13 slice 4 translates them and must leave this set empty.
@@ -124,9 +131,9 @@ def test_every_entry_is_bilingual():
 def test_api_codes_raised_by_routes_exist_in_the_catalog():
     """`_coded(status, "CODE", ...)` / `api_error(status, "CODE", ...)` / `InvalidNameError("CODE"...)`."""
     pattern = re.compile(
-        r"""(?:_coded|api_error|InvalidNameError|InvalidTagsError)\(\s*(?:(?:\d+|status\.\w+),\s*)?["']([A-Z_]+)["']"""
-        r"""|_too_many\([^"'\n]*,\s*["']([A-Z_]+)["']"""
-        r"""|\b(?:render|describe)\(\s*["']([A-Z_]+)["']"""
+        r"""(?:_coded|api_error|InvalidNameError|InvalidTagsError)\(\s*(?:(?:\d+|status\.\w+),\s*)?["']([A-Z0-9_]+)["']"""
+        r"""|_too_many\([^"'\n]*,\s*["']([A-Z0-9_]+)["']"""
+        r"""|\b(?:render|describe)\(\s*["']([A-Z0-9_]+)["']"""
     )
     found = set()
     for folder in ("api", "shared"):
