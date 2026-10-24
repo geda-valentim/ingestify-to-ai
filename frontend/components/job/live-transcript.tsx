@@ -42,20 +42,20 @@ export function useLiveTranscript(
         const since = state.cursor;
         const data = await jobsApi.getPartialTranscript(jobId, since, controller.signal);
         if (controller.signal.aborted) return;
-        const { state: next, reset } = mergePartial(state, since, data);
-        if (reset) {
-          // The transcription restarted (e.g. GPU failed, retrying on CPU): start over
-          state = next;
-          first = true;
-          setSegments([]);
-          setPreloaded(0);
-        } else if (next !== state) {
+        const { state: next, reset, applied } = mergePartial(state, since, data);
+        if (applied) {
+          if (reset) {
+            // The transcription restarted (e.g. GPU failed, retrying on CPU): start over
+            setSegments([]);
+            setPreloaded(0);
+          } else if (next !== state) {
+            setSegments(next.segments);
+          }
           if (first) {
             first = false;
-            setPreloaded(data.segments.length);
+            if (!reset) setPreloaded(data.segments.length);
           }
           state = next;
-          setSegments(next.segments);
         }
       } catch {
         // Live text is a nicety: keep polling, the final result still arrives
