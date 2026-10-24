@@ -63,6 +63,10 @@ class RedisClient:
                 db=settings.redis_db,
                 password=settings.redis_password if settings.redis_password else None,
                 decode_responses=True,
+                # A dead Redis must fail fast, not hold a worker thread / the loop
+                # indefinitely. No blocking commands (BLPOP, pubsub) go through this client.
+                socket_connect_timeout=5,
+                socket_timeout=5,
             )
 
         self.result_ttl = settings.result_ttl_seconds
@@ -228,7 +232,7 @@ class RedisClient:
         key = f"job:{job_id}:transcript:partial"
         try:
             total = self.client.llen(key)
-            raw = self.client.lrange(key, since, -1) if since < total else []
+            raw = self.client.lrange(key, since, total - 1) if since < total else []
             return [json.loads(s) for s in raw], total
         except Exception as e:
             logger.error("Failed to read live transcript for job %s: %s", job_id, e)

@@ -37,7 +37,9 @@ def typename(item):
         return ' / '.join(typename(part) for part in item.get('anyOf', item.get('oneOf')))
     if item.get('type') == 'array':
         return 'array de ' + typename(item.get('items', {}))
-    return item.get('type', 'objeto livre') + (f" ({item['format']})" if 'format' in item else '')
+    # OpenAPI 3.1 spells an upload as contentMediaType; the docs keep calling it binary
+    fmt = item.get('format') or ('binary' if 'contentMediaType' in item else None)
+    return item.get('type', 'objeto livre') + (f" ({fmt})" if fmt else '')
 
 
 def constraints(item):

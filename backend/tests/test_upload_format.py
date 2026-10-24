@@ -171,7 +171,8 @@ def test_health_reports_the_api_version(monkeypatch):
     monkeypatch.setattr(routes, "get_redis_client", lambda: SimpleNamespace(ping=lambda: True))
     monkeypatch.setattr(routes, "get_es_client", lambda: SimpleNamespace(health_check=lambda: True))
     from workers.celery_app import celery_app
-    monkeypatch.setattr(celery_app.control, "inspect", lambda: SimpleNamespace(stats=lambda: {"w1": {}}))
+    monkeypatch.setattr(celery_app.control, "inspect", lambda **kw: SimpleNamespace(stats=lambda: {"w1": {}}))
+    monkeypatch.setitem(routes._health_cache, "payload", None)
     assert routes.health_check().version == API_VERSION
 
 
@@ -184,3 +185,25 @@ def test_routes_that_inspect_celery_never_block_the_event_loop():
 
     for route in (routes.health_check, admin_routes.monitoring_health):
         assert not inspect.iscoroutinefunction(route), route.__name__
+
+
+def test_cors_allows_every_header_the_frontend_sends():
+    # A cross-origin frontend (UI and API on different hosts) is blocked at preflight
+    # for any request header missing here; image and engine-control calls send Idempotency-Key.
+    import re
+    from pathlib import Path
+
+    from fastapi.testclient import TestClient
+    from api.main import app, cors_origins
+
+    frontend = Path(__file__).resolve().parents[2] / "frontend"
+    sent = {"Idempotency-Key", "X-API-Key", "X-Source-Token"}
+    if frontend.is_dir():
+        for path in [*frontend.glob("lib/**/*.ts"), *frontend.glob("hooks/**/*.ts"), *frontend.glob("components/**/*.tsx")]:
+            sent |= set(re.findall(r'"((?:X-[A-Za-z-]+)|Idempotency-Key)"', path.read_text(encoding="utf-8")))
+    origin = cors_origins[0]
+    for header in sorted(sent):
+        response = TestClient(app).options("/health", headers={
+            "Origin": origin, "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": header})
+        assert response.status_code == 200, header

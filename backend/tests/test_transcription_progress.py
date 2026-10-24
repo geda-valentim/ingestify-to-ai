@@ -214,6 +214,26 @@ def test_partial_transcript_is_read_from_where_the_client_left_off():
     assert redis_client.get_partial_transcript("job", since=3) == ([], 0)
 
 
+def test_partial_transcript_response_is_self_consistent_when_a_write_lands_between_reads():
+    import fakeredis
+    from shared.redis_client import RedisClient
+
+    fake = fakeredis.FakeRedis(decode_responses=True)
+    redis_client = RedisClient(client=fake)
+    redis_client.append_partial_transcript("job", [_seg(0.0, 1.0, "a"), _seg(1.0, 2.0, "b")])
+
+    real_llen = fake.llen
+
+    def llen_then_append(key):
+        total = real_llen(key)
+        redis_client.append_partial_transcript("job", [_seg(2.0, 3.0, "c")])  # lands after LLEN
+        return total
+
+    fake.llen = llen_then_append
+    segments, total = redis_client.get_partial_transcript("job", since=1)
+    assert len(segments) == total - 1  # exactly [since, next)
+
+
 def test_partial_transcript_endpoint_returns_only_the_new_segments(monkeypatch):
     import asyncio
 
@@ -230,7 +250,7 @@ def test_partial_transcript_endpoint_returns_only_the_new_segments(monkeypatch):
     monkeypatch.setattr(routes, "get_redis_client", lambda: redis_client)
 
     def get(since):
-        return asyncio.run(routes.get_partial_transcript(job_id, since=since, current_user=None, owned_job=None))
+        return routes.get_partial_transcript(job_id, since=since, current_user=None, owned_job=None)
 
     first = get(0)
     assert first.status == "processing"
@@ -257,5 +277,5 @@ def test_partial_transcript_endpoint_404s_for_an_unknown_job(monkeypatch):
     monkeypatch.setattr(routes, "get_redis_client", lambda: redis_client)
 
     with pytest.raises(HTTPException) as exc:
-        asyncio.run(routes.get_partial_transcript("nope", since=0, current_user=None, owned_job=None))
+        routes.get_partial_transcript("nope", since=0, current_user=None, owned_job=None)
     assert exc.value.status_code == 404
