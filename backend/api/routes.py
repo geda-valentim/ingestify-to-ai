@@ -3383,7 +3383,11 @@ def health_check():
     if not _health_lock.acquire(blocking=False):
         response = _health_cache["payload"]
         if response is None:
-            raise HTTPException(status_code=503, detail="health probe in progress")
+            # Cold start: same status body as any other 503, flagged as not yet probed
+            response = HealthCheckResponse(
+                status="unhealthy", version=API_VERSION, redis=False,
+                workers={"active": 0, "available": 0, "elasticsearch": False, "probe_in_progress": True},
+                timestamp=datetime.utcnow())
     else:
         try:
             response = _health_cache["payload"]

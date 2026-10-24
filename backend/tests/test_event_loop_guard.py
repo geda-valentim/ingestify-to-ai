@@ -126,6 +126,9 @@ def test_health_concurrent_call_does_not_wait(monkeypatch):
         routes.health_check()  # no cached result yet: 503, without waiting
     assert time.monotonic() - t0 < 0.5
     assert exc.value.status_code == 503
+    # Same status body as any other 503 (clients read detail.status), never a bare string
+    assert exc.value.detail["status"] == "unhealthy"
+    assert exc.value.detail["workers"]["probe_in_progress"] is True
     release.set()
     t.join()
 
