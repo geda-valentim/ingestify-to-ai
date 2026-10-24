@@ -1,4 +1,4 @@
-import { API_URL, ApiError, apiFetch, getHeaders } from "./api";
+import { API_URL, ApiError, PT_LANGUAGE, apiFetch, getHeaders } from "./api";
 import type {
   Capabilities,
   ModelProfile,
@@ -20,6 +20,8 @@ export async function controlRequest<T>(
     method,
     headers: {
       ...getHeaders(true),
+      // Admin screens are Portuguese, so the API's messages and next steps are too.
+      ...PT_LANGUAGE,
       "Content-Type": "application/json",
       ...extra,
     },

@@ -60,8 +60,8 @@ def test_use_lang_scopes_the_language_and_restores_it():
 
 
 def test_render_falls_back_to_the_other_language_then_to_the_code():
-    # Engine-control entries without English yet answer in Portuguese for English clients.
-    assert "Vincule um perfil" in render("RUNTIME_PROFILE_REQUIRED")
+    # English is the default; an unknown code renders as itself.
+    assert "Bind a published profile" in render("RUNTIME_PROFILE_REQUIRED")
     assert render("NOT_A_REAL_CODE") == "NOT_A_REAL_CODE"
     assert render("FILE_TOO_LARGE", lang="pt", max_size_mb=7) == "Arquivo muito grande. Máximo: 7MB"
     assert render("FILE_TOO_LARGE", lang="en", max_size_mb=7) == "The file is too large. Maximum size: 7 MB."

@@ -462,7 +462,7 @@ def test_a_route_needs_capacity_on_its_engines(world):
         db.commit()
     with pytest.raises(HTTPException) as exc:
         put(world, steps=[{"engine_ids": ["local"]}])
-    assert exc.value.status_code == 422 and "no capacity" in exc.value.detail
+    assert exc.value.status_code == 422 and "no capacity" in exc.value.detail["technical"] and exc.value.detail["code"] == "ROUTE_REJECTED"
 
 
 def test_document_pages_and_vision_can_be_routed_on_local_engines_only(world, monkeypatch):
@@ -481,7 +481,7 @@ def test_document_pages_and_vision_can_be_routed_on_local_engines_only(world, mo
     world.add_remote("fake_1", config={"features": {"vision": {"gpu_type": "L4", "workers": 1}}})
     with pytest.raises(HTTPException) as exc:
         put(world, feature="vision", steps=[{"engine_ids": ["local"]}, {"engine_ids": ["fake_1"]}])
-    assert exc.value.status_code == 422 and "local engines only" in exc.value.detail
+    assert exc.value.status_code == 422 and "local engines only" in exc.value.detail["technical"]
 
 
 def test_opening_remote_work_to_everyone_needs_the_password(world):

@@ -1,4 +1,4 @@
-"""Route class that adds Portuguese guidance to coded HTTP errors (0009 CA1).
+"""Route class that adds localized (en/pt) guidance to coded HTTP errors (0009 CA1).
 
 Routers for engine control, execution profiles, access and IAM use it so every
 ``{"code": ...}`` refusal — including those raised by router dependencies — also

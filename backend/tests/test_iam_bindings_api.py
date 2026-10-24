@@ -23,7 +23,6 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from api import access_routes, auth_routes, iam_routes
-from api.iam_deps import PLATFORM_DENIED_DETAIL
 from shared.access import contracts as C, policy, service
 from shared.access.models import AuthorizationEpoch, RoleGrant
 from shared.auth import get_current_active_user
@@ -222,7 +221,7 @@ def test_without_either_administration_the_route_is_closed(world, api):  # noqa:
     for method, path, body in (("GET", BASE, None), ("POST", BASE, {"subject_id": "x", "role": "observer"}),
                                ("POST", f"{BASE}/x/revoke", {"version": 0})):
         r = api("outsider", method, path, body)
-        assert (r.status_code, r.json()["detail"]) == (403, PLATFORM_DENIED_DETAIL)
+        assert (r.status_code, r.json()["detail"]["code"]) == (403, "ADMIN_REQUIRED")
 
 
 def test_writes_of_both_families_need_a_login_session(world, api):  # noqa: F811
@@ -231,7 +230,7 @@ def test_writes_of_both_families_need_a_login_session(world, api):  # noqa: F811
     for who, body in (("bootstrap", {"subject_id": "outsider", "role": "platform_auditor", "expires_at": _later(days=1)}),
                       ("delegate", _engines_body(revision, "editor"))):
         r = api(who, "POST", BASE, body, headers={**HEADERS, "X-API-Key": "k"})
-        assert r.status_code == 403 and "login session" in r.json()["detail"], r.text
+        assert r.status_code == 403 and r.json()["detail"]["code"] == "LOGIN_SESSION_REQUIRED", r.text
 
 
 def test_an_api_key_never_reads_engines_bindings(world, api):  # noqa: F811
@@ -245,7 +244,7 @@ def test_an_api_key_never_reads_engines_bindings(world, api):  # noqa: F811
     assert _code(api("delegate", "GET", "/admin/access/grants", headers=key)) == (403, "LOGIN_SESSION_REQUIRED")
     # Engines authority alone: the route is closed to an API key.
     r = api("delegate", "GET", BASE, headers=key)
-    assert (r.status_code, r.json()["detail"]) == (403, PLATFORM_DENIED_DETAIL)
+    assert (r.status_code, r.json()["detail"]["code"]) == (403, "ADMIN_REQUIRED")
     # Bootstrap holds both: platform rows only.
     rows = api("bootstrap", "GET", f"{BASE}?include_inactive=true", headers=key).json()["bindings"]
     assert platform_id in {b["id"] for b in rows}
@@ -412,5 +411,5 @@ def test_engines_off_hides_engines_bindings_from_the_listing(world, api, monkeyp
     monkeypatch.setattr(get_settings(), "engine_access_enabled", False)
     # With the flag off policy.authorize answers "bootstrap" for anyone: never an opening.
     r = api("delegate", "GET", BASE)
-    assert (r.status_code, r.json()["detail"]) == (403, PLATFORM_DENIED_DETAIL)
+    assert (r.status_code, r.json()["detail"]["code"]) == (403, "ADMIN_REQUIRED")
     assert {b["family"] for b in _listed(api, "bootstrap", "?include_inactive=true")} <= {"platform"}

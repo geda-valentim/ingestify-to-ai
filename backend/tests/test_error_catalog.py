@@ -18,6 +18,7 @@ from fastapi import Depends, FastAPI, HTTPException, APIRouter
 from fastapi.testclient import TestClient
 
 from shared import error_catalog
+from shared.i18n import LanguageMiddleware, use_lang
 from shared.engine_control import service
 from shared.engine_control.contracts import PlanRequest
 from shared.engine_control.models import ControlHost
@@ -48,33 +49,13 @@ SCANNED = [
     "api/face_routes.py",
     "shared/datalake",
     "workers/vision/image_input.py",
+    # P-13 slice 4
+    "api/admin_routes.py",
+    "api/engine_admin_routes.py",
+    "api/routing_admin_routes.py",
+    "api/admin_errors.py",
+    "shared/engines/store.py",
 ]
-# Codes whose English text is still missing: they answer in Portuguese when English
-# is asked. P-13 slice 4 translates them and must leave this set empty.
-PENDING_EN = {
-    'ACTION_OR_TARGET_NOT_REGISTERED', 'ADAPTER_NOT_REGISTERED',
-    'ADMISSION_AUTHORITY_UNAVAILABLE', 'BOOTSTRAP_ACTOR_REQUIRED', 'BOUND_TO_LIBRARY_PROFILE',
-    'BUDGET_INSUFFICIENT', 'BUDGET_STOP_UNCONFIRMED', 'CLEANUP_CREDENTIAL_REQUIRED',
-    'CLEANUP_WATCHDOG_NOT_READY', 'CLI_ADMISSION_LOST', 'CONSUMER_NOT_CLASSIFIED',
-    'CONTROL_REDEPLOY_REQUIRED', 'COOLDOWN_NOT_VERIFIED', 'CREDENTIALS_NOT_ALLOWED_IN_PROFILE',
-    'CREDENTIALS_REQUIRED', 'ENGINE_ENVIRONMENT_REQUIRED', 'ENVIRONMENT_UNKNOWN',
-    'EXECUTOR_NOT_NEUTRALIZED', 'GPU_NOT_REGISTERED', 'GPU_UUID_NOT_REGISTERED',
-    'HASHED_MODEL_LOCK_REQUIRED', 'HOST_AMBIGUOUS', 'HOST_APPLY_FAILED',
-    'HOST_AUTHORITY_UNAVAILABLE', 'HOST_COMMAND_FAILED', 'HOST_EFFECT_UNCERTAIN',
-    'HOST_IDENTITY_REQUIRED', 'IDEMPOTENCY_CONFLICT', 'IMAGE_MISMATCH', 'INVALID_SETTINGS',
-    'INVALID_WARM_DEADLINE', 'MANIFEST_STALE', 'MODEL_FOOTPRINT_NOT_QUALIFIED',
-    'MODEL_METADATA_CHANGED', 'MODEL_NOT_APPROVED', 'NOTHING_TO_COOL_DOWN',
-    'NO_REGISTERED_HOST', 'PAID_BUDGET_REQUIRED', 'PAID_CONFIRMATION_REQUIRED', 'PLAN_STALE',
-    'POOL_OBSERVATION_UNAVAILABLE', 'PROFILE_CONTENT_MISMATCH', 'PROFILE_INCOMPATIBLE',
-    'PROFILE_INVENTORY_CHANGED', 'PROVIDER_SETTINGS_REQUIRED', 'RECOVERY_STATE_UNCONFIRMED',
-    'REGISTERED_COMMAND_NOT_SUPPORTED', 'REGISTERED_MANIFEST_CHANGED',
-    'RESOURCE_OWNED_BY_ANOTHER_ENGINE', 'RESOURCE_OWNERSHIP_CONFLICT',
-    'RUNTIME_OPERATION_REQUIRED', 'RUNTIME_PROFILE_EXISTS', 'RUNTIME_PROFILE_NOT_FOUND',
-    'RUNTIME_PROFILE_REQUIRED', 'SDK_AUTOSCALER_UNAVAILABLE', 'SEEDED_PROFILE_STALE',
-    'SERVICE_NOT_REGISTERED', 'TEST_CONNECTION_FIRST', 'TEST_FAILED', 'USE_WARM_DURATION',
-    'WARM_EXPIRATION_REQUIRED', 'WARM_POOL_NOT_VERIFIED',
-    'WHISPERX_CONTROL_PROFILE_NOT_QUALIFIED'
-}
 # Any string literal that is (or starts with) an UPPER_SNAKE code: "CODE",
 # "CODE: detail", f"CODE:{n}" — raised directly, picked by a conditional or put in
 # a {"code": ...} detail. Environment variable names are the only other such literals.
@@ -118,9 +99,7 @@ def _params(template):
 
 def test_every_entry_is_bilingual():
     pending = {c for c, (texts, _s) in error_catalog.CATALOG.items() if "en" not in texts}
-    assert pending == PENDING_EN, (
-        f"untranslated: {sorted(pending - PENDING_EN)}; translated but still listed: {sorted(PENDING_EN - pending)}"
-    )
+    assert not pending, f"English text missing (P-13 slice 4 left no allowlist): {sorted(pending)}"
     for code, (texts, _steps) in error_catalog.CATALOG.items():
         assert texts.get("pt"), code
         assert set(texts) <= {"en", "pt"}, code
@@ -142,12 +121,10 @@ def test_api_codes_raised_by_routes_exist_in_the_catalog():
     assert {"FILE_EMPTY", "FILE_TOO_LARGE", "INVALID_FILE_FORMAT", "PROJECT_LIMIT"} <= found
     missing = {c for c in found if c not in error_catalog.CATALOG}
     assert not missing, missing
-    assert not [c for c in found if c in PENDING_EN]
 
 
 def test_the_live_503s_are_bilingual():
     for code in ("LIVE_DISABLED", "LIVE_NOT_READY", "LIVE_CAPACITY_FULL", "LIVE_DIARIZATION_NOT_READY"):
-        assert code not in PENDING_EN
         assert error_catalog.render(code, lang="en") != error_catalog.render(code, lang="pt")
 
 
@@ -260,6 +237,8 @@ def modal(world):  # noqa: F811
 def test_modal_without_profile_explains_setup_and_disables_unplannable_actions(modal):
     with modal() as db:
         caps = service.capabilities(db, db.get(Engine, "m2"), "transcription")
+        with use_lang("pt"):
+            setup_pt = service.capabilities(db, db.get(Engine, "m2"), "transcription")["setup"]
     actions = {a["type"]: a for a in caps["actions"]}
     assert actions["test"]["enabled"] and actions["reconcile"]["enabled"]
     assert actions["cooldown"]["reason"] == "NOTHING_TO_COOL_DOWN"
@@ -272,7 +251,8 @@ def test_modal_without_profile_explains_setup_and_disables_unplannable_actions(m
     assert setup["code"] == "RUNTIME_PROFILE_REQUIRED"
     assert setup["profile_bound"] is False and setup["connection_verified"] is False
     assert setup["next_steps"] == ["test_connection", "bind_profile", "create_profile"]
-    assert "Testar" in setup["message"]
+    assert "Test" in setup["message"] and "Testar" not in setup["message"]  # English by default
+    assert "Testar" in setup_pt["message"] and setup_pt["next_steps"] == setup["next_steps"]  # same steps, pt text
 
 
 def test_modal_verified_identity_drops_the_test_connection_step(modal):
@@ -302,8 +282,12 @@ def test_cooldown_without_profile_is_nothing_to_cool_down(modal):
             service.create_plan(db, db.get(Engine, "m2"), _plan("cooldown"), "root")
     assert (exc.value.code, exc.value.status) == ("NOTHING_TO_COOL_DOWN", 409)
     d = exc.value.detail()
-    assert d["message"].startswith("Nada para liberar para transcription")
+    assert d["message"].startswith("Nothing to release for transcription")
     assert d["next_steps"] == ["test_connection", "bind_profile"]
+    with use_lang("pt"):
+        d_pt = exc.value.detail()
+    assert d_pt["message"].startswith("Nada para liberar para transcription")
+    assert (d_pt["code"], d_pt["next_steps"]) == (d["code"], d["next_steps"])
 
 
 def test_operations_without_profile_keep_the_code_and_gain_guidance(modal):
@@ -313,9 +297,11 @@ def test_operations_without_profile_keep_the_code_and_gain_guidance(modal):
     assert (exc.value.code, exc.value.status) == ("RUNTIME_PROFILE_REQUIRED", 422)
     assert str(exc.value) == "RUNTIME_PROFILE_REQUIRED"
     d = exc.value.detail()
-    assert d["message"].startswith(
-        "Esta engine ainda não tem perfil de execução vinculado para transcription."
-    )
+    assert d["message"].startswith("This engine has no bound execution profile yet for transcription.")
+    with use_lang("pt"):
+        assert exc.value.detail()["message"].startswith(
+            "Esta engine ainda não tem perfil de execução vinculado para transcription."
+        )
     assert d["next_steps"] == ["test_connection", "bind_profile", "create_profile"]
 
 
@@ -451,4 +437,49 @@ def test_codes_built_with_f_strings_exist():
     for what in ("PROJECT", "FOLDER"):
         for code in (f"{what}_NAME_EMPTY", f"{what}_NAME_CONTROL_CHARS", f"{what}_CREATE_FAILED"):
             assert code in error_catalog.CATALOG, code
-            assert code not in PENDING_EN, code
+
+
+# -- P-13 slice 4: the same refusal in both languages ---------------------------------
+
+
+def _guided_app(raiser):
+    from api.error_guidance import GuidedRoute
+
+    router = APIRouter(route_class=GuidedRoute)
+
+    @router.get("/x")
+    def x():
+        raiser()
+        return {}
+
+    app = FastAPI()
+    app.add_middleware(LanguageMiddleware)
+    app.include_router(router)
+    return TestClient(app)
+
+
+@pytest.mark.parametrize("code", ["ACCESS_DENIED", "VERSION_CONFLICT", "RUNTIME_PROFILE_REQUIRED", "TEST_FAILED"])
+def test_guided_route_enrich_keeps_code_and_steps_in_both_languages(code):
+    def refuse():
+        raise HTTPException(409, detail={"code": code, "current_version": 7})
+
+    client = _guided_app(refuse)
+    en = client.get("/x").json()["detail"]
+    pt = client.get("/x", headers={"Accept-Language": "pt-BR"}).json()["detail"]
+    assert (en["code"], pt["code"]) == (code, code)
+    assert en["next_steps"] == pt["next_steps"] == list(error_catalog.CATALOG[code][1])
+    assert en["current_version"] == pt["current_version"] == 7  # extra keys survive
+    assert en["message"] != pt["message"]
+    assert en["message"] == error_catalog.render(code, lang="en")
+    assert pt["message"] == error_catalog.render(code, lang="pt")
+
+
+def test_no_catalog_entry_is_missing_a_language():
+    assert all({"en", "pt"} <= set(texts) for texts, _ in error_catalog.CATALOG.values())
+
+
+def test_the_admin_catalog_does_not_shadow_another_entry():
+    from shared.catalog_admin import ADMIN_CATALOG
+    from shared.catalog_api import API_CATALOG
+
+    assert not set(ADMIN_CATALOG) & (set(API_CATALOG) | set(error_catalog._PT))

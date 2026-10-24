@@ -96,9 +96,10 @@ class RouteSpec(BaseModel):
 class RouteError(ValueError):
     """A route that cannot be saved; `status` is the HTTP status the API answers with"""
 
-    def __init__(self, message: str, status: int = 422):
+    def __init__(self, message: str, status: int = 422, code: Optional[str] = None):
         super().__init__(message)
         self.status = status
+        self.code = code  # catalog code the API answers with; None = ROUTE_REJECTED
 
 
 class VersionConflict(Exception):
@@ -320,7 +321,8 @@ def validate(db: Session, feature: str, spec: RouteSpec, *, fingerprint_of=None,
         needs_remote_worker=any(execution_mode(e.adapter_type)=='remote_runner' for e in remote_engines)
         if needs_remote_worker and not (remote_worker_alive or _remote_worker_alive)():
             raise RouteError("No worker-remote is running to execute remote steps: "
-                             "docker compose --profile engines up -d worker-remote", status=409)
+                             "docker compose --profile engines up -d worker-remote", status=409,
+                             code="REMOTE_WORKER_NOT_RUNNING")
         needed, available = remote_capacity(db, steps), remote_threads_available()
         if needed > available:
             raise RouteError(f"The route's remote capacity ({needed}) exceeds what worker-remote can hold "

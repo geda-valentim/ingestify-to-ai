@@ -44,7 +44,10 @@ from fastapi.routing import APIRoute, APIWebSocketRoute
 # and the image routes (/images/*, /images/faces/*) answer in the request language.
 # Text `detail`s of the datalake and Full Analysis refusals become {"code", "message"}
 # objects; the /images envelope {"error_code", "message", "job_id"} is unchanged.
-API_VERSION = "1.10.0"
+# 1.11.0: bilingual API, part 4 (admin, engines, routing, IAM, access): their text refusals
+# become {"code", "message", "next_steps"} objects in the requested language, every engine,
+# IAM and root message has an English text, and the admin UI asks for pt-BR.
+API_VERSION = "1.11.0"
 
 API_DESCRIPTION = """
 API assíncrona que converte documentos (PDF, DOCX, HTML, PPTX, XLSX...) em Markdown,

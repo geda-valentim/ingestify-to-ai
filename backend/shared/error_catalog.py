@@ -24,6 +24,7 @@ when a code is raised without an entry here.
 import re
 from datetime import datetime
 
+from shared.catalog_admin import ADMIN_CATALOG
 from shared.catalog_api import API_CATALOG
 from shared.catalog_en import EN
 from shared.catalog_images import IMAGES_CATALOG
@@ -51,6 +52,7 @@ NEXT_STEPS = {
     "fix_input",  # correct the submitted field(s)
     "enable_control",  # turn on ENGINE_CONTROL_ENABLED / the access schema
     "set_root_token",  # set ROOT_SETUP_TOKEN on the server
+    "set_server_secret",  # set a server environment variable (e.g. ENGINE_SECRETS_PUBLIC_KEY)
 }
 
 PROFILE_ACTIONS_EXEMPT = ("test", "reconcile")
@@ -597,6 +599,9 @@ CATALOG.update(API_CATALOG)
 _overlap = CATALOG.keys() & IMAGES_CATALOG.keys()
 assert not _overlap, f"codes defined in both catalogs: {sorted(_overlap)}"
 CATALOG.update(IMAGES_CATALOG)
+_overlap = CATALOG.keys() & ADMIN_CATALOG.keys()
+assert not _overlap, f"codes defined in both catalogs: {sorted(_overlap)}"
+CATALOG.update(ADMIN_CATALOG)
 
 _CODE = re.compile(r"^([A-Z][A-Z0-9_]{3,})(?:\s*:\s*(.*))?$", re.S)
 
@@ -720,7 +725,7 @@ def detail(code, *, text=None, cause=None, context=None, feature=None, needs_con
     out["next_steps"] = steps
     technical = rest if raw_code else text
     if technical and technical != out["message"]:
-        out["technical"] = str(technical)[:500]
+        out["technical"] = str(technical)[:2000]
     return out
 
 

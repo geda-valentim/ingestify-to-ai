@@ -58,7 +58,7 @@ def before_write(
             from shared.engines.store import EngineStateError
 
             if isinstance(exc, ControlError):
-                raise EngineStateError(exc.code, exc.status) from None
+                raise EngineStateError(exc.code, exc.status, code=exc.code) from None
             raise
 
     # CAS/serialization applies to legacy writers too, without introducing control-table reads.

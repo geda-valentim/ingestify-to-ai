@@ -15,6 +15,7 @@ from fastapi.concurrency import run_in_threadpool
 from pydantic import Field
 from sqlalchemy.orm import Session, sessionmaker
 from shared.config import get_settings
+from shared.i18n import api_error
 from shared.database import get_db, SessionLocal
 from shared.engine_control import service, registry, catalog
 from shared.engine_control.contracts import Closed, RuntimeSettings, PlanRequest
@@ -571,7 +572,7 @@ def host_check(
     op = invoke(service.fenced, db, op_id, generation)
     invoke(policy.operation_authority, db, op, effect=policy.enabled())
     if op.handles.get("host_id") != host_id:
-        raise HTTPException(403)
+        raise api_error(403, "HOST_OPERATION_MISMATCH")
     return {"cancel_requested": op.cancel_requested, "deadline": op.deadline}
 
 
@@ -595,7 +596,7 @@ def host_event(
         invoke(policy.epoch, db, True)
     op = invoke(service.fenced, db, op_id, body.generation)
     if op.handles.get("host_id") != host_id:
-        raise HTTPException(403)
+        raise api_error(403, "HOST_OPERATION_MISMATCH")
     invoke(
         service.event,
         db,
@@ -626,7 +627,7 @@ def host_result(
     host_identity(host_id, request)
     op = invoke(service.fenced, db, op_id, body.generation)
     if op.handles.get("host_id") != host_id:
-        raise HTTPException(403)
+        raise api_error(403, "HOST_OPERATION_MISMATCH")
     op.handles = dict(
         op.handles or {},
         host_result=service.clean(body.model_dump(exclude={"generation"})),

@@ -245,7 +245,7 @@ def test_engine_profiles_reproduce_the_configuration_and_are_bound(Session):
     assert [(r["key"], r["reason"]) for r in failed] == [
         ("engine:modal_2:transcription", "TEST_CONNECTION_FIRST")
     ]
-    assert "Testar conexão" in failed[0]["message"]
+    assert "Test connection" in failed[0]["message"]
 
 
 def test_the_seeded_modal_profile_keeps_the_deployment_fingerprint(Session):
@@ -644,7 +644,7 @@ def test_a_drifted_seeded_profile_touched_by_a_human_is_not_overwritten(Session)
     report = run(Session)
     stale = next(r for r in report.skipped if r["reason"] == "SEEDED_PROFILE_STALE")
     assert (stale["key"], stale["stage"]) == ("engine:modal_2:transcription", "bind")
-    assert "alterado por um administrador" in stale["message"]
+    assert "edited the profile" in stale["message"]
     with Session() as db:
         assert db.query(ExecutionRevision).filter_by(profile_id=p.id).count() == revisions
         assert control.latest_profile(db, "modal_2", "transcription") is None

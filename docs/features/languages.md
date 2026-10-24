@@ -35,23 +35,22 @@ de imagem do formulário de upload e as telas de datalake), que pedem `pt-BR` na
 
 ## O que muda de idioma
 
-Partes 1 e 2 (API 1.9.0). A parte 2 acrescenta as rotas de job restantes (resultado, páginas,
-assets, retry, exclusão, listagem), autenticação (cadastro, login, sessão, 401, usuário
-inativo), os 429 (`Retry-After` continua) e a criação de API keys; também os textos dos
-corpos 200 (`message` de enfileirado, arquivo já processado, notas de `purge_source`). O
-401 mantém `WWW-Authenticate: Bearer`.
+Todo texto de erro e de orientação da API: recusas de `/upload`, `/convert` e `/transcribe`,
+localização de upload (projeto/pasta), tags, sessões ao vivo, `GET /search`, autenticação e
+API keys, datalake e imagens (inclusive o envelope `error_code`/`message` de `/images/*`),
+administração (`/admin/*`, engines, roteamento), controle de engines, perfis de execução,
+acesso e IAM, e os 404 de job/projeto/pasta/API key. O `code` é o mesmo em qualquer idioma,
+assim como `next_steps` (identificadores). Nas recusas que embrulham uma exceção de domínio
+(engines, roteamento, IAM) o texto original, sempre em inglês, vai em `technical`.
 
-Parte 1 (API 1.8.0): recusas de `/upload`, `/convert` e `/transcribe`, localização de
-upload (projeto/pasta), tags, sessões ao vivo (503 e `GET .../availability`), `GET /search`
-(503), `callback_url` inválido, erros de nome de projeto/pasta (inclusive o 422 de
-`POST /api-keys`), limites de projeto/pasta e tags nas rotas `/images/*` (no envelope
-`error_code`/`message`) e os 404 de job/projeto/pasta/API key.
+O `message` de engine-control que volta em corpos de `GET` (`setup`, ações de
+`capabilities`) segue o idioma da requisição, como os erros.
 
-Parte 3 (API 1.10.0): as rotas de datalake e todas as recusas de `/images/*` e
-`/images/faces/*`, inclusive `mode=full` e o destino de datalake: dentro de `/images/*` o
-envelope é sempre `{"detail": {"error_code", "message", "job_id"}}`, com `message` no idioma
-pedido. Admin, engines e IAM migram na próxima parte e, até lá, continuam em português; o
-`code` é o mesmo em qualquer idioma.
+Idioma por tela da interface de administração: as telas de computação (`/admin/engines`,
+`/admin/engines/[id]`, `/admin/gpus`, `/admin/routing`, `/admin/status`, via `adminGet`) são
+em inglês e usam o padrão; as telas de controle de engines, perfis de execução, acesso e IAM
+(via `controlRequest`) são em português e pedem `pt-BR`. Os rótulos de `next_steps` ficam em
+português nas duas.
 
 Os 404 que não revelam o que existe continuam **texto** (não objeto), agora no idioma
 pedido (em `/images/*` só o de `POST /images/{id}/cancel`; o de conexão de datalake dentro de
@@ -73,7 +72,6 @@ Quem precisa do texto em português envia `Accept-Language: pt-BR`. Quem casava 
 
 ## Limites e lacunas conhecidas
 
-- Alguns textos de engines/IAM/admin ainda não têm versão em inglês e respondem em
-  português mesmo com `Accept-Language: en` (lista `PENDING_EN` em
-  `backend/tests/test_error_catalog.py`; esvaziada na última parte).
+- Todo código do catálogo tem texto em inglês e em português
+  (`backend/tests/test_error_catalog.py` falha se faltar um).
 - O idioma é decidido na requisição; tarefas em segundo plano e Celery usam inglês.

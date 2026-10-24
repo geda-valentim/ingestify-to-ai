@@ -32,9 +32,8 @@ from shared.models import (DatalakeConnection, ImageAnalysisRun, Job, JobDatalak
 ALICE, BOB, ROOT = "user-alice", "user-bob", "user-root"
 MODES = ("off", "shadow", "enforce")
 CREDS = {"access_key": "test-key", "secret_key": "test-secret"}
-NOT_FOUND_DL = (404, "Conexão não encontrada")  # by id: api/iam_deps.py (P-13 slice 4 localizes it)
-# A connection named in a body: the route's own 404, in the request language (English by default).
-NOT_FOUND_DL_BODY = (404, datalake_not_found_detail())
+# By id (api/iam_deps.py) or named in a body (the route's own 404): the same text, in the request language.
+NOT_FOUND_DL = (404, datalake_not_found_detail())
 NOT_FOUND_JOB = (404, deps.job_not_found_detail())
 NOT_FOUND_RUN = (404, image_routes.full_analysis_not_found_detail())
 # A request is a session or an API key; the key acts as its owner in this slice.
@@ -195,7 +194,7 @@ def test_owner_results_are_the_legacy_ones(client, db):
 def test_body_referenced_connections_are_owner_only(client, path, body):
     """The draft routes are self-service, but a connection they name is still the caller's only."""
     for uid in (BOB, ROOT):
-        assert _detail(client(uid).post(path, json=body)) == NOT_FOUND_DL_BODY, (uid, path)
+        assert _detail(client(uid).post(path, json=body)) == NOT_FOUND_DL, (uid, path)
     assert client(ALICE).post(path, json=body).status_code not in (401, 403, 404)
 
 

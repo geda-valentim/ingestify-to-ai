@@ -391,6 +391,11 @@ export function QueryError({
             {g.nextSteps.map((s) => NEXT_STEP_LABELS[s] || s).join(" · ")}
           </p>
         )}
+        {g.technical && (
+          <p className="text-xs text-muted-foreground break-words">
+            Details: {g.technical}
+          </p>
+        )}
         {reference && (
           <p className="text-[11px] text-muted-foreground font-mono">
             {reference}

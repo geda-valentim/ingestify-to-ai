@@ -18,8 +18,6 @@ from sqlalchemy.pool import StaticPool
 
 from api import deps
 from api.iam_deps import (
-    PLATFORM_DENIED_DETAIL,
-    SESSION_REQUIRED_DETAIL,
     Scope,
     authorized,
     declaration_of,
@@ -191,7 +189,7 @@ def test_off_is_the_legacy_admin_rule_and_bindings_are_inert(db, people, client,
     _bind(db, alice, "platform_operator", granted_by=root)
     assert _get(client, "/stats", root).status_code == 200
     r = _get(client, "/stats", alice)
-    assert (r.status_code, r.json()["detail"]) == (403, PLATFORM_DENIED_DETAIL)
+    assert (r.status_code, r.json()["detail"]["code"]) == (403, "ADMIN_REQUIRED")
     assert _get(client, "/stats", bob).status_code == 403
 
 
@@ -208,7 +206,7 @@ def test_enforce_answers_with_bindings(db, people, client, settings, monkeypatch
     assert _get(client, "/stats", alice).status_code == 200
     assert _get(client, "/stats", root).status_code == 200  # bootstrap
     r = _get(client, "/stats", bob)
-    assert (r.status_code, r.json()["detail"]) == (403, PLATFORM_DENIED_DETAIL)
+    assert (r.status_code, r.json()["detail"]["code"]) == (403, "ADMIN_REQUIRED")
     # The operator role does not hold settings.update.
     r = client.patch("/settings", headers={"x-test-user": alice.id, **JWT})
     assert r.status_code == 403
@@ -272,10 +270,10 @@ def test_session_is_required_after_the_permission(db, people, client, settings, 
     ok = client.patch("/settings", headers={"x-test-user": root.id, **JWT})
     assert ok.status_code == 200
     key = client.patch("/settings", headers={"x-test-user": root.id, "x-api-key": "k", **JWT})
-    assert (key.status_code, key.json()["detail"]) == (403, SESSION_REQUIRED_DETAIL)
+    assert (key.status_code, key.json()["detail"]["code"]) == (403, "LOGIN_SESSION_REQUIRED")
     # Without the permission the answer is the permission 403, as require_admin_session.
     denied = client.patch("/settings", headers={"x-test-user": bob.id, "x-api-key": "k"})
-    assert (denied.status_code, denied.json()["detail"]) == (403, PLATFORM_DENIED_DETAIL)
+    assert (denied.status_code, denied.json()["detail"]["code"]) == (403, "ADMIN_REQUIRED")
 
 
 @pytest.mark.parametrize("mode", ["off", "shadow", "enforce"])

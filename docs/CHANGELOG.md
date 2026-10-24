@@ -2,6 +2,46 @@
 
 > **Registro histórico (2025-10).** Não é mantido; para mudanças posteriores use `git log`. Observação: `workers/tasks_old.py`, citado abaixo, não existe (há um `workers/tasks.py.backup`). Exceção: mudanças de comportamento intencionais que uma spec manda registrar aqui entram na seção abaixo.
 
+## 2026-10: API bilíngue, inglês por padrão — parte 4 (API 1.11.0)
+
+- Última parte: administração (`/admin/*`), engines, roteamento, controle de engines, perfis
+  de execução, acesso e IAM seguem o `Accept-Language` (inglês por padrão, `pt`/`pt-BR`). Os
+  63 códigos de engine/IAM que só tinham português ganharam texto em inglês; não resta
+  nenhum código sem os dois idiomas (o teste não aceita mais lista de pendências).
+- **`detail` em texto vira objeto** `{"code", "message", "next_steps"}` (o `code` é novo; o
+  `message` segue o idioma). Quem casava o texto deve casar `detail.code`:
+  - `/admin/*` (monitoramento): 403 `ADMIN_REQUIRED` (era "Acesso negado: privilégios de
+    administrador necessários"); 500 `ADMIN_STATS_FAILED`, `STUCK_JOBS_LIST_FAILED`,
+    `STUCK_JOBS_RECOVER_FAILED`, `PAGES_RETRY_FAILED`, `CLEANUP_FAILED`,
+    `HEALTH_CHECK_FAILED`; 404 `ADMIN_JOB_NOT_FOUND`; fila do broker: 409
+    `BROKER_MESSAGE_NOT_ORPHANED`, `BROKER_NO_WORKER_ANSWERED`, `BROKER_TASK_RUNNING` e 404
+    `BROKER_MESSAGE_GONE`.
+  - Sessão e permissões (todas as rotas que usam `require(...)`): 403 `ADMIN_REQUIRED`, 403
+    `LOGIN_SESSION_REQUIRED` (era "...requires a login session (JWT)...", agora um texto
+    único), 401/403 `USER_INACTIVE` (era "Inactive user") e `ACCESS_DENIED` (era "Acesso
+    negado").
+  - `/admin/engines*`: 404 `ENGINE_NOT_FOUND`; 403 `CURRENT_PASSWORD_REQUIRED`; 409
+    `VERSION_CONFLICT`, `ENGINE_NO_CREDENTIALS`, `ENGINE_SECRETS_KEY_MISSING`,
+    `REMOTE_WORKER_NOT_RUNNING`, `LOCAL_ENGINE_NO_SPEND`, `REMOTE_CAPACITY_EXCEEDED`,
+    `ENGINE_NOT_ACTIVATABLE` (mantém `problems`), `ENGINE_STATE_CONFLICT`; 422
+    `CAPACITY_EXCEEDED` (mantém `vram`), `INVALID_BUDGET`, `INVALID_CREDENTIAL_FIELDS`,
+    `CREDENTIALS_NOT_SUPPORTED`, `INVALID_CONFIGURATION`; 504 `REMOTE_WORKER_TIMEOUT`. O texto
+    técnico original (sempre em inglês) vai em `technical`.
+  - `/admin/routing/*`: 403 `CURRENT_PASSWORD_REQUIRED`; 409 `VERSION_CONFLICT`; 404
+    `ROUTE_NOT_FOUND`; `ROUTE_REJECTED` (o status de antes, em geral 422).
+  - `/internal/engine-hosts/.../operations`: o 403 sem corpo vira `HOST_OPERATION_MISMATCH`.
+  - IAM: `message` e `next_steps` vêm do catálogo no idioma pedido; o texto específico
+    (por exemplo o papel desconhecido) fica em `technical`.
+- Os textos de engine-control que voltam em corpos de `GET` (`setup`, `reason`/`message` das
+  ações) também seguem o idioma da requisição. `code` e `next_steps` são os mesmos nos dois.
+- Interface de administração: as telas de controle de engines, perfis, acesso e IAM seguem em
+  português e enviam `Accept-Language: pt-BR`; as telas de computação (engines, GPUs, rotas,
+  status) são em inglês e usam o padrão. `ENGINE_SECRETS_KEY_MISSING` ganhou o próximo passo
+  `set_server_secret`; a falta de worker-remote ao salvar uma rota responde
+  `REMOTE_WORKER_NOT_RUNNING` (409).
+- Fora do escopo do P-13: OpenAPI/Swagger, a mensagem de validação do FastAPI e as
+  descrições de figuras ([features/languages.md](features/languages.md)).
+
 ## 2026-10: API bilíngue, inglês por padrão — parte 3 (API 1.10.0)
 
 - Datalake e imagens passam a responder no idioma pedido em `Accept-Language` (inglês por
