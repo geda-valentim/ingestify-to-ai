@@ -545,6 +545,25 @@ docker compose ps mysql
 docker compose logs mysql
 ```
 
+## API versioning and CHANGELOG
+
+`API_VERSION` lives in [backend/api/openapi_docs.py](backend/api/openapi_docs.py) (one comment
+line per version above it) and every version has a section in [docs/CHANGELOG.md](docs/CHANGELOG.md).
+Decide the bump per **release** (what goes out in one deploy), by analysing the change — never
+one minor per PR:
+
+| Change | Bump |
+|---|---|
+| Bug or security fix, stricter validation of input already invalid, performance, internal refactor, docs | **patch** `1.11.0 → 1.11.1` |
+| New endpoint, new optional field/parameter, new error `code` clients can branch on, new event | **minor** `1.11 → 1.12.0` |
+| Removing/renaming a field or endpoint, changing a response shape, a default or a `detail` type clients rely on | **major** `→ 2.0.0` (needs the owner's sign-off) |
+
+- PRs that ship in the same deploy share **one** version; a multi-PR feature is one version, not one per slice.
+- The coordinator sets the version and writes the CHANGELOG at merge time. Implementer subagents never touch `API_VERSION` or `docs/CHANGELOG.md` (parallel PRs conflict there).
+- The release commit also updates the pins: `tests/test_vision_markdown.py` (`info.version`), `frontend/docs/doc2md_openapi.json` and the header of `docs/api-reference.md` (regenerate with `scripts/generate_api_docs.py` when the schema changed).
+- CHANGELOG entry (pt-BR, newest first): `## AAAA-MM: <título> (API x.y.z)`, then what changed for the client, any behaviour change and its migration (old text → new `code`), rollout notes (migrations, image rebuilds, Modal redeploy).
+- Never renumber a version that was already deployed.
+
 ## Documentation Organization
 
 **IMPORTANT: All documentation (.md) files MUST be created in the respective `/docs` folders:**
@@ -579,3 +598,14 @@ Do what has been asked; nothing more, nothing less.
 NEVER create files unless they're absolutely necessary for achieving your goal.
 ALWAYS prefer editing an existing file to creating a new one.
 NEVER proactively create documentation files (*.md) or README files. Only create documentation files if explicitly requested by the User.
+
+<!-- storage-rule-20261011 -->
+## Armazenamento: código aqui, dados volumosos em /data
+
+- Scripts, código, configs e docs ficam neste repositório.
+- Dados de maior volume ficam em **`/data/<este-projeto>/<mesmo caminho relativo>`**: vídeos, áudios, imagens geradas, renders/exports, datasets, dumps, `bronze`/`raw`, logs grandes, checkpoints e caches pesados. Nunca grave isso no NVMe (`/var/app`, `/root`, `/home`).
+- Aponte para esses dados por variável de ambiente/config ou por symlink no caminho antigo. Script novo que salva saída volumosa deve gravar por padrão em `/data/...`.
+- Modelos de IA ficam em **`/data/models`** (`HF_HOME=/data/models/huggingface`, `OLLAMA_MODELS=/data/models/ollama`, `TORCH_HOME=/data/models/torch`). Reutilize o que já existe lá.
+- Ficam no NVMe: bancos de dados ativos, `venv` e `node_modules`.
+- Antes de mover dados que já existem, peça a um agente revisor que verifique e autorize: containers e processos usando a pasta, arquivos rastreados no git, referências absolutas e permissões. Mova com `rsync`, verifique, remova a origem e crie um symlink.
+<!-- /storage-rule-20261011 -->
