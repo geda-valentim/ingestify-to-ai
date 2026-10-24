@@ -2,6 +2,50 @@
 
 > **Registro histórico (2025-10).** Não é mantido; para mudanças posteriores use `git log`. Observação: `workers/tasks_old.py`, citado abaixo, não existe (há um `workers/tasks.py.backup`). Exceção: mudanças de comportamento intencionais que uma spec manda registrar aqui entram na seção abaixo.
 
+## 2026-10: controle de cold start do Docling e correções de configuração (API 1.13.0)
+
+**Por que é minor:** há um endpoint novo de administração, `GET /admin/docling/cold-starts`.
+O resto são correções; nenhum campo, código de erro ou endpoint existente muda.
+
+**Novo**
+- **Cold starts do Docling (#97):** cada processo do worker de conversão recarrega os pesos
+  (~10 s). Agora isso é medido e controlável:
+  - `GET /admin/docling/cold-starts` (permissão `platform.monitoring.read`): últimas 24 h por
+    hora e por worker, com motivo (`process_start`, `new_options`, `evicted`), segundos,
+    processos iniciados e parados, pico de memória e cold starts por 100 conversões;
+  - WARNING no log quando um worker passa de `DOCLING_COLD_START_WARN_PER_HOUR` (padrão 6);
+  - `DOCLING_MAX_MEMORY_PER_CHILD_KB` (padrão 5000000) define quando o processo é reciclado
+    no overlay GPU; com 3 GB (valor anterior, local) um processo ocioso de ~2,5 GB era
+    reciclado a cada ~2 páginas;
+  - `DOCLING_CONVERTER_CACHE_SIZE` (padrão 3, antes 2 fixo).
+
+**Correções**
+- **Tela do job (#94):** enquanto um PDF dividido converte, `/jobs/<id>` mostra as páginas já
+  prontas em ordem, sob um cabeçalho de progresso fixo com a trilha de páginas.
+- **Preset no upload (#95):** a tela de conversão sempre envia o preset escolhido. Antes,
+  "Fast" ia como ausência de preset e, em URL/Drive/Dropbox, o servidor aplicava
+  `DOCLING_ENABLE_*`. Efeito colateral: o primeiro reenvio pela tela de um arquivo
+  convertido antes sem preset é processado de novo uma vez.
+- **Configuração do compose (#93, #96):**
+  - `worker`/`worker-audio` recebem `WHISPER_MODEL`, `WHISPER_DEVICE` e
+    `WHISPER_COMPUTE_TYPE`; no overlay GPU, `WHISPER_DEVICE=cpu` tira o áudio da placa
+    (sem a variável continua cuda). Um float16 explícito em CPU vira int8 com aviso;
+  - `worker-vision` consome `${VISION_QUEUE}` e recebe `REDIS_PASSWORD`;
+  - `ELASTICSEARCH_USER`, `ELASTICSEARCH_PASSWORD` e `ELASTICSEARCH_VERIFY_CERTS` chegam aos
+    serviços que usam o Elasticsearch.
+
+**Rollout**
+- **Imagens:** só o frontend precisa de rebuild (tela do job e preset). API e workers usam o
+  código montado: basta recriar, porque o compose mudou (env e `command` do worker).
+- **Sem migration.** Nenhuma variável obrigatória nova; todas têm padrão.
+- **Antes do deploy neste servidor:** descartar a mudança local de
+  `docker-compose.gpu.yml` (`--max-memory-per-child=5000000`), agora versionada como
+  `DOCLING_MAX_MEMORY_PER_CHILD_KB`, senão o `git pull --ff-only` falha.
+- **Modal:** nenhum arquivo do fingerprint mudou neste release (o redeploy pendente do
+  1.12.0 continua valendo).
+- **Trocar `VISION_QUEUE`:** esvazie a fila antiga antes e recrie api, worker, beat,
+  worker-remote e worker-vision juntos.
+
 ## 2026-10: correções de segurança e de confiabilidade (API 1.12.0)
 
 **Por que é minor e não patch:**

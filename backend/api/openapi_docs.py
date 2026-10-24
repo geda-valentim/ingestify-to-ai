@@ -55,7 +55,12 @@ from fastapi.routing import APIRoute, APIWebSocketRoute
 # datalake responses are capped. Unknown docling_preset on /upload is a 422; CORS allows
 # Idempotency-Key; the event loop no longer blocks on auth/polling/uploads; page retry,
 # expired page results and provider retries complete documents correctly.
-API_VERSION = "1.12.0"
+# 1.13.0: minor (new admin endpoint GET /admin/docling/cold-starts). Otherwise fixes:
+# Docling child recycling and converter cache are configurable and measured; worker-audio
+# honours WHISPER_MODEL/WHISPER_DEVICE; worker-vision follows VISION_QUEUE and gets
+# REDIS_PASSWORD; Elasticsearch credentials reach the services; the upload form always
+# sends the selected docling_preset; the job page shows converted pages while a PDF runs.
+API_VERSION = "1.13.0"
 
 API_DESCRIPTION = """
 API assíncrona que converte documentos (PDF, DOCX, HTML, PPTX, XLSX...) em Markdown,
