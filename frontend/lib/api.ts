@@ -400,7 +400,7 @@ export const jobsApi = {
   /** An image job's result as served by the API: rendered Markdown or the JSON, as text. */
   async getImageResultFile(jobId: string, format: "markdown" | "json"): Promise<string> {
     const response = await apiFetch(`${API_URL}/jobs/${jobId}/result?format=${format}`, {
-      headers: getHeaders(true),
+      headers: { ...getHeaders(true), ...PT_LANGUAGE }, // Portuguese screens: refusals in pt-BR
     });
 
     if (!response.ok) {

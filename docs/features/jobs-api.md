@@ -52,8 +52,8 @@ Todos os endpoints abaixo exigem autenticação. Os que recebem `{job_id}` passa
 
 - O dono é sempre resolvido no **MySQL**; para jobs filhos, sobe-se até o MAIN
   (via `pages.page_job_id` ou `parent_job_id`).
-- Job inexistente **e** job de outro usuário devolvem o mesmo `404 "Job não encontrado"`
-  (sem enumeração).
+- Job inexistente **e** job de outro usuário devolvem o mesmo `404 "Job not found"`
+  (texto; em português, `"Job não encontrado"`, com `Accept-Language: pt-BR`; sem enumeração).
 - O dono registrado no Redis (`job:{id}:owner`) só é consultado quando o MySQL não conhece
   o job, e só autoriza com igualdade explícita.
 
@@ -102,8 +102,8 @@ curl -H "X-API-Key: $INGESTIFY_API_KEY" \
 
 ### `GET /jobs/{job_id}`
 
-Lê o status do **Redis** (se expirou — 24 h — responde `404 "Job não encontrado ou
-expirado"`, mesmo que o job exista no MySQL e o resultado esteja no Elasticsearch).
+Lê o status do **Redis** (se expirou — 24 h — responde `404 "Job not found or
+expired"` (`"Job não encontrado ou expirado"` com `Accept-Language: pt-BR`), mesmo que o job exista no MySQL e o resultado esteja no Elasticsearch).
 Datas e nome vêm do MySQL quando existem.
 
 Para jobs MAIN de PDF dividido, inclui `total_pages`, `pages_completed`, `pages_failed`,

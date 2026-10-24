@@ -715,7 +715,7 @@ def test_duplicate_with_purge_of_a_completed_job_purges_it_now(api, endpoint):
     body = r.json()
     assert body["job_id"] == JOB_ID and body["duplicate"] is True
     assert body["source_available"] is False
-    assert "apagado" in body["message"]
+    assert "was deleted" in body["message"]
     assert api.minio.deleted == [("ingestify-uploads", UPLOAD_PATH)]
     api.db.expire_all()
     assert purge_requested(api.db.get(Job, JOB_ID)) is True
@@ -729,7 +729,7 @@ def test_duplicate_with_purge_of_a_running_job_records_the_option(api, endpoint)
     body = post_file(api, endpoint, purge=True).json()
 
     assert body["duplicate"] is True and body["source_available"] is True
-    assert "será apagado" in body["message"]
+    assert "will be deleted" in body["message"]
     assert api.minio.deleted == []
     api.db.expire_all()
     assert purge_requested(api.db.get(Job, JOB_ID)) is True

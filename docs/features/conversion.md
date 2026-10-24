@@ -76,7 +76,7 @@ Diferenças em relação ao `/upload` (comportamento atual, não necessariamente
 Nos dois endpoints, quando há arquivo, a API calcula o SHA-256 enquanto grava o upload em
 disco. Se o mesmo usuário já tem um job `MAIN` com o mesmo checksum, **a mesma operação**
 e **no mesmo projeto**, a resposta devolve o `job_id` existente (`duplicate: true`,
-`message` "Arquivo já foi processado anteriormente…") e as tags enviadas são
+`message` "File already processed (existing job: …)"; em português com `Accept-Language: pt-BR`: "Arquivo já foi processado anteriormente…") e as tags enviadas são
 **adicionadas** ao job existente. A pasta original é preservada. Enviar para outro projeto
 cria uma conversão independente.
 

@@ -415,10 +415,7 @@ def find_duplicate_job(db: Session, user_id: str, checksum: str, location: Uploa
     if same is not None:
         return same, None
     if candidates:
-        return None, (
-            f"O arquivo original do job {candidates[0].id} foi (ou será) apagado; "
-            f"processando de novo para manter o original"
-        )
+        return None, render("REPROCESS_ORIGINAL_GONE", job_id=candidates[0].id)
 
     other = next((job for job in base.filter(or_(Job.project_id != location.project_id,
                                                  Job.project_id.is_(None))).all()
@@ -426,11 +423,9 @@ def find_duplicate_job(db: Session, user_id: str, checksum: str, location: Uploa
     if other is None:
         return None, None
     other_project = db.get(Project, other.project_id) if other.project_id else None
-    other_name = other_project.name if other_project is not None else "(sem projeto)"
-    return None, (
-        f"Arquivo já processado no projeto '{other_name}' (job {other.id}); "
-        f"processando de novo em '{location.project_name}'"
-    )
+    other_name = other_project.name if other_project is not None else render("NO_PROJECT")
+    return None, render("REPROCESS_OTHER_PROJECT", project=other_name, job_id=other.id,
+                        target=location.project_name)
 
 
 def existing_job_location(db: Session, job: Job, location: UploadLocation) -> dict:

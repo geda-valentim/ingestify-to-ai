@@ -55,6 +55,11 @@ def job_not_found_detail() -> str:
     return render("JOB_NOT_FOUND")
 
 
+def job_not_found_or_expired_detail() -> str:
+    """The 404 text of a job the caller owns whose cache entry is gone (after authorization)."""
+    return render("JOB_NOT_FOUND_OR_EXPIRED")
+
+
 def project_not_found_detail() -> str:
     return render("PROJECT_NOT_FOUND_404")
 

@@ -244,7 +244,7 @@ form.append("language", "pt");
 form.append("output_format", "vtt");
 
 const created = await fetch(\`\${API}/transcribe\`, { method: "POST", headers, body: form });
-if (!created.ok) throw new Error((await created.json()).detail);
+if (!created.ok) throw new Error(JSON.stringify((await created.json()).detail));
 const { job_id } = await created.json();
 
 // 2. ${pt ? "Consulta o status até terminar" : "Poll the status until it finishes"}
@@ -267,7 +267,7 @@ const RESPONSES = {
   "job_id": "${EXAMPLE_JOB_ID}",
   "status": "queued",
   "created_at": "2026-09-25T18:32:29.301477",
-  "message": "Job de transcrição de áudio enfileirado para processamento",
+  "message": "Audio transcription job queued for processing",
   "project": { "id": "${EXAMPLE_PROJECT_ID}", "name": "Aulas", "created": false, "source": "request" },
   "folder": null
 }`,

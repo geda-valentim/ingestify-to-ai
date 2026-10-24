@@ -4,6 +4,7 @@ from jose import JWTError, jwt
 import bcrypt
 from fastapi import Depends, HTTPException, Header, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials, APIKeyHeader
+from shared.i18n import api_error
 from sqlalchemy.orm import Session
 import secrets
 import hashlib
@@ -268,11 +269,7 @@ async def get_current_user(
     Raises:
         HTTPException 401: If authentication fails
     """
-    credentials_exception = HTTPException(
-        status_code=401,
-        detail="Could not validate credentials",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
+    credentials_exception = api_error(401, "NOT_AUTHENTICATED", headers={"WWW-Authenticate": "Bearer"})
 
     request.state.api_key = None
 
@@ -322,7 +319,7 @@ async def get_current_active_user(
         HTTPException 400: If user is inactive
     """
     if not current_user.is_active:
-        raise HTTPException(status_code=400, detail="Inactive user")
+        raise api_error(400, "USER_INACTIVE")
 
     return current_user
 

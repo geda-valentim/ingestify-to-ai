@@ -10,6 +10,7 @@ import logging
 from typing import Optional
 
 from fastapi import HTTPException, Request, status
+from shared.i18n import api_error
 
 from shared.redis_client import get_redis_client
 
@@ -27,10 +28,10 @@ def _redis():
     return get_redis_client().client
 
 
-def _too_many(retry_after: int, detail: str) -> HTTPException:
-    return HTTPException(
-        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-        detail=detail,
+def _too_many(retry_after: int, code: str) -> HTTPException:
+    return api_error(
+        status.HTTP_429_TOO_MANY_REQUESTS,
+        code,
         headers={"Retry-After": str(max(retry_after, 1))},
     )
 
@@ -57,7 +58,7 @@ def hit(bucket: str, identity: str, limit: int, window_seconds: int) -> None:
         count = _increment(redis, key, window_seconds)
         if count > limit:
             ttl = redis.ttl(key)
-            raise _too_many(ttl if ttl and ttl > 0 else window_seconds, "Muitas tentativas. Tente novamente mais tarde.")
+            raise _too_many(ttl if ttl and ttl > 0 else window_seconds, "REQUEST_RATE_LIMITED")
     except HTTPException:
         raise
     except Exception as e:
@@ -72,7 +73,7 @@ def check_failures(bucket: str, identity: str, limit: int) -> None:
         failures = int(redis.get(key) or 0)
         if failures >= limit:
             ttl = redis.ttl(key)
-            raise _too_many(ttl if ttl and ttl > 0 else 60, "Muitas tentativas de login. Tente novamente mais tarde.")
+            raise _too_many(ttl if ttl and ttl > 0 else 60, "LOGIN_RATE_LIMITED")
     except HTTPException:
         raise
     except Exception as e:

@@ -44,6 +44,7 @@ from shared.schemas import (
     PartialTranscriptResponse,
     SourceDeletedResponse,
 )
+from shared.error_catalog import render
 from shared.i18n import api_error
 from shared.redis_client import get_redis_client
 from shared.elasticsearch_client import get_es_client, SearchUnavailable
@@ -54,7 +55,12 @@ from shared.models import Folder, Job, JobTag, Page, Project, JobStatus as DBJob
 from shared.config import get_settings
 from shared.utils import calculate_file_checksum
 from shared.auth import get_current_active_user
-from api.deps import job_not_found_detail, owned_folder_or_404, owned_project_or_404
+from api.deps import (
+    job_not_found_detail,
+    job_not_found_or_expired_detail,
+    owned_folder_or_404,
+    owned_project_or_404,
+)
 from api.iam_deps import Scope, authorized, owned_page, require, visible
 from shared.utils import sanitize_upload_filename
 from shared.tags import set_job_tags
@@ -211,10 +217,10 @@ def _duplicate_response(db: Session, existing_job: Job, upload_location, message
     if purge_source is True:
         outcome = apply_purge_to_duplicate(db, existing_job, get_minio_client)
         message += {
-            DUPLICATE_PURGED: ". O arquivo original foi apagado (purge_source)",
-            DUPLICATE_SCHEDULED: ". O arquivo original será apagado quando o job terminar com sucesso (purge_source)",
-            DUPLICATE_ALREADY_GONE: ". O arquivo original já tinha sido apagado",
-            DUPLICATE_KEPT: ". " + (error_catalog.describe("SOURCE_DELETE_FAILED", lang="pt")[0] or ""),
+            DUPLICATE_PURGED: render("DUPLICATE_NOTE_PURGED"),
+            DUPLICATE_SCHEDULED: render("DUPLICATE_NOTE_SCHEDULED"),
+            DUPLICATE_ALREADY_GONE: render("DUPLICATE_NOTE_ALREADY_GONE"),
+            DUPLICATE_KEPT: ". " + (error_catalog.describe("SOURCE_DELETE_FAILED")[0] or ""),
         }[outcome]
     if callback_url:
         url_changed = existing_job.callback_url != callback_url
@@ -441,7 +447,7 @@ async def upload_and_convert(
             add_tags_to_existing_job(db, existing_job, tag_list)
             return _duplicate_response(
                 db, existing_job, upload_location,
-                f"Arquivo já foi processado anteriormente (job existente: {existing_job.id})",
+                render("DUPLICATE_DOCUMENT", job_id=existing_job.id),
                 purge_source, callback_url)
 
         # Generate job ID for new file
@@ -555,12 +561,12 @@ async def upload_and_convert(
                 job_type="main",
                 status="failed",
                 progress=0,
-                error="Celery workers não disponíveis"
+                error=render("QUEUE_UNAVAILABLE", lang="en")
             )
             # Update MySQL
             try:
                 db_job.status = DBJobStatus.FAILED
-                db_job.error_message = "Celery workers não disponíveis"
+                db_job.error_message = render("QUEUE_UNAVAILABLE", lang="en")
                 db.commit()
             except Exception:
                 db.rollback()
@@ -587,7 +593,7 @@ async def upload_and_convert(
             job_id=job_id,
             status="queued",
             created_at=created_at,
-            message=reprocess_note or "Job enfileirado para processamento",
+            message=reprocess_note or render("JOB_QUEUED"),
             project=upload_location.project_info(),
             folder=upload_location.folder_info(),
         )
@@ -938,7 +944,7 @@ async def transcribe_audio(
             redis_client.set_job_output_format(str(existing_job.id), output_format)
             return _duplicate_response(
                 db, existing_job, upload_location,
-                f"Arquivo de áudio já foi processado anteriormente (job existente: {existing_job.id})",
+                render("DUPLICATE_AUDIO", job_id=existing_job.id),
                 purge_source, callback_url)
 
         # Generate job ID for new file
@@ -1064,12 +1070,12 @@ async def transcribe_audio(
                 job_type="main",
                 status="failed",
                 progress=0,
-                error="Celery workers não disponíveis"
+                error=render("QUEUE_UNAVAILABLE", lang="en")
             )
             # Update MySQL
             try:
                 db_job.status = DBJobStatus.FAILED
-                db_job.error_message = "Celery workers não disponíveis"
+                db_job.error_message = render("QUEUE_UNAVAILABLE", lang="en")
                 db.commit()
             except Exception:
                 db.rollback()
@@ -1096,7 +1102,7 @@ async def transcribe_audio(
             job_id=job_id,
             status="queued",
             created_at=created_at,
-            message=reprocess_note or "Job de transcrição de áudio enfileirado para processamento",
+            message=reprocess_note or render("TRANSCRIPTION_JOB_QUEUED"),
             project=upload_location.project_info(),
             folder=upload_location.folder_info(),
         )
@@ -1310,7 +1316,7 @@ async def convert_document(
                 add_tags_to_existing_job(db, existing_job, tag_list)
                 return _duplicate_response(
                     db, existing_job, upload_location,
-                    f"Arquivo já foi processado anteriormente (job existente: {existing_job.id})",
+                    render("DUPLICATE_DOCUMENT", job_id=existing_job.id),
                     purge_source, callback_url)
 
         # Generate job ID for new conversion
@@ -1453,12 +1459,12 @@ async def convert_document(
                 job_type="main",
                 status="failed",
                 progress=0,
-                error="Celery workers não disponíveis"
+                error=render("QUEUE_UNAVAILABLE", lang="en")
             )
             # Update MySQL
             try:
                 db_job.status = DBJobStatus.FAILED
-                db_job.error_message = "Celery workers não disponíveis"
+                db_job.error_message = render("QUEUE_UNAVAILABLE", lang="en")
                 db.commit()
             except Exception:
                 db.rollback()
@@ -1485,7 +1491,7 @@ async def convert_document(
             job_id=job_id,
             status="queued",
             created_at=created_at,
-            message=reprocess_note or "Job enfileirado para processamento",
+            message=reprocess_note or render("JOB_QUEUED"),
             project=upload_location.project_info(),
             folder=upload_location.folder_info(),
         )
@@ -1563,7 +1569,7 @@ async def get_job_status(
                     "progress": 100 if live.state == "completed" else 0,
                     "error": live.error_code, "transcribed_seconds": live.audio_samples / 16000}
     if not status_data:
-        raise HTTPException(status_code=404, detail="Job não encontrado ou expirado")
+        raise HTTPException(status_code=404, detail=job_not_found_or_expired_detail())
 
     # Get job metadata from MySQL (child jobs não possuem linha própria)
     db_job = owned_job if (owned_job is not None and owned_job.id == job_id) else None
@@ -1934,7 +1940,7 @@ async def delete_job(
     except Exception as e:
         db.rollback()
         logger.error(f"Failed to delete job {job_id} from MySQL: {e}")
-        raise HTTPException(status_code=500, detail="Erro ao deletar do banco de dados")
+        raise _coded(500, "JOB_DELETE_DB_FAILED")
 
     # 3. Delete from Redis
     try:
@@ -1967,7 +1973,7 @@ async def delete_job(
         logger.warning(f"Failed to delete job {job_id} from Redis: {e}")
 
     return {
-        "message": "Job deletado com sucesso",
+        "message": render("JOB_DELETED"),
         "job_id": job_id,
         "deleted_at": datetime.utcnow().isoformat()
     }
@@ -2028,7 +2034,7 @@ async def delete_job_source(
     has_assets = db_job is not None and conversion_assets.assets_available(db_job)
     if not (has_source or has_assets):
         db.rollback()
-        raise HTTPException(status_code=404, detail="Arquivo original não encontrado")
+        raise _coded(404, "SOURCE_NOT_FOUND")
 
     # Anything queued or running may still read the original: the MAIN job
     # (also while a Celery retry waits, PENDING), or a page (retry included)
@@ -2156,14 +2162,14 @@ async def get_job_result(
             return JSONResponse(status_code=202, content={'job_id': job_id, 'status': owned_job.status.value,
                 'poll_url': f'/jobs/{job_id}', 'result_url': f'/jobs/{job_id}/result'})
         if not owned_job.minio_result_path:
-            raise HTTPException(503, 'Relatório aguardando recuperação durável')
+            raise _coded(503, "IMAGE_REPORT_PENDING")
         storage = get_minio_client()
         try:
             from starlette.concurrency import run_in_threadpool
             raw = await run_in_threadpool(storage.download_file, storage.bucket_results, owned_job.minio_result_path)
             payload = json.loads(raw)
         except Exception as exc:
-            raise HTTPException(503, 'Relatório temporariamente indisponível; tente consultar o mesmo job novamente') from exc
+            raise _coded(503, "IMAGE_REPORT_UNAVAILABLE") from exc
         if format_ == 'json':
             return JSONResponse(payload, headers={'Cache-Control': 'private, no-store'})
         if image_format == 'markdown':
@@ -2187,7 +2193,7 @@ async def get_job_result(
         durable_transcription = isinstance(profile, dict)
         if durable_transcription:
             if owned_job.status != DBJobStatus.COMPLETED:
-                raise HTTPException(400, detail="Transcrição ainda não publicada")
+                raise _coded(400, "TRANSCRIPT_NOT_PUBLISHED")
             transcript_attempt_id = getattr(owned_job, "transcript_attempt_id", None)
             # Unknown downloaded sources can resolve to a document. Such jobs
             # retain their admission profile without publishing a transcript.
@@ -2199,7 +2205,7 @@ async def get_job_result(
             live = db.get(LiveSession, job_id)
             if live is not None:
                 if live.state != "completed" or owned_job.status != DBJobStatus.COMPLETED:
-                    raise HTTPException(400, detail="Sessão live não concluída")
+                    raise _coded(400, "LIVE_SESSION_NOT_COMPLETED")
                 live_generation = live.generation
 
     # Check job status first
@@ -2208,16 +2214,13 @@ async def get_job_result(
         status_data = {"type": "main", "status": "completed"}
 
     if not status_data:
-        raise HTTPException(status_code=404, detail="Job não encontrado ou expirado")
+        raise HTTPException(status_code=404, detail=job_not_found_or_expired_detail())
 
     if status_data["status"] == "processing" or status_data["status"] == "queued":
-        raise HTTPException(status_code=400, detail="Job ainda está em processamento")
+        raise _coded(400, "JOB_NOT_FINISHED")
 
     if status_data["status"] == "failed":
-        raise HTTPException(
-            status_code=500,
-            detail=f"Job falhou: {status_data.get('error', 'Erro desconhecido')}"
-        )
+        raise _coded(500, "JOB_FAILED", error=status_data.get("error") or render("JOB_ERROR_UNKNOWN"))
 
     # Transcription formats (explicit ?format= or the default chosen at upload) are
     # served straight from Redis/MinIO, even if Elasticsearch has no result
@@ -2248,7 +2251,7 @@ async def get_job_result(
 
             result_data = public_result(redis_result)
         else:
-            raise HTTPException(status_code=404, detail="Resultado não encontrado ou expirado")
+            raise _coded(404, "RESULT_NOT_FOUND")
 
     # Older transcription jobs only have their default format in the result metadata
     if not requested_format:
@@ -2424,10 +2427,7 @@ def _transcript_response(job_id: str, fmt: str, redis_client, generation=None, a
             logger.warning(f"Transcript {fmt} for job {job_id} not available in MinIO: {e}")
 
     if content is None:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Formato '{fmt}' não disponível para este job (apenas jobs de /transcribe geram {', '.join(TRANSCRIPT_FORMATS)})"
-        )
+        raise _coded(404, "TRANSCRIPT_FORMAT_UNAVAILABLE", format=fmt, formats=", ".join(TRANSCRIPT_FORMATS))
 
     return Response(
         content=content,
@@ -2460,7 +2460,7 @@ async def get_partial_transcript(
 
     status_data = redis_client.get_job_status(job_id)
     if not status_data:
-        raise HTTPException(status_code=404, detail="Job não encontrado ou expirado")
+        raise HTTPException(status_code=404, detail=job_not_found_or_expired_detail())
 
     segments, total = redis_client.get_partial_transcript(job_id, since)
     return PartialTranscriptResponse(
@@ -2537,10 +2537,7 @@ async def get_job_pages(
     total_pages = redis_client.get_job_pages_total(job_id)
 
     if not total_pages:
-        raise HTTPException(
-            status_code=404,
-            detail="Job não tem páginas (não é PDF multi-página ou não foi encontrado)"
-        )
+        raise _coded(404, "JOB_NO_PAGES")
 
     # Get page job IDs from main job
     page_job_ids = redis_client.get_page_jobs(job_id)
@@ -2648,17 +2645,13 @@ async def get_page_status_by_number(
     page_job_id = redis_client.get_page_job_id_by_number(job_id, page_number)
 
     if not page_job_id:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Página {page_number} não encontrada no job {job_id}. "
-                   f"Verifique se o job é um PDF multi-página e se a página existe."
-        )
+        raise _coded(404, "PAGE_NOT_FOUND_IN_JOB", page_number=page_number, job_id=job_id)
 
     # Buscar status do page job
     page_status = redis_client.get_job_status(page_job_id)
 
     if not page_status:
-        raise HTTPException(status_code=404, detail="Status da página não encontrado")
+        raise _coded(404, "PAGE_STATUS_NOT_FOUND")
 
     # Parse timestamps
     started_at = None
@@ -2729,10 +2722,8 @@ async def get_page_result_by_number(
         # Check status
         if db_page:
             if db_page.status == DBJobStatus.FAILED:
-                raise HTTPException(
-                    status_code=500,
-                    detail=f"Conversão da página {page_number} falhou: {db_page.error_message or 'Erro desconhecido'}"
-                )
+                raise _coded(500, "PAGE_FAILED", page_number=page_number,
+                             error=db_page.error_message or render("JOB_ERROR_UNKNOWN"))
 
             return {
                 "job_id": db_page.page_job_id or f"page-{page_number}",
@@ -2766,29 +2757,20 @@ async def get_page_result_by_number(
     page_job_id = redis_client.get_page_job_id_by_number(job_id, page_number)
 
     if not page_job_id:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Página {page_number} não encontrada no job {job_id}. "
-                   f"Verifique se o job é um PDF multi-página e se a página existe."
-        )
+        raise _coded(404, "PAGE_NOT_FOUND_IN_JOB", page_number=page_number, job_id=job_id)
 
     # Verificar status primeiro
     page_status = redis_client.get_job_status(page_job_id)
 
     if not page_status:
-        raise HTTPException(status_code=404, detail="Status da página não encontrado")
+        raise _coded(404, "PAGE_STATUS_NOT_FOUND")
 
     if page_status["status"] in ["processing", "queued"]:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Página {page_number} ainda está em processamento (status: {page_status['status']})"
-        )
+        raise _coded(400, "PAGE_NOT_FINISHED", page_number=page_number, status=page_status["status"])
 
     if page_status["status"] == "failed":
-        raise HTTPException(
-            status_code=500,
-            detail=f"Conversão da página {page_number} falhou: {page_status.get('error', 'Erro desconhecido')}"
-        )
+        raise _coded(500, "PAGE_FAILED", page_number=page_number,
+                     error=page_status.get("error") or render("JOB_ERROR_UNKNOWN"))
 
     # Buscar resultado (sem os campos internos do merge: `_figures`, `_figure_markdown`)
     from shared.figure_descriptions import public_result
@@ -2796,10 +2778,7 @@ async def get_page_result_by_number(
     result_data = public_result(redis_client.get_job_result(page_job_id))
 
     if not result_data:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Resultado da página {page_number} não encontrado ou expirado"
-        )
+        raise _coded(404, "PAGE_RESULT_NOT_FOUND", page_number=page_number)
 
     completed_at = None
     if "completed_at" in page_status and page_status["completed_at"]:
@@ -2883,9 +2862,9 @@ async def list_jobs(
     offset = max(0, offset)
 
     if status is not None and status not in _API_TO_DB_STATUS:
-        raise HTTPException(status_code=422, detail=f"status inválido: {status}")
+        raise _coded(422, "JOB_STATUS_INVALID", status=status)
     if kind is not None and kind not in JOB_KINDS:
-        raise HTTPException(status_code=422, detail=f"kind inválido: {kind}. Use: {', '.join(JOB_KINDS)}")
+        raise _coded(422, "JOB_KIND_INVALID", kind=kind, allowed=", ".join(JOB_KINDS))
     tag_filter = parse_tags_or_422(tag)
     project_id = (project_id or "").strip() or None
     folder_id = (folder_id or "").strip() or None
@@ -2896,12 +2875,12 @@ async def list_jobs(
     project = owned_project_or_404(db, project_id, current_user) if project_id else None
     if folder_id == "root":
         if project is None:
-            raise HTTPException(status_code=422, detail="folder_id=root exige project_id")
+            raise _coded(422, "FOLDER_ROOT_NEEDS_PROJECT")
         query = query.filter(Job.project_id == project.id, Job.folder_id.is_(None))
     elif folder_id:
         folder = owned_folder_or_404(db, folder_id, current_user)
         if project is not None and folder.project_id != project.id:
-            raise HTTPException(status_code=422, detail="A pasta não pertence ao projeto informado")
+            raise _coded(422, "FOLDER_NOT_IN_PROJECT")
         query = query.filter(Job.project_id == folder.project_id, Job.folder_id == folder.id)
     elif project is not None:
         query = query.filter(Job.project_id == project.id)
@@ -3061,7 +3040,7 @@ async def search_jobs(
         raise unavailable
     except Exception as e:
         logger.error(f"Error searching jobs: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Erro ao buscar jobs")
+        raise _coded(500, "SEARCH_FAILED")
 
 
 @router.post("/jobs/{job_id}/pages/{page_number}/retry", summary="Refazer página com falha")
@@ -3109,10 +3088,8 @@ async def retry_failed_page(
             page_status = redis_client.get_job_status(page_job_id)
 
             if not page_status or page_status.get("status") != "failed":
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Página {page_number} não está em status 'failed' (status: {page_status.get('status') if page_status else 'unknown'})"
-                )
+                raise _coded(400, "PAGE_NOT_FAILED", page_number=page_number,
+                             status=page_status.get("status") if page_status else "unknown")
 
             # Create the page record in MySQL for future tracking
             try:
@@ -3133,26 +3110,20 @@ async def retry_failed_page(
                 db.rollback()
                 # Continue anyway - we can still retry using Redis data
         else:
-            raise HTTPException(status_code=404, detail=f"Página {page_number} não encontrada no job {job_id}")
+            raise _coded(404, "PAGE_NOT_FOUND_IN_JOB", page_number=page_number, job_id=job_id)
     else:
         # Check if page actually failed
         if db_page.status != DBJobStatus.FAILED:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Página {page_number} não está em status 'failed' (status atual: {db_page.status.value})"
-            )
+            raise _coded(400, "PAGE_NOT_FAILED", page_number=page_number, status=db_page.status.value)
 
         # Check retry limit (max 3 attempts)
         if db_page.retry_count >= 3:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Limite de tentativas atingido para página {page_number} (3/3 tentativas). Não é possível tentar novamente."
-            )
+            raise _coded(400, "PAGE_RETRY_LIMIT", page_number=page_number)
 
     # Get main job info to access original file
     db_job = owned_job if (owned_job is not None and owned_job.id == job_id) else None
     if not db_job:
-        raise HTTPException(status_code=404, detail="Job principal não encontrado")
+        raise _coded(404, "MAIN_JOB_NOT_FOUND")
 
     from shared import error_catalog
 
@@ -3160,17 +3131,14 @@ async def retry_failed_page(
     # original cannot be deleted between finding it here and the retry being queued
     db_job = lock_job(db, job_id)
     if db_job is None:
-        raise HTTPException(status_code=404, detail="Job principal não encontrado")
+        raise _coded(404, "MAIN_JOB_NOT_FOUND")
     try:
         db.refresh(db_page, with_for_update=True)
     except Exception:  # a page migrated from Redis whose row could not be saved
         pass
     if db_page.status != DBJobStatus.FAILED:
         db.rollback()
-        raise HTTPException(
-            status_code=400,
-            detail=f"Página {page_number} não está em status 'failed' (status atual: {db_page.status.value})"
-        )
+        raise _coded(400, "PAGE_NOT_FAILED", page_number=page_number, status=db_page.status.value)
 
     logger.info(f"Retrying page {page_number} of job {job_id} for user {current_user.username}")
 
@@ -3179,7 +3147,7 @@ async def retry_failed_page(
     except ImportError as e:
         logger.error(f"Celery tasks not available: {e}")
         db.rollback()
-        raise HTTPException(status_code=503, detail="Sistema de processamento indisponível")
+        raise _coded(503, "QUEUE_UNAVAILABLE")
 
     # Same path as the admin bulk retry and the monitoring auto-retry: the original
     # is located first (nothing is changed when it is gone), then the page waits
@@ -3199,17 +3167,17 @@ async def retry_failed_page(
     except Exception as e:
         db.rollback()
         logger.error(f"Could not queue the retry of page {page_number} of job {job_id}: {e}")
-        raise HTTPException(503, detail={"code": "DATABASE_UNAVAILABLE"}) from None
+        raise _coded(503, "DATABASE_UNAVAILABLE") from None
     if failed or not queued:
         # Nothing was queued: the page and the MAIN job were put back as they were
-        raise HTTPException(status_code=500, detail="Erro ao reprocessar página")
+        raise _coded(500, "PAGE_RETRY_FAILED")
     new_page_job_id = queued[0][1]
     db.refresh(db_page)
 
     logger.info(f"Page {page_number} of job {job_id} enqueued for retry with new job_id {new_page_job_id}")
 
     return {
-        "message": f"Página {page_number} enfileirada para reprocessamento (tentativa {db_page.retry_count}/3)",
+        "message": render("PAGE_RETRY_QUEUED", page_number=page_number, attempt=db_page.retry_count),
         "job_id": job_id,
         "page_number": page_number,
         "new_page_job_id": new_page_job_id,
@@ -3282,7 +3250,7 @@ async def get_page_pdf(
     # Ownership já validada em owned_page -> authorized(Job) (spec 0014)
     # (MySQL como fonte da verdade).
     if not db_page:
-        raise HTTPException(status_code=404, detail=f"Página {page_number} não encontrada")
+        raise _coded(404, "PAGE_NOT_FOUND", page_number=page_number)
     _raise_if_source_purged(db_page.job)
 
     minio_client = get_minio_client()
@@ -3296,10 +3264,7 @@ async def get_page_pdf(
 
     # Check if file exists in MinIO
     if not minio_client.file_exists(minio_client.bucket_pages, minio_object_path):
-        raise HTTPException(
-            status_code=404,
-            detail=f"Arquivo PDF da página {page_number} não encontrado no MinIO. O job pode não ter sido dividido em páginas."
-        )
+        raise _coded(404, "PAGE_PDF_NOT_FOUND", page_number=page_number)
 
     # O host da requisição serve para descobrir o endereço do MinIO visível pelo
     # navegador quando MINIO_PUBLIC_ENDPOINT não está configurado. A assinatura
@@ -3321,7 +3286,7 @@ async def get_page_pdf(
             f"Failed to sign URL for page {page_number} of job {job_id}: {e}",
             exc_info=True,
         )
-        raise HTTPException(status_code=503, detail="Armazenamento de arquivos indisponível")
+        raise _coded(503, "FILE_STORAGE_UNAVAILABLE")
 
     logger.info(
         f"Issued presigned PDF URL for page {page_number} of job {job_id} "

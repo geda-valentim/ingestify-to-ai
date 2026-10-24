@@ -1,4 +1,5 @@
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status, Form, Request
+from shared.i18n import api_error
 from sqlalchemy import func, or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
@@ -59,18 +60,12 @@ async def register(
     # Check if email already exists
     existing_email = db.query(User).filter(User.email == user_data.email).first()
     if existing_email:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Email already registered"
-        )
+        raise api_error(status.HTTP_400_BAD_REQUEST, "EMAIL_ALREADY_REGISTERED")
 
     # Check if username already exists
     existing_username = db.query(User).filter(User.username == user_data.username).first()
     if existing_username:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Username already taken"
-        )
+        raise api_error(status.HTTP_400_BAD_REQUEST, "USERNAME_TAKEN")
 
     # Create new user - as the installation's root when there is none yet (spec 0019)
     hashed_pw = hash_password(user_data.password)
@@ -89,7 +84,7 @@ async def register(
     except IntegrityError:
         # A concurrent registration took the same email or username after the checks above
         db.rollback()
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Email or username already exists")
+        raise api_error(status.HTTP_400_BAD_REQUEST, "EMAIL_OR_USERNAME_EXISTS")
 
     if new_user.is_root and background is not None:
         # Spec 0020: the new root creates the default execution profiles. Seeding takes
@@ -174,17 +169,11 @@ async def login(
 
     if not user:
         rate_limit.record_failure("login:failed", account, settings.login_lockout_seconds)
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect username/email or password",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+        raise api_error(status.HTTP_401_UNAUTHORIZED, "INVALID_CREDENTIALS",
+                        headers={"WWW-Authenticate": "Bearer"})
 
     if not user.is_active:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Inactive user account"
-        )
+        raise api_error(status.HTTP_400_BAD_REQUEST, "USER_INACTIVE")
 
     rate_limit.reset("login:failed", account)
 
@@ -218,11 +207,8 @@ async def refresh_token(
     ## Erros:
     - 401: token ausente, expirado ou inválido, ou usuário inativo
     """
-    unauthorized = HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Sessão expirada ou inválida",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
+    unauthorized = api_error(status.HTTP_401_UNAUTHORIZED, "SESSION_INVALID",
+                             headers={"WWW-Authenticate": "Bearer"})
     user_id = verify_token(bearer.credentials) if bearer else None
     if not user_id:
         raise unauthorized
