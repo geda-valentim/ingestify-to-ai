@@ -1197,6 +1197,72 @@ def _recount_parent_pages(db, parent_job_id: str) -> bool:
     return settled
 
 
+def _attempt_rows(db, parent_job_id: str, page_number: int, page_job_id: str, lock: bool = False):
+    """
+    (rows this attempt owns, whether it was superseded) for one page.
+
+    A page retry swaps the Page row's page_job_id for a new attempt's. Only the
+    attempt named by the row may write the page's outcome: a late result (or failure)
+    of the superseded one is ignored, it must not overwrite the live attempt.
+    A row without a page_job_id yet belongs to whoever starts first.
+    """
+    query = db.query(Page).filter(Page.job_id == parent_job_id, Page.page_number == page_number)
+    if lock:
+        query = query.with_for_update().populate_existing()
+    rows = query.all()
+    mine = [r for r in rows if not r.page_job_id or r.page_job_id == page_job_id]
+    return mine, bool(rows) and not mine
+
+
+def _page_counts(parent_job_id: str):
+    """(total_pages, pages completed) of a split job from its MySQL rows; (None, 0) when unreadable"""
+    db = SessionLocal()
+    try:
+        job = db.query(Job).filter(Job.id == parent_job_id).first()
+        total = job.total_pages if job else None
+        done = db.query(Page).filter(Page.job_id == parent_job_id, Page.status == JobStatus.COMPLETED).count()
+        return (total or None), done
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"Could not count the pages of job {parent_job_id}: {e}")
+        return None, 0
+    finally:
+        db.close()
+
+
+def _all_pages_completed(db, parent_job_id: str) -> bool:
+    """Every page of the split job has a COMPLETED row (live attempts only: one row per page)"""
+    job = db.query(Job).filter(Job.id == parent_job_id).first()
+    total = (job.total_pages if job else None) or 0
+    if not total:
+        return False
+    done = db.query(Page).filter(Page.job_id == parent_job_id, Page.status == JobStatus.COMPLETED).count()
+    return done >= total
+
+
+def _live_pages(parent_job_id: str):
+    """The Page rows of a split job (one per page, the live attempt), None when MySQL has none/is unreadable"""
+    db = SessionLocal()
+    try:
+        rows = db.query(Page).filter(Page.job_id == parent_job_id).order_by(Page.page_number).all()
+        return rows or None
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"Could not read the pages of job {parent_job_id}: {e}")
+        return None
+    finally:
+        db.close()
+
+
+def _attempt_superseded(parent_job_id: str, page_number: int, page_job_id: str) -> bool:
+    db = SessionLocal()
+    try:
+        return _attempt_rows(db, parent_job_id, page_number, page_job_id)[1]
+    except Exception as e:  # noqa: BLE001 - the authoritative check is the one under the write
+        logger.warning(f"Could not check whether page job {page_job_id} was superseded: {e}")
+        return False
+    finally:
+        db.close()
+
+
 def _mark_page_failed(
     log_prefix: str,
     page_job_id: str,
@@ -1230,10 +1296,9 @@ def _mark_page_failed(
         from shared.models import Page as PageModel
         # Every row of this page (uq_pages_job_page keeps it to one; a database
         # not migrated yet may still hold an old split retry's duplicate)
-        pages = db.query(PageModel).filter(
-            PageModel.job_id == parent_job_id,
-            PageModel.page_number == page_number
-        ).all()
+        pages, superseded = _attempt_rows(db, parent_job_id, page_number, page_job_id, lock=True)
+        if superseded:
+            logger.info(f"{log_prefix} Page {page_number} failure ignored: a newer attempt replaced this one")
         for page in pages:
             page.status = JobStatus.PENDING if retrying else JobStatus.FAILED
             page.error_message = error_msg
@@ -1301,13 +1366,14 @@ def _run_page_conversion(
         from shared.models import Page as PageModel
         # Every row of this page (uq_pages_job_page keeps it to one; a database
         # not migrated yet may still hold an old split retry's duplicate)
-        pages = db.query(PageModel).filter(
-            PageModel.job_id == parent_job_id,
-            PageModel.page_number == page_number
-        ).all()
+        pages, superseded = _attempt_rows(db, parent_job_id, page_number, page_job_id, lock=True)
+        if superseded:
+            db.rollback()
+            logger.info(f"{log_prefix} Page {page_number} skipped: a newer attempt replaced this one")
+            return {"page_job_id": page_job_id, "page_number": page_number, "status": "superseded"}
         for page in pages:
             page.status = JobStatus.PROCESSING
-            page.page_job_id = page_job_id  # a retry runs under a new page job id
+            page.page_job_id = page_job_id
         if pages:
             db.commit()
     except Exception as e:
@@ -1361,6 +1427,12 @@ def _run_page_conversion(
 
             result = page_outputs(result)  # public outputs never carry figure markers
 
+        if _attempt_superseded(parent_job_id, page_number, page_job_id):
+            # A retry replaced this attempt while it ran: its result must not reach the
+            # stores the live attempt writes (ES / MinIO are keyed by page number)
+            logger.info(f"{log_prefix} Page {page_number} result discarded: a newer attempt replaced this one")
+            return {"page_job_id": page_job_id, "page_number": page_number, "status": "superseded"}
+
         # Store page result in Redis
         redis_client.set_job_result(page_job_id, result)
 
@@ -1391,15 +1463,14 @@ def _run_page_conversion(
 
         # Update MySQL: Mark page as completed with markdown content
         settled = False
+        superseded = False
+        all_completed = None  # MySQL's verdict on the merge; None = could not be read
         db = SessionLocal()
         try:
-            from shared.models import Page as PageModel
             # Every row of this page (uq_pages_job_page keeps it to one; a database
-            # not migrated yet may still hold an old split retry's duplicate)
-            pages = db.query(PageModel).filter(
-                PageModel.job_id == parent_job_id,
-                PageModel.page_number == page_number
-            ).all()
+            # not migrated yet may still hold an old split retry's duplicate), but only
+            # while this is still the page's live attempt
+            pages, superseded = _attempt_rows(db, parent_job_id, page_number, page_job_id, lock=True)
             for page in pages:
                 page.status = JobStatus.COMPLETED
                 page.markdown_content = markdown_content
@@ -1410,11 +1481,16 @@ def _run_page_conversion(
             if pages:
                 db.commit()
 
-            settled = _recount_parent_pages(db, parent_job_id)
+            if not superseded:
+                settled = _recount_parent_pages(db, parent_job_id)
+                all_completed = _all_pages_completed(db, parent_job_id)
         except Exception as e:
             logger.error(f"{log_prefix} MySQL completion error: {e}")
         finally:
             db.close()
+        if superseded:
+            logger.info(f"{log_prefix} Page {page_number} result ignored: a newer attempt replaced this one")
+            return {"page_job_id": page_job_id, "page_number": page_number, "status": "superseded"}
         if settled:
             # The last page to settle was this completion and an earlier page failed
             # for good: the MAIN job is PARTIAL now, purge_source applies
@@ -1432,9 +1508,12 @@ def _run_page_conversion(
 
         logger.info(f"{log_prefix} Page {page_number} completed")
 
-        # Update main job progress
-        total_pages = redis_client.get_job_pages_total(parent_job_id)
-        completed_pages = redis_client.count_completed_page_jobs(parent_job_id)
+        # Update main job progress: MySQL counts the live attempts; the Redis child
+        # list is only the fallback when MySQL could not be read
+        total_pages, completed_pages = _page_counts(parent_job_id)
+        if not total_pages:
+            total_pages = redis_client.get_job_pages_total(parent_job_id)
+            completed_pages = redis_client.count_completed_page_jobs(parent_job_id)
 
         if total_pages and completed_pages:
             # Progress: 20% (download) + 70% (pages) + 10% (merge)
@@ -1444,8 +1523,11 @@ def _run_page_conversion(
 
             logger.info(f"{log_prefix} Main job progress: {main_progress}% ({completed_pages}/{total_pages} pages)")
 
-        # Check if all pages completed - trigger merge
-        if redis_client.all_page_jobs_completed(parent_job_id):
+        # Check if all pages completed - trigger merge. MySQL decides (the cached
+        # child list can be expired or name a superseded attempt)
+        if all_completed is None:
+            all_completed = redis_client.all_page_jobs_completed(parent_job_id)
+        if all_completed:
             logger.info(f"{log_prefix} All pages completed - creating merge job")
 
             merge_job_id = str(uuid4())
@@ -1669,9 +1751,18 @@ def merge_pages_task(
             started_at=datetime.utcnow(),
         )
 
-        # Get all page jobs
-        page_job_ids = redis_client.get_page_jobs(parent_job_id)
-        total_pages = len(page_job_ids)
+        # The live attempt of every page, from MySQL (the cached child list can be
+        # expired or still name a superseded attempt); Redis only when MySQL has none
+        db_pages = _live_pages(parent_job_id)
+        if db_pages is not None:
+            page_refs = [(p.page_job_id, p.page_number, p.markdown_content) for p in db_pages]
+        else:
+            page_refs = []
+            for page_job_id in redis_client.get_page_jobs(parent_job_id):
+                page_status = redis_client.get_job_status(page_job_id)
+                if page_status:
+                    page_refs.append((page_job_id, page_status.get("page_number"), None))
+        total_pages = len(page_refs)
 
         logger.info(f"[MERGE JOB {merge_job_id}] Merging {total_pages} pages")
 
@@ -1680,13 +1771,11 @@ def merge_pages_task(
         page_figures = {}
         total_words = 0
 
-        for page_job_id in page_job_ids:
-            page_status = redis_client.get_job_status(page_job_id)
-            if not page_status:
-                continue
-
-            page_num = page_status.get("page_number")
-            page_result = redis_client.get_job_result(page_job_id)
+        for page_job_id, page_num, stored_markdown in page_refs:
+            page_result = redis_client.get_job_result(page_job_id) if page_job_id else None
+            if not page_result and stored_markdown:
+                # Result expired from Redis: the page's markdown is kept in MySQL
+                page_result = {"markdown": stored_markdown, "metadata": {"words": len(stored_markdown.split())}}
 
             if page_result:
                 # describe_images / ocr_images: the marked markdown and the figure entries

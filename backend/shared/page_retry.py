@@ -110,12 +110,14 @@ def requeue_pages(db, job: Job, pages: List[Page], *, user_id: Optional[str], re
     db.commit()
 
     queued, failed = [], []
-    for page, new_id, _ in plan:
+    for page, new_id, (old_id, _old_error) in plan:
         number = page.page_number
         try:
             if redis_client is not None:
                 redis_client.set_job_status(job_id=new_id, job_type="page", status="queued", progress=0,
                                             parent_job_id=job_id, page_number=number)
+                # The parent's cached child list names the live attempt, not the failed one
+                redis_client.replace_page_job(job_id, old_id, new_id)
                 if user_id:
                     redis_client.set_job_owner(new_id, user_id)
 
@@ -145,11 +147,11 @@ def requeue_pages(db, job: Job, pages: List[Page], *, user_id: Optional[str], re
 
     if failed:
         _put_back(db, job_id, [(p, old) for p, new_id, old in plan if any(p is f for f, _ in failed)],
-                  previous_job if not queued else None)
+                  previous_job if not queued else None, redis_client)
     return queued, failed
 
 
-def _put_back(db, job_id: str, pages, previous_job) -> None:
+def _put_back(db, job_id: str, pages, previous_job, redis_client=None) -> None:
     """Pages that were not enqueued go back to FAILED; the job too when nothing was queued."""
     from shared.engines.ledger import recount_parent_pages
 
@@ -159,10 +161,16 @@ def _put_back(db, job_id: str, pages, previous_job) -> None:
             row = db.query(Page).filter(Page.id == page.id).with_for_update().populate_existing().first()
             if row is None or row.status != JobStatus.PENDING:
                 continue
+            attempt_id = row.page_job_id
             row.status = JobStatus.FAILED
             row.retry_count = max((row.retry_count or 1) - 1, 0)
             row.page_job_id = old_id
             row.error_message = old_error
+            if redis_client is not None:
+                try:
+                    redis_client.replace_page_job(job_id, attempt_id, old_id)
+                except Exception as e:  # noqa: BLE001 - Redis is a cache
+                    logger.warning(f"Could not restore the cached page list of job {job_id}: {e}")
         if job is not None and previous_job is not None:
             job.status, job.completed_at, job.error_message = previous_job
         elif job is not None:

@@ -305,6 +305,44 @@ class RedisClient:
             )
             return False
 
+    def replace_page_job(self, parent_job_id: str, old_job_id: str, new_job_id: str) -> bool:
+        """
+        A page retry is a new attempt under a new page job id: swap it into the
+        parent's child list in place of the superseded one (appended when the old id
+        is not there), so the cached list keeps naming the live attempt of every page.
+
+        Optimistic (WATCH) read-modify-write of the parent's status blob, so a
+        concurrent writer of the same blob is retried instead of overwritten. Redis
+        is a cache: False (parent expired, Redis down) is not an error, the
+        readers that decide anything rebuild the list from MySQL.
+        """
+        key = f"job:{parent_job_id}:status"
+        try:
+            with self.client.pipeline() as pipe:
+                for _ in range(5):
+                    try:
+                        pipe.watch(key)
+                        raw = pipe.get(key)
+                        if not raw:
+                            return False
+                        parent_status = json.loads(raw)
+                        child_jobs = parent_status.get("child_job_ids") or {}
+                        ids = [i for i in child_jobs.get("page_job_ids", []) if i != old_job_id]
+                        if new_job_id not in ids:
+                            ids.append(new_job_id)
+                        child_jobs["page_job_ids"] = ids
+                        parent_status["child_job_ids"] = child_jobs
+                        pipe.multi()
+                        pipe.set(key, json.dumps(parent_status), ex=86400)
+                        pipe.execute()
+                        return True
+                    except redis.WatchError:
+                        continue
+        except Exception as e:
+            logger.error("Failed to swap page job %s for %s on parent job %s: %s",
+                         old_job_id, new_job_id, parent_job_id, e)
+        return False
+
     def get_child_jobs(self, parent_job_id: str) -> Optional[Dict[str, Any]]:
         """Retorna child jobs do parent.
 
