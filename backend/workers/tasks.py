@@ -89,28 +89,40 @@ _CLOUD_SOURCES = ('gdrive', 'dropbox')
 _SOURCE_READY_MARKER = '.source_ready'
 
 
-def _mark_source_ready(temp_dir: Path, file_path: Path) -> None:
+def _mark_source_ready(temp_dir: Path, file_path: Path) -> Path:
     """
-    Record that the provider download in `temp_dir` finished. The provider token is
-    dropped right after it (S-01), so a Celery retry must reuse this file instead of
-    downloading again; the marker tells a finished download from a partial one.
+    Record that the provider download in `temp_dir` finished and return its path. The
+    provider token is dropped right after it (S-01), so a Celery retry must reuse this
+    file instead of downloading again; the marker (name and size) tells a finished
+    download from a partial or truncated one. A provider file name that collides with
+    the marker's own files is renamed: those names come from the user.
     """
+    if file_path.name in (_SOURCE_READY_MARKER, _SOURCE_READY_MARKER + '.tmp'):
+        renamed = file_path.with_name('source.bin')
+        os.replace(file_path, renamed)
+        file_path = renamed
     marker = temp_dir / _SOURCE_READY_MARKER
     tmp = temp_dir / (_SOURCE_READY_MARKER + '.tmp')
-    tmp.write_text(file_path.name)
+    tmp.write_text(f"{file_path.name}\n{file_path.stat().st_size}", encoding='utf-8')
     os.replace(tmp, marker)
+    return file_path
 
 
 def _reusable_source(temp_dir: Path) -> Optional[Path]:
     """The finished provider download left by an earlier attempt, if it is still intact."""
     try:
-        name = (temp_dir / _SOURCE_READY_MARKER).read_text()
-    except OSError:
+        name, _, size = (temp_dir / _SOURCE_READY_MARKER).read_text(encoding='utf-8').partition('\n')
+    except (OSError, UnicodeDecodeError):
         return None
-    if not name or Path(name).name != name:
+    if not name or Path(name).name != name or name in (_SOURCE_READY_MARKER, _SOURCE_READY_MARKER + '.tmp'):
         return None
     path = temp_dir / name
-    return path if path.is_file() else None
+    try:
+        if not path.is_file() or not size.isdigit() or path.stat().st_size != int(size):
+            return None
+    except OSError:
+        return None
+    return path
 
 
 def _discard_attempt_files(job_id: str, source_type: str, *, retrying: bool) -> None:
@@ -720,6 +732,9 @@ def process_conversion(
     with SessionLocal() as db:
         job = db.query(Job).filter(Job.id == job_id).with_for_update().first()
         if job is None or job.status in (JobStatus.COMPLETED, JobStatus.CANCELLED):
+            if job is not None and not _strict_audio_task(options):
+                # Nothing will retry: a download kept for this retry is no longer needed
+                _discard_attempt_files(job_id, source_type, retrying=False)
             return {"job_id": job_id, "status": "discarded"}
         if isinstance(getattr(job, 'transcription_profile', None), dict):
             from shared.transcription import options_from_profile
@@ -770,7 +785,7 @@ def process_conversion(
                     )
                 )
                 if source_type in _CLOUD_SOURCES:
-                    _mark_source_ready(temp_dir, file_path)
+                    file_path = _mark_source_ready(temp_dir, file_path)
             if source_type in _CLOUD_SOURCES:
                 redis_client.delete_source_token(job_id)
 

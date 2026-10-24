@@ -604,3 +604,33 @@ def test_a_marker_without_its_file_is_not_a_reusable_source(tmp_path):
     assert tasks._reusable_source(tmp_path) is None
     (tmp_path / ".source_ready").write_text("../escape.pdf")
     assert tasks._reusable_source(tmp_path) is None
+
+
+def test_a_truncated_download_is_not_reused(tmp_path):
+    (tmp_path / "a.pdf").write_bytes(b"%PDF-1.4")
+    tasks._mark_source_ready(tmp_path, tmp_path / "a.pdf")
+    assert tasks._reusable_source(tmp_path) == tmp_path / "a.pdf"
+    (tmp_path / "a.pdf").write_bytes(b"%PDF")
+    assert tasks._reusable_source(tmp_path) is None
+
+
+def test_a_provider_file_named_like_the_marker_is_renamed(tmp_path):
+    for name in (".source_ready", ".source_ready.tmp"):
+        (tmp_path / name).write_bytes(b"%PDF-1.4")
+        path = tasks._mark_source_ready(tmp_path, tmp_path / name)
+        assert path.name == "source.bin" and path.read_bytes() == b"%PDF-1.4"
+        assert tasks._reusable_source(tmp_path) == path
+        path.unlink()
+
+
+def test_a_retry_of_a_settled_job_removes_the_kept_download(world, convert, monkeypatch, tmp_path):
+    kwargs, job_id, calls = _cloud_retry_setup(world, convert, monkeypatch, tmp_path)
+    work = tmp_path / job_id
+    work.mkdir()
+    (work / "a.pdf").write_bytes(b"%PDF-1.4")
+    tasks._mark_source_ready(work, work / "a.pdf")
+    with world.Session() as db:
+        db.get(Job, job_id).status = JobStatus.CANCELLED
+        db.commit()
+    assert tasks.process_conversion.run(**kwargs)["status"] == "discarded"
+    assert not work.exists() and calls == []
