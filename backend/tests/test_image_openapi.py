@@ -35,7 +35,9 @@ def test_facial_migrations_have_one_head_on_current_main_chain():
     # jobs source bookkeeping + uq_pages_job_page follow it; the conversion image
     # assets columns follow them as the single head.
     # the describe-stage columns (describe_images / ocr_images) follow them as the single head.
-    assert scripts.get_heads() == ['d4b80025f6c2']
+    # the job completion-webhook columns follow them as the single head.
+    assert scripts.get_heads() == ['e5c90026a7d3']
+    assert scripts.get_revision('e5c90026a7d3').down_revision == 'd4b80025f6c2'
     assert scripts.get_revision('d4b80025f6c2').down_revision == 'c3a70024e5b1'
     assert scripts.get_revision('c3a70024e5b1').down_revision == 'b8f20022e1c4'
     assert scripts.get_revision('b8f20022e1c4').down_revision == 'a7d30021c5e9'

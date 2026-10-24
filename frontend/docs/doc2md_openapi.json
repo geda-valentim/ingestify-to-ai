@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Ingestify API",
-    "description": "\nAPI assíncrona que converte documentos (PDF, DOCX, HTML, PPTX, XLSX...) em Markdown,\ntranscreve áudio e vídeo e analisa imagens. Todo pedido vira um **job**: a resposta\ntraz o `job_id` na hora e o trabalho segue em workers Celery. Guias completos no\nportal de documentação (`/pt/docs`); referência gerada em `/redoc` e `/openapi.json`.\n\n## Autenticação\n\n- **JWT** (`bearerAuth`): `POST /auth/login` devolve `access_token`; envie\n  `Authorization: Bearer <token>`. `POST /auth/refresh` renova a sessão.\n- **API key** (`apiKeyAuth`): crie em `POST /api-keys/` (com JWT) e envie\n  `X-API-Key: <chave>`. Uma key pode ser vinculada a um projeto\n  (`PATCH /api-keys/{key_id}`).\n- Com os dois no mesmo request, vale o JWT. Rotas marcadas como sessão de\n  administrador (`x-access: admin-session`) ou só JWT (`x-access: jwt`) recusam API key.\n- No Swagger, clique em **Authorize** e preencha `bearerAuth` (só o token, sem o\n  prefixo `Bearer`) e/ou `apiKeyAuth`. A autorização persiste entre recargas.\n- **Primeira instalação**: `GET /auth/setup` (público) diz se a instalação ainda não tem\n  usuário (`root_pending`) e se o registro exige token. O primeiro `POST /auth/register`\n  de uma instalação vazia cria o **root**, a identidade de bootstrap do IAM. Em produção\n  isso exige `setup_token` igual ao `ROOT_SETUP_TOKEN` do servidor (fora de produção,\n  só quando ele está configurado).\n\n## Permissões (IAM)\n\nCada usuário é dono dos próprios jobs, projetos, tags, API keys e conexões de datalake:\nrecurso de outro usuário responde 404. Rotas `/admin/*` exigem permissões de plataforma\nconcedidas por papéis IAM (`platform_admin`, `platform_operator`, `platform_auditor`,\n`remote_engine_user`), e as rotas de engines usam os papéis de engines (`observer`,\n`engine_operator`, `access_admin`...), hoje guardados como vínculos IAM em\n`/admin/iam/bindings`. Root e os administradores de bootstrap equivalem a\n`platform_admin`. `POST /iam/check` diz o que o chamador pode fazer; `GET /iam/permissions`\nlista o catálogo. O campo `x-access` de cada operação diz a credencial exigida. Guia:\n[Acesso e IAM](/pt/docs/engine-access).\n\n## Projetos e pastas\n\nTodo job pertence a um **projeto** (obrigatório) e, opcionalmente, a uma **pasta** do\nprojeto (um nível). Os endpoints que criam jobs (`/upload`, `/convert`, `/transcribe`,\n`/images/*`) aceitam:\n\n- `project`: nome do projeto. É criado se não existir (*get-or-add*). Caixa, espaços e\n  acentos sobre letras latinas não contam: `Reunião` e ` reuniao ` são o mesmo projeto;\n- `project_id`: ID de um projeto existente (nunca cria);\n- `folder` / `folder_id`: a pasta dentro do projeto (o nome não pode ter `/`).\n\nSem `project`/`project_id`, o job vai para o projeto **vinculado à API key** (veja\n`PATCH /api-keys/{key_id}`). Isso só vale para requests autenticados apenas pela key: com\nJWT, o vínculo é ignorado. Sem projeto no request e sem vínculo, a resposta é **422**.\nUm arquivo repetido só é reaproveitado dentro do mesmo projeto (`duplicate: true`).\n\n```bash\ncurl -H \"X-API-Key: ...\" -F \"file=@aula.mp3\" -F \"project=Aulas\" -F \"folder=Setembro\" .../transcribe\n```\n\n## Ciclo de vida do job\n\n`POST` devolve `job_id`; acompanhe com `GET /jobs/{job_id}` (`status`, `progress`) e\nbusque o resultado em `GET /jobs/{job_id}/result`. Estados (`status`):\n\n- `pending` / `queued`: aceito, aguardando worker;\n- `processing`: em execução (PDF de várias páginas: split → páginas em paralelo → merge;\n  `GET /jobs/{job_id}/pages` mostra cada página);\n- `completed`: concluído;\n- `partial`: terminou com lacunas (ex.: algumas páginas falharam); o resultado\n  preservado fica disponível e as páginas com falha podem ser refeitas\n  (`POST /jobs/{job_id}/pages/{n}/retry`);\n- `failed`: falhou depois das tentativas automáticas; `error` explica;\n- `cancelled`: cancelado (sessões ao vivo, análise composta de imagem).\n\n## Arquivos de origem (`purge_source`)\n\n`/upload`, `/convert`, `/transcribe` e as oito rotas `/images/*` aceitam\n`purge_source` (padrão `false`). Com `true`, os arquivos de origem (o arquivo enviado,\nos PDFs por página, as cópias da imagem) são apagados quando o job termina, depois das\ntentativas automáticas; o resultado fica. Para apagar depois, use\n`DELETE /jobs/{job_id}/source` (200; 404 sem origem; 409 `JOB_STILL_PROCESSING`;\n503 `SOURCE_DELETE_FAILED`). `GET /jobs/{job_id}` informa `source_available`,\n`source_deleted_at` e `source_deletable`. Sem origem, o PDF de página responde 410\n`SOURCE_PURGED` e o retry de página 409 `SOURCE_NOT_AVAILABLE`.\n\n## Imagens da conversão (`image_mode`, `page_images`)\n\n`/upload` e `/convert` aceitam `image_mode` (`none`, padrão: o markdown mantém\n`<!-- image -->`; `referenced`: cada figura vira um PNG referenciado no markdown como\n`![Image](/jobs/{job_id}/assets/{name})`) e `page_images` (`true`: cada página do PDF\nrenderizada como PNG). `GET /jobs/{job_id}/result` lista `assets` (`name`, `kind`\n`picture`|`page`, `page`, `bbox`, `sha256`, `mime`, `width`, `height`, `size_bytes`,\n`url`) e `assets_skipped`; cada imagem sai em `GET /jobs/{job_id}/assets/{name}` (sempre\no job principal, também num PDF dividido). Com `purge_source=true` as imagens ficam\n`ASSET_RETENTION_SECONDS` depois do fim do job (`assets_expire_at` em\n`GET /jobs/{job_id}`) e então são apagadas; `DELETE /jobs/{job_id}/source` apaga na hora.\nDepois disso a rota responde 410 `SOURCE_PURGED`.\n\n## Idempotência (Full Analysis e rostos)\n\n`/images/analyze` com `mode=full` e `/images/faces` exigem o header `Idempotency-Key`\n(1..128 caracteres). A mesma chave com o mesmo pedido devolve o mesmo job enquanto a\ntentativa está na fila, rodando ou concluída; depois que ela falha de vez, a mesma chave\nabre a tentativa seguinte (`attempt` + 1, job novo). Chave usada com outro pedido: 409;\njob da chave excluído: 410 (use outra chave). `purge_source` não entra na comparação.\n\n## Erros\n\nErros HTTP vêm em `{\"detail\": ...}`: texto, lista de validação (422) ou objeto.\n\n**Criação de jobs** (`/upload`, `/convert`, `/transcribe`): toda recusa traz\n`{\"detail\": {\"code\": \"...\", \"message\": \"...\"}}`; o `code` diz o que fazer, sem casar texto.\nA seção *Responses* de cada rota lista os códigos. Os principais:\n\n| Código | Status | O que fazer |\n|---|---|---|\n| `INVALID_FILE_FORMAT` | 422 | o conteúdo contradiz a extensão; reenviar o mesmo arquivo não adianta |\n| `FILE_MISSING` | 422 | o campo `file` não chegou (em geral upload cortado); reenvie |\n| `FILE_EMPTY` / `FILE_TOO_LARGE` | 400 / 413 | arquivo vazio / acima do limite |\n| `FOLDER_LIMIT` / `PROJECT_LIMIT` | 422 | teto de pastas por projeto / projetos por usuário |\n| `PROJECT_REQUIRED`, `PROJECT_ARCHIVED`, `INVALID_LOCATION` | 422 | corrija `project`/`folder` |\n| `INVALID_TAGS` | 422 | corrija `tags` |\n| `QUEUE_UNAVAILABLE`, `DATABASE_UNAVAILABLE` | 503 | temporário; tente de novo |\n\nO 422 de validação do FastAPI mantém `detail` como lista e ganha `code` no topo:\n`{\"detail\": [...], \"code\": \"FILE_MISSING\" | \"VALIDATION_ERROR\"}`. Os 404 de projeto/pasta\n(`project_id`/`folder_id` de outro usuário ou inexistente) seguem em texto, iguais ao 404\nde job.\n\nOutras recusas com código (jobs, engines, perfis de execução, acesso, IAM, root) trazem\n`{\"detail\": {\"code\": \"...\", \"message\": \"...\", \"next_steps\": [...]}}`, com `cause`\n(o gate interno quando um código genérico embrulha outro) e `technical` (texto original)\nquando houver. Use `code` para decidir; `message` é para pessoas. Falhas não tratadas\nrespondem 500 com `{\"error\": {\"code\": \"INTERNAL_ERROR\", \"message\": \"...\"}}`.\n\n## Limites de taxa\n\nLogin: `RATE_LIMIT_PER_MINUTE` tentativas por IP por minuto (padrão 10) e bloqueio\ntemporário da conta após `LOGIN_MAX_FAILED_ATTEMPTS` falhas (padrão 5, por\n`LOGIN_LOCKOUT_SECONDS`, padrão 900 s). Registro: `REGISTER_LIMIT_PER_HOUR` por IP (padrão\n5). Excedido, a resposta é **429**. Uploads respeitam `MAX_FILE_SIZE_MB` (413).\n",
-    "version": "1.6.1"
+    "description": "\nAPI assíncrona que converte documentos (PDF, DOCX, HTML, PPTX, XLSX...) em Markdown,\ntranscreve áudio e vídeo e analisa imagens. Todo pedido vira um **job**: a resposta\ntraz o `job_id` na hora e o trabalho segue em workers Celery. Guias completos no\nportal de documentação (`/pt/docs`); referência gerada em `/redoc` e `/openapi.json`.\n\n## Autenticação\n\n- **JWT** (`bearerAuth`): `POST /auth/login` devolve `access_token`; envie\n  `Authorization: Bearer <token>`. `POST /auth/refresh` renova a sessão.\n- **API key** (`apiKeyAuth`): crie em `POST /api-keys/` (com JWT) e envie\n  `X-API-Key: <chave>`. Uma key pode ser vinculada a um projeto\n  (`PATCH /api-keys/{key_id}`).\n- Com os dois no mesmo request, vale o JWT. Rotas marcadas como sessão de\n  administrador (`x-access: admin-session`) ou só JWT (`x-access: jwt`) recusam API key.\n- No Swagger, clique em **Authorize** e preencha `bearerAuth` (só o token, sem o\n  prefixo `Bearer`) e/ou `apiKeyAuth`. A autorização persiste entre recargas.\n- **Primeira instalação**: `GET /auth/setup` (público) diz se a instalação ainda não tem\n  usuário (`root_pending`) e se o registro exige token. O primeiro `POST /auth/register`\n  de uma instalação vazia cria o **root**, a identidade de bootstrap do IAM. Em produção\n  isso exige `setup_token` igual ao `ROOT_SETUP_TOKEN` do servidor (fora de produção,\n  só quando ele está configurado).\n\n## Permissões (IAM)\n\nCada usuário é dono dos próprios jobs, projetos, tags, API keys e conexões de datalake:\nrecurso de outro usuário responde 404. Rotas `/admin/*` exigem permissões de plataforma\nconcedidas por papéis IAM (`platform_admin`, `platform_operator`, `platform_auditor`,\n`remote_engine_user`), e as rotas de engines usam os papéis de engines (`observer`,\n`engine_operator`, `access_admin`...), hoje guardados como vínculos IAM em\n`/admin/iam/bindings`. Root e os administradores de bootstrap equivalem a\n`platform_admin`. `POST /iam/check` diz o que o chamador pode fazer; `GET /iam/permissions`\nlista o catálogo. O campo `x-access` de cada operação diz a credencial exigida. Guia:\n[Acesso e IAM](/pt/docs/engine-access).\n\n## Projetos e pastas\n\nTodo job pertence a um **projeto** (obrigatório) e, opcionalmente, a uma **pasta** do\nprojeto (um nível). Os endpoints que criam jobs (`/upload`, `/convert`, `/transcribe`,\n`/images/*`) aceitam:\n\n- `project`: nome do projeto. É criado se não existir (*get-or-add*). Caixa, espaços e\n  acentos sobre letras latinas não contam: `Reunião` e ` reuniao ` são o mesmo projeto;\n- `project_id`: ID de um projeto existente (nunca cria);\n- `folder` / `folder_id`: a pasta dentro do projeto (o nome não pode ter `/`).\n\nSem `project`/`project_id`, o job vai para o projeto **vinculado à API key** (veja\n`PATCH /api-keys/{key_id}`). Isso só vale para requests autenticados apenas pela key: com\nJWT, o vínculo é ignorado. Sem projeto no request e sem vínculo, a resposta é **422**.\nUm arquivo repetido só é reaproveitado dentro do mesmo projeto (`duplicate: true`).\n\n```bash\ncurl -H \"X-API-Key: ...\" -F \"file=@aula.mp3\" -F \"project=Aulas\" -F \"folder=Setembro\" .../transcribe\n```\n\n## Ciclo de vida do job\n\n`POST` devolve `job_id`; acompanhe com `GET /jobs/{job_id}` (`status`, `progress`) e\nbusque o resultado em `GET /jobs/{job_id}/result`. Estados (`status`):\n\n- `pending` / `queued`: aceito, aguardando worker;\n- `processing`: em execução (PDF de várias páginas: split → páginas em paralelo → merge;\n  `GET /jobs/{job_id}/pages` mostra cada página);\n- `completed`: concluído;\n- `partial`: terminou com lacunas (ex.: algumas páginas falharam); o resultado\n  preservado fica disponível e as páginas com falha podem ser refeitas\n  (`POST /jobs/{job_id}/pages/{n}/retry`);\n- `failed`: falhou depois das tentativas automáticas; `error` explica;\n- `cancelled`: cancelado (sessões ao vivo, análise composta de imagem).\n\n## Arquivos de origem (`purge_source`)\n\n`/upload`, `/convert`, `/transcribe` e as oito rotas `/images/*` aceitam\n`purge_source` (padrão `false`). Com `true`, os arquivos de origem (o arquivo enviado,\nos PDFs por página, as cópias da imagem) são apagados quando o job termina, depois das\ntentativas automáticas; o resultado fica. Para apagar depois, use\n`DELETE /jobs/{job_id}/source` (200; 404 sem origem; 409 `JOB_STILL_PROCESSING`;\n503 `SOURCE_DELETE_FAILED`). `GET /jobs/{job_id}` informa `source_available`,\n`source_deleted_at` e `source_deletable`. Sem origem, o PDF de página responde 410\n`SOURCE_PURGED` e o retry de página 409 `SOURCE_NOT_AVAILABLE`.\n\n## Webhooks (`callback_url`)\n\n`/upload`, `/convert` e `/transcribe` aceitam `callback_url` (https). Quando o job\nprincipal termina, a plataforma envia um POST assinado a essa URL com o evento\n`job.completed`, `job.failed` ou `job.partial` (só metadados: o markdown se busca em\n`GET /jobs/{job_id}/result`). Cabeçalhos: `X-Ingestify-Event`, `X-Ingestify-Delivery`\n(id para deduplicar) e `X-Ingestify-Signature: t=<unix>,v1=<hex>`, o HMAC-SHA256 de\n`{t}.{corpo}` com o segredo de `GET /webhooks/signing-secret` (um por usuário). 2xx\nconfirma; 5xx, 408, 429 e falha de rede são repetidos até 6 vezes (30 s a 2 h); outros\n4xx e redirecionamentos não. A mesma conversão pode gerar mais de um evento (uma\npágina refeita depois de `job.partial` gera `job.completed`): deduplique por\n`X-Ingestify-Delivery`. `GET /jobs/{job_id}` traz o bloco `webhook` (estado da\nentrega). URL local, privada ou com credenciais: 422 `INVALID_CALLBACK_URL`.\nGuia: docs/features/webhooks.md.\n\n## Imagens da conversão (`image_mode`, `page_images`)\n\n`/upload` e `/convert` aceitam `image_mode` (`none`, padrão: o markdown mantém\n`<!-- image -->`; `referenced`: cada figura vira um PNG referenciado no markdown como\n`![Image](/jobs/{job_id}/assets/{name})`) e `page_images` (`true`: cada página do PDF\nrenderizada como PNG). `GET /jobs/{job_id}/result` lista `assets` (`name`, `kind`\n`picture`|`page`, `page`, `bbox`, `sha256`, `mime`, `width`, `height`, `size_bytes`,\n`url`) e `assets_skipped`; cada imagem sai em `GET /jobs/{job_id}/assets/{name}` (sempre\no job principal, também num PDF dividido). Com `purge_source=true` as imagens ficam\n`ASSET_RETENTION_SECONDS` depois do fim do job (`assets_expire_at` em\n`GET /jobs/{job_id}`) e então são apagadas; `DELETE /jobs/{job_id}/source` apaga na hora.\nDepois disso a rota responde 410 `SOURCE_PURGED`.\n\n## Idempotência (Full Analysis e rostos)\n\n`/images/analyze` com `mode=full` e `/images/faces` exigem o header `Idempotency-Key`\n(1..128 caracteres). A mesma chave com o mesmo pedido devolve o mesmo job enquanto a\ntentativa está na fila, rodando ou concluída; depois que ela falha de vez, a mesma chave\nabre a tentativa seguinte (`attempt` + 1, job novo). Chave usada com outro pedido: 409;\njob da chave excluído: 410 (use outra chave). `purge_source` não entra na comparação.\n\n## Erros\n\nErros HTTP vêm em `{\"detail\": ...}`: texto, lista de validação (422) ou objeto.\n\n**Criação de jobs** (`/upload`, `/convert`, `/transcribe`): toda recusa traz\n`{\"detail\": {\"code\": \"...\", \"message\": \"...\"}}`; o `code` diz o que fazer, sem casar texto.\nA seção *Responses* de cada rota lista os códigos. Os principais:\n\n| Código | Status | O que fazer |\n|---|---|---|\n| `INVALID_FILE_FORMAT` | 422 | o conteúdo contradiz a extensão; reenviar o mesmo arquivo não adianta |\n| `FILE_MISSING` | 422 | o campo `file` não chegou (em geral upload cortado); reenvie |\n| `FILE_EMPTY` / `FILE_TOO_LARGE` | 400 / 413 | arquivo vazio / acima do limite |\n| `FOLDER_LIMIT` / `PROJECT_LIMIT` | 422 | teto de pastas por projeto / projetos por usuário |\n| `PROJECT_REQUIRED`, `PROJECT_ARCHIVED`, `INVALID_LOCATION` | 422 | corrija `project`/`folder` |\n| `INVALID_TAGS` | 422 | corrija `tags` |\n| `QUEUE_UNAVAILABLE`, `DATABASE_UNAVAILABLE` | 503 | temporário; tente de novo |\n\nO 422 de validação do FastAPI mantém `detail` como lista e ganha `code` no topo:\n`{\"detail\": [...], \"code\": \"FILE_MISSING\" | \"VALIDATION_ERROR\"}`. Os 404 de projeto/pasta\n(`project_id`/`folder_id` de outro usuário ou inexistente) seguem em texto, iguais ao 404\nde job.\n\nOutras recusas com código (jobs, engines, perfis de execução, acesso, IAM, root) trazem\n`{\"detail\": {\"code\": \"...\", \"message\": \"...\", \"next_steps\": [...]}}`, com `cause`\n(o gate interno quando um código genérico embrulha outro) e `technical` (texto original)\nquando houver. Use `code` para decidir; `message` é para pessoas. Falhas não tratadas\nrespondem 500 com `{\"error\": {\"code\": \"INTERNAL_ERROR\", \"message\": \"...\"}}`.\n\n## Limites de taxa\n\nLogin: `RATE_LIMIT_PER_MINUTE` tentativas por IP por minuto (padrão 10) e bloqueio\ntemporário da conta após `LOGIN_MAX_FAILED_ATTEMPTS` falhas (padrão 5, por\n`LOGIN_LOCKOUT_SECONDS`, padrão 900 s). Registro: `REGISTER_LIMIT_PER_HOUR` por IP (padrão\n5). Excedido, a resposta é **429**. Uploads respeitam `MAX_FILE_SIZE_MB` (413).\n",
+    "version": "1.7.0"
   },
   "paths": {
     "/auth/register": {
@@ -2208,6 +2208,37 @@
             }
           }
         },
+        "x-access": "user"
+      }
+    },
+    "/webhooks/signing-secret": {
+      "get": {
+        "tags": [
+          "Conversion"
+        ],
+        "summary": "Segredo de assinatura dos webhooks",
+        "description": "Segredo com que o receptor verifica o cabeçalho `X-Ingestify-Signature` dos\nwebhooks de conclusão (`callback_url`). Um por usuário, estável: não há como\ngerar outro nem como lê-lo de volta pelos eventos. Trate como senha.\n\nA assinatura é `HMAC-SHA256(secret, \"{t}.{corpo}\")` em hexadecimal, com `t` o\ntimestamp (segundos) do cabeçalho `t=<t>,v1=<hex>`. Recuse eventos com `t`\nmuito antigo (ex.: mais de 5 minutos). Exemplos em Python e Node:\ndocs/features/webhooks.md.",
+        "operationId": "get_signing_secret_webhooks_signing_secret_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SigningSecretResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
+          }
+        ],
         "x-access": "user"
       }
     },
@@ -6127,7 +6158,7 @@
             }
           },
           "422": {
-            "description": "`{\"detail\": {\"code\", \"message\"}}`. `code`: `INVALID_FILE_FORMAT`, `FOLDER_LIMIT`, `PROJECT_LIMIT`, `PROJECT_REQUIRED`, `PROJECT_ARCHIVED`, `INVALID_LOCATION`, `INVALID_TAGS`, `INVALID_TRANSCRIPTION_OPTIONS`. Ou o 422 de validação do FastAPI: `{\"detail\": [...], \"code\": \"FILE_MISSING\" | \"VALIDATION_ERROR\"}`",
+            "description": "`{\"detail\": {\"code\", \"message\"}}`. `code`: `INVALID_FILE_FORMAT`, `FOLDER_LIMIT`, `PROJECT_LIMIT`, `PROJECT_REQUIRED`, `PROJECT_ARCHIVED`, `INVALID_LOCATION`, `INVALID_TAGS`, `INVALID_TRANSCRIPTION_OPTIONS`, `INVALID_CALLBACK_URL`. Ou o 422 de validação do FastAPI: `{\"detail\": [...], \"code\": \"FILE_MISSING\" | \"VALIDATION_ERROR\"}`",
             "content": {
               "application/json": {
                 "example": {
@@ -6236,7 +6267,7 @@
             }
           },
           "422": {
-            "description": "`{\"detail\": {\"code\", \"message\"}}`. `code`: `UNSUPPORTED_MEDIA_FORMAT`, `INVALID_OUTPUT_FORMAT`, `FOLDER_LIMIT`, `PROJECT_LIMIT`, `PROJECT_REQUIRED`, `PROJECT_ARCHIVED`, `INVALID_LOCATION`, `INVALID_TAGS`, `INVALID_TRANSCRIPTION_OPTIONS`. Ou o 422 de validação do FastAPI: `{\"detail\": [...], \"code\": \"FILE_MISSING\" | \"VALIDATION_ERROR\"}`",
+            "description": "`{\"detail\": {\"code\", \"message\"}}`. `code`: `UNSUPPORTED_MEDIA_FORMAT`, `INVALID_OUTPUT_FORMAT`, `FOLDER_LIMIT`, `PROJECT_LIMIT`, `PROJECT_REQUIRED`, `PROJECT_ARCHIVED`, `INVALID_LOCATION`, `INVALID_TAGS`, `INVALID_TRANSCRIPTION_OPTIONS`, `INVALID_CALLBACK_URL`. Ou o 422 de validação do FastAPI: `{\"detail\": [...], \"code\": \"FILE_MISSING\" | \"VALIDATION_ERROR\"}`",
             "content": {
               "application/json": {
                 "example": {
@@ -6391,7 +6422,7 @@
             }
           },
           "422": {
-            "description": "`{\"detail\": {\"code\", \"message\"}}`. `code`: `INVALID_FILE_FORMAT`, `FOLDER_LIMIT`, `PROJECT_LIMIT`, `PROJECT_REQUIRED`, `PROJECT_ARCHIVED`, `INVALID_LOCATION`, `INVALID_TAGS`, `INVALID_TRANSCRIPTION_OPTIONS`. Ou o 422 de validação do FastAPI: `{\"detail\": [...], \"code\": \"FILE_MISSING\" | \"VALIDATION_ERROR\"}`",
+            "description": "`{\"detail\": {\"code\", \"message\"}}`. `code`: `INVALID_FILE_FORMAT`, `FOLDER_LIMIT`, `PROJECT_LIMIT`, `PROJECT_REQUIRED`, `PROJECT_ARCHIVED`, `INVALID_LOCATION`, `INVALID_TAGS`, `INVALID_TRANSCRIPTION_OPTIONS`, `INVALID_CALLBACK_URL`. Ou o 422 de validação do FastAPI: `{\"detail\": [...], \"code\": \"FILE_MISSING\" | \"VALIDATION_ERROR\"}`",
             "content": {
               "application/json": {
                 "example": {
@@ -8256,6 +8287,18 @@
             "description": "Se true, apaga os arquivos de origem do job — o arquivo enviado (MinIO e cópia local) e, num PDF dividido, os PDFs por página — quando o job termina: `completed`, ou `failed`/`partial` depois de esgotadas as tentativas automáticas (nunca enquanto houver retry ou página na fila). O resultado (markdown, markdown por página) fica. Depois disso o retry manual de página não é mais possível. GET /jobs/{job_id} informa `source_available` e `source_deleted_at`. Arquivo repetido no mesmo projeto: com true o job existente é devolvido (`duplicate: true`) e passa a apagar a origem (na hora, se já terminou); com false um job existente cuja origem foi (ou será) apagada não é reaproveitado e um job novo é criado. Padrão false (mantém). Para apagar depois: DELETE /jobs/{job_id}/source",
             "default": false
           },
+          "callback_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Callback Url",
+            "description": "URL https que recebe um POST assinado quando o job principal termina (`job.completed`, `job.failed` ou `job.partial`): só metadados, nunca o markdown (busque-o em GET /jobs/{job_id}/result). A assinatura está em `X-Ingestify-Signature` e o segredo em GET /webhooks/signing-secret. Hosts locais, redes privadas e credenciais na URL são recusados (422 `INVALID_CALLBACK_URL`). O estado da entrega aparece em `webhook` de GET /jobs/{job_id}. Arquivo repetido: o job existente passa a notificar esta URL (na hora, se já terminou). Detalhes: docs/features/webhooks.md"
+          },
           "image_mode": {
             "type": "string",
             "enum": [
@@ -8613,6 +8656,18 @@
             "description": "Apagar o áudio/vídeo enviado quando a transcrição terminar (com sucesso, ou com falha depois das tentativas automáticas); guarda só o texto",
             "default": false
           },
+          "callback_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Callback Url",
+            "description": "URL https que recebe um POST assinado quando o job principal termina (`job.completed`, `job.failed` ou `job.partial`): só metadados, nunca o markdown (busque-o em GET /jobs/{job_id}/result). A assinatura está em `X-Ingestify-Signature` e o segredo em GET /webhooks/signing-secret. Hosts locais, redes privadas e credenciais na URL são recusados (422 `INVALID_CALLBACK_URL`). O estado da entrega aparece em `webhook` de GET /jobs/{job_id}. Arquivo repetido: o job existente passa a notificar esta URL (na hora, se já terminou). Detalhes: docs/features/webhooks.md"
+          },
           "diarize": {
             "anyOf": [
               {
@@ -8817,6 +8872,18 @@
             "title": "Purge Source",
             "description": "Se true, apaga os arquivos de origem do job — o arquivo enviado (MinIO e cópia local) e, num PDF dividido, os PDFs por página — quando o job termina: `completed`, ou `failed`/`partial` depois de esgotadas as tentativas automáticas (nunca enquanto houver retry ou página na fila). O resultado (markdown, markdown por página) fica. Depois disso o retry manual de página não é mais possível. GET /jobs/{job_id} informa `source_available` e `source_deleted_at`. Arquivo repetido no mesmo projeto: com true o job existente é devolvido (`duplicate: true`) e passa a apagar a origem (na hora, se já terminou); com false um job existente cuja origem foi (ou será) apagada não é reaproveitado e um job novo é criado. Padrão false (mantém). Para apagar depois: DELETE /jobs/{job_id}/source",
             "default": false
+          },
+          "callback_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Callback Url",
+            "description": "URL https que recebe um POST assinado quando o job principal termina (`job.completed`, `job.failed` ou `job.partial`): só metadados, nunca o markdown (busque-o em GET /jobs/{job_id}/result). A assinatura está em `X-Ingestify-Signature` e o segredo em GET /webhooks/signing-secret. Hosts locais, redes privadas e credenciais na URL são recusados (422 `INVALID_CALLBACK_URL`). O estado da entrega aparece em `webhook` de GET /jobs/{job_id}. Arquivo repetido: o job existente passa a notificar esta URL (na hora, se já terminou). Detalhes: docs/features/webhooks.md"
           },
           "image_mode": {
             "type": "string",
@@ -13914,6 +13981,16 @@
               }
             ]
           },
+          "webhook": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/WebhookInfo"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "parent_job_id": {
             "anyOf": [
               {
@@ -15410,6 +15487,19 @@
         "title": "SetupStatus",
         "description": "Whether the installation still needs its root user (spec 0019)"
       },
+      "SigningSecretResponse": {
+        "properties": {
+          "secret": {
+            "type": "string",
+            "title": "Secret"
+          }
+        },
+        "type": "object",
+        "required": [
+          "secret"
+        ],
+        "title": "SigningSecretResponse"
+      },
       "SourceDeletedResponse": {
         "properties": {
           "job_id": {
@@ -16226,6 +16316,96 @@
           "input"
         ],
         "title": "VisionTaskInfo"
+      },
+      "WebhookInfo": {
+        "properties": {
+          "url_host": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url Host"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "delivered",
+              "failed"
+            ],
+            "title": "Status",
+            "default": "pending"
+          },
+          "attempts": {
+            "type": "integer",
+            "title": "Attempts",
+            "default": 0
+          },
+          "last_http_status": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Http Status"
+          },
+          "last_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Error"
+          },
+          "last_attempt_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Attempt At"
+          },
+          "delivered_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delivered At"
+          },
+          "delivery_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delivery Id"
+          }
+        },
+        "type": "object",
+        "title": "WebhookInfo",
+        "description": "Entrega do webhook de conclusão (callback_url) do job"
       },
       "When": {
         "properties": {

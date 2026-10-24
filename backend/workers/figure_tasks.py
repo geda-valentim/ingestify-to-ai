@@ -17,7 +17,7 @@ shared/figure_descriptions.py has the pure parts).
            that completes the set queues the finalize
     finalize_figures_task (default queue): rewrites the markdown, completes the
            MAIN job, then the post-completion steps (status, temporary files,
-           purge_source, callback), retried on their own
+           purge_source), retried on their own
 
 No conversion worker ever waits on the vision worker: the stage is driven by
 messages. The MAIN job stays PROCESSING (progress 90 -> 99) until the text is
@@ -145,7 +145,7 @@ def wanted(job_id: str, options: Optional[dict] = None) -> bool:
     return found["describe"] or found["ocr"]
 
 
-def begin(job_id: str, result: dict, *, total_pages: Optional[int] = None, callback_url: Optional[str] = None,
+def begin(job_id: str, result: dict, *, total_pages: Optional[int] = None,
           has_manifest: bool = False) -> dict:
     """
     Start the describe stage of a converted document (`result`: markdown with the
@@ -159,7 +159,7 @@ def begin(job_id: str, result: dict, *, total_pages: Optional[int] = None, callb
     work = fd.plan(entries, int(settings.conversion_figure_max_count))
     pending = {
         "result": result, "entries": entries, "work": work, "total_pages": total_pages,
-        "callback_url": callback_url, "has_manifest": has_manifest,
+        "has_manifest": has_manifest,
         "describe": options["describe"], "ocr": options["ocr"],
         "caption_task": fd.caption_task(settings.conversion_figure_caption_task),
         "started": time.time(),
@@ -619,7 +619,7 @@ def finalize(job_id: str, pending: dict, results: Dict[str, dict], *, reason: Op
         job.figures_stage_at = _now()
         db.commit()
     logger.info(f"[MAIN JOB {job_id}] Completed with figure texts: {counts}" + (f" ({reason})" if reason else ""))
-    after_complete(job_id, callback_url=pending.get("callback_url"), result=result)
+    after_complete(job_id)
     return {"job_id": job_id, "status": "completed", **counts}
 
 
@@ -628,11 +628,12 @@ def _finishable(job: Optional[Job]) -> bool:
         job.status in (JobStatus.PROCESSING, JobStatus.FAILED)
 
 
-def after_complete(job_id: str, *, callback_url: Optional[str] = None, result: Optional[dict] = None) -> bool:
+def after_complete(job_id: str) -> bool:
     """
     The steps after the COMPLETED commit, each idempotent and on its own: the Redis
     status, the temporary files, purge_source (settled only now, after the texts
-    were inlined), the callback (once). The marker goes back to NULL once they all
+    were inlined). The completion webhook is not a step: it is queued by the COMPLETED
+    commit itself (shared/webhooks.py). The marker goes back to NULL once they all
     ran; a step that failed leaves it at "finishing" for the next finalize / beat
     sweep to run them again (never the finalize itself). Returns whether all ran.
     """
@@ -646,16 +647,12 @@ def after_complete(job_id: str, *, callback_url: Optional[str] = None, result: O
         ("files", lambda: tasks._remove_job_files(job_id)),
         ("purge", lambda: tasks._purge_source_if_requested(job_id)),
     ]
-    if callback_url:
-        steps.append(("callback", lambda: tasks.send_callback(
-            callback_url, job_id, "completed", result or _redis().get_job_result(job_id))))
     for name, step in steps:
         try:
             step()
-        except Exception as e:  # noqa: BLE001 - retried by the next finalize / sweep (not the callback)
+        except Exception as e:  # noqa: BLE001 - retried by the next finalize / sweep
             logger.warning(f"[MAIN JOB {job_id}] Post-completion step {name} failed: {e}")
-            if name != "callback":
-                ok = False
+            ok = False
     if ok:
         try:
             with SessionLocal() as db:

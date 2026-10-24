@@ -2,6 +2,21 @@
 
 > **Registro histórico (2025-10).** Não é mantido; para mudanças posteriores use `git log`. Observação: `workers/tasks_old.py`, citado abaixo, não existe (há um `workers/tasks.py.backup`). Exceção: mudanças de comportamento intencionais que uma spec manda registrar aqui entram na seção abaixo.
 
+## 2026-10: Webhook de conclusão de job (API 1.7.0)
+
+- `POST /upload`, `POST /convert` e `POST /transcribe` aceitam `callback_url` (https). Quando
+  o job principal termina, a plataforma envia um `POST` assinado (HMAC-SHA256,
+  `X-Ingestify-Signature: t=<unix>,v1=<hex>`) com `job.completed`, `job.failed` ou
+  `job.partial`: só metadados, nunca o Markdown. Falhas de rede e 5xx/408/429 são repetidas
+  até 6 vezes; 3xx e outros 4xx não. Contrato completo em `docs/features/webhooks.md`.
+- Novo `GET /webhooks/signing-secret` (o segredo é por usuário, derivado de
+  `WEBHOOK_SIGNING_SECRET` ou, se vazio, de `JWT_SECRET_KEY`). `GET /jobs/{job_id}` ganha o
+  bloco `webhook` (host, estado e tentativas da entrega).
+- Novo 422 `INVALID_CALLBACK_URL` (URL http, local, privada, com credenciais ou longa demais).
+- Colunas novas em `jobs`: `callback_url` e `webhook_state` (alembic `e5c90026a7d3`; também
+  criadas no boot). O antigo `callback_url` de `ConvertRequest` e `send_callback`, que nenhuma
+  rota usava, foram removidos. Retrocompatível.
+
 ## 2026-10: Sem sucesso silencioso (API 1.6.1)
 
 - `GET /search` responde `503` com `{"detail": {"code": "SEARCH_UNAVAILABLE", "message"}}`

@@ -393,6 +393,15 @@ class Settings(BaseSettings):
     # generic JSON body - engine slug, event, numbers; never secrets or user data
     engine_alert_webhook_url: str = ""
 
+    # Job completion webhook (callback_url on /upload, /convert, /transcribe;
+    # shared/webhooks.py). The per-user signing secret is derived from this key, or
+    # from JWT_SECRET_KEY when it is empty (then rotating the JWT key rotates every
+    # webhook secret).
+    webhook_signing_secret: str = ""
+    webhook_signing_secret_file: str = ""
+    webhook_allow_http: bool = False  # accept http:// callback URLs (dev only)
+    webhook_queue: str = ""  # empty = the default Celery queue
+
     def engine_private_keys(self) -> List[str]:
         """Private keys from ENGINE_SECRETS_PRIVATE_KEYS (comma-separated) and/or the _FILE"""
         keys = [k.strip() for k in self.engine_secrets_private_keys.split(",") if k.strip()]

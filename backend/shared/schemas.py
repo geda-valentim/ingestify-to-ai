@@ -1,7 +1,7 @@
 from pydantic import model_validator
 from typing import Annotated
 from shared.vision_capabilities import VisionTask, VISION_TASKS, task_catalog
-from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from typing import Optional, Literal, List, Any, Dict
 from datetime import datetime
 from uuid import UUID
@@ -67,7 +67,6 @@ class ConvertRequest(BaseModel):
     source: Optional[str] = None
     name: Optional[str] = None  # Nome de identificação opcional
     options: ConversionOptions = Field(default_factory=ConversionOptions)
-    callback_url: Optional[HttpUrl] = None
 
     @field_validator('source')
     @classmethod
@@ -166,6 +165,18 @@ class PageJobInfo(BaseModel):
     retry_count: int = 0  # Number of retry attempts (max 3)
 
 
+class WebhookInfo(BaseModel):
+    """Entrega do webhook de conclusão (callback_url) do job"""
+    url_host: Optional[str] = None  # só o host: o caminho e a query podem conter um token
+    status: Literal["pending", "delivered", "failed"] = "pending"
+    attempts: int = 0
+    last_http_status: Optional[int] = None
+    last_error: Optional[str] = None
+    last_attempt_at: Optional[datetime] = None
+    delivered_at: Optional[datetime] = None
+    delivery_id: Optional[str] = None  # o mesmo X-Ingestify-Delivery enviado ao receptor
+
+
 class JobStatusResponse(BaseModel):
     job_id: UUID
     type: JobType
@@ -198,6 +209,9 @@ class JobStatusResponse(BaseModel):
     # Onde o job está (spec 0004). Jobs filhos herdam do job MAIN.
     project: Optional[ProjectRef] = None
     folder: Optional[FolderRef] = None
+
+    # Webhook de conclusão (callback_url): só nos jobs MAIN que informaram um
+    webhook: Optional[WebhookInfo] = None
 
     # Para MAIN jobs
     parent_job_id: Optional[UUID] = None

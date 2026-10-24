@@ -18,6 +18,7 @@ from api.image_routes import router as image_router
 from api.face_routes import router as face_router
 from api.datalake_routes import router as datalake_router, job_router as datalake_job_router
 from api.tag_routes import router as tag_router
+from api.webhook_routes import router as webhook_router
 from api.engine_admin_routes import router as engine_admin_router
 from api.engine_control_routes import router as engine_control_router, host_router as engine_host_router
 from api.routing_admin_routes import router as routing_admin_router
@@ -339,6 +340,7 @@ app.include_router(datalake_router)
 app.include_router(datalake_job_router)
 app.include_router(image_router)  # Vision routes (already has /images prefix)
 app.include_router(tag_router)  # GET /tags, PUT /jobs/{job_id}/tags
+app.include_router(webhook_router)  # GET /webhooks/signing-secret
 # Before engine_admin_router: /admin/engines/status must not match /admin/engines/{engine_id}
 app.include_router(routing_admin_router)  # /admin/routing, /admin/engines/status (spec 0003)
 app.include_router(engine_admin_router)  # /admin/engines, /admin/gpus (spec 0003)

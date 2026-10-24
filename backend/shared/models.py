@@ -150,6 +150,12 @@ class Job(Base):
     source_deleted_at = Column(DateTime, nullable=True)  # when they were deleted (UTC)
     operation_key = Column(String(64), nullable=True)  # dedup key of a document conversion
 
+    # Completion webhook (shared/webhooks.py, alembic e5c90026a7d3): where to POST
+    # the terminal event of a MAIN job, and the state of the latest delivery. Kept
+    # out of JobConfiguration.options for the same reason as the columns above.
+    callback_url = Column(String(2048), nullable=True)
+    webhook_state = Column(JSON, nullable=True)
+
     # Image assets of a document conversion (shared/conversion_assets.py, alembic
     # c3a70024e5b1): the durable manifest {"assets": [...], "skipped": {...}}, when
     # the beat deletes them (purge_source + ASSET_RETENTION_SECONDS) and when they
@@ -789,3 +795,6 @@ class ImageAnalysisSubmission(Base):
 
 # Spec 0014: explicit additive migration (shared/iam/migration.py).
 from shared.iam.models import IamBinding  # noqa: E402,F401
+
+# The completion-webhook listener on every Session (imports Job from this module)
+import shared.webhooks  # noqa: E402,F401

@@ -2,7 +2,7 @@
 
 Gerado do OpenAPI da aplicação por `scripts/generate_api_docs.py`. Não edite este arquivo à mão.
 
-API `1.6.1`: **140 operações HTTP** e **1 WebSocket(s)**.
+API `1.7.0`: **141 operações HTTP** e **1 WebSocket(s)**.
 
 Base pública de desenvolvimento: `https://dev.ingestify.ai/api`. Os caminhos abaixo são relativos à base.
 
@@ -65,6 +65,7 @@ Guias de imagem: [PT](https://dev.ingestify.ai/pt/docs/images) / [EN](https://de
 | POST | `/images/{job_id}/cancel` | JWT ou API key | Cancelar análise composta de imagem |
 | GET | `/tags` | JWT ou API key | Listar as tags do usuário |
 | PUT | `/jobs/{job_id}/tags` | JWT ou API key | Definir as tags de um job |
+| GET | `/webhooks/signing-secret` | JWT ou API key | Segredo de assinatura dos webhooks |
 | GET | `/admin/routing` | Administrador (JWT ou API key) | Rotas por funcionalidade e backlog |
 | PUT | `/admin/routing/{feature}` | Administrador (somente JWT) | Criar ou substituir a rota de uma funcionalidade |
 | DELETE | `/admin/routing/{feature}` | Administrador (somente JWT) | Remover rota (volta ao caminho padrão) |
@@ -416,6 +417,27 @@ Respostas declaradas:
 
 Criar jobs (upload, conversão por URL/Drive/Dropbox, transcrição), acompanhar estado, páginas e resultado, buscar, excluir jobs e apagar os arquivos de origem.
 
+### GET /webhooks/signing-secret
+
+Segredo de assinatura dos webhooks
+
+Autorização: **JWT ou API key**. Operation ID: `get_signing_secret_webhooks_signing_secret_get`.
+
+Segredo com que o receptor verifica o cabeçalho `X-Ingestify-Signature` dos
+webhooks de conclusão (`callback_url`). Um por usuário, estável: não há como
+gerar outro nem como lê-lo de volta pelos eventos. Trate como senha.
+
+A assinatura é `HMAC-SHA256(secret, "{t}.{corpo}")` em hexadecimal, com `t` o
+timestamp (segundos) do cabeçalho `t=<t>,v1=<hex>`. Recuse eventos com `t`
+muito antigo (ex.: mais de 5 minutos). Exemplos em Python e Node:
+docs/features/webhooks.md.
+
+Respostas declaradas:
+
+| Status | Content-Type | Esquema | Descrição |
+| --- | --- | --- | --- |
+| 200 | application/json | [SigningSecretResponse](#model-signingsecretresponse) | Successful Response |
+
 ### POST /upload
 
 Enviar e converter arquivo
@@ -564,6 +586,7 @@ Content-Type: `multipart/form-data`. Esquema: [Body_upload_and_convert_upload_po
 | `language` | não | string / null |  | Idioma para áudio/vídeo; omitido detecta automaticamente |
 | `include_word_timestamps` | não | boolean / null |  |  |
 | `purge_source` | não | boolean | default=false | Se true, apaga os arquivos de origem do job — o arquivo enviado (MinIO e cópia local) e, num PDF dividido, os PDFs por página — quando o job termina: `completed`, ou `failed`/`partial` depois de esgotadas as tentativas automáticas (nunca enquanto houver retry ou página na fila). O resultado (markdown, markdown por página) fica. Depois disso o retry manual de página não é mais possível. GET /jobs/{job_id} informa `source_available` e `source_deleted_at`. Arquivo repetido no mesmo projeto: com true o job existente é devolvido (`duplicate: true`) e passa a apagar a origem (na hora, se já terminou); com false um job existente cuja origem foi (ou será) apagada não é reaproveitado e um job novo é criado. Padrão false (mantém). Para apagar depois: DELETE /jobs/{job_id}/source |
+| `callback_url` | não | string / null |  | URL https que recebe um POST assinado quando o job principal termina (`job.completed`, `job.failed` ou `job.partial`): só metadados, nunca o markdown (busque-o em GET /jobs/{job_id}/result). A assinatura está em `X-Ingestify-Signature` e o segredo em GET /webhooks/signing-secret. Hosts locais, redes privadas e credenciais na URL são recusados (422 `INVALID_CALLBACK_URL`). O estado da entrega aparece em `webhook` de GET /jobs/{job_id}. Arquivo repetido: o job existente passa a notificar esta URL (na hora, se já terminou). Detalhes: docs/features/webhooks.md |
 | `image_mode` | não | string | default="none"; enum=["none", "referenced"] | Imagens do documento (PDF, DOCX...). `none` (padrão): como sempre, o markdown traz `<!-- image -->` no lugar de cada figura e nenhuma imagem é guardada. `referenced`: cada figura vira um PNG (`assets` em GET /jobs/{job_id}/result, kind `picture`, com página, bbox, sha256 e tamanho) e o markdown a referencia: `![Image](/jobs/{job_id}/assets/{name})`. Baixe com GET /jobs/{job_id}/assets/{name}. Figuras menores que CONVERSION_ASSET_MIN_PX ou além dos limites do job (CONVERSION_ASSET_MAX_COUNT, CONVERSION_ASSET_MAX_TOTAL_MB) ficam como placeholder e são contadas em `assets_skipped`. Com purge_source=true as imagens ficam ASSET_RETENTION_SECONDS (padrão 3600) depois do fim do job e então são apagadas |
 | `page_images` | não | boolean | default=false | Se true (só PDF), cada página é renderizada como PNG (CONVERSION_PAGE_IMAGE_DPI, padrão 150) e entra em `assets` com kind `page`; não aparece no markdown. Funciona com ou sem image_mode. Mesmas regras de retenção de image_mode. Padrão false |
 | `describe_images` | não | boolean | default=false | Se true, cada figura do documento (PictureItem do Docling; nunca as páginas renderizadas) é descrita pelo modelo de visão Florence-2 e a descrição entra no markdown logo depois da figura, num blockquote `> **Figure (description, English):** ...`. As descrições saem em INGLÊS por enquanto. Funciona com image_mode `none` (o placeholder `<!-- image -->` é trocado pelo blockquote) ou `referenced` (a referência à imagem fica e o blockquote vem em seguida). Imagens iguais (mesmo sha256) são descritas uma vez; figuras menores que CONVERSION_ASSET_MIN_PX ou além de CONVERSION_FIGURE_MAX_COUNT por documento são puladas. O job fica `processing` até o texto entrar no markdown. Contagens em `figures_described` / `figures_skipped` de GET /jobs/{job_id}/result. Padrão false |
@@ -580,7 +603,7 @@ Respostas declaradas:
 | 200 | application/json | [JobCreatedResponse](#model-jobcreatedresponse) | Successful Response |
 | 400 | application/json | objeto livre | `{"detail": {"code", "message"}}`. `code`: `FILE_EMPTY` |
 | 413 | application/json | objeto livre | `{"detail": {"code", "message"}}`. `code`: `FILE_TOO_LARGE` |
-| 422 | application/json | objeto livre | `{"detail": {"code", "message"}}`. `code`: `INVALID_FILE_FORMAT`, `FOLDER_LIMIT`, `PROJECT_LIMIT`, `PROJECT_REQUIRED`, `PROJECT_ARCHIVED`, `INVALID_LOCATION`, `INVALID_TAGS`, `INVALID_TRANSCRIPTION_OPTIONS`. Ou o 422 de validação do FastAPI: `{"detail": [...], "code": "FILE_MISSING" &#124; "VALIDATION_ERROR"}` |
+| 422 | application/json | objeto livre | `{"detail": {"code", "message"}}`. `code`: `INVALID_FILE_FORMAT`, `FOLDER_LIMIT`, `PROJECT_LIMIT`, `PROJECT_REQUIRED`, `PROJECT_ARCHIVED`, `INVALID_LOCATION`, `INVALID_TAGS`, `INVALID_TRANSCRIPTION_OPTIONS`, `INVALID_CALLBACK_URL`. Ou o 422 de validação do FastAPI: `{"detail": [...], "code": "FILE_MISSING" &#124; "VALIDATION_ERROR"}` |
 | 500 | application/json | objeto livre | `{"detail": {"code", "message"}}`. `code`: `JOB_CREATE_FAILED` |
 | 503 | application/json | objeto livre | `{"detail": {"code", "message"}}`. `code`: `QUEUE_UNAVAILABLE`, `DATABASE_UNAVAILABLE`, `DIARIZATION_NOT_READY` |
 | 404 | — | objeto livre | `project_id` / `folder_id` inexistente ou de outro usuário (texto, igual ao 404 de job) |
@@ -694,6 +717,7 @@ Content-Type: `multipart/form-data`. Esquema: [Body_transcribe_audio_transcribe_
 | `include_word_timestamps` | não | boolean | default=false | Incluir timestamps em nível de palavra (mais detalhado) |
 | `output_format` | não | string | default="markdown" | Formato padrão do resultado em /jobs/{job_id}/result: markdown, vtt, srt, txt ou json |
 | `purge_source` | não | boolean | default=false | Apagar o áudio/vídeo enviado quando a transcrição terminar (com sucesso, ou com falha depois das tentativas automáticas); guarda só o texto |
+| `callback_url` | não | string / null |  | URL https que recebe um POST assinado quando o job principal termina (`job.completed`, `job.failed` ou `job.partial`): só metadados, nunca o markdown (busque-o em GET /jobs/{job_id}/result). A assinatura está em `X-Ingestify-Signature` e o segredo em GET /webhooks/signing-secret. Hosts locais, redes privadas e credenciais na URL são recusados (422 `INVALID_CALLBACK_URL`). O estado da entrega aparece em `webhook` de GET /jobs/{job_id}. Arquivo repetido: o job existente passa a notificar esta URL (na hora, se já terminou). Detalhes: docs/features/webhooks.md |
 | `diarize` | não | boolean / null |  | Identificar falantes; omitido usa o padrão do provider |
 | `min_speakers` | não | integer / null |  |  |
 | `max_speakers` | não | integer / null |  |  |
@@ -709,7 +733,7 @@ Respostas declaradas:
 | 200 | application/json | [JobCreatedResponse](#model-jobcreatedresponse) | Successful Response |
 | 400 | application/json | objeto livre | `{"detail": {"code", "message"}}`. `code`: `FILE_EMPTY` |
 | 413 | application/json | objeto livre | `{"detail": {"code", "message"}}`. `code`: `FILE_TOO_LARGE` |
-| 422 | application/json | objeto livre | `{"detail": {"code", "message"}}`. `code`: `UNSUPPORTED_MEDIA_FORMAT`, `INVALID_OUTPUT_FORMAT`, `FOLDER_LIMIT`, `PROJECT_LIMIT`, `PROJECT_REQUIRED`, `PROJECT_ARCHIVED`, `INVALID_LOCATION`, `INVALID_TAGS`, `INVALID_TRANSCRIPTION_OPTIONS`. Ou o 422 de validação do FastAPI: `{"detail": [...], "code": "FILE_MISSING" &#124; "VALIDATION_ERROR"}` |
+| 422 | application/json | objeto livre | `{"detail": {"code", "message"}}`. `code`: `UNSUPPORTED_MEDIA_FORMAT`, `INVALID_OUTPUT_FORMAT`, `FOLDER_LIMIT`, `PROJECT_LIMIT`, `PROJECT_REQUIRED`, `PROJECT_ARCHIVED`, `INVALID_LOCATION`, `INVALID_TAGS`, `INVALID_TRANSCRIPTION_OPTIONS`, `INVALID_CALLBACK_URL`. Ou o 422 de validação do FastAPI: `{"detail": [...], "code": "FILE_MISSING" &#124; "VALIDATION_ERROR"}` |
 | 500 | application/json | objeto livre | `{"detail": {"code", "message"}}`. `code`: `JOB_CREATE_FAILED` |
 | 503 | application/json | objeto livre | `{"detail": {"code", "message"}}`. `code`: `TRANSCRIPTION_DISABLED`, `QUEUE_UNAVAILABLE`, `DATABASE_UNAVAILABLE`, `DIARIZATION_NOT_READY` |
 | 404 | — | objeto livre | `project_id` / `folder_id` inexistente ou de outro usuário (texto, igual ao 404 de job) |
@@ -808,6 +832,7 @@ Content-Type: `multipart/form-data`. Esquema: [Body_convert_document_convert_pos
 | `language` | não | string / null |  | Idioma para áudio/vídeo; omitido detecta automaticamente |
 | `include_word_timestamps` | não | boolean / null |  |  |
 | `purge_source` | não | boolean | default=false | Se true, apaga os arquivos de origem do job — o arquivo enviado (MinIO e cópia local) e, num PDF dividido, os PDFs por página — quando o job termina: `completed`, ou `failed`/`partial` depois de esgotadas as tentativas automáticas (nunca enquanto houver retry ou página na fila). O resultado (markdown, markdown por página) fica. Depois disso o retry manual de página não é mais possível. GET /jobs/{job_id} informa `source_available` e `source_deleted_at`. Arquivo repetido no mesmo projeto: com true o job existente é devolvido (`duplicate: true`) e passa a apagar a origem (na hora, se já terminou); com false um job existente cuja origem foi (ou será) apagada não é reaproveitado e um job novo é criado. Padrão false (mantém). Para apagar depois: DELETE /jobs/{job_id}/source |
+| `callback_url` | não | string / null |  | URL https que recebe um POST assinado quando o job principal termina (`job.completed`, `job.failed` ou `job.partial`): só metadados, nunca o markdown (busque-o em GET /jobs/{job_id}/result). A assinatura está em `X-Ingestify-Signature` e o segredo em GET /webhooks/signing-secret. Hosts locais, redes privadas e credenciais na URL são recusados (422 `INVALID_CALLBACK_URL`). O estado da entrega aparece em `webhook` de GET /jobs/{job_id}. Arquivo repetido: o job existente passa a notificar esta URL (na hora, se já terminou). Detalhes: docs/features/webhooks.md |
 | `image_mode` | não | string | default="none"; enum=["none", "referenced"] | Imagens do documento (PDF, DOCX...). `none` (padrão): como sempre, o markdown traz `<!-- image -->` no lugar de cada figura e nenhuma imagem é guardada. `referenced`: cada figura vira um PNG (`assets` em GET /jobs/{job_id}/result, kind `picture`, com página, bbox, sha256 e tamanho) e o markdown a referencia: `![Image](/jobs/{job_id}/assets/{name})`. Baixe com GET /jobs/{job_id}/assets/{name}. Figuras menores que CONVERSION_ASSET_MIN_PX ou além dos limites do job (CONVERSION_ASSET_MAX_COUNT, CONVERSION_ASSET_MAX_TOTAL_MB) ficam como placeholder e são contadas em `assets_skipped`. Com purge_source=true as imagens ficam ASSET_RETENTION_SECONDS (padrão 3600) depois do fim do job e então são apagadas |
 | `page_images` | não | boolean | default=false | Se true (só PDF), cada página é renderizada como PNG (CONVERSION_PAGE_IMAGE_DPI, padrão 150) e entra em `assets` com kind `page`; não aparece no markdown. Funciona com ou sem image_mode. Mesmas regras de retenção de image_mode. Padrão false |
 | `describe_images` | não | boolean | default=false | Se true, cada figura do documento (PictureItem do Docling; nunca as páginas renderizadas) é descrita pelo modelo de visão Florence-2 e a descrição entra no markdown logo depois da figura, num blockquote `> **Figure (description, English):** ...`. As descrições saem em INGLÊS por enquanto. Funciona com image_mode `none` (o placeholder `<!-- image -->` é trocado pelo blockquote) ou `referenced` (a referência à imagem fica e o blockquote vem em seguida). Imagens iguais (mesmo sha256) são descritas uma vez; figuras menores que CONVERSION_ASSET_MIN_PX ou além de CONVERSION_FIGURE_MAX_COUNT por documento são puladas. O job fica `processing` até o texto entrar no markdown. Contagens em `figures_described` / `figures_skipped` de GET /jobs/{job_id}/result. Padrão false |
@@ -824,7 +849,7 @@ Respostas declaradas:
 | 200 | application/json | [JobCreatedResponse](#model-jobcreatedresponse) | Successful Response |
 | 400 | application/json | objeto livre | `{"detail": {"code", "message"}}`. `code`: `FILE_EMPTY`, `INVALID_SOURCE_TYPE`, `FILE_REQUIRED`, `SOURCE_REQUIRED`, `SOURCE_TOKEN_REQUIRED` |
 | 413 | application/json | objeto livre | `{"detail": {"code", "message"}}`. `code`: `FILE_TOO_LARGE` |
-| 422 | application/json | objeto livre | `{"detail": {"code", "message"}}`. `code`: `INVALID_FILE_FORMAT`, `FOLDER_LIMIT`, `PROJECT_LIMIT`, `PROJECT_REQUIRED`, `PROJECT_ARCHIVED`, `INVALID_LOCATION`, `INVALID_TAGS`, `INVALID_TRANSCRIPTION_OPTIONS`. Ou o 422 de validação do FastAPI: `{"detail": [...], "code": "FILE_MISSING" &#124; "VALIDATION_ERROR"}` |
+| 422 | application/json | objeto livre | `{"detail": {"code", "message"}}`. `code`: `INVALID_FILE_FORMAT`, `FOLDER_LIMIT`, `PROJECT_LIMIT`, `PROJECT_REQUIRED`, `PROJECT_ARCHIVED`, `INVALID_LOCATION`, `INVALID_TAGS`, `INVALID_TRANSCRIPTION_OPTIONS`, `INVALID_CALLBACK_URL`. Ou o 422 de validação do FastAPI: `{"detail": [...], "code": "FILE_MISSING" &#124; "VALIDATION_ERROR"}` |
 | 500 | application/json | objeto livre | `{"detail": {"code", "message"}}`. `code`: `JOB_CREATE_FAILED` |
 | 503 | application/json | objeto livre | `{"detail": {"code", "message"}}`. `code`: `QUEUE_UNAVAILABLE`, `DATABASE_UNAVAILABLE`, `DIARIZATION_NOT_READY` |
 | 404 | — | objeto livre | `project_id` / `folder_id` inexistente ou de outro usuário (texto, igual ao 404 de job) |
@@ -5178,6 +5203,7 @@ Esquema JSON completo:
 | `language` | não | string / null |  | Idioma para áudio/vídeo; omitido detecta automaticamente |
 | `include_word_timestamps` | não | boolean / null |  |  |
 | `purge_source` | não | boolean | default=false | Se true, apaga os arquivos de origem do job — o arquivo enviado (MinIO e cópia local) e, num PDF dividido, os PDFs por página — quando o job termina: `completed`, ou `failed`/`partial` depois de esgotadas as tentativas automáticas (nunca enquanto houver retry ou página na fila). O resultado (markdown, markdown por página) fica. Depois disso o retry manual de página não é mais possível. GET /jobs/{job_id} informa `source_available` e `source_deleted_at`. Arquivo repetido no mesmo projeto: com true o job existente é devolvido (`duplicate: true`) e passa a apagar a origem (na hora, se já terminou); com false um job existente cuja origem foi (ou será) apagada não é reaproveitado e um job novo é criado. Padrão false (mantém). Para apagar depois: DELETE /jobs/{job_id}/source |
+| `callback_url` | não | string / null |  | URL https que recebe um POST assinado quando o job principal termina (`job.completed`, `job.failed` ou `job.partial`): só metadados, nunca o markdown (busque-o em GET /jobs/{job_id}/result). A assinatura está em `X-Ingestify-Signature` e o segredo em GET /webhooks/signing-secret. Hosts locais, redes privadas e credenciais na URL são recusados (422 `INVALID_CALLBACK_URL`). O estado da entrega aparece em `webhook` de GET /jobs/{job_id}. Arquivo repetido: o job existente passa a notificar esta URL (na hora, se já terminou). Detalhes: docs/features/webhooks.md |
 | `image_mode` | não | string | default="none"; enum=["none", "referenced"] | Imagens do documento (PDF, DOCX...). `none` (padrão): como sempre, o markdown traz `<!-- image -->` no lugar de cada figura e nenhuma imagem é guardada. `referenced`: cada figura vira um PNG (`assets` em GET /jobs/{job_id}/result, kind `picture`, com página, bbox, sha256 e tamanho) e o markdown a referencia: `![Image](/jobs/{job_id}/assets/{name})`. Baixe com GET /jobs/{job_id}/assets/{name}. Figuras menores que CONVERSION_ASSET_MIN_PX ou além dos limites do job (CONVERSION_ASSET_MAX_COUNT, CONVERSION_ASSET_MAX_TOTAL_MB) ficam como placeholder e são contadas em `assets_skipped`. Com purge_source=true as imagens ficam ASSET_RETENTION_SECONDS (padrão 3600) depois do fim do job e então são apagadas |
 | `page_images` | não | boolean | default=false | Se true (só PDF), cada página é renderizada como PNG (CONVERSION_PAGE_IMAGE_DPI, padrão 150) e entra em `assets` com kind `page`; não aparece no markdown. Funciona com ou sem image_mode. Mesmas regras de retenção de image_mode. Padrão false |
 | `describe_images` | não | boolean | default=false | Se true, cada figura do documento (PictureItem do Docling; nunca as páginas renderizadas) é descrita pelo modelo de visão Florence-2 e a descrição entra no markdown logo depois da figura, num blockquote `> **Figure (description, English):** ...`. As descrições saem em INGLÊS por enquanto. Funciona com image_mode `none` (o placeholder `<!-- image -->` é trocado pelo blockquote) ou `referenced` (a referência à imagem fica e o blockquote vem em seguida). Imagens iguais (mesmo sha256) são descritas uma vez; figuras menores que CONVERSION_ASSET_MIN_PX ou além de CONVERSION_FIGURE_MAX_COUNT por documento são puladas. O job fica `processing` até o texto entrar no markdown. Contagens em `figures_described` / `figures_skipped` de GET /jobs/{job_id}/result. Padrão false |
@@ -5329,6 +5355,18 @@ Esquema JSON completo:
       "title": "Purge Source",
       "description": "Se true, apaga os arquivos de origem do job — o arquivo enviado (MinIO e cópia local) e, num PDF dividido, os PDFs por página — quando o job termina: `completed`, ou `failed`/`partial` depois de esgotadas as tentativas automáticas (nunca enquanto houver retry ou página na fila). O resultado (markdown, markdown por página) fica. Depois disso o retry manual de página não é mais possível. GET /jobs/{job_id} informa `source_available` e `source_deleted_at`. Arquivo repetido no mesmo projeto: com true o job existente é devolvido (`duplicate: true`) e passa a apagar a origem (na hora, se já terminou); com false um job existente cuja origem foi (ou será) apagada não é reaproveitado e um job novo é criado. Padrão false (mantém). Para apagar depois: DELETE /jobs/{job_id}/source",
       "default": false
+    },
+    "callback_url": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Callback Url",
+      "description": "URL https que recebe um POST assinado quando o job principal termina (`job.completed`, `job.failed` ou `job.partial`): só metadados, nunca o markdown (busque-o em GET /jobs/{job_id}/result). A assinatura está em `X-Ingestify-Signature` e o segredo em GET /webhooks/signing-secret. Hosts locais, redes privadas e credenciais na URL são recusados (422 `INVALID_CALLBACK_URL`). O estado da entrega aparece em `webhook` de GET /jobs/{job_id}. Arquivo repetido: o job existente passa a notificar esta URL (na hora, se já terminou). Detalhes: docs/features/webhooks.md"
     },
     "image_mode": {
       "type": "string",
@@ -5690,6 +5728,7 @@ Esquema JSON completo:
 | `include_word_timestamps` | não | boolean | default=false | Incluir timestamps em nível de palavra (mais detalhado) |
 | `output_format` | não | string | default="markdown" | Formato padrão do resultado em /jobs/{job_id}/result: markdown, vtt, srt, txt ou json |
 | `purge_source` | não | boolean | default=false | Apagar o áudio/vídeo enviado quando a transcrição terminar (com sucesso, ou com falha depois das tentativas automáticas); guarda só o texto |
+| `callback_url` | não | string / null |  | URL https que recebe um POST assinado quando o job principal termina (`job.completed`, `job.failed` ou `job.partial`): só metadados, nunca o markdown (busque-o em GET /jobs/{job_id}/result). A assinatura está em `X-Ingestify-Signature` e o segredo em GET /webhooks/signing-secret. Hosts locais, redes privadas e credenciais na URL são recusados (422 `INVALID_CALLBACK_URL`). O estado da entrega aparece em `webhook` de GET /jobs/{job_id}. Arquivo repetido: o job existente passa a notificar esta URL (na hora, se já terminou). Detalhes: docs/features/webhooks.md |
 | `diarize` | não | boolean / null |  | Identificar falantes; omitido usa o padrão do provider |
 | `min_speakers` | não | integer / null |  |  |
 | `max_speakers` | não | integer / null |  |  |
@@ -5768,6 +5807,18 @@ Esquema JSON completo:
       "title": "Purge Source",
       "description": "Apagar o áudio/vídeo enviado quando a transcrição terminar (com sucesso, ou com falha depois das tentativas automáticas); guarda só o texto",
       "default": false
+    },
+    "callback_url": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Callback Url",
+      "description": "URL https que recebe um POST assinado quando o job principal termina (`job.completed`, `job.failed` ou `job.partial`): só metadados, nunca o markdown (busque-o em GET /jobs/{job_id}/result). A assinatura está em `X-Ingestify-Signature` e o segredo em GET /webhooks/signing-secret. Hosts locais, redes privadas e credenciais na URL são recusados (422 `INVALID_CALLBACK_URL`). O estado da entrega aparece em `webhook` de GET /jobs/{job_id}. Arquivo repetido: o job existente passa a notificar esta URL (na hora, se já terminou). Detalhes: docs/features/webhooks.md"
     },
     "diarize": {
       "anyOf": [
@@ -5880,6 +5931,7 @@ Esquema JSON completo:
 | `language` | não | string / null |  | Idioma para áudio/vídeo; omitido detecta automaticamente |
 | `include_word_timestamps` | não | boolean / null |  |  |
 | `purge_source` | não | boolean | default=false | Se true, apaga os arquivos de origem do job — o arquivo enviado (MinIO e cópia local) e, num PDF dividido, os PDFs por página — quando o job termina: `completed`, ou `failed`/`partial` depois de esgotadas as tentativas automáticas (nunca enquanto houver retry ou página na fila). O resultado (markdown, markdown por página) fica. Depois disso o retry manual de página não é mais possível. GET /jobs/{job_id} informa `source_available` e `source_deleted_at`. Arquivo repetido no mesmo projeto: com true o job existente é devolvido (`duplicate: true`) e passa a apagar a origem (na hora, se já terminou); com false um job existente cuja origem foi (ou será) apagada não é reaproveitado e um job novo é criado. Padrão false (mantém). Para apagar depois: DELETE /jobs/{job_id}/source |
+| `callback_url` | não | string / null |  | URL https que recebe um POST assinado quando o job principal termina (`job.completed`, `job.failed` ou `job.partial`): só metadados, nunca o markdown (busque-o em GET /jobs/{job_id}/result). A assinatura está em `X-Ingestify-Signature` e o segredo em GET /webhooks/signing-secret. Hosts locais, redes privadas e credenciais na URL são recusados (422 `INVALID_CALLBACK_URL`). O estado da entrega aparece em `webhook` de GET /jobs/{job_id}. Arquivo repetido: o job existente passa a notificar esta URL (na hora, se já terminou). Detalhes: docs/features/webhooks.md |
 | `image_mode` | não | string | default="none"; enum=["none", "referenced"] | Imagens do documento (PDF, DOCX...). `none` (padrão): como sempre, o markdown traz `<!-- image -->` no lugar de cada figura e nenhuma imagem é guardada. `referenced`: cada figura vira um PNG (`assets` em GET /jobs/{job_id}/result, kind `picture`, com página, bbox, sha256 e tamanho) e o markdown a referencia: `![Image](/jobs/{job_id}/assets/{name})`. Baixe com GET /jobs/{job_id}/assets/{name}. Figuras menores que CONVERSION_ASSET_MIN_PX ou além dos limites do job (CONVERSION_ASSET_MAX_COUNT, CONVERSION_ASSET_MAX_TOTAL_MB) ficam como placeholder e são contadas em `assets_skipped`. Com purge_source=true as imagens ficam ASSET_RETENTION_SECONDS (padrão 3600) depois do fim do job e então são apagadas |
 | `page_images` | não | boolean | default=false | Se true (só PDF), cada página é renderizada como PNG (CONVERSION_PAGE_IMAGE_DPI, padrão 150) e entra em `assets` com kind `page`; não aparece no markdown. Funciona com ou sem image_mode. Mesmas regras de retenção de image_mode. Padrão false |
 | `describe_images` | não | boolean | default=false | Se true, cada figura do documento (PictureItem do Docling; nunca as páginas renderizadas) é descrita pelo modelo de visão Florence-2 e a descrição entra no markdown logo depois da figura, num blockquote `> **Figure (description, English):** ...`. As descrições saem em INGLÊS por enquanto. Funciona com image_mode `none` (o placeholder `<!-- image -->` é trocado pelo blockquote) ou `referenced` (a referência à imagem fica e o blockquote vem em seguida). Imagens iguais (mesmo sha256) são descritas uma vez; figuras menores que CONVERSION_ASSET_MIN_PX ou além de CONVERSION_FIGURE_MAX_COUNT por documento são puladas. O job fica `processing` até o texto entrar no markdown. Contagens em `figures_described` / `figures_skipped` de GET /jobs/{job_id}/result. Padrão false |
@@ -6003,6 +6055,18 @@ Esquema JSON completo:
       "title": "Purge Source",
       "description": "Se true, apaga os arquivos de origem do job — o arquivo enviado (MinIO e cópia local) e, num PDF dividido, os PDFs por página — quando o job termina: `completed`, ou `failed`/`partial` depois de esgotadas as tentativas automáticas (nunca enquanto houver retry ou página na fila). O resultado (markdown, markdown por página) fica. Depois disso o retry manual de página não é mais possível. GET /jobs/{job_id} informa `source_available` e `source_deleted_at`. Arquivo repetido no mesmo projeto: com true o job existente é devolvido (`duplicate: true`) e passa a apagar a origem (na hora, se já terminou); com false um job existente cuja origem foi (ou será) apagada não é reaproveitado e um job novo é criado. Padrão false (mantém). Para apagar depois: DELETE /jobs/{job_id}/source",
       "default": false
+    },
+    "callback_url": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Callback Url",
+      "description": "URL https que recebe um POST assinado quando o job principal termina (`job.completed`, `job.failed` ou `job.partial`): só metadados, nunca o markdown (busque-o em GET /jobs/{job_id}/result). A assinatura está em `X-Ingestify-Signature` e o segredo em GET /webhooks/signing-secret. Hosts locais, redes privadas e credenciais na URL são recusados (422 `INVALID_CALLBACK_URL`). O estado da entrega aparece em `webhook` de GET /jobs/{job_id}. Arquivo repetido: o job existente passa a notificar esta URL (na hora, se já terminou). Detalhes: docs/features/webhooks.md"
     },
     "image_mode": {
       "type": "string",
@@ -12289,6 +12353,7 @@ Esquema JSON completo:
 | `assets_expire_at` | não | string (date-time) / null |  |  |
 | `project` | não | [ProjectRef](#model-projectref) / null |  |  |
 | `folder` | não | [FolderRef](#model-folderref) / null |  |  |
+| `webhook` | não | [WebhookInfo](#model-webhookinfo) / null |  |  |
 | `parent_job_id` | não | string (uuid) / null |  |  |
 | `total_pages` | não | integer / null |  |  |
 | `pages_completed` | não | integer / null |  |  |
@@ -12440,6 +12505,16 @@ Esquema JSON completo:
       "anyOf": [
         {
           "$ref": "#/components/schemas/FolderRef"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "webhook": {
+      "anyOf": [
+        {
+          "$ref": "#/components/schemas/WebhookInfo"
         },
         {
           "type": "null"
@@ -14480,6 +14555,32 @@ Esquema JSON completo:
 }
 ```
 
+<a id="model-signingsecretresponse"></a>
+
+### SigningSecretResponse
+
+| Campo | Obrigatório | Tipo | Padrões/limites | Descrição |
+| --- | --- | --- | --- | --- |
+| `secret` | sim | string |  |  |
+
+Esquema JSON completo:
+
+```json
+{
+  "properties": {
+    "secret": {
+      "type": "string",
+      "title": "Secret"
+    }
+  },
+  "type": "object",
+  "required": [
+    "secret"
+  ],
+  "title": "SigningSecretResponse"
+}
+```
+
 <a id="model-sourcedeletedresponse"></a>
 
 ### SourceDeletedResponse
@@ -15644,6 +15745,118 @@ Esquema JSON completo:
     "input"
   ],
   "title": "VisionTaskInfo"
+}
+```
+
+<a id="model-webhookinfo"></a>
+
+### WebhookInfo
+
+Entrega do webhook de conclusão (callback_url) do job
+
+| Campo | Obrigatório | Tipo | Padrões/limites | Descrição |
+| --- | --- | --- | --- | --- |
+| `url_host` | não | string / null |  |  |
+| `status` | não | string | default="pending"; enum=["pending", "delivered", "failed"] |  |
+| `attempts` | não | integer | default=0 |  |
+| `last_http_status` | não | integer / null |  |  |
+| `last_error` | não | string / null |  |  |
+| `last_attempt_at` | não | string (date-time) / null |  |  |
+| `delivered_at` | não | string (date-time) / null |  |  |
+| `delivery_id` | não | string / null |  |  |
+
+Esquema JSON completo:
+
+```json
+{
+  "properties": {
+    "url_host": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Url Host"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "delivered",
+        "failed"
+      ],
+      "title": "Status",
+      "default": "pending"
+    },
+    "attempts": {
+      "type": "integer",
+      "title": "Attempts",
+      "default": 0
+    },
+    "last_http_status": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Last Http Status"
+    },
+    "last_error": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Last Error"
+    },
+    "last_attempt_at": {
+      "anyOf": [
+        {
+          "type": "string",
+          "format": "date-time"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Last Attempt At"
+    },
+    "delivered_at": {
+      "anyOf": [
+        {
+          "type": "string",
+          "format": "date-time"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Delivered At"
+    },
+    "delivery_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Delivery Id"
+    }
+  },
+  "type": "object",
+  "title": "WebhookInfo",
+  "description": "Entrega do webhook de conclusão (callback_url) do job"
 }
 ```
 
