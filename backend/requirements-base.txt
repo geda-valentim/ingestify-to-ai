@@ -26,7 +26,10 @@
 # Python 3.13+ compatibility - setuptools provides distutils
 setuptools>=75.0.0
 
-fastapi==0.104.1
+fastapi==0.136.3
+# starlette>=1.3.1: request.form() limits now apply to urlencoded bodies (/auth/login),
+# plus the multipart/Host/path DoS fixes; fastapi 0.104 capped it at <0.28.
+starlette==1.3.1
 uvicorn[standard]==0.24.0
 websockets==17.2  # private/public live protocol, bounded queues
 celery==5.3.4
@@ -37,8 +40,12 @@ redis==5.0.1
 pydantic>=2.9.0,<2.14
 pydantic-core>=2.23.0,<3.0.0
 pydantic-settings>=2.3.0,<3.0.0
-httpx[socks]>=0.27.0,<0.28  # SOCKS proxy support for crawler; 0.28 breaks starlette 0.27 TestClient
-python-multipart==0.0.6
+# SOCKS proxy support for crawler. The cap was added for starlette 0.27 TestClient; kept as-is because
+# 0.28 is untested against the crawler/proxy code and is not part of the security fix.
+httpx[socks]>=0.27.0,<0.28
+# python-multipart: CVE-2024-24762 (Content-Type ReDoS, reachable unauthenticated through /auth/login)
+# is fixed in 0.0.7; >=0.0.30 also covers the later multipart/querystring DoS advisories
+python-multipart==0.0.31
 python-dotenv==1.0.0
 
 # Docling and dependencies (use latest compatible version)

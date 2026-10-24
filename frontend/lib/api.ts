@@ -429,9 +429,10 @@ export const jobsApi = {
   },
 
   /** The text of a transcription while it runs, from segment `since` on. */
-  async getPartialTranscript(jobId: string, since: number): Promise<PartialTranscriptResponse> {
+  async getPartialTranscript(jobId: string, since: number, signal?: AbortSignal): Promise<PartialTranscriptResponse> {
     const response = await apiFetch(`${API_URL}/jobs/${jobId}/transcript/partial?since=${since}`, {
       headers: getHeaders(true),
+      signal,
     });
 
     if (!response.ok) {
