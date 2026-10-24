@@ -427,3 +427,17 @@ def test_host_identity_retries_once_on_a_partial_identities_file(tmp_path, monke
     with pytest.raises(HTTPException) as exc:
         routes.host_identity("host-1", request)
     assert exc.value.detail == {"code": "HOST_IDENTITY_REQUIRED"}
+
+
+def test_the_api_catalog_does_not_shadow_an_engine_or_iam_entry():
+    from shared.catalog_api import API_CATALOG
+
+    assert not set(API_CATALOG) & set(error_catalog._PT)
+
+
+def test_codes_built_with_f_strings_exist():
+    """`validate_name` and `_get_or_create` compose these codes, so the literal scan cannot see them."""
+    for what in ("PROJECT", "FOLDER"):
+        for code in (f"{what}_NAME_EMPTY", f"{what}_NAME_CONTROL_CHARS", f"{what}_CREATE_FAILED"):
+            assert code in error_catalog.CATALOG, code
+            assert code not in PENDING_EN, code

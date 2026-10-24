@@ -54,7 +54,7 @@ from shared.models import Folder, Job, JobTag, Page, Project, JobStatus as DBJob
 from shared.config import get_settings
 from shared.utils import calculate_file_checksum
 from shared.auth import get_current_active_user
-from api.deps import owned_folder_or_404, owned_project_or_404
+from api.deps import job_not_found_detail, owned_folder_or_404, owned_project_or_404
 from api.iam_deps import Scope, authorized, owned_page, require, visible
 from shared.utils import sanitize_upload_filename
 from shared.tags import set_job_tags
@@ -214,7 +214,7 @@ def _duplicate_response(db: Session, existing_job: Job, upload_location, message
             DUPLICATE_PURGED: ". O arquivo original foi apagado (purge_source)",
             DUPLICATE_SCHEDULED: ". O arquivo original será apagado quando o job terminar com sucesso (purge_source)",
             DUPLICATE_ALREADY_GONE: ". O arquivo original já tinha sido apagado",
-            DUPLICATE_KEPT: ". " + (error_catalog.describe("SOURCE_DELETE_FAILED")[0] or ""),
+            DUPLICATE_KEPT: ". " + (error_catalog.describe("SOURCE_DELETE_FAILED", lang="pt")[0] or ""),
         }[outcome]
     if callback_url:
         url_changed = existing_job.callback_url != callback_url
@@ -1822,7 +1822,7 @@ async def delete_job(
     db_job = owned_job if (owned_job is not None and owned_job.id == job_id) else None
 
     if not status_data and not db_job:
-        raise HTTPException(status_code=404, detail="Job não encontrado")
+        raise HTTPException(status_code=404, detail=job_not_found_detail())
 
     # Revoke under the same SQL lock order as strict finalization, before any
     # external cleanup. Late writes cannot publish or recreate caches afterward.

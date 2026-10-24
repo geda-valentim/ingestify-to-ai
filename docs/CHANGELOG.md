@@ -10,9 +10,9 @@
 - **Mudança de comportamento: o padrão passou de português para inglês.** Clientes sem
   `Accept-Language` (curl, SDKs, scripts) passam a receber mensagens em inglês; para manter
   o português, enviem `Accept-Language: pt-BR`. Quem casava texto deve casar `detail.code`.
-- Esta parte cobre as recusas de `/upload`, `/convert` e `/transcribe`, projeto/pasta,
-  tags, sessões ao vivo e os 404 de job/projeto/pasta/API key (continuam texto, no idioma
-  pedido). As demais rotas (auth, API keys, datalake, imagens, admin, engines, IAM) migram
+- Esta parte cobre as recusas de `/upload`, `/convert` e `/transcribe`, projeto/pasta
+  (também em `/images/*` e o 422 de `POST /api-keys`), tags, sessões ao vivo e os 404 de
+  job/projeto/pasta/API key (continuam texto, no idioma pedido). As demais rotas (auth, API keys, datalake, imagens, admin, engines, IAM) migram
   nas partes seguintes e seguem em português até lá.
 - Sessões ao vivo: os 503 de `POST /transcribe/live/sessions` e o `message` de
   `GET /transcribe/live/sessions/availability` (1.6.0) seguem o idioma pedido; `Retry-After`

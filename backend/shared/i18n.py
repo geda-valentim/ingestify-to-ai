@@ -13,6 +13,7 @@ never set the variable, so they render English.
 
 import contextlib
 import contextvars
+import math
 from typing import Optional
 
 LANGS = ("en", "pt")
@@ -38,6 +39,8 @@ def negotiate(header: Optional[str]) -> str:
                     quality = float(value.strip())
                 except ValueError:
                     quality = 1.0
+                if not math.isfinite(quality) or quality > 1:
+                    quality = 1.0  # nan/inf/out of range: as if no q was given
         if quality <= 0:
             continue
         primary = tag.split("-", 1)[0]
@@ -58,6 +61,11 @@ def use_lang(lang: str):
         yield
     finally:
         _lang.reset(token)
+
+
+def language_headers(lang: str) -> dict:
+    """Headers every response carries: the language of the text and that it varies."""
+    return {"Content-Language": CONTENT_LANGUAGE[lang], "Vary": "Accept-Language"}
 
 
 def api_error(status_code: int, code: str, *, headers: Optional[dict] = None, **params):
@@ -83,11 +91,8 @@ class LanguageMiddleware:
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
-        raw = b""
-        for name, value in scope.get("headers") or []:
-            if name == b"accept-language":
-                raw = value
-                break
+        # Several Accept-Language headers are one comma-separated list (RFC 9110).
+        raw = b",".join(value for name, value in scope.get("headers") or [] if name == b"accept-language")
         lang = negotiate(raw.decode("latin-1"))
         token = _lang.set(lang)
 

@@ -29,14 +29,17 @@ Negociação (RFC 9110, simplificada):
 - não há `?lang=` (pode vir depois, sem quebrar nada).
 
 Toda resposta traz `Content-Language: en` ou `pt-BR` e `Vary: Accept-Language` (caches e
-proxies guardam uma cópia por idioma). A interface web fixa `Accept-Language: en`, porque
-a UI é só em inglês.
+proxies guardam uma cópia por idioma), inclusive o 500 de produção. A interface web pede
+`Accept-Language: en`, exceto as telas em português (`/live` e as opções de imagem do
+formulário de upload), que pedem `pt-BR` nas suas chamadas.
 
 ## O que muda de idioma
 
 Nesta parte (API 1.8.0): recusas de `/upload`, `/convert` e `/transcribe`, localização de
-upload (projeto/pasta), tags, sessões ao vivo (503), erros de nome de projeto/pasta e os
-404 de job/projeto/pasta/API key. As demais rotas migram nas próximas partes e, até lá,
+upload (projeto/pasta), tags, sessões ao vivo (503 e `GET .../availability`), `GET /search`
+(503), `callback_url` inválido, erros de nome de projeto/pasta (inclusive o 422 de
+`POST /api-keys`), limites de projeto/pasta e tags nas rotas `/images/*` (no envelope
+`error_code`/`message`) e os 404 de job/projeto/pasta/API key. As demais rotas migram nas próximas partes e, até lá,
 continuam em português; o `code` é o mesmo em qualquer idioma.
 
 Os 404 que não revelam o que existe continuam **texto** (não objeto), agora no idioma

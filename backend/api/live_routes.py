@@ -132,7 +132,7 @@ def session_availability(response: Response, user: User = Depends(require('live.
 
     def state(protocol):
         code = availability_code(store, protocol, common)
-        return {'available': code is None, 'code': code, 'message': render(code) if code else None}
+        return {'available': code is None, 'code': code, 'message': render(code if code in CATALOG else 'LIVE_NOT_READY') if code else None}
 
     return {**state(1), 'diarization': state(2)}
 

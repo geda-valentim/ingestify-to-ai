@@ -30,6 +30,10 @@ from shared.i18n import LanguageMiddleware, api_error, current_lang, negotiate, 
     ("pt;q=0", "en"),
     ("pt;q=0, en;q=0.2", "en"),
     ("pt;q=abc", "pt"),
+    ("pt;q=nan, en;q=0.9", "pt"),
+    ("en;q=0.9, pt;q=inf", "pt"),
+    ("pt;q=5, en;q=0.9", "pt"),
+    ("pt;q=-1", "en"),
     ("*", "en"),
     ("fr, de;q=0.7", "en"),
     ("", "en"),
@@ -120,3 +124,48 @@ def test_requests_do_not_leak_their_language_into_each_other(client):
 def test_every_param_of_a_template_reaches_the_message():
     assert render("PAGES_FAILED", lang="en", failed=2, total=5).startswith("2 of 5 pages failed")
     assert render("PAGES_FAILED", lang="pt", failed=2, total=5).startswith("2 de 5 páginas falharam")
+
+
+def test_several_accept_language_headers_are_one_list():
+    app = FastAPI()
+    app.add_middleware(LanguageMiddleware)
+
+    @app.get("/ok")
+    def ok():
+        return {"lang": current_lang()}
+
+    client = TestClient(app)
+    response = client.get("/ok", headers=[("Accept-Language", "fr"), ("Accept-Language", "pt-BR")])
+    assert response.json() == {"lang": "pt"}
+
+
+def test_the_real_app_carries_the_language_headers():
+    from api.main import app
+
+    client = TestClient(app, raise_server_exceptions=False)
+    default = client.get("/no-such-route")
+    portuguese = client.get("/no-such-route", headers={"Accept-Language": "pt-BR"})
+    assert default.status_code == portuguese.status_code == 404
+    assert default.headers["content-language"] == "en"
+    assert portuguese.headers["content-language"] == "pt-BR"
+    assert "Accept-Language" in default.headers["vary"]
+
+
+def test_the_production_500_carries_the_language_headers(monkeypatch):
+    from api import main
+
+    monkeypatch.setattr(main.settings, "environment", "production")
+
+    @main.app.get("/_i18n_boom")
+    def boom():
+        raise RuntimeError("secret")
+
+    try:
+        client = TestClient(main.app, raise_server_exceptions=False)
+        response = client.get("/_i18n_boom", headers={"Accept-Language": "pt-BR"})
+    finally:
+        main.app.router.routes[:] = [r for r in main.app.router.routes if getattr(r, "path", "") != "/_i18n_boom"]
+    assert response.status_code == 500
+    assert response.json()["error"] == {"code": "INTERNAL_ERROR", "message": "Erro interno do servidor"}
+    assert response.headers["content-language"] == "pt-BR"
+    assert "Accept-Language" in response.headers["vary"]
