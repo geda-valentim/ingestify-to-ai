@@ -8,7 +8,12 @@ The source files of a job, and `purge_source`.
   under `{TEMP_STORAGE_PATH}/uploads/{job_id}/` or `.../audio/{job_id}/`. A URL /
   Drive / Dropbox source is never stored in MinIO: the worker downloads it into
   the job's work dir `{TEMP_STORAGE_PATH}/{job_id}/`, removed when the job
-  completes (a failed job, or one with failed pages, may still have it there);
+  completes (a failed job, or one with failed pages, may still have it there).
+  The provider token is dropped right after that download, so while a Celery
+  retry is pending the work dir keeps only the finished download (and its
+  `.source_ready` marker: name and size) for the retry to reuse; the last
+  attempt, a retry that cannot be scheduled and a retry of a job that already
+  settled remove it;
 - the split per-page PDFs of a multi-page PDF (`pages/{job_id}/...` in the pages
   bucket, what `GET /jobs/{id}/pages/{n}/pdf` serves) and their local copies in
   the work dir.
