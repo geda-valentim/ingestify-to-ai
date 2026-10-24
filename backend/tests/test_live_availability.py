@@ -1,4 +1,5 @@
 """GET /transcribe/live/sessions/availability: the page asks before opening the microphone."""
+import pytest
 from api import live_routes
 from tests.test_live_transcription import world  # noqa: F401
 
@@ -76,3 +77,92 @@ def test_the_post_503_carries_a_message(world, monkeypatch):
     response = world.client.post('/transcribe/live/sessions', json={'project_id': 'p'})
     assert response.status_code == 503
     assert response.json()['detail'] == {'code': 'LIVE_DISABLED', 'message': live_routes.UNAVAILABLE_MESSAGES['LIVE_DISABLED']}
+
+
+def ready_diarization(world, monkeypatch, **worker):
+    settings = live_routes.get_settings()
+    monkeypatch.setattr(settings, 'live_diarization_enabled', True)
+    monkeypatch.setattr(settings, 'live_diarization_qualified', True)
+    world.store.ready({'ready': True, 'capacity': 2, 'incarnation': 'v2', 'backend': 'whisper', 'model': 'turbo',
+                       'capabilities': ['online_diarization'], 'diarization_capacity': 1, **worker})
+
+
+def test_expired_lease_of_an_active_job_is_capacity_full(world):
+    world.store.ready({'ready': True, 'capacity': 1, 'incarnation': 'test', 'backend': 'whisper', 'model': 'turbo',
+                       'active_jobs': ['still-inside-cuda']})
+    body = get(world)
+    assert (body['available'], body['code']) == (False, 'LIVE_CAPACITY_FULL')
+    response = world.client.post('/transcribe/live/sessions', json={'project_id': 'p'})
+    assert (response.status_code, response.json()['detail']['code']) == (503, 'LIVE_CAPACITY_FULL')
+
+
+def test_exhausted_diarization_capacity_leaves_protocol_one_available(world, monkeypatch):
+    ready_diarization(world, monkeypatch)
+    world.store.reserve('speakers', protocol=2)
+    body = get(world)
+    assert (body['available'], body['code']) == (True, None)
+    assert (body['diarization']['available'], body['diarization']['code']) == (False, 'LIVE_DIARIZATION_NOT_READY')
+
+
+def test_database_failure_is_not_ready_not_500(world, monkeypatch):
+    def boom(db):
+        raise RuntimeError('database down')
+
+    monkeypatch.setattr(live_routes, 'available', boom)
+    body = get(world)
+    assert (body['available'], body['code']) == (False, 'LIVE_NOT_READY')
+
+
+def test_common_inputs_are_read_once_per_request(world, monkeypatch):
+    calls = []
+    monkeypatch.setattr(live_routes, 'available', lambda db: calls.append(1) or True)
+    get(world)
+    assert len(calls) == 1
+
+
+def engine_control(world, monkeypatch, *, gate_closed=False, modes=None, engine=True):
+    from shared.engine_control.models import ControlResource
+    from shared.models import Engine
+    monkeypatch.setattr(live_routes.get_settings(), 'engine_control_enabled', True)
+    with world.db() as db:
+        if engine:
+            db.add(Engine(id='local', slug='local', display_name='Local', adapter_type='local', config={'features': {}},
+                          deployments={}, limit_usd=10, min_remaining_usd=0, version=0))
+            db.add(ControlResource(key='live-gpu', owner_engine_id='local', gate_closed=gate_closed,
+                                   applied={'feature_modes': modes or {}}))
+        db.commit()
+
+
+def test_engine_control_off_does_not_consult_admission(world, monkeypatch):
+    monkeypatch.setattr(live_routes.get_settings(), 'engine_control_enabled', False)
+    assert get(world)['available'] is True
+
+
+def test_engine_control_open_gate_is_available(world, monkeypatch):
+    engine_control(world, monkeypatch)
+    assert get(world)['available'] is True
+
+
+@pytest.mark.parametrize('kwargs', [
+    {'gate_closed': True},
+    {'modes': {'live-transcription': 'standby'}},
+    {'modes': {'live-transcription': 'stopped'}},
+    {'engine': False},
+])
+def test_engine_control_refusal_matches_the_post(world, monkeypatch, kwargs):
+    engine_control(world, monkeypatch, **kwargs)
+    body = get(world)
+    assert (body['available'], body['code']) == (False, 'LIVE_NOT_READY')
+    response = world.client.post('/transcribe/live/sessions', json={'project_id': 'p'})
+    assert (response.status_code, response.json()['detail']['code']) == (503, 'LIVE_NOT_READY')
+
+
+def test_availability_takes_no_row_locks(world, monkeypatch):
+    from shared.engine_control import admission
+    locks = []
+    real = admission.resource_rows
+    monkeypatch.setattr(admission, 'resource_rows',
+                        lambda db, engine, feature, lock=True: locks.append(lock) or real(db, engine, feature, lock))
+    engine_control(world, monkeypatch)
+    get(world)
+    assert locks == [False]

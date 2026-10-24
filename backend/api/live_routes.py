@@ -87,15 +87,31 @@ def unavailable(code):
                         headers={'Retry-After': '5'})
 
 
-def availability_code(db, store, protocol=1):
-    """Why a session of this protocol would be refused now (None = it would be admitted), without reserving."""
+def availability_inputs(db):
+    """The refusal that does not depend on the protocol (None = none), read once per request."""
     settings = get_settings()
     if not settings.live_transcription_enabled:
         return 'LIVE_DISABLED'
+    try:
+        if len(settings.live_internal_token) < 32 or not available(db):
+            return 'LIVE_NOT_READY'
+        from shared.engine_control.admission import admission_refusal
+        if admission_refusal(db, 'live-transcription'):  # acquire() would answer 503 LIVE_NOT_READY
+            return 'LIVE_NOT_READY'
+    except Exception:  # DB down: the session could not be created either
+        return 'LIVE_NOT_READY'
+    return None
+
+
+def availability_code(store, protocol, common):
+    """Why a session of this protocol would be refused now (None = it would be admitted), without reserving."""
+    settings = get_settings()
+    if common == 'LIVE_DISABLED':
+        return common
     if protocol == 2 and not (settings.live_diarization_enabled and settings.live_diarization_qualified):
         return 'LIVE_DIARIZATION_NOT_READY'
-    if len(settings.live_internal_token) < 32 or not available(db):
-        return 'LIVE_NOT_READY'
+    if common:
+        return common
     try:
         return store.availability(protocol)
     except Exception:  # Redis down: the session could not be admitted either
@@ -118,10 +134,10 @@ def session_availability(response: Response, user: User = Depends(require('live.
     É um retrato: entre esta resposta e o `POST` a vaga pode ser ocupada.
     """
     response.headers['Cache-Control'] = 'no-store'
-    store = get_store()
+    store, common = get_store(), availability_inputs(db)
 
     def state(protocol):
-        code = availability_code(db, store, protocol)
+        code = availability_code(store, protocol, common)
         return {'available': code is None, 'code': code, 'message': UNAVAILABLE_MESSAGES.get(code)}
 
     return {**state(1), 'diarization': state(2)}

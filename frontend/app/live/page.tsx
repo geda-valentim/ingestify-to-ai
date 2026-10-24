@@ -15,7 +15,7 @@ import { LiveTranscriptView } from "@/components/job/live-transcript";
 import { useLiveCapture } from "@/hooks/use-live-capture";
 import { useAuthStore } from "@/lib/store/auth";
 import { loginUrl } from "@/lib/session";
-import { liveApi } from "@/lib/api";
+import { ApiError, liveApi } from "@/lib/api";
 
 export default function LivePage() {
   const user = useAuthStore((s) => s.user);
@@ -36,7 +36,8 @@ export default function LivePage() {
   });
   const live = availability.data;
   const blocked = live ? !(diarize ? live.diarization.available : live.available) : false;
-  const notice = availability.isError ? "Não foi possível verificar a transcrição ao vivo. Tente recarregar a página."
+  const denied = availability.error instanceof ApiError && availability.error.status === 403;
+  const notice = availability.isError ? (denied ? availability.error.message : "Não foi possível verificar a transcrição ao vivo. Tente recarregar a página.")
     : live && !live.available ? live.message
     : live && diarize && !live.diarization.available ? live.diarization.message : null;
   useEffect(() => { if (live && !live.diarization.available && diarize && !busy) setDiarize(false); }, [live, diarize, busy]);

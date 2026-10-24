@@ -29,16 +29,23 @@ class LiveStore:
         value = self.redis.get(self.worker_key)
         return json.loads(value) if value else None
 
-    def availability(self, protocol=1):
-        """The code `reserve` would refuse with right now, or None. Reads only: nothing is reserved."""
-        worker = self.readiness()
+    @staticmethod
+    def refusal(worker, lease_missing, slot_values, protocol):
+        """The code admission refuses with, or None. One rule for `reserve` and `availability`.
+
+        `lease_missing`: callable returning True when an active job's lease is gone
+        (called only after the worker/protocol checks, so callers can read lazily).
+        """
         if not worker or not worker.get('ready'):
             return 'LIVE_NOT_READY'
         if protocol == 2 and 'online_diarization' not in worker.get('capabilities', []):
             return 'LIVE_DIARIZATION_NOT_READY'
-        if any(self.redis.get(f'live:lease:{job}') is None for job in worker.get('active_jobs', [])):
+        # A released/expired lease can precede the return of an in-flight CUDA
+        # call. Keep admission closed while that process-local decoder still
+        # occupies the worker.
+        if lease_missing(worker.get('active_jobs', [])):
             return 'LIVE_CAPACITY_FULL'
-        values = [self.redis.get(f'live:slot:{self.worker_id}:{i}') for i in range(worker['capacity'])]
+        values = slot_values(worker)
         if protocol == 2:
             online = sum(bool(raw and json.loads(raw).get('protocol') == 2) for raw in values)
             if online >= worker.get('diarization_capacity', worker['capacity']):
@@ -46,6 +53,14 @@ class LiveStore:
         if all(raw is not None for raw in values):
             return 'LIVE_CAPACITY_FULL'
         return None
+
+    def availability(self, protocol=1):
+        """The code `reserve` would refuse with right now, or None. Reads only: nothing is reserved."""
+        return self.refusal(
+            self.readiness(),
+            lambda jobs: any(self.redis.get(f'live:lease:{job}') is None for job in jobs),
+            lambda worker: [self.redis.get(f'live:slot:{self.worker_id}:{i}') for i in range(worker['capacity'])],
+            protocol)
 
     def reserve(self, job_id, protocol=1):
         generation = secrets.randbits(53) or 1
@@ -55,25 +70,24 @@ class LiveStore:
                     p.watch(self.worker_key)
                     raw = p.get(self.worker_key)
                     worker = json.loads(raw) if raw else None
-                    if not worker or not worker.get('ready'):
-                        raise LiveError('LIVE_NOT_READY', 1013)
-                    if protocol == 2 and 'online_diarization' not in worker.get('capabilities', []):
-                        raise LiveError('LIVE_DIARIZATION_NOT_READY', 1013)
-                    # A released/expired lease can precede the return of an
-                    # in-flight CUDA call. Keep admission closed while that
-                    # process-local decoder still occupies the worker.
-                    active_keys = [f'live:lease:{job}' for job in worker.get('active_jobs', [])]
-                    if active_keys:
-                        p.watch(*active_keys)
-                        if any(p.get(key) is None for key in active_keys):
-                            raise LiveError('LIVE_CAPACITY_FULL', 1013)
-                    slots = [f'live:slot:{self.worker_id}:{i}' for i in range(worker['capacity'])]
-                    p.watch(*slots)
-                    values = [p.get(key) for key in slots]
-                    if protocol == 2:
-                        online_reserved = sum(bool(raw and json.loads(raw).get('protocol') == 2) for raw in values)
-                        if online_reserved >= worker.get('diarization_capacity', worker['capacity']):
-                            raise LiveError('LIVE_DIARIZATION_NOT_READY', 1013)
+
+                    def lease_missing(jobs):
+                        keys = [f'live:lease:{job}' for job in jobs]
+                        if keys:
+                            p.watch(*keys)
+                        return any(p.get(key) is None for key in keys)
+
+                    values = []
+
+                    def slot_values(worker):
+                        p.watch(*slots)
+                        values[:] = [p.get(key) for key in slots]
+                        return values
+
+                    slots = [f'live:slot:{self.worker_id}:{i}' for i in range((worker or {}).get('capacity', 0))]
+                    code = self.refusal(worker, lease_missing, slot_values, protocol)
+                    if code:
+                        raise LiveError(code, 1013)
                     slot = next((key for key, raw in zip(slots, values) if raw is None), None)
                     if slot is None:
                         raise LiveError('LIVE_CAPACITY_FULL', 1013)

@@ -20,8 +20,10 @@ services:
     env_file: .env
     environment:
       # Same as every other service: config.py defaults to production, whose
-      # credential checks refuse the stack's current MinIO settings.
-      ENVIRONMENT: development
+      # credential checks refuse the stack's current MinIO settings. In
+      # production set LIVE_WORKER_ENVIRONMENT=production, or list
+      # docker-compose.prod.yml after this file (its worker-live override wins).
+      ENVIRONMENT: ${LIVE_WORKER_ENVIRONMENT:-development}
       HF_HOME: /models/huggingface
       DEVICE: cuda
       WHISPER_DEVICE: cuda
