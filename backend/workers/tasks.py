@@ -12,11 +12,13 @@ from celery import Task
 from celery.exceptions import SoftTimeLimitExceeded
 from pathlib import Path
 from datetime import datetime
+from typing import Optional
 from uuid import uuid4
 import json
 import logging
 import asyncio
 import contextlib
+import os
 import shutil
 import time
 
@@ -81,6 +83,57 @@ def _remove_job_files(job_id: str) -> None:
         except Exception as e:
             # Not fatal for the job, but the (possibly sensitive) files stay on disk
             logger.error(f"[JOB {job_id}] Could not remove {directory}: {e}")
+
+
+_CLOUD_SOURCES = ('gdrive', 'dropbox')
+_SOURCE_READY_MARKER = '.source_ready'
+
+
+def _mark_source_ready(temp_dir: Path, file_path: Path) -> None:
+    """
+    Record that the provider download in `temp_dir` finished. The provider token is
+    dropped right after it (S-01), so a Celery retry must reuse this file instead of
+    downloading again; the marker tells a finished download from a partial one.
+    """
+    marker = temp_dir / _SOURCE_READY_MARKER
+    tmp = temp_dir / (_SOURCE_READY_MARKER + '.tmp')
+    tmp.write_text(file_path.name)
+    os.replace(tmp, marker)
+
+
+def _reusable_source(temp_dir: Path) -> Optional[Path]:
+    """The finished provider download left by an earlier attempt, if it is still intact."""
+    try:
+        name = (temp_dir / _SOURCE_READY_MARKER).read_text()
+    except OSError:
+        return None
+    if not name or Path(name).name != name:
+        return None
+    path = temp_dir / name
+    return path if path.is_file() else None
+
+
+def _discard_attempt_files(job_id: str, source_type: str, *, retrying: bool) -> None:
+    """
+    Clean the work dir after a failed attempt. When a retry follows, a gdrive/dropbox
+    job keeps its finished download (and only that): the token is already gone, so
+    the file is the retry's only source. Anything else is removed, as before.
+    """
+    temp_dir = Path(settings.temp_storage_path) / job_id
+    try:
+        keep = _reusable_source(temp_dir) if retrying and source_type in _CLOUD_SOURCES else None
+        if keep is None:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            return
+        for entry in temp_dir.iterdir():
+            if entry.name in (keep.name, _SOURCE_READY_MARKER):
+                continue
+            if entry.is_dir() and not entry.is_symlink():
+                shutil.rmtree(entry, ignore_errors=True)
+            else:
+                entry.unlink(missing_ok=True)
+    except Exception as e:  # noqa: BLE001 - cleanup is best effort (cleanup_stale_files follows)
+        logger.error(f"[JOB {job_id}] Could not clean the work dir: {e}")
 
 
 def _purge_source_if_requested(job_id: str) -> None:
@@ -701,17 +754,24 @@ def process_conversion(
         else:
             # The provider's token comes out of band (S-01); auth_token survives only
             # for messages queued before that change
-            source_token = auth_token
-            if source_type in ('gdrive', 'dropbox') and not source_token:
-                source_token = redis_client.get_source_token(job_id)
-            file_path = asyncio.run(
-                handler.download(
-                    source=source,
-                    temp_path=temp_dir,
-                    auth_token=source_token
+            # A retry after the download reuses it: the token is gone by then
+            file_path = _reusable_source(temp_dir) if source_type in _CLOUD_SOURCES else None
+            if file_path is not None:
+                logger.info(f"[MAIN JOB {job_id}] Reusing the {source_type} download of an earlier attempt")
+            else:
+                source_token = auth_token
+                if source_type in _CLOUD_SOURCES and not source_token:
+                    source_token = redis_client.get_source_token(job_id)
+                file_path = asyncio.run(
+                    handler.download(
+                        source=source,
+                        temp_path=temp_dir,
+                        auth_token=source_token
+                    )
                 )
-            )
-            if source_type in ('gdrive', 'dropbox'):
+                if source_type in _CLOUD_SOURCES:
+                    _mark_source_ready(temp_dir, file_path)
+            if source_type in _CLOUD_SOURCES:
                 redis_client.delete_source_token(job_id)
 
         logger.info(f"[MAIN JOB {job_id}] File downloaded: {file_path}")
@@ -870,13 +930,7 @@ def process_conversion(
         retrying = not is_audio_job and _will_retry(self)
         _record_main_failure(job_id, redis_client, error_msg, retrying=retrying)
 
-        # Cleanup temp files
-        try:
-            temp_dir = Path(settings.temp_storage_path) / job_id
-            if temp_dir.exists():
-                shutil.rmtree(temp_dir, ignore_errors=True)
-        except Exception:
-            pass
+        _discard_attempt_files(job_id, source_type, retrying=retrying)
 
         if is_audio_job:
             return {"job_id": job_id, "status": "failed", "error": error_msg}
@@ -884,7 +938,8 @@ def process_conversion(
         # Retry with backoff (settled FAILED if the retry cannot be scheduled)
         raise _retry_or_settle(
             self, countdown=60 * (2 ** self.request.retries),
-            settle=(lambda error: _record_main_failure(job_id, redis_client, error, retrying=False))
+            settle=(lambda error: (_record_main_failure(job_id, redis_client, error, retrying=False),
+                                   _discard_attempt_files(job_id, source_type, retrying=False)))
             if retrying else None)
 
     except SourceFileTooLarge as exc:
@@ -941,17 +996,13 @@ def process_conversion(
         retrying = _will_retry(self)
         _record_main_failure(job_id, redis_client, str(exc), retrying=retrying)
 
-        # Cleanup on failure
-        try:
-            temp_dir = Path(settings.temp_storage_path) / job_id
-            if temp_dir.exists():
-                shutil.rmtree(temp_dir, ignore_errors=True)
-        except Exception:
-            pass
+        # Cleanup on failure (a retry keeps a finished provider download)
+        _discard_attempt_files(job_id, source_type, retrying=retrying)
 
         raise _retry_or_settle(
             self, exc=exc, countdown=60 * (2 ** self.request.retries),
-            settle=(lambda error: _record_main_failure(job_id, redis_client, error, retrying=False))
+            settle=(lambda error: (_record_main_failure(job_id, redis_client, error, retrying=False),
+                                   _discard_attempt_files(job_id, source_type, retrying=False)))
             if retrying else None)
 
 

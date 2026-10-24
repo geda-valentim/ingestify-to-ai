@@ -512,3 +512,95 @@ def test_a_provider_file_over_the_limit_fails_once_without_retry_and_cleans_up(w
         assert job.status == JobStatus.FAILED and job.error_message == result["error"]
     assert world.redis.get_source_token(job_id) is None
     assert not (tmp_path / job_id).exists()
+
+
+def _cloud_retry_setup(world, convert, monkeypatch, tmp_path):
+    response = convert("gdrive", "file-id", authorization="Bearer eyJ.user.jwt", source_token="ya29.provider")
+    [kwargs] = convert.enqueued
+    job_id = str(response.job_id)
+    monkeypatch.setattr(tasks.settings, "temp_storage_path", str(tmp_path))
+    monkeypatch.setattr(tasks, "get_es_client", lambda: SimpleNamespace())
+    monkeypatch.setattr(tasks.process_conversion, "retry", lambda **kw: RuntimeError("retry"))
+    calls = []
+
+    class Drive:
+        async def download(self, source, temp_path, auth_token=None):
+            calls.append(auth_token)
+            if auth_token is None:
+                raise RuntimeError("401: the provider needs its credential")
+            path = temp_path / "a.pdf"
+            path.write_bytes(b"%PDF-1.4")
+            (temp_path / "stale-output.md").write_text("half done")
+            return path
+
+    monkeypatch.setattr(tasks, "get_source_handler", lambda source_type: Drive())
+    return kwargs, job_id, calls
+
+
+def test_a_retry_reuses_the_provider_download_without_the_token(world, convert, monkeypatch, tmp_path):
+    kwargs, job_id, calls = _cloud_retry_setup(world, convert, monkeypatch, tmp_path)
+    monkeypatch.setattr(tasks, "_will_retry", lambda task: True)
+    monkeypatch.setattr(tasks, "should_split_pdf", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("convert failed")))
+
+    with pytest.raises(RuntimeError):
+        tasks.process_conversion.run(**kwargs)
+    assert calls == ["ya29.provider"]
+    assert world.redis.get_source_token(job_id) is None  # dropped right after the download
+    assert (tmp_path / job_id / "a.pdf").is_file()  # the retry's source survives
+    assert not (tmp_path / job_id / "stale-output.md").exists()
+
+    converted = []
+    monkeypatch.setattr(tasks, "should_split_pdf", lambda *a, **k: False)
+    monkeypatch.setattr(tasks, "_converter_for", lambda *a, **k: object())
+    monkeypatch.setattr(tasks, "_convert", lambda converter, path, *a, **k: converted.append(path)
+                        or (_ for _ in ()).throw(RuntimeError("stop")))
+    monkeypatch.setattr(tasks, "_will_retry", lambda task: False)
+    with pytest.raises(RuntimeError):
+        tasks.process_conversion.run(**kwargs)
+    assert calls == ["ya29.provider"]  # the provider was not called again
+    assert converted == [tmp_path / job_id / "a.pdf"]
+    assert not (tmp_path / job_id).exists()  # the last attempt cleans everything
+
+
+def test_a_failed_download_still_retries_with_the_token(world, convert, monkeypatch, tmp_path):
+    kwargs, job_id, calls = _cloud_retry_setup(world, convert, monkeypatch, tmp_path)
+    monkeypatch.setattr(tasks, "_will_retry", lambda task: True)
+
+    class Flaky:
+        async def download(self, source, temp_path, auth_token=None):
+            calls.append(auth_token)
+            (temp_path / "partial.bin").write_bytes(b"x")
+            raise RuntimeError("network")
+
+    monkeypatch.setattr(tasks, "get_source_handler", lambda source_type: Flaky())
+    with pytest.raises(RuntimeError):
+        tasks.process_conversion.run(**kwargs)
+    assert world.redis.get_source_token(job_id) == "ya29.provider"
+    assert not (tmp_path / job_id).exists()  # no finished download: nothing to reuse
+    with pytest.raises(RuntimeError):
+        tasks.process_conversion.run(**kwargs)
+    assert calls == ["ya29.provider", "ya29.provider"]
+
+
+def test_an_unscheduled_retry_settles_and_removes_the_kept_download(world, convert, monkeypatch, tmp_path):
+    kwargs, job_id, calls = _cloud_retry_setup(world, convert, monkeypatch, tmp_path)
+    monkeypatch.setattr(tasks, "_will_retry", lambda task: True)
+    monkeypatch.setattr(tasks, "should_split_pdf", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("convert failed")))
+
+    def broker_down(**kw):
+        raise OSError("broker down")
+
+    monkeypatch.setattr(tasks.process_conversion, "retry", broker_down)
+    with pytest.raises(OSError):
+        tasks.process_conversion.run(**kwargs)
+    with world.Session() as db:
+        assert db.get(Job, job_id).status == JobStatus.FAILED
+    assert world.redis.get_source_token(job_id) is None
+    assert not (tmp_path / job_id).exists()
+
+
+def test_a_marker_without_its_file_is_not_a_reusable_source(tmp_path):
+    (tmp_path / ".source_ready").write_text("gone.pdf")
+    assert tasks._reusable_source(tmp_path) is None
+    (tmp_path / ".source_ready").write_text("../escape.pdf")
+    assert tasks._reusable_source(tmp_path) is None
