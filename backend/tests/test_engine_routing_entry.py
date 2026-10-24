@@ -544,7 +544,7 @@ def test_the_job_page_says_where_and_why(world):
     world.redis.set_job_status(job_id=job_id, job_type="main", status="queued")
     db, alice = user(world, ALICE)
     try:
-        response = asyncio.run(routes.get_job_status(job_id, current_user=alice, owned_job=db.get(Job, job_id), db=db))
+        response = routes.get_job_status(job_id, current_user=alice, owned_job=db.get(Job, job_id), db=db)
     finally:
         db.close()
     assert response.engine.kind == "local" and response.queue_reason == "starting"

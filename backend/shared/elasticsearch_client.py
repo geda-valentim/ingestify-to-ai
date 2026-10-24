@@ -561,7 +561,8 @@ class ElasticsearchClient:
     def health_check(self) -> bool:
         """Check if Elasticsearch is healthy"""
         try:
-            return self.client.ping()
+            # Bounded: this runs on the /health path, which must not hold a thread for long.
+            return self.client.options(request_timeout=2, max_retries=0).ping()
         except Exception:
             return False
 

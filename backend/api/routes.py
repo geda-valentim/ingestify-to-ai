@@ -1,6 +1,9 @@
 from starlette.responses import JSONResponse
 import json
 import threading
+import anyio
+import anyio.to_thread
+import functools
 import time
 from fastapi.encoders import jsonable_encoder
 from shared.job_configuration import job_configuration
@@ -527,8 +530,8 @@ async def upload_and_convert(
             minio_client = get_minio_client()
             minio_object_name = f"uploads/{job_id}/{filename}"
             try:
-                await run_in_threadpool(
-                    minio_client.upload_file,
+                await _minio_upload(
+                    minio_client,
                     bucket_name=minio_client.bucket_uploads,
                     object_name=minio_object_name,
                     file_path=str(temp_file_path),
@@ -1024,8 +1027,8 @@ async def transcribe_audio(
             minio_client = get_minio_client()
             minio_object_name = f"audio/{job_id}/{filename}"
             try:
-                await run_in_threadpool(
-                    minio_client.upload_file,
+                await _minio_upload(
+                    minio_client,
                     bucket_name=minio_client.bucket_audio,
                     object_name=minio_object_name,
                     file_path=str(temp_file_path),
@@ -1428,8 +1431,8 @@ async def convert_document(
                 minio_client = get_minio_client()
                 minio_object_name = f"uploads/{job_id}/{filename}"
                 try:
-                    await run_in_threadpool(
-                        minio_client.upload_file,
+                    await _minio_upload(
+                        minio_client,
                         bucket_name=minio_client.bucket_uploads,
                         object_name=minio_object_name,
                         file_path=str(temp_file_path),
@@ -3309,6 +3312,19 @@ async def get_page_pdf(
     }
 
 
+# Big MinIO uploads get their own small pool so they cannot starve auth in the default one.
+_upload_limiter = None  # created lazily: anyio 3 needs a running loop
+
+
+async def _minio_upload(client, **kwargs):
+    global _upload_limiter
+    if _upload_limiter is None:
+        _upload_limiter = anyio.CapacityLimiter(8)
+    return await anyio.to_thread.run_sync(
+        functools.partial(client.upload_file, **kwargs), limiter=_upload_limiter
+    )
+
+
 HEALTH_CACHE_SECONDS = 5.0
 _health_lock = threading.Lock()
 _health_cache: dict = {"at": 0.0, "payload": None}
@@ -3358,18 +3374,25 @@ def _compute_health() -> HealthCheckResponse:
 @router.get("/health", summary="Verificar saúde da API", response_model=HealthCheckResponse)
 def health_check():
     """Health check endpoint"""
-    # Sync on purpose: the Celery inspect below blocks for ~1-2 s, and FastAPI runs a
-    # plain def in its threadpool. As async def it froze the event loop on every
-    # container healthcheck and dropped live sessions with LIVE_BACKPRESSURE.
-    # Single-flight + short cache: a burst of unauthenticated calls shares one probe
-    # instead of each holding a threadpool token for the whole inspect.
-    with _health_lock:
-        now = time.monotonic()
+    # Sync on purpose: the Celery inspect blocks for ~1-2 s, and FastAPI runs a plain def
+    # in its threadpool. As async def it froze the event loop on every container
+    # healthcheck and dropped live sessions with LIVE_BACKPRESSURE.
+    # Single-flight + short cache: callers that find a probe in flight never wait on the
+    # lock (that would pin a threadpool token each); they get the last result, even
+    # stale, or 503 if there is none yet.
+    if not _health_lock.acquire(blocking=False):
         response = _health_cache["payload"]
-        if response is None or now - _health_cache["at"] >= HEALTH_CACHE_SECONDS:
-            response = _compute_health()
-            _health_cache["payload"] = response
-            _health_cache["at"] = time.monotonic()
+        if response is None:
+            raise HTTPException(status_code=503, detail="health probe in progress")
+    else:
+        try:
+            response = _health_cache["payload"]
+            if response is None or time.monotonic() - _health_cache["at"] >= HEALTH_CACHE_SECONDS:
+                response = _compute_health()
+                _health_cache["payload"] = response
+                _health_cache["at"] = time.monotonic()
+        finally:
+            _health_lock.release()
 
     # Return 503 if unhealthy (the timestamp is a datetime: encode before HTTPException)
     if response.status == "unhealthy":
