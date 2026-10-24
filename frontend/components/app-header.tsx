@@ -12,6 +12,7 @@ import {
   BookOpen,
   ChevronDown,
   Cpu,
+  FlaskConical,
   Key,
   Menu,
   Mic,
@@ -34,9 +35,10 @@ type NavLink = { href: string; label: string; icon: typeof UploadIcon };
 const PRIMARY_LINKS: NavLink[] = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/convert", label: "Convert", icon: UploadIcon },
-  { href: "/live", label: "Live", icon: Mic },
   { href: "/jobs", label: "My Jobs", icon: Search },
 ];
+// Experimental ingestion sources, kept apart from the stable flow until they graduate.
+const LABS_LINKS: NavLink[] = [{ href: "/live", label: "Live", icon: Mic }];
 const DOCS_LINK: NavLink = { href: "/docs", label: "Docs", icon: BookOpen };
 const BUSINESS_LINK: NavLink = { href: "/business", label: "Business", icon: Building2 };
 const LINK_STYLE =
@@ -55,6 +57,7 @@ export function AppHeader({ className }: { className?: string }) {
   const token = useAuthStore((state) => state.token);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [accountOpen, setAccountOpen] = useState(false);
+  const [labsOpen, setLabsOpen] = useState(false);
   const setAuth = useAuthStore((state) => state.setAuth);
 
   // The saved session can be stale - a user promoted to admin (or demoted) after
@@ -84,6 +87,7 @@ export function AppHeader({ className }: { className?: string }) {
   useEffect(() => {
     setMobileOpen(false);
     setAccountOpen(false);
+    setLabsOpen(false);
   }, [pathname, user?.id]);
 
   // A drawer opened on a phone must release its focus trap after resizing.
@@ -92,6 +96,7 @@ export function AppHeader({ className }: { className?: string }) {
     const closeOnResize = () => {
       setMobileOpen(false);
       setAccountOpen(false);
+      setLabsOpen(false);
     };
     desktop.addEventListener("change", closeOnResize);
     return () => desktop.removeEventListener("change", closeOnResize);
@@ -154,6 +159,40 @@ export function AppHeader({ className }: { className?: string }) {
             className="hidden items-center gap-1 xl:flex"
           >
             {PRIMARY_LINKS.map((link) => renderLink(link))}
+            <DropdownMenu.Root open={labsOpen} onOpenChange={setLabsOpen}>
+              <DropdownMenu.Trigger asChild>
+                <button
+                  type="button"
+                  className={cn(
+                    LINK_STYLE,
+                    LABS_LINKS.some(({ href }) => isActive(href))
+                      ? "bg-secondary text-secondary-foreground"
+                      : "text-muted-foreground",
+                  )}
+                >
+                  <FlaskConical aria-hidden="true" className="h-4 w-4 shrink-0" />
+                  Labs
+                  <ChevronDown aria-hidden="true" className="h-3 w-3" />
+                </button>
+              </DropdownMenu.Trigger>
+              <DropdownMenu.Portal>
+                <DropdownMenu.Content
+                  align="start"
+                  sideOffset={8}
+                  className="z-50 min-w-48 rounded-lg border bg-popover p-1 text-popover-foreground shadow-md"
+                >
+                  {LABS_LINKS.map((link) => (
+                    <DropdownMenu.Item
+                      key={link.href}
+                      asChild
+                      className="data-[highlighted]:bg-accent data-[highlighted]:text-accent-foreground"
+                    >
+                      {renderLink(link)}
+                    </DropdownMenu.Item>
+                  ))}
+                </DropdownMenu.Content>
+              </DropdownMenu.Portal>
+            </DropdownMenu.Root>
           </nav>
         )}
 
@@ -247,6 +286,17 @@ export function AppHeader({ className }: { className?: string }) {
                   PRIMARY_LINKS.map((link) =>
                     renderLink(link, () => setMobileOpen(false)),
                   )}
+                {user && (
+                  <>
+                    <p className="flex items-center gap-2 px-3 pb-1 pt-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                      <FlaskConical aria-hidden="true" className="h-3.5 w-3.5" />
+                      Labs
+                    </p>
+                    {LABS_LINKS.map((link) =>
+                      renderLink(link, () => setMobileOpen(false)),
+                    )}
+                  </>
+                )}
                 {renderLink(DOCS_LINK, () => setMobileOpen(false))}
                 {renderLink(BUSINESS_LINK, () => setMobileOpen(false))}
               </nav>
