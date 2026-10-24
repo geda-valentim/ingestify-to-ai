@@ -2,6 +2,34 @@
 
 > **Registro histórico (2025-10).** Não é mantido; para mudanças posteriores use `git log`. Observação: `workers/tasks_old.py`, citado abaixo, não existe (há um `workers/tasks.py.backup`). Exceção: mudanças de comportamento intencionais que uma spec manda registrar aqui entram na seção abaixo.
 
+## 2026-10: API bilíngue, inglês por padrão — parte 3 (API 1.10.0)
+
+- Datalake e imagens passam a responder no idioma pedido em `Accept-Language` (inglês por
+  padrão; `pt-BR` mantém a redação anterior). O `code`/`error_code` não muda. Mesmo contrato
+  da parte 1; ver [features/languages.md](features/languages.md).
+- **Mudança de comportamento: `detail` em texto vira objeto** (`{"code", "message"}`) nas
+  recusas de `POST /datalakes/discover`, `/datalakes/buckets`, `/datalakes/partition-preview`,
+  `POST/PATCH/DELETE /datalakes` e `/datalakes/{id}/*` (provedor, credenciais, bucket,
+  nome, conexão vinculada/desativada, 502 de provedor), de `POST /jobs/{id}/datalake/retry`
+  (`DATALAKE_JOB_NOT_COMPLETED` 409, `DATALAKE_DESTINATION_MISSING` 404), da validação de
+  destino/particionamento (`DATALAKE_*`, `PARTITION_*`) e das recusas de
+  `mode=full` e do upload facial (`IMAGE_IDEMPOTENCY_KEY_REQUIRED` 422,
+  `IMAGE_IDEMPOTENCY_KEY_REUSED` 409, `IMAGE_JOB_DELETED` 410, `FLORENCE_NOT_READY` 503,
+  `IMAGE_SUBMISSION_CONFLICT` 503, `IMAGE_PERSIST_FAILED` 503, `FACE_UPLOAD_FIELDS_INVALID`
+  422, `FACE_REQUEST_INVALID` 422). Quem casava o texto deve ler `detail.code`.
+- **Não mudam de forma:** o envelope de `/images/*` (`{"detail": {"error_code", "message",
+  "job_id"}}`, inclusive `VISION_TIMEOUT` com `poll_url`/`result_url`, `FACE_UNAVAILABLE` com
+  `stages` e `VISION_ENGINE_UNAVAILABLE` com `retry_after`); só `message` segue o idioma.
+  Os 404 que não revelam o que existe (conexão de datalake, Full Analysis) continuam texto,
+  localizado. Mensagens de validação do Pydantic do datalake (`ConnectionConfig`, partições)
+  seguem o idioma pedido, no formato de 422 de validação.
+- `GET /images/capabilities` devolve `reason` no idioma pedido quando a API não vê worker de
+  visão; o `reason` que o worker publica, e o `detail` de falha devolvido pelo worker de
+  visão, continuam em inglês.
+- Mensagens de `workers/vision` (`VisionError`): inglês, como sempre; as checagens de imagem
+  feitas pela API (base64, tamanho, formato) agora saem também em português com `pt-BR`.
+  Textos de entrega ao datalake gravados pelo worker saem em inglês.
+
 ## 2026-10: API bilíngue, inglês por padrão — parte 2 (API 1.9.0)
 
 - Mesma regra da parte 1 (`Accept-Language`, padrão inglês, `code` estável) para as demais

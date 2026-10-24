@@ -26,6 +26,7 @@ from datetime import datetime
 
 from shared.catalog_api import API_CATALOG
 from shared.catalog_en import EN
+from shared.catalog_images import IMAGES_CATALOG
 from shared.i18n import DEFAULT, LANGS, current_lang
 
 # Closed vocabulary of next steps (labels live in frontend/lib/admin-errors.ts).
@@ -593,6 +594,7 @@ CATALOG = _bilingual(_PT)
 _overlap = CATALOG.keys() & API_CATALOG.keys()
 assert not _overlap, f"codes defined in both catalogs: {sorted(_overlap)}"
 CATALOG.update(API_CATALOG)
+CATALOG.update(IMAGES_CATALOG)
 
 _CODE = re.compile(r"^([A-Z][A-Z0-9_]{3,})(?:\s*:\s*(.*))?$", re.S)
 

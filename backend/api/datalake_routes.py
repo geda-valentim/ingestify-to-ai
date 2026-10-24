@@ -14,6 +14,8 @@ from shared.datalake.adapters import adapter_for, validate_credentials
 from shared.datalake.schemas import ConnectionCreate, ConnectionUpdate, ConnectionConfig, Provider, Destination, clean_prefix, clean_bucket
 from shared.datalake.secrets import seal, unseal
 from shared.datalake import service
+from shared.datalake.errors import DatalakeError, datalake_not_found_detail, to_http
+from shared.i18n import api_error
 from shared.datalake.partitioning import PartitionStrategy, PartitionError, resolve_layout, validate_values
 from shared.models import DatalakeConnection, Job, JobDatalakeExport, User, JobStatus
 from api.iam_deps import Scope, authorized, require, visible
@@ -38,9 +40,9 @@ class DiscoverConnection(BaseModel):
 def draft_connection(body: DiscoverConnection, user: User, db: Session):
     row = connection_or_404(db, user, body.connection_id) if body.connection_id else None
     if row is not None and row.provider != body.provider:
-        raise HTTPException(422, "O provedor da conexão não pode ser alterado")
+        raise api_error(422, "DATALAKE_PROVIDER_IMMUTABLE")
     if body.credentials is None and row is None:
-        raise HTTPException(422, "Informe as credenciais do provedor")
+        raise api_error(422, "DATALAKE_CREDENTIALS_REQUIRED")
     credentials = ({key: value.get_secret_value() for key, value in body.credentials.items()}
                    if body.credentials is not None else unseal(row))
     config = body.config.model_dump()
@@ -60,13 +62,13 @@ def discover_connection(body: DiscoverConnection, user: User = Depends(require("
         if body.bucket is not None:
             bucket = clean_bucket(body.bucket)
             if not adapter.bucket_exists(bucket):
-                raise HTTPException(422, "Bucket não encontrado ou sem acesso")
+                raise api_error(422, "DATALAKE_BUCKET_INACCESSIBLE")
             return {"buckets": [bucket], "verified": True}
         return {"buckets": sorted(set(adapter.buckets())), "verified": True}
     except HTTPException:
         raise
     except Exception:
-        raise HTTPException(502, "Não foi possível listar os buckets. Verifique a conexão ou informe um bucket para validar seu acesso.") from None
+        raise api_error(502, "DATALAKE_DISCOVER_FAILED") from None
 
 
 class CreateBucket(DiscoverConnection):
@@ -91,7 +93,7 @@ def validate_new_bucket(provider, bucket):
     else:
         invalid = invalid or ".-" in bucket or "-." in bucket or bucket.startswith(("xn--", "sthree-", "amzn-s3-demo-")) or bucket.endswith(("-s3alias", "--ol-s3", ".mrap", "--x-s3", "--table-s3", "-an"))
     if invalid:
-        raise HTTPException(422, "Nome inválido para o provedor. Use de 3 a 63 letras minúsculas, números e hífens, começando e terminando com letra ou número.")
+        raise api_error(422, "DATALAKE_BUCKET_NAME_INVALID")
 
 
 @router.post("/buckets", summary="Criar bucket", status_code=201)
@@ -106,14 +108,14 @@ def create_bucket(body: CreateBucket, user: User = Depends(require("datalakes.cr
         location = "US"
     if body.location is not None:
         if body.provider == "azure" or (body.provider in ("s3", "minio") and body.location != location):
-            raise HTTPException(422, "Use a região configurada na conexão; no Azure, o container usa a região da conta.")
+            raise api_error(422, "DATALAKE_BUCKET_REGION_MISMATCH")
         location = body.location
     try:
         adapter = adapter_for(draft)
         # S3 in us-east-1 can succeed when recreating an owned bucket and reset
         # its ACL. Always check first, so this action never changes existing storage.
         if adapter.bucket_exists(body.bucket):
-            raise HTTPException(409, "Este bucket já existe. Use ‘Verificar outro bucket’ para selecioná-lo.")
+            raise api_error(409, "DATALAKE_BUCKET_EXISTS")
         adapter.create_bucket(body.bucket, location=location)
         return {"bucket": body.bucket, "created": True, "location": location}
     except HTTPException:
@@ -122,10 +124,10 @@ def create_bucket(body: CreateBucket, user: User = Depends(require("datalakes.cr
         code = getattr(exc, "code", None)
         status = getattr(exc, "status_code", None)
         if code in ("BucketAlreadyExists", "BucketAlreadyOwnedByYou", "ContainerAlreadyExists") or code == 409 or status == 409:
-            raise HTTPException(409, "Nome já utilizado. Escolha outro nome ou verifique o bucket existente.") from None
+            raise api_error(409, "DATALAKE_BUCKET_NAME_TAKEN") from None
         if code in ("AccessDenied", "AuthorizationFailure", "AuthorizationPermissionMismatch") or code in (401, 403) or status in (401, 403):
-            raise HTTPException(403, "A conta não tem permissão para verificar ou criar este bucket. Verifique as credenciais e permissões no provedor.") from None
-        raise HTTPException(502, "Não foi possível confirmar a criação. Verifique o nome do bucket no provedor antes de tentar novamente.") from None
+            raise api_error(403, "DATALAKE_BUCKET_FORBIDDEN") from None
+        raise api_error(502, "DATALAKE_BUCKET_CREATE_UNCONFIRMED") from None
 
 
 def public_connection(row):
@@ -137,15 +139,15 @@ def public_connection(row):
 def connection_or_404(db, user, connection_id):
     row = service.owned_connection(db, connection_id, user.id)
     if row is None:
-        raise HTTPException(404, "Conexão não encontrada")
+        raise HTTPException(404, datalake_not_found_detail())
     return row
 
 
 def ensure_credentials(provider, config, credentials):
     try:
         validate_credentials(provider, config, credentials)
-    except ValueError as exc:
-        raise HTTPException(422, str(exc)) from None
+    except DatalakeError as exc:
+        raise to_http(exc) from None
 
 
 class PartitionPreview(BaseModel):
@@ -181,7 +183,7 @@ def partition_preview(body: PartitionPreview, user: User = Depends(require("data
     try:
         return {**resolve_layout(strategy, body.prefix, context, values), "partitioning": strategy.model_dump()}
     except PartitionError as exc:
-        raise HTTPException(422, str(exc)) from None
+        raise to_http(exc) from None
 
 
 @router.get("", summary="Listar conexões de datalake")
@@ -213,7 +215,7 @@ def update_connection(connection_id: str, body: ConnectionUpdate,
     ensure_credentials(row.provider, config, credentials)
     if body.name is not None:
         if not body.name.strip():
-            raise HTTPException(422, "Informe um nome")
+            raise api_error(422, "DATALAKE_NAME_REQUIRED")
         row.name = body.name.strip()
     row.config = config
     if body.enabled is not None:
@@ -229,7 +231,7 @@ def delete_connection(connection_id: str,
                       row: DatalakeConnection = Depends(authorized(DatalakeConnection, "datalakes.delete")),
                       db: Session = Depends(get_db)):
     if db.query(JobDatalakeExport).filter(JobDatalakeExport.connection_id == row.id).first():
-        raise HTTPException(409, "Esta conexão está vinculada a jobs. Desative-a para impedir novas solicitações.")
+        raise api_error(409, "DATALAKE_IN_USE")
     db.delete(row)
     db.commit()
     return Response(status_code=204)
@@ -240,13 +242,13 @@ def list_buckets(connection_id: str,
                  row: DatalakeConnection = Depends(authorized(DatalakeConnection, "datalakes.read")),
                  db: Session = Depends(get_db)):
     if not row.enabled:
-        raise HTTPException(409, "Conexão desativada")
+        raise api_error(409, "DATALAKE_DISABLED")
     configured = row.config.get("buckets") or []
     try:
         buckets = configured or adapter_for(row).buckets()
         return {"buckets": sorted(buckets), "configured": bool(configured)}
     except Exception:
-        raise HTTPException(502, "Não foi possível listar os buckets. Verifique as credenciais ou configure os buckets permitidos.") from None
+        raise api_error(502, "DATALAKE_BUCKETS_UNAVAILABLE") from None
 
 
 class TestConnection(BaseModel):
@@ -264,7 +266,7 @@ def test_connection(connection_id: str, body: TestConnection,
         else:
             adapter_for(row).buckets()
     except Exception:
-        raise HTTPException(502, "Não foi possível acessar a conexão. Verifique as credenciais, o endpoint e as permissões.") from None
+        raise api_error(502, "DATALAKE_CONNECTION_UNREACHABLE") from None
     return {"ok": True, "bucket": bucket}
 
 
@@ -277,7 +279,7 @@ def list_objects(connection_id: str, bucket: str, prefix: str = "", limit: int =
         service.prepare_destination(db, row.user_id, choice)
         return {"objects": adapter_for(row).objects(choice.bucket, prefix, limit), "limit": limit}
     except Exception:
-        raise HTTPException(502, "Não foi possível listar os arquivos deste bucket") from None
+        raise api_error(502, "DATALAKE_OBJECTS_UNAVAILABLE") from None
 
 
 # A form sub-dependency, not a route guard: it only names the caller, so the route
@@ -303,11 +305,11 @@ def destination_form(
             partition_values=json.loads(datalake_partition_values) if datalake_partition_values else {})
         return service.prepare_destination(db, user.id, choice)
     except LookupError:
-        raise HTTPException(404, "Conexão não encontrada") from None
+        raise HTTPException(404, datalake_not_found_detail()) from None
     except ValueError:
-        raise HTTPException(422, "Informe uma conexão, um bucket permitido e uma pasta válida") from None
+        raise api_error(422, "DATALAKE_DESTINATION_INVALID") from None
     except Exception:
-        raise HTTPException(502, "Não foi possível acessar o bucket de destino") from None
+        raise api_error(502, "DATALAKE_DESTINATION_UNREACHABLE") from None
 
 
 def bind_request_destination(db, job, destination, source_type=None):
@@ -317,7 +319,7 @@ def bind_request_destination(db, job, destination, source_type=None):
     try:
         service.bind_destination(db, job, destination, source_type=source_type)
     except PartitionError as exc:
-        raise HTTPException(422, str(exc)) from None
+        raise to_http(exc) from None
 
 
 def discard_uncommitted_destination(cache, job_id, user_id):
@@ -335,11 +337,11 @@ def prepare_body_destination(db, user, choice):
     try:
         return service.prepare_destination(db, user.id, choice)
     except LookupError:
-        raise HTTPException(404, "Conexão não encontrada") from None
+        raise HTTPException(404, datalake_not_found_detail()) from None
     except ValueError:
-        raise HTTPException(422, "Destino inválido ou conexão desativada") from None
+        raise api_error(422, "DATALAKE_DESTINATION_REJECTED") from None
     except Exception:
-        raise HTTPException(502, "Não foi possível acessar o bucket de destino") from None
+        raise api_error(502, "DATALAKE_DESTINATION_UNREACHABLE") from None
 
 
 job_router = APIRouter(tags=["Datalakes"])
@@ -354,10 +356,10 @@ def get_delivery(job_id: str, owned_job=Depends(authorized(Job, "jobs.read")), d
 def retry_delivery(job_id: str, owned_job=Depends(authorized(Job, "datalake_exports.retry")),
                    db: Session = Depends(get_db)):
     if owned_job is None or owned_job.id != job_id or owned_job.status != JobStatus.COMPLETED:
-        raise HTTPException(409, "Aguarde a conclusão do job")
+        raise api_error(409, "DATALAKE_JOB_NOT_COMPLETED")
     dest = db.get(JobDatalakeExport, job_id)
     if dest is None:
-        raise HTTPException(404, "Destino não encontrado")
+        raise api_error(404, "DATALAKE_DESTINATION_MISSING")
     if dest.status != "completed":
         dest.status, dest.error, dest.attempts = "pending", None, 0
         db.commit()

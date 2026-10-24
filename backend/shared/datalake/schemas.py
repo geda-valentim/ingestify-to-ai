@@ -2,6 +2,7 @@ from typing import Literal, Optional
 from urllib.parse import urlparse
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
+from shared.datalake.errors import DatalakeError
 from shared.datalake.partitioning import PartitionStrategy, validate_values
 
 Provider = Literal["s3", "minio", "gcs", "azure"]
@@ -10,14 +11,14 @@ Provider = Literal["s3", "minio", "gcs", "azure"]
 def clean_prefix(value: str) -> str:
     value = value.strip().strip("/")
     if any(part in (".", "..") for part in value.split("/")) or "\\" in value or any(ord(c) < 32 for c in value):
-        raise ValueError("Pasta inválida")
+        raise DatalakeError("DATALAKE_PREFIX_INVALID")
     return value
 
 
 def clean_bucket(value: str) -> str:
     value = value.strip()
     if not value or len(value) > 255 or any(c in value for c in "/\\") or any(ord(c) < 33 for c in value):
-        raise ValueError("Bucket inválido")
+        raise DatalakeError("DATALAKE_BUCKET_INVALID")
     return value
 
 
@@ -45,7 +46,7 @@ class ConnectionConfig(BaseModel):
             return None
         parsed = urlparse(value)
         if parsed.scheme not in ("http", "https") or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment or parsed.path not in ("", "/"):
-            raise ValueError("Informe um endpoint HTTP(S) sem credenciais, parâmetros ou caminho")
+            raise DatalakeError("DATALAKE_ENDPOINT_INVALID")
         return value.rstrip("/")
 
     @field_validator("default_prefix")
@@ -66,7 +67,7 @@ class ConnectionConfig(BaseModel):
     @model_validator(mode="after")
     def default_is_allowed(self):
         if self.buckets and self.default_bucket and self.default_bucket not in self.buckets:
-            raise ValueError("O bucket padrão deve estar na lista de buckets permitidos")
+            raise DatalakeError("DATALAKE_DEFAULT_BUCKET_NOT_ALLOWED")
         return self
 
 
@@ -83,7 +84,7 @@ class ConnectionCreate(BaseModel):
     def trimmed_name(cls, value):
         value = value.strip()
         if not value:
-            raise ValueError("Informe um nome")
+            raise DatalakeError("DATALAKE_NAME_REQUIRED")
         return value
 
 

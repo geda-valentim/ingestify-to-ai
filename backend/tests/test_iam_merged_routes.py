@@ -24,6 +24,7 @@ from shared.auth import get_current_active_user
 from shared.config import get_settings
 from shared.database import Base, get_db
 from shared.datalake import service
+from shared.datalake.errors import datalake_not_found_detail
 from shared.datalake.secrets import seal
 from shared.models import (DatalakeConnection, ImageAnalysisRun, Job, JobDatalakeExport, JobStatus, Page,
                            User)
@@ -31,9 +32,11 @@ from shared.models import (DatalakeConnection, ImageAnalysisRun, Job, JobDatalak
 ALICE, BOB, ROOT = "user-alice", "user-bob", "user-root"
 MODES = ("off", "shadow", "enforce")
 CREDS = {"access_key": "test-key", "secret_key": "test-secret"}
-NOT_FOUND_DL = (404, "Conexão não encontrada")
+NOT_FOUND_DL = (404, "Conexão não encontrada")  # by id: api/iam_deps.py (P-13 slice 4 localizes it)
+# A connection named in a body: the route's own 404, in the request language (English by default).
+NOT_FOUND_DL_BODY = (404, datalake_not_found_detail())
 NOT_FOUND_JOB = (404, deps.job_not_found_detail())
-NOT_FOUND_RUN = (404, "Full Analysis não encontrada")
+NOT_FOUND_RUN = (404, image_routes.full_analysis_not_found_detail())
 # A request is a session or an API key; the key acts as its owner in this slice.
 CREDENTIALS = ({}, {"x-api-key": "k"})
 
@@ -192,7 +195,7 @@ def test_owner_results_are_the_legacy_ones(client, db):
 def test_body_referenced_connections_are_owner_only(client, path, body):
     """The draft routes are self-service, but a connection they name is still the caller's only."""
     for uid in (BOB, ROOT):
-        assert _detail(client(uid).post(path, json=body)) == NOT_FOUND_DL, (uid, path)
+        assert _detail(client(uid).post(path, json=body)) == NOT_FOUND_DL_BODY, (uid, path)
     assert client(ALICE).post(path, json=body).status_code not in (401, 403, 404)
 
 
@@ -212,7 +215,8 @@ def test_job_delivery_routes_are_owner_only(client, db, headers):
     r = alice.post("/jobs/img-a-done/datalake/retry", headers=headers)
     assert r.status_code == 202 and r.json()["destination"]["status"] == "pending", r.text
     # The owner's job with no destination, and an unfinished one: the route's own answers.
-    assert _detail(alice.post("/jobs/doc-a/datalake/retry", headers=headers)) == (404, "Destino não encontrado")
+    assert _detail(alice.post("/jobs/doc-a/datalake/retry", headers=headers)) == (
+        404, {"code": "DATALAKE_DESTINATION_MISSING", "message": "Destination not found"})
     assert alice.post("/jobs/img-a/datalake/retry", headers=headers).status_code == 409
 
 

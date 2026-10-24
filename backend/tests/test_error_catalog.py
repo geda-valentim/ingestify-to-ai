@@ -41,6 +41,13 @@ SCANNED = [
     "api/deps.py",
     "shared/projects.py",
     "shared/tags.py",
+    # P-13 slice 3
+    "api/datalake_routes.py",
+    "api/image_routes.py",
+    "api/image_full_routes.py",
+    "api/face_routes.py",
+    "shared/datalake",
+    "workers/vision/image_input.py",
 ]
 # Codes whose English text is still missing: they answer in Portuguese when English
 # is asked. P-13 slice 4 translates them and must leave this set empty.

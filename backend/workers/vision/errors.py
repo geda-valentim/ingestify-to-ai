@@ -20,6 +20,17 @@ class VisionError(Exception):
     error_code: str = "VISION_ERROR"
     http_status: int = 500
 
+    def __init__(self, *args, catalog_code=None, **params):
+        """``catalog_code``/``params``: the bilingual text the API renders for this failure.
+
+        The message (``str(exc)``) stays English, as the worker writes it; the API
+        checks (``image_input``) also name a catalog entry so ``/images`` can answer
+        in the request language. Worker failures returned over Celery keep English.
+        """
+        super().__init__(*args)
+        self.catalog_code = catalog_code
+        self.params = params
+
 
 class VisionDependenciesMissingError(VisionError):
     """torch / transformers / Pillow are not installed in this process."""
