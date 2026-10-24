@@ -49,7 +49,12 @@ from fastapi.routing import APIRoute, APIWebSocketRoute
 # IAM and root message has an English text, and the admin UI asks for pt-BR.
 # 1.11.1: fix only. /health and /admin/health/monitoring stop freezing the API event loop
 # (they ran a blocking Celery inspect inside async def), which dropped live sessions.
-API_VERSION = "1.11.1"
+# 1.11.2: fixes only, one release. Security: python-multipart/Starlette/FastAPI upgraded
+# (login ReDoS and form DoS), Drive/Dropbox downloads and decoded audio are size-bounded,
+# datalake responses are capped. Unknown docling_preset on /upload is a 422; CORS allows
+# Idempotency-Key; the event loop no longer blocks on auth/polling/uploads; page retry,
+# expired page results and provider retries complete documents correctly.
+API_VERSION = "1.11.2"
 
 API_DESCRIPTION = """
 API assíncrona que converte documentos (PDF, DOCX, HTML, PPTX, XLSX...) em Markdown,

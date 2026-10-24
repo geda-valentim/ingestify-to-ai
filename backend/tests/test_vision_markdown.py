@@ -372,7 +372,7 @@ def test_every_image_route_publishes_output_format_and_markdown():
     from api.main import app
     schema = app.openapi()
     components = schema["components"]["schemas"]
-    assert schema["info"]["version"] == "1.11.1"
+    assert schema["info"]["version"] == "1.11.2"
     for path in ("/images/describe/upload", "/images/ocr/upload", "/images/analyze/upload",
                  "/images/faces/upload", "/images/describe", "/images/ocr", "/images/analyze", "/images/faces"):
         operation = schema["paths"][path]["post"]
