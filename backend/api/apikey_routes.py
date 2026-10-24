@@ -7,6 +7,7 @@ from uuid import UUID
 from api.deps import owned_project_or_404
 from api.iam_deps import Scope, authorized, require, visible
 from shared.database import get_db
+from shared.i18n import api_error
 from shared.models import User, APIKey, Project
 from shared.projects import InvalidNameError, get_or_create_project
 from shared.schemas import APIKeyCreate, APIKeyResponse, APIKeyInfo, APIKeyProjectUpdate, ProjectRef
@@ -91,14 +92,14 @@ async def create_api_key(
     project_name = (key_data.project or "").strip() or None
     project_id = (key_data.project_id or "").strip() or None
     if project_name and project_id:
-        raise HTTPException(status_code=422, detail="Envie 'project' ou 'project_id', não os dois")
+        raise api_error(422, "LOCATION_PROJECT_AND_ID")
     if project_id:
         project = owned_project_or_404(db, project_id, current_user)
     elif project_name:
         try:
             project, _created = get_or_create_project(db, current_user.id, project_name, origin="api_key_create")
         except InvalidNameError as e:
-            raise HTTPException(status_code=422, detail=str(e))
+            raise HTTPException(status_code=422, detail={"code": e.code, "message": str(e)})
 
     # Generate API key
     plain_key = generate_api_key()

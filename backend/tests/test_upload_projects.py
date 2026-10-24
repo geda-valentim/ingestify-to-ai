@@ -417,8 +417,8 @@ def test_same_file_other_project_is_processed_again(env, endpoint):
     assert second.status_code == 200
     assert second.json()["job_id"] != first.json()["job_id"]
     assert second.json()["message"] == (
-        f"Arquivo já processado no projeto 'Cliente A' (job {first.json()['job_id']}); "
-        f"processando de novo em 'Cliente B'"
+        f"File already processed in project 'Cliente A' (job {first.json()['job_id']}); "
+        f"processing again in 'Cliente B'"
     )
     assert env.db.query(Job).count() == 2
 
@@ -480,7 +480,7 @@ def test_production_client_request_is_unchanged(env):
                          "duplicate", "source_available"}
     assert body["duplicate"] is False and body["source_available"] is None
     assert body["status"] == "queued"
-    assert body["message"] == "Job de transcrição de áudio enfileirado para processamento"
+    assert body["message"] == "Audio transcription job queued for processing"
     assert job_of(env, new).project_id == inbox.id
     options = env.enqueued[-1]["kwargs"]["options"]
     assert options["output_format"] == "json" and options["purge_source"] is True

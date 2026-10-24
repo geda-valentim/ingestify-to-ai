@@ -357,4 +357,357 @@ API_CATALOG = {
         },
         ["retry"],
     ),
+    # --- authentication and API keys (P-13 slice 2) ---------------------------------
+    "EMAIL_ALREADY_REGISTERED": (
+        {
+            "en": "Email already registered",
+            "pt": "E-mail já cadastrado",
+        },
+        ["fix_input"],
+    ),
+    "USERNAME_TAKEN": (
+        {
+            "en": "Username already taken",
+            "pt": "Nome de usuário já está em uso",
+        },
+        ["fix_input"],
+    ),
+    "EMAIL_OR_USERNAME_EXISTS": (
+        {
+            "en": "Email or username already exists",
+            "pt": "E-mail ou nome de usuário já existe",
+        },
+        ["fix_input"],
+    ),
+    "INVALID_CREDENTIALS": (
+        {
+            "en": "Incorrect username/email or password",
+            "pt": "Usuário/e-mail ou senha incorretos",
+        },
+        ["fix_input"],
+    ),
+    "USER_INACTIVE": (
+        {
+            "en": "Inactive user account",
+            "pt": "Conta de usuário inativa",
+        },
+        [],
+    ),
+    "SESSION_INVALID": (
+        {
+            "en": "Session expired or invalid",
+            "pt": "Sessão expirada ou inválida",
+        },
+        [],
+    ),
+    "CREDENTIALS_INVALID": (
+        {
+            "en": "Could not validate credentials",
+            "pt": "Não foi possível validar as credenciais",
+        },
+        [],
+    ),
+    "RATE_LIMITED": (
+        {
+            "en": "Too many attempts. Try again later.",
+            "pt": "Muitas tentativas. Tente novamente mais tarde.",
+        },
+        ["retry"],
+    ),
+    "LOGIN_RATE_LIMITED": (
+        {
+            "en": "Too many login attempts. Try again later.",
+            "pt": "Muitas tentativas de login. Tente novamente mais tarde.",
+        },
+        ["retry"],
+    ),
+    # --- jobs: lookups, results, pages, retry, delete, list (P-13 slice 2) ---------
+    "JOB_NOT_FOUND_OR_EXPIRED": (
+        {
+            "en": "Job not found or expired",
+            "pt": "Job não encontrado ou expirado",
+        },
+        [],
+    ),
+    "MAIN_JOB_NOT_FOUND": (
+        {
+            "en": "Main job not found",
+            "pt": "Job principal não encontrado",
+        },
+        [],
+    ),
+    "JOB_DELETE_DB_FAILED": (
+        {
+            "en": "The job could not be deleted from the database.",
+            "pt": "Erro ao deletar do banco de dados",
+        },
+        ["retry"],
+    ),
+    "SOURCE_NOT_FOUND": (
+        {
+            "en": "The original file was not found.",
+            "pt": "Arquivo original não encontrado",
+        },
+        [],
+    ),
+    "IMAGE_REPORT_PENDING": (
+        {
+            "en": "The report is waiting for durable recovery.",
+            "pt": "Relatório aguardando recuperação durável",
+        },
+        ["retry"],
+    ),
+    "IMAGE_REPORT_UNAVAILABLE": (
+        {
+            "en": "The report is temporarily unavailable; try the same job again.",
+            "pt": "Relatório temporariamente indisponível; tente consultar o mesmo job novamente",
+        },
+        ["retry"],
+    ),
+    "TRANSCRIPT_NOT_PUBLISHED": (
+        {
+            "en": "The transcript is not published yet.",
+            "pt": "Transcrição ainda não publicada",
+        },
+        [],
+    ),
+    "LIVE_SESSION_NOT_COMPLETED": (
+        {
+            "en": "The live session has not completed.",
+            "pt": "Sessão live não concluída",
+        },
+        [],
+    ),
+    "JOB_NOT_FINISHED": (
+        {
+            "en": "The job is still being processed.",
+            "pt": "Job ainda está em processamento",
+        },
+        [],
+    ),
+    "JOB_FAILED": (
+        {
+            "en": "Job failed: {error}",
+            "pt": "Job falhou: {error}",
+        },
+        [],
+    ),
+    "JOB_ERROR_UNKNOWN": (
+        {
+            "en": "Unknown error",
+            "pt": "Erro desconhecido",
+        },
+        [],
+    ),
+    "RESULT_NOT_FOUND": (
+        {
+            "en": "Result not found or expired",
+            "pt": "Resultado não encontrado ou expirado",
+        },
+        [],
+    ),
+    "TRANSCRIPT_FORMAT_UNAVAILABLE": (
+        {
+            "en": "Format '{format}' is not available for this job (only /transcribe jobs produce {formats}).",
+            "pt": "Formato '{format}' não disponível para este job (apenas jobs de /transcribe geram {formats})",
+        },
+        [],
+    ),
+    "JOB_NO_PAGES": (
+        {
+            "en": "The job has no pages (it is not a multi-page PDF, or it was not found).",
+            "pt": "Job não tem páginas (não é PDF multi-página ou não foi encontrado)",
+        },
+        [],
+    ),
+    "PAGE_NOT_FOUND_IN_JOB": (
+        {
+            "en": "Page {page_number} was not found in job {job_id}. Check that the job is a multi-page PDF and that the page exists.",
+            "pt": "Página {page_number} não encontrada no job {job_id}. Verifique se o job é um PDF multi-página e se a página existe.",
+        },
+        [],
+    ),
+    "PAGE_NOT_FOUND": (
+        {
+            "en": "Page {page_number} not found.",
+            "pt": "Página {page_number} não encontrada",
+        },
+        [],
+    ),
+    "PAGE_STATUS_NOT_FOUND": (
+        {
+            "en": "Page status not found.",
+            "pt": "Status da página não encontrado",
+        },
+        [],
+    ),
+    "PAGE_NOT_FINISHED": (
+        {
+            "en": "Page {page_number} is still being processed (status: {status}).",
+            "pt": "Página {page_number} ainda está em processamento (status: {status})",
+        },
+        [],
+    ),
+    "PAGE_FAILED": (
+        {
+            "en": "Conversion of page {page_number} failed: {error}",
+            "pt": "Conversão da página {page_number} falhou: {error}",
+        },
+        [],
+    ),
+    "PAGE_RESULT_NOT_FOUND": (
+        {
+            "en": "The result of page {page_number} was not found or has expired.",
+            "pt": "Resultado da página {page_number} não encontrado ou expirado",
+        },
+        [],
+    ),
+    "PAGE_NOT_FAILED": (
+        {
+            "en": "Page {page_number} is not in 'failed' status (current status: {status}).",
+            "pt": "Página {page_number} não está em status 'failed' (status atual: {status})",
+        },
+        [],
+    ),
+    "PAGE_RETRY_LIMIT": (
+        {
+            "en": "Retry limit reached for page {page_number} (3/3 attempts). It cannot be retried again.",
+            "pt": "Limite de tentativas atingido para página {page_number} (3/3 tentativas). Não é possível tentar novamente.",
+        },
+        [],
+    ),
+    "PAGE_RETRY_FAILED": (
+        {
+            "en": "The page could not be reprocessed.",
+            "pt": "Erro ao reprocessar página",
+        },
+        ["retry"],
+    ),
+    "PAGE_PDF_NOT_FOUND": (
+        {
+            "en": "The PDF of page {page_number} was not found in storage. The job may not have been split into pages.",
+            "pt": "Arquivo PDF da página {page_number} não encontrado no MinIO. O job pode não ter sido dividido em páginas.",
+        },
+        [],
+    ),
+    "FILE_STORAGE_UNAVAILABLE": (
+        {
+            "en": "File storage is unavailable.",
+            "pt": "Armazenamento de arquivos indisponível",
+        },
+        ["retry"],
+    ),
+    "JOB_STATUS_INVALID": (
+        {
+            "en": "Invalid status: {status}",
+            "pt": "status inválido: {status}",
+        },
+        ["fix_input"],
+    ),
+    "JOB_KIND_INVALID": (
+        {
+            "en": "Invalid kind: {kind}. Use one of: {allowed}.",
+            "pt": "kind inválido: {kind}. Use: {allowed}",
+        },
+        ["fix_input"],
+    ),
+    "FOLDER_ROOT_NEEDS_PROJECT": (
+        {
+            "en": "folder_id=root requires project_id.",
+            "pt": "folder_id=root exige project_id",
+        },
+        ["fix_input"],
+    ),
+    "SEARCH_FAILED": (
+        {
+            "en": "The jobs could not be searched.",
+            "pt": "Erro ao buscar jobs",
+        },
+        ["retry"],
+    ),
+    # --- notes and messages that routes return in 200 bodies (P-13 slice 2) --------
+    "JOB_QUEUED": (
+        {
+            "en": "Job queued for processing",
+            "pt": "Job enfileirado para processamento",
+        },
+        [],
+    ),
+    "TRANSCRIPTION_JOB_QUEUED": (
+        {
+            "en": "Audio transcription job queued for processing",
+            "pt": "Job de transcrição de áudio enfileirado para processamento",
+        },
+        [],
+    ),
+    "JOB_DELETED": (
+        {
+            "en": "Job deleted successfully",
+            "pt": "Job deletado com sucesso",
+        },
+        [],
+    ),
+    "PAGE_RETRY_QUEUED": (
+        {
+            "en": "Page {page_number} queued for reprocessing (attempt {attempt}/3)",
+            "pt": "Página {page_number} enfileirada para reprocessamento (tentativa {attempt}/3)",
+        },
+        [],
+    ),
+    "DUPLICATE_DOCUMENT": (
+        {
+            "en": "File already processed (existing job: {job_id})",
+            "pt": "Arquivo já foi processado anteriormente (job existente: {job_id})",
+        },
+        [],
+    ),
+    "DUPLICATE_AUDIO": (
+        {
+            "en": "Audio file already processed (existing job: {job_id})",
+            "pt": "Arquivo de áudio já foi processado anteriormente (job existente: {job_id})",
+        },
+        [],
+    ),
+    "DUPLICATE_NOTE_PURGED": (
+        {
+            "en": ". The original file was deleted (purge_source)",
+            "pt": ". O arquivo original foi apagado (purge_source)",
+        },
+        [],
+    ),
+    "DUPLICATE_NOTE_SCHEDULED": (
+        {
+            "en": ". The original file will be deleted when the job finishes successfully (purge_source)",
+            "pt": ". O arquivo original será apagado quando o job terminar com sucesso (purge_source)",
+        },
+        [],
+    ),
+    "DUPLICATE_NOTE_ALREADY_GONE": (
+        {
+            "en": ". The original file had already been deleted",
+            "pt": ". O arquivo original já tinha sido apagado",
+        },
+        [],
+    ),
+    "REPROCESS_ORIGINAL_GONE": (
+        {
+            "en": "The original file of job {job_id} was (or will be) deleted; processing again to keep the original",
+            "pt": "O arquivo original do job {job_id} foi (ou será) apagado; processando de novo para manter o original",
+        },
+        [],
+    ),
+    "REPROCESS_OTHER_PROJECT": (
+        {
+            "en": "File already processed in project '{project}' (job {job_id}); processing again in '{target}'",
+            "pt": "Arquivo já processado no projeto '{project}' (job {job_id}); processando de novo em '{target}'",
+        },
+        [],
+    ),
+    "NO_PROJECT": (
+        {
+            "en": "(no project)",
+            "pt": "(sem projeto)",
+        },
+        [],
+    ),
 }

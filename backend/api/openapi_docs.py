@@ -35,7 +35,12 @@ from fastapi.routing import APIRoute, APIWebSocketRoute
 # sent no Accept-Language used to get Portuguese and now get English; responses
 # carry Content-Language and Vary: Accept-Language. Part 1 covers the job-creating
 # routes, upload locations, tags and live sessions.
-API_VERSION = "1.8.0"
+# 1.9.0: part 2 of the bilingual API. The remaining job routes (result, pages, assets
+# errors, retry, delete, list, search), authentication (register, login, session, 401,
+# inactive user), the 429 rate limits and API-key creation answer in the request language;
+# every text `detail` of those routes became `{"code", "message"}`, except the 404 that
+# does not reveal what exists (job, project, folder, API key), which stays text.
+API_VERSION = "1.9.0"
 
 API_DESCRIPTION = """
 API assíncrona que converte documentos (PDF, DOCX, HTML, PPTX, XLSX...) em Markdown,

@@ -30,16 +30,22 @@ Negociação (RFC 9110, simplificada):
 
 Toda resposta traz `Content-Language: en` ou `pt-BR` e `Vary: Accept-Language` (caches e
 proxies guardam uma cópia por idioma), inclusive o 500 de produção. A interface web pede
-`Accept-Language: en`, exceto as telas em português (`/live` e as opções de imagem do
-formulário de upload), que pedem `pt-BR` nas suas chamadas.
+`Accept-Language: en`, exceto as telas em português (`/live`, as opções de imagem do
+formulário de upload e o resultado de jobs de imagem), que pedem `pt-BR` nas suas chamadas.
 
 ## O que muda de idioma
 
-Nesta parte (API 1.8.0): recusas de `/upload`, `/convert` e `/transcribe`, localização de
+Partes 1 e 2 (API 1.9.0). A parte 2 acrescenta as rotas de job restantes (resultado, páginas,
+assets, retry, exclusão, listagem), autenticação (cadastro, login, sessão, 401, usuário
+inativo), os 429 (`Retry-After` continua) e a criação de API keys; também os textos dos
+corpos 200 (`message` de enfileirado, arquivo já processado, notas de `purge_source`). O
+401 mantém `WWW-Authenticate: Bearer`.
+
+Parte 1 (API 1.8.0): recusas de `/upload`, `/convert` e `/transcribe`, localização de
 upload (projeto/pasta), tags, sessões ao vivo (503 e `GET .../availability`), `GET /search`
 (503), `callback_url` inválido, erros de nome de projeto/pasta (inclusive o 422 de
 `POST /api-keys`), limites de projeto/pasta e tags nas rotas `/images/*` (no envelope
-`error_code`/`message`) e os 404 de job/projeto/pasta/API key. As demais rotas migram nas próximas partes e, até lá,
+`error_code`/`message`) e os 404 de job/projeto/pasta/API key. Datalake, imagens, admin, engines e IAM migram nas próximas partes e, até lá,
 continuam em português; o `code` é o mesmo em qualquer idioma.
 
 Os 404 que não revelam o que existe continuam **texto** (não objeto), agora no idioma

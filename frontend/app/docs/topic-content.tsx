@@ -244,7 +244,7 @@ form.append("language", "pt");
 form.append("output_format", "vtt");
 
 const created = await fetch(\`\${API}/transcribe\`, { method: "POST", headers, body: form });
-if (!created.ok) throw new Error((await created.json()).detail);
+if (!created.ok) throw new Error(JSON.stringify((await created.json()).detail));
 const { job_id } = await created.json();
 
 // 2. ${pt ? "Consulta o status até terminar" : "Poll the status until it finishes"}

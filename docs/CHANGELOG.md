@@ -2,6 +2,42 @@
 
 > **Registro histórico (2025-10).** Não é mantido; para mudanças posteriores use `git log`. Observação: `workers/tasks_old.py`, citado abaixo, não existe (há um `workers/tasks.py.backup`). Exceção: mudanças de comportamento intencionais que uma spec manda registrar aqui entram na seção abaixo.
 
+## 2026-10: API bilíngue, inglês por padrão — parte 2 (API 1.9.0)
+
+- Mesma regra da parte 1 (`Accept-Language`, padrão inglês, `code` estável) para as demais
+  rotas de job, a autenticação, os limites 429 e a criação de API keys. Restam datalake,
+  imagens, admin, engines e IAM (partes 3 e 4), que seguem em português.
+- **`detail` em texto vira objeto `{"code", "message"}`** (o status HTTP não muda; quem lia
+  o texto passa a ler `detail.message`, ou melhor, ramificar por `detail.code`):
+  - `GET /jobs/{id}/result`: 400 `TRANSCRIPT_NOT_PUBLISHED`, 400 `LIVE_SESSION_NOT_COMPLETED`,
+    400 `JOB_NOT_FINISHED`, 500 `JOB_FAILED`, 404 `RESULT_NOT_FOUND`,
+    404 `TRANSCRIPT_FORMAT_UNAVAILABLE`, 503 `IMAGE_REPORT_PENDING`, 503 `IMAGE_REPORT_UNAVAILABLE`.
+  - `GET /jobs/{id}/pages`: 404 `JOB_NO_PAGES`. `GET /jobs/{id}/pages/{n}/status` e `.../result`:
+    404 `PAGE_NOT_FOUND_IN_JOB`, 404 `PAGE_STATUS_NOT_FOUND`, 404 `PAGE_RESULT_NOT_FOUND`,
+    400 `PAGE_NOT_FINISHED`, 500 `PAGE_FAILED`. `GET .../pages/{n}/pdf`: 404 `PAGE_NOT_FOUND`,
+    404 `PAGE_PDF_NOT_FOUND`, 503 `FILE_STORAGE_UNAVAILABLE`.
+  - `POST /jobs/{id}/pages/{n}/retry`: 400 `PAGE_NOT_FAILED`, 400 `PAGE_RETRY_LIMIT`,
+    404 `MAIN_JOB_NOT_FOUND`, 404 `PAGE_NOT_FOUND_IN_JOB`, 503 `QUEUE_UNAVAILABLE`,
+    500 `PAGE_RETRY_FAILED`; o 503 que era `{"code": "DATABASE_UNAVAILABLE"}` sem texto agora traz `message`.
+  - `DELETE /jobs/{id}`: 500 `JOB_DELETE_DB_FAILED`. `DELETE /jobs/{id}/source`: 404 `SOURCE_NOT_FOUND`.
+  - `GET /jobs`: 422 `JOB_STATUS_INVALID`, 422 `JOB_KIND_INVALID`, 422 `FOLDER_ROOT_NEEDS_PROJECT`,
+    422 `FOLDER_NOT_IN_PROJECT`. `GET /search`: 500 `SEARCH_FAILED`.
+  - `POST /auth/register`: 400 `EMAIL_ALREADY_REGISTERED`, `USERNAME_TAKEN`, `EMAIL_OR_USERNAME_EXISTS`.
+    `POST /auth/login`: 401 `INVALID_CREDENTIALS` (com `WWW-Authenticate: Bearer`), 400 `USER_INACTIVE`.
+    `POST /auth/refresh`: 401 `SESSION_INVALID`. Qualquer rota autenticada: 401 `CREDENTIALS_INVALID`
+    (com `WWW-Authenticate: Bearer`) e 400 `USER_INACTIVE`. O status 401 não muda, então a
+    interface continua encerrando a sessão por ele.
+  - 429 `RATE_LIMITED` (limite por IP) e `LOGIN_RATE_LIMITED` (bloqueio de conta), ambos com `Retry-After`.
+  - `POST /api-keys`: 422 `LOCATION_PROJECT_AND_ID` e os erros de nome de projeto
+    (`PROJECT_NAME_EMPTY`, `PROJECT_NAME_CONTROL_CHARS`, `NAME_TOO_LONG`, `NAME_KEY_TOO_LONG`).
+- Continuam **texto**, só que no idioma pedido: os 404 de job (`Job not found`), de job
+  expirado (`Job not found or expired`, só para quem é dono), de projeto, pasta e API key.
+- Textos de corpo 200 também seguem o idioma: `message` de `POST /upload|/convert|/transcribe`
+  (job enfileirado, arquivo já processado, notas de `purge_source`, reprocessamento em outro
+  projeto) e de `DELETE /jobs/{id}` e do retry de página.
+- Não mudou: o 503 de `GET /health` (corpo de status, sem texto), a validação 422 do FastAPI e
+  os `error_message` de páginas gravados pelos workers.
+
 ## 2026-10: API bilíngue, inglês por padrão — parte 1 (API 1.8.0)
 
 - O texto legível (`message`) segue o header `Accept-Language`: inglês (padrão) ou
