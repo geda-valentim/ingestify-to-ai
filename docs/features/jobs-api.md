@@ -64,6 +64,7 @@ Todos os endpoints abaixo exigem autenticação. Os que recebem `{job_id}` passa
 | `GET /jobs` | Lista os jobs MAIN do usuário (paginação e filtros). |
 | `GET /jobs/{job_id}` | Status de qualquer job (MAIN, SPLIT, PAGE, MERGE). |
 | `GET /jobs/{job_id}/result` | Resultado (Markdown) de um MAIN ou de um PAGE. |
+| `GET /webhooks/signing-secret` | Segredo com que se verifica a assinatura do webhook de conclusão (`callback_url`). |
 | `GET /jobs/{job_id}/pages` | Lista de páginas com status e `job_id` de cada uma. |
 | `GET /jobs/{job_id}/pages/{n}/status` | Status da página `n` (1-indexada). |
 | `GET /jobs/{job_id}/pages/{n}/result` | Markdown da página `n`. |
@@ -279,10 +280,20 @@ SOURCE_PURGED` e as imagens `410 SOURCE_PURGED` (`cause: ASSETS_PURGED`). Para a
 qualquer rota `/images/*` (ver
 [vision.md](vision.md#guardar-ou-apagar-a-imagem-original-purge_source)).
 
+## Webhook de conclusão (`callback_url`)
+
+Em vez de consultar o job em loop, passe `callback_url` (https) no `/upload`, `/convert` ou
+`/transcribe`: quando o job principal termina, a plataforma envia um `POST` assinado com
+`job.completed`, `job.failed` ou `job.partial` (só metadados; o Markdown se busca em
+`GET /jobs/{job_id}/result`). O estado da entrega vem em `webhook` de `GET /jobs/{job_id}`
+(`url_host`, `status`, `attempts`, `last_http_status`, `last_error`, `delivered_at`,
+`delivery_id`). Contrato, assinatura e novas tentativas: [webhooks.md](webhooks.md).
+
 ## Configuração
 
 | Variável | Default | Efeito |
 |---|---|---|
+| `WEBHOOK_SIGNING_SECRET` / `WEBHOOK_QUEUE` / `WEBHOOK_ALLOW_HTTP` | vazio / vazio / `false` | Webhook de conclusão; ver [webhooks.md](webhooks.md#configuração). |
 | `RESULT_TTL_SECONDS` | `3600` | TTL de `job:{id}:result` no Redis. |
 | `ASSET_RETENTION_SECONDS` | `3600` | Com `purge_source=true`, quanto tempo as imagens da conversão ficam depois do fim do job. |
 | (fixo no código) | 24 h | TTL de `job:{id}:status`, `job:{id}:owner`, `job:{id}:pages:total`. |
