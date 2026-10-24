@@ -427,7 +427,9 @@ def _execute(usage: EngineUsage, engine: Engine, d: Optional[JobDispatch], holde
             budget_seconds = pricing.deadline_seconds(usage.reserved_usd, rate)
             max_bytes = int((engine.config or {}).get("max_input_bytes") or 0) or None
             extra = {"max_media_bytes": max_bytes} if max_bytes else {}
-            result = adapter.execute(media=file_path.read_bytes, suffix=file_path.suffix.lower(), options=options,
+            # The configured duration limit travels with the request (whisper_core enforces it while decoding)
+            result = adapter.execute(media=file_path.read_bytes, suffix=file_path.suffix.lower(),
+                                     options={**options, "max_audio_seconds": get_settings().max_audio_duration_seconds},
                                      ctx=ctx, budget_seconds=budget_seconds, spawn_guard=_upload_slot, **extra)
 
         actual = pricing.settle_usd(result.usage.reported_seconds, result.usage.measured_seconds, rate)

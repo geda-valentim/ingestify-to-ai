@@ -126,7 +126,7 @@ def test_a_remote_item_runs_finishes_like_local_and_settles_the_larger_of_report
     assert run(world, usage_id) == "succeeded"
 
     request = account.spawned[0]
-    assert request["media"].startswith(b"ID3") and request["options"] == {}
+    assert request["media"].startswith(b"ID3") and request["options"] == {"max_audio_seconds": remote.get_settings().max_audio_duration_seconds}
     usage = world.usage(usage_id)
     rate = Decimal(str(usage.rate_usd_per_s))
     assert usage.status == "settled" and usage.outcome == "succeeded" and usage.output_persisted_at is not None

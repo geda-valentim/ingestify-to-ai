@@ -32,6 +32,7 @@ from datetime import datetime, timedelta, timezone
 import logging
 
 from shared.schemas import (
+    DoclingPresetName,
     ConvertRequest,
     JobCreatedResponse,
     JobStatusResponse,
@@ -251,7 +252,7 @@ async def upload_and_convert(
     file: UploadFile = File(..., description="Arquivo para conversão (PDF, DOCX, HTML, etc.)"),
     name: Optional[str] = Form(None, description="Nome de identificação (opcional, padrão: nome do arquivo)"),
     tags: Optional[str] = Form(None, description=TAGS_FORM_DESCRIPTION),
-    docling_preset: Optional[str] = Form(
+    docling_preset: Optional[DoclingPresetName] = Form(
         "fast",
         description="Quality/speed preset for PDF conversion: 'fast' (~35s/MB, text-only), 'balanced' (~70-105s/MB, with images), 'quality' (~350s/MB, with OCR)"
     ),
@@ -1137,7 +1138,7 @@ async def convert_document(
         description="Nome de identificação opcional (padrão: nome do arquivo ou URL)"
     ),
     tags: Optional[str] = Form(None, description=TAGS_FORM_DESCRIPTION),
-    docling_preset: Optional[Literal["fast", "balanced", "quality"]] = Form(
+    docling_preset: Optional[DoclingPresetName] = Form(
         None,
         description="Preset do Docling para PDF: 'fast' (só texto, sem OCR), 'balanced' (com imagens), "
                     "'quality' (com OCR, para PDFs escaneados). Omitido: padrões do servidor (DOCLING_ENABLE_*)",

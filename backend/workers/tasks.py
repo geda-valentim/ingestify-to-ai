@@ -16,12 +16,13 @@ from uuid import uuid4
 import json
 import logging
 import asyncio
+import contextlib
 import shutil
 import time
 
 from workers.celery_app import celery_app
 from workers.converter import get_converter
-from workers.sources import get_source_handler
+from workers.sources import SourceFileTooLarge, get_source_handler
 from shared.redis_client import get_redis_client
 from shared.elasticsearch_client import get_es_client
 from shared.minio_client import get_minio_client
@@ -102,11 +103,11 @@ def _will_retry(task) -> bool:
     return (request.retries or 0) < (task.max_retries or 0)
 
 
-def _catalog_error(code: str, technical) -> str:
+def _catalog_error(code: str, technical, **context) -> str:
     """A job error message from shared.error_catalog, with the technical cause after it."""
     from shared import error_catalog
 
-    message = error_catalog.describe(code)[0]
+    message = error_catalog.describe(code, **context)[0]
     return f"{message} ({technical})" if technical else message
 
 
@@ -552,8 +553,14 @@ def _run_routed_transcription(job_id: str, source: str, options: dict, usage_id:
     except Exception as exc:
         heartbeat.stop()
         logger.error(f"[MAIN JOB {job_id}] Routed transcription failed: {exc}", exc_info=True)
-        _, change = ledger.settle_failed(usage_id, holder, error_code="INTERNAL", detail=str(exc),
-                                         session_factory=SessionLocal)
+        if _is_duration_limit(exc):
+            # The backlog must not place the same file again: fail the job for good
+            _, change = ledger.settle_failed(usage_id, holder, error_code=exc.code,
+                                             detail=_audio_refusal_message(exc),
+                                             counts=False, terminal=True, session_factory=SessionLocal)
+        else:
+            _, change = ledger.settle_failed(usage_id, holder, error_code="INTERNAL", detail=str(exc),
+                                             session_factory=SessionLocal)
         if not _strict_audio_task(options):
             try:
                 shutil.rmtree(Path(settings.temp_storage_path) / job_id, ignore_errors=True)
@@ -570,6 +577,20 @@ def _run_routed_transcription(job_id: str, source: str, options: dict, usage_id:
                             session_factory=SessionLocal)
     engine_dispatch.kick(celery_app)
     return {"job_id": job_id, "status": "completed"}
+
+
+_AUDIO_REFUSALS = ("AUDIO_DURATION_LIMIT_EXCEEDED", "AUDIO_SAMPLE_RATE_UNSUPPORTED")
+
+
+def _is_duration_limit(exc: BaseException) -> bool:
+    """The audio itself is refused (too long, rate too low): the input's fault, retrying cannot help"""
+    return getattr(exc, "code", None) in _AUDIO_REFUSALS
+
+
+def _audio_refusal_message(exc: BaseException) -> str:
+    """The catalog message of an audio refusal, with the limit in minutes when it is the duration"""
+    maximum = getattr(exc, "maximum_seconds", None) or settings.max_audio_duration_seconds
+    return _catalog_error(exc.code, None, max_minutes=f"{maximum / 60:g}")
 
 
 def _strict_audio_task(options):
@@ -866,7 +887,43 @@ def process_conversion(
             settle=(lambda error: _record_main_failure(job_id, redis_client, error, retrying=False))
             if retrying else None)
 
+    except SourceFileTooLarge as exc:
+        # Permanent: the provider file is above MAX_FILE_SIZE_MB, a retry downloads the same bytes
+        logger.warning(f"[MAIN JOB {job_id}] {exc}")
+        from shared import error_catalog
+
+        error_msg = error_catalog.render("FILE_TOO_LARGE", max_size_mb=exc.max_mb)
+        strict = _strict_audio_task(options)
+        try:
+            if strict:
+                if not _fail_transcription_attempt(job_id, options, redis_client, error_msg, retry=False):
+                    return {"job_id": job_id, "status": "discarded"}
+            else:
+                _record_main_failure(job_id, redis_client, error_msg, retrying=False)
+        except BaseException:
+            # A status write that fails must not leave the download or the provider token behind
+            if not strict:
+                shutil.rmtree(Path(settings.temp_storage_path) / job_id, ignore_errors=True)
+            with contextlib.suppress(Exception):
+                redis_client.delete_source_token(job_id)
+            raise
+        redis_client.delete_source_token(job_id)
+        if not strict:
+            # The strict audio path leaves the job directory alone: a successor attempt may share it
+            shutil.rmtree(Path(settings.temp_storage_path) / job_id, ignore_errors=True)
+        return {"job_id": job_id, "status": "failed", "error": error_msg}
+
     except Exception as exc:
+        if _is_duration_limit(exc):
+            # Coded rejection, never retried: the same file is as long the next time
+            error_msg = _audio_refusal_message(exc)
+            logger.warning(f"[MAIN JOB {job_id}] {exc}")
+            if _strict_audio_task(options):
+                changed = _fail_transcription_attempt(job_id, options, redis_client, error_msg, retry=False)
+                return {"job_id": job_id, "status": "failed" if changed else "discarded"}
+            _record_main_failure(job_id, redis_client, error_msg, retrying=False)
+            shutil.rmtree(Path(settings.temp_storage_path) / job_id, ignore_errors=True)
+            return {"job_id": job_id, "status": "failed", "error": error_msg}
         logger.error(f"[MAIN JOB {job_id}] Failed: {exc}", exc_info=True)
         if _strict_audio_task(options):
             retry = self.request.retries < self.max_retries

@@ -12,6 +12,7 @@ from typing import Dict, Any, List
 import logging
 
 from workers.audio.base_transcriber import AudioTranscriber, VIDEO_FORMATS
+from workers.engines import whisper_core
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +29,8 @@ class OpenAIWhisperTranscriber(AudioTranscriber):
         self,
         model_size: str = "turbo",
         device: str = None,
-        download_root: str = None
+        download_root: str = None,
+        max_audio_seconds: float = 3600,
     ):
         """
         Initialize OpenAI Whisper transcriber
@@ -56,6 +58,7 @@ class OpenAIWhisperTranscriber(AudioTranscriber):
         # This class must not probe torch itself: there is exactly one CUDA
         # probe in the codebase and it lives in shared/device.py.
         self.device = device or "cpu"
+        self.max_audio_seconds = max_audio_seconds
 
         logger.info(
             f"Initializing OpenAI Whisper (model={model_size}, device={self.device})"
@@ -93,8 +96,9 @@ class OpenAIWhisperTranscriber(AudioTranscriber):
 
         try:
             # Transcribe audio
+            # Decoded here, with the duration limit, rather than by whisper's unbounded ffmpeg read
             result = self.model.transcribe(
-                str(audio_path),
+                whisper_core.load_bounded_audio(audio_path, self.max_audio_seconds),
                 language=language,
                 word_timestamps=include_word_timestamps,
                 temperature=temperature,
@@ -158,6 +162,8 @@ class OpenAIWhisperTranscriber(AudioTranscriber):
 
             return transcription_result
 
+        except (whisper_core.AudioDurationExceeded, whisper_core.AudioSampleRateUnsupported):
+            raise  # a coded rejection of the input, not a transcription failure
         except Exception as e:
             logger.error(f"Transcription failed: {e}", exc_info=True)
             raise Exception(f"Failed to transcribe audio: {str(e)}") from e
@@ -172,7 +178,7 @@ class OpenAIWhisperTranscriber(AudioTranscriber):
             import whisper
 
             # Load audio and detect language
-            audio = whisper.load_audio(str(audio_path))
+            audio = whisper_core.load_bounded_audio(audio_path, 30, truncate=True)
 
             # Pad or trim to 30 seconds for detection
             audio = whisper.pad_or_trim(audio)
@@ -191,6 +197,8 @@ class OpenAIWhisperTranscriber(AudioTranscriber):
 
             return detected_language
 
+        except (whisper_core.AudioDurationExceeded, whisper_core.AudioSampleRateUnsupported):
+            raise
         except Exception as e:
             logger.error(f"Language detection failed: {e}", exc_info=True)
             raise Exception(f"Failed to detect language: {str(e)}") from e

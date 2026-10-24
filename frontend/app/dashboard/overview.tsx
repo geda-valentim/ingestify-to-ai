@@ -13,7 +13,7 @@ import { loginUrl } from "@/lib/session";
 
 const capabilities = [
   { title: "Convert files", description: "Turn documents, images and recordings into usable text.", href: "/convert", icon: FileInput },
-  { title: "Live transcription", description: "Capture speech and follow your transcript as it arrives.", href: "/live", icon: AudioLines },
+  { title: "Live transcription (Labs)", description: "Capture speech and follow your transcript as it arrives.", href: "/live", icon: AudioLines },
   { title: "Jobs & search", description: "Track processing and find content you have already ingested.", href: "/jobs", icon: Search },
   { title: "Build with agents", description: "Connect ingestion, progress, reading and search as tools.", href: "/agents", icon: Workflow },
 ];

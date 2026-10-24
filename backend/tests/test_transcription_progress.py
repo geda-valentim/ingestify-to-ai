@@ -76,7 +76,7 @@ def test_a_failing_progress_write_never_fails_the_transcription():
     _transcription_progress(redis_client, "job")(100.0, 3600.0)  # no exception
 
 
-def test_faster_whisper_reports_each_segment_as_it_is_decoded(tmp_path):
+def test_faster_whisper_reports_each_segment_as_it_is_decoded(tmp_path, monkeypatch):
     decoded = []
 
     def segments():
@@ -92,6 +92,8 @@ def test_faster_whisper_reports_each_segment_as_it_is_decoded(tmp_path):
     transcriber = FasterWhisperTranscriber.__new__(FasterWhisperTranscriber)
     transcriber.model = model
     transcriber.model_size = "turbo"
+    transcriber.max_audio_seconds = 3600
+    monkeypatch.setattr("workers.engines.whisper_core.load_bounded_audio", lambda path, maximum: b"audio")
     audio = tmp_path / "aula.mp3"
     audio.write_bytes(b"ID3")
 
@@ -116,7 +118,7 @@ def test_faster_whisper_reports_each_segment_as_it_is_decoded(tmp_path):
     ]
 
 
-def test_faster_whisper_without_a_callback_behaves_as_before(tmp_path):
+def test_faster_whisper_without_a_callback_behaves_as_before(tmp_path, monkeypatch):
     model = MagicMock()
     model.transcribe.return_value = (
         iter([SimpleNamespace(start=0.0, end=1.0, text=" oi ", words=None)]),
@@ -125,6 +127,8 @@ def test_faster_whisper_without_a_callback_behaves_as_before(tmp_path):
     transcriber = FasterWhisperTranscriber.__new__(FasterWhisperTranscriber)
     transcriber.model = model
     transcriber.model_size = "turbo"
+    transcriber.max_audio_seconds = 3600
+    monkeypatch.setattr("workers.engines.whisper_core.load_bounded_audio", lambda path, maximum: b"audio")
     audio = tmp_path / "aula.mp3"
     audio.write_bytes(b"ID3")
 

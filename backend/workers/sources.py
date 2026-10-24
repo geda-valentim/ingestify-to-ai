@@ -13,6 +13,37 @@ from shared.config import get_settings
 logger = logging.getLogger(__name__)
 
 
+class SourceFileTooLarge(Exception):
+    """The source file is above MAX_FILE_SIZE_MB. Permanent: retrying cannot make it smaller."""
+
+    def __init__(self, max_mb: int):
+        self.max_mb = max_mb
+        super().__init__(f"File exceeds maximum size of {max_mb}MB")
+
+
+# Chunk size of the provider downloads: bounds the memory held per request
+DOWNLOAD_CHUNK_BYTES = 4 * 1024 * 1024
+
+
+class _LimitedWriter:
+    """File wrapper that refuses to write past `max_bytes` (counts bytes as they land on disk)."""
+
+    def __init__(self, fh, max_bytes: int, max_mb: int):
+        self._fh = fh
+        self._max_bytes = max_bytes
+        self._max_mb = max_mb
+        self.written = 0
+
+    def write(self, data) -> int:
+        self.written += len(data)
+        if self.written > self._max_bytes:
+            raise SourceFileTooLarge(self._max_mb)
+        return self._fh.write(data)
+
+    def flush(self):
+        self._fh.flush()
+
+
 class SourceHandler(ABC):
     """Abstract base class for source handlers"""
 
@@ -90,9 +121,7 @@ class URLHandler(SourceHandler):
                             async for chunk in response.aiter_bytes():
                                 downloaded += len(chunk)
                                 if downloaded > max_bytes:
-                                    raise Exception(
-                                        f"File exceeds maximum size of {get_settings().max_file_size_mb}MB"
-                                    )
+                                    raise SourceFileTooLarge(get_settings().max_file_size_mb)
                                 f.write(chunk)
 
                         logger.info(f"Downloaded {downloaded} bytes to {file_path}")
@@ -102,6 +131,9 @@ class URLHandler(SourceHandler):
 
                 raise Exception(f"Too many redirects (max {self.MAX_REDIRECTS})")
 
+        except SourceFileTooLarge:
+            file_path.unlink(missing_ok=True)
+            raise
         except httpx.HTTPError as e:
             file_path.unlink(missing_ok=True)
             logger.error(f"HTTP error downloading file: {e}")
@@ -224,12 +256,13 @@ class GoogleDriveHandler(SourceHandler):
         # Create temp directory
         temp_path.mkdir(parents=True, exist_ok=True)
         file_path = temp_path / f"gdrive_{source}"
+        max_mb = get_settings().max_file_size_mb
+        max_bytes = max_mb * 1024 * 1024
 
         try:
             from google.oauth2.credentials import Credentials
             from googleapiclient.discovery import build
             from googleapiclient.http import MediaIoBaseDownload
-            import io
 
             # Create credentials from token
             creds = Credentials(token=auth_token)
@@ -237,25 +270,30 @@ class GoogleDriveHandler(SourceHandler):
             # Build Drive service
             service = build('drive', 'v3', credentials=creds)
 
-            # Download file
+            # Fail fast on the declared size (absent for Google-native documents)
+            declared = service.files().get(fileId=source, fields='size').execute().get('size')
+            if declared is not None and int(declared) > max_bytes:
+                raise SourceFileTooLarge(max_mb)
+
+            # Stream to disk chunk by chunk; the writer aborts once the limit is crossed
             request = service.files().get_media(fileId=source)
-            fh = io.BytesIO()
-            downloader = MediaIoBaseDownload(fh, request)
-
-            done = False
-            while not done:
-                status, done = downloader.next_chunk()
-                if status:
-                    logger.info(f"Download progress: {int(status.progress() * 100)}%")
-
-            # Write to file
             with open(file_path, 'wb') as f:
-                f.write(fh.getvalue())
+                downloader = MediaIoBaseDownload(
+                    _LimitedWriter(f, max_bytes, max_mb), request, chunksize=DOWNLOAD_CHUNK_BYTES)
+                done = False
+                while not done:
+                    status, done = downloader.next_chunk()
+                    if status:
+                        logger.info(f"Download progress: {int(status.progress() * 100)}%")
 
             logger.info(f"Downloaded from Google Drive to {file_path}")
             return file_path
 
+        except SourceFileTooLarge:
+            file_path.unlink(missing_ok=True)
+            raise
         except Exception as e:
+            file_path.unlink(missing_ok=True)
             logger.error(f"Google Drive download failed: {e}")
             raise Exception(f"Failed to download from Google Drive: {str(e)}")
 
@@ -287,6 +325,8 @@ class DropboxHandler(SourceHandler):
         temp_path.mkdir(parents=True, exist_ok=True)
         filename = source.split('/')[-1] or 'dropbox_file'
         file_path = temp_path / filename
+        max_mb = get_settings().max_file_size_mb
+        max_bytes = max_mb * 1024 * 1024
 
         try:
             import dropbox
@@ -294,17 +334,28 @@ class DropboxHandler(SourceHandler):
             # Create Dropbox client
             dbx = dropbox.Dropbox(auth_token)
 
-            # Download file
+            # The body is streamed (the SDK does not read it until asked)
             metadata, response = dbx.files_download(source)
+            try:
+                declared = getattr(metadata, 'size', None)
+                if declared is not None and declared > max_bytes:
+                    raise SourceFileTooLarge(max_mb)
 
-            # Write to file
-            with open(file_path, 'wb') as f:
-                f.write(response.content)
+                with open(file_path, 'wb') as f:
+                    writer = _LimitedWriter(f, max_bytes, max_mb)
+                    for chunk in response.iter_content(chunk_size=DOWNLOAD_CHUNK_BYTES):
+                        writer.write(chunk)
+            finally:
+                response.close()
 
             logger.info(f"Downloaded from Dropbox to {file_path}")
             return file_path
 
+        except SourceFileTooLarge:
+            file_path.unlink(missing_ok=True)
+            raise
         except Exception as e:
+            file_path.unlink(missing_ok=True)
             logger.error(f"Dropbox download failed: {e}")
             raise Exception(f"Failed to download from Dropbox: {str(e)}")
 

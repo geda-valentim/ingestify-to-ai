@@ -15,6 +15,7 @@ from pathlib import Path
 import threading
 import time
 
+from workers.engines.whisper_core import DURATION_TOLERANCE_SECONDS
 from workers.engines.transcript_schema import normalize_aligned_segments, validate_result
 
 VERSION = '3.8.6'
@@ -25,8 +26,9 @@ class TranscriptionCancelled(RuntimeError):
 
 
 class WhisperXError(RuntimeError):
-    def __init__(self, code, detail=''):
+    def __init__(self, code, detail='', maximum_seconds=None):
         self.code = code
+        self.maximum_seconds = maximum_seconds
         super().__init__(f'{code}: {detail}' if detail else code)
 
 
@@ -77,11 +79,11 @@ def load_bounded_audio(path, maximum_seconds):
     import numpy as np
     import subprocess
     process = subprocess.run(['ffmpeg', '-nostdin', '-v', 'error', '-i', str(path),
-        '-t', str(maximum_seconds + 1), '-f', 'f32le', '-acodec', 'pcm_f32le',
+        '-t', str(maximum_seconds + DURATION_TOLERANCE_SECONDS), '-f', 'f32le', '-acodec', 'pcm_f32le',
         '-ac', '1', '-ar', '16000', '-'], capture_output=True, check=True)
     audio = np.frombuffer(process.stdout, dtype=np.float32).copy()
-    if len(audio) > maximum_seconds * 16000:
-        raise WhisperXError('AUDIO_DURATION_LIMIT_EXCEEDED')
+    if len(audio) > (maximum_seconds + DURATION_TOLERANCE_SECONDS) * 16000:
+        raise WhisperXError('AUDIO_DURATION_LIMIT_EXCEEDED', maximum_seconds=maximum_seconds)
     return audio
 
 
@@ -156,8 +158,8 @@ class WhisperXRuntime:
             duration = len(audio) / 16000
             if on_progress:
                 on_progress(0, duration, None)
-            if duration > self.max_audio_seconds:
-                raise WhisperXError('AUDIO_DURATION_LIMIT_EXCEEDED')
+            if duration > self.max_audio_seconds + DURATION_TOLERANCE_SECONDS:
+                raise WhisperXError('AUDIO_DURATION_LIMIT_EXCEEDED', maximum_seconds=self.max_audio_seconds)
             profile = options.get('transcription_profile')
             if profile:
                 expected = profile['models']
