@@ -241,7 +241,7 @@ def get_user_by_api_key(db: Session, api_key: str) -> Optional[User]:
 # FastAPI Dependencies
 # ============================================
 
-async def get_current_user(
+def get_current_user(
     request: Request,
     bearer_token: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
     api_key: Optional[str] = Depends(api_key_scheme),
@@ -303,7 +303,7 @@ async def get_current_user(
     raise credentials_exception
 
 
-async def get_current_active_user(
+def get_current_active_user(
     current_user: User = Depends(get_current_user)
 ) -> User:
     """
@@ -324,7 +324,7 @@ async def get_current_active_user(
     return current_user
 
 
-async def get_optional_user(
+def get_optional_user(
     request: Request,
     bearer_token: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
     api_key: Optional[str] = Depends(api_key_scheme),
@@ -343,6 +343,6 @@ async def get_optional_user(
         User object or None
     """
     try:
-        return await get_current_user(request, bearer_token, api_key, db)
+        return get_current_user(request, bearer_token, api_key, db)
     except HTTPException:
         return None

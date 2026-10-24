@@ -1,5 +1,8 @@
 from starlette.responses import JSONResponse
 import json
+import threading
+import time
+from fastapi.encoders import jsonable_encoder
 from shared.job_configuration import job_configuration
 from shared import conversion_assets, webhooks
 from shared.job_source import (
@@ -523,7 +526,8 @@ async def upload_and_convert(
             minio_client = get_minio_client()
             minio_object_name = f"uploads/{job_id}/{filename}"
             try:
-                minio_client.upload_file(
+                await run_in_threadpool(
+                    minio_client.upload_file,
                     bucket_name=minio_client.bucket_uploads,
                     object_name=minio_object_name,
                     file_path=str(temp_file_path),
@@ -1019,7 +1023,8 @@ async def transcribe_audio(
             minio_client = get_minio_client()
             minio_object_name = f"audio/{job_id}/{filename}"
             try:
-                minio_client.upload_file(
+                await run_in_threadpool(
+                    minio_client.upload_file,
                     bucket_name=minio_client.bucket_audio,
                     object_name=minio_object_name,
                     file_path=str(temp_file_path),
@@ -1422,7 +1427,8 @@ async def convert_document(
                 minio_client = get_minio_client()
                 minio_object_name = f"uploads/{job_id}/{filename}"
                 try:
-                    minio_client.upload_file(
+                    await run_in_threadpool(
+                        minio_client.upload_file,
                         bucket_name=minio_client.bucket_uploads,
                         object_name=minio_object_name,
                         file_path=str(temp_file_path),
@@ -1531,7 +1537,7 @@ def _job_status_with_db_fallback(redis_client, job_id: str, owned_job: Optional[
     }
 
 @router.get("/jobs/{job_id}", summary="Estado do job", response_model=JobStatusResponse)
-async def get_job_status(
+def get_job_status(
     job_id: str,
     current_user: User = Depends(get_current_active_user),
     owned_job: Optional[Job] = Depends(_job_read),
@@ -2437,7 +2443,7 @@ def _transcript_response(job_id: str, fmt: str, redis_client, generation=None, a
 
 
 @router.get("/jobs/{job_id}/transcript/partial", summary="Transcrição parcial em andamento", response_model=PartialTranscriptResponse)
-async def get_partial_transcript(
+def get_partial_transcript(
     job_id: str,
     since: int = Query(0, ge=0, description="Índice do primeiro segmento a retornar (o `next` da consulta anterior)"),
     current_user: User = Depends(get_current_active_user),
@@ -2472,7 +2478,7 @@ async def get_partial_transcript(
 
 
 @router.get("/jobs/{job_id}/pages", summary="Listar páginas do job", response_model=JobPagesResponse)
-async def get_job_pages(
+def get_job_pages(
     job_id: str,
     current_user: User = Depends(get_current_active_user),
     owned_job: Optional[Job] = Depends(_job_read),
@@ -3302,12 +3308,12 @@ async def get_page_pdf(
     }
 
 
-@router.get("/health", summary="Verificar saúde da API", response_model=HealthCheckResponse)
-def health_check():
-    """Health check endpoint"""
-    # Sync on purpose: the Celery inspect below blocks for ~1-2 s, and FastAPI runs a
-    # plain def in its threadpool. As async def it froze the event loop on every
-    # container healthcheck and dropped live sessions with LIVE_BACKPRESSURE.
+HEALTH_CACHE_SECONDS = 5.0
+_health_lock = threading.Lock()
+_health_cache: dict = {"at": 0.0, "payload": None}
+
+
+def _compute_health() -> HealthCheckResponse:
     redis_client = get_redis_client()
     es_client = get_es_client()
 
@@ -3321,7 +3327,7 @@ def health_check():
     worker_count = 0
     try:
         from workers.celery_app import celery_app
-        inspect = celery_app.control.inspect()
+        inspect = celery_app.control.inspect(timeout=1.0)
         stats = inspect.stats()
         worker_count = len(stats) if stats else 0
     except Exception as e:
@@ -3335,7 +3341,7 @@ def health_check():
     else:
         status = "unhealthy"
 
-    response = HealthCheckResponse(
+    return HealthCheckResponse(
         status=status,
         version=API_VERSION,
         redis=redis_ok,
@@ -3347,8 +3353,25 @@ def health_check():
         timestamp=datetime.utcnow(),
     )
 
-    # Return 503 if unhealthy
-    if status == "unhealthy":
-        raise HTTPException(status_code=503, detail=response.dict())
+
+@router.get("/health", summary="Verificar saúde da API", response_model=HealthCheckResponse)
+def health_check():
+    """Health check endpoint"""
+    # Sync on purpose: the Celery inspect below blocks for ~1-2 s, and FastAPI runs a
+    # plain def in its threadpool. As async def it froze the event loop on every
+    # container healthcheck and dropped live sessions with LIVE_BACKPRESSURE.
+    # Single-flight + short cache: a burst of unauthenticated calls shares one probe
+    # instead of each holding a threadpool token for the whole inspect.
+    with _health_lock:
+        now = time.monotonic()
+        response = _health_cache["payload"]
+        if response is None or now - _health_cache["at"] >= HEALTH_CACHE_SECONDS:
+            response = _compute_health()
+            _health_cache["payload"] = response
+            _health_cache["at"] = time.monotonic()
+
+    # Return 503 if unhealthy (the timestamp is a datetime: encode before HTTPException)
+    if response.status == "unhealthy":
+        raise HTTPException(status_code=503, detail=jsonable_encoder(response))
 
     return response
