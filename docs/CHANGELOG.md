@@ -2,6 +2,17 @@
 
 > **Registro histórico (2025-10).** Não é mantido; para mudanças posteriores use `git log`. Observação: `workers/tasks_old.py`, citado abaixo, não existe (há um `workers/tasks.py.backup`). Exceção: mudanças de comportamento intencionais que uma spec manda registrar aqui entram na seção abaixo.
 
+## 2026-10: Disponibilidade da transcrição ao vivo (API 1.6.0)
+
+- `GET /transcribe/live/sessions/availability` diz, sem reservar vaga, se uma sessão
+  seria aceita agora: `{"available", "code", "message", "diarization": {...}}`, com os
+  mesmos códigos que o `POST` responderia (`LIVE_DISABLED`, `LIVE_NOT_READY`,
+  `LIVE_CAPACITY_FULL`, `LIVE_DIARIZATION_NOT_READY`).
+- A página `/live` consulta ao abrir e a cada 5 s parada: com o worker fora do ar, avisa
+  antes e desabilita "Iniciar microfone"; a identificação de falantes fica desabilitada
+  quando não está pronta.
+- Os 503 de `POST /transcribe/live/sessions` passam a trazer `message` junto do `code`.
+
 ## 2026-10: Códigos de erro na criação de jobs (API 1.5.0)
 
 - Toda recusa de `POST /upload`, `POST /convert` e `POST /transcribe` traz

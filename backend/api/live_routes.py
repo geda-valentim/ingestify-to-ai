@@ -74,8 +74,73 @@ def live_owned(job_id, owned_job, db):
     return live
 
 
+UNAVAILABLE_MESSAGES = {
+    'LIVE_DISABLED': 'A transcrição ao vivo está desligada neste servidor.',
+    'LIVE_NOT_READY': 'O serviço de transcrição ao vivo não está disponível agora. Tente de novo em instantes.',
+    'LIVE_CAPACITY_FULL': 'Todas as vagas de transcrição ao vivo estão em uso. Tente de novo em instantes.',
+    'LIVE_DIARIZATION_NOT_READY': 'A identificação de falantes ao vivo não está disponível agora.',
+}
+
+
 def unavailable(code):
-    raise HTTPException(503, detail={'code': code}, headers={'Retry-After': '5'})
+    raise HTTPException(503, detail={'code': code, 'message': UNAVAILABLE_MESSAGES.get(code, UNAVAILABLE_MESSAGES['LIVE_NOT_READY'])},
+                        headers={'Retry-After': '5'})
+
+
+def availability_inputs(db):
+    """The refusal that does not depend on the protocol (None = none), read once per request."""
+    settings = get_settings()
+    if not settings.live_transcription_enabled:
+        return 'LIVE_DISABLED'
+    try:
+        if len(settings.live_internal_token) < 32 or not available(db):
+            return 'LIVE_NOT_READY'
+        from shared.engine_control.admission import admission_refusal
+        if admission_refusal(db, 'live-transcription'):  # acquire() would answer 503 LIVE_NOT_READY
+            return 'LIVE_NOT_READY'
+    except Exception:  # DB down: the session could not be created either
+        return 'LIVE_NOT_READY'
+    return None
+
+
+def availability_code(store, protocol, common):
+    """Why a session of this protocol would be refused now (None = it would be admitted), without reserving."""
+    settings = get_settings()
+    if common == 'LIVE_DISABLED':
+        return common
+    if protocol == 2 and not (settings.live_diarization_enabled and settings.live_diarization_qualified):
+        return 'LIVE_DIARIZATION_NOT_READY'
+    if common:
+        return common
+    try:
+        return store.availability(protocol)
+    except Exception:  # Redis down: the session could not be admitted either
+        return 'LIVE_NOT_READY'
+
+
+@router.get('/availability', summary="Disponibilidade da transcrição ao vivo")
+def session_availability(response: Response, user: User = Depends(require('live.sessions.create')),
+                         db: Session = Depends(get_db)):
+    """
+    Se uma sessão seria aceita agora, sem reservar vaga. Consulte antes de abrir o
+    microfone: `available: false` traz o mesmo `code` que `POST` responderia (503).
+
+    - `LIVE_DISABLED`: desligada neste servidor (`LIVE_TRANSCRIPTION_ENABLED`)
+    - `LIVE_NOT_READY`: worker ao vivo fora do ar ou aquecendo
+    - `LIVE_CAPACITY_FULL`: todas as vagas em uso
+    - `diarization`: o mesmo para sessões com identificação de falantes
+      (`LIVE_DIARIZATION_NOT_READY` quando não qualificada ou sem vaga)
+
+    É um retrato: entre esta resposta e o `POST` a vaga pode ser ocupada.
+    """
+    response.headers['Cache-Control'] = 'no-store'
+    store, common = get_store(), availability_inputs(db)
+
+    def state(protocol):
+        code = availability_code(store, protocol, common)
+        return {'available': code is None, 'code': code, 'message': UNAVAILABLE_MESSAGES.get(code)}
+
+    return {**state(1), 'diarization': state(2)}
 
 
 @router.post('', summary="Criar sessão de transcrição ao vivo", status_code=201)

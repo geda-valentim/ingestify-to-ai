@@ -786,7 +786,16 @@ export const computeApi = {
   status: () => adminGet<EnginesStatus>("/admin/engines/status"),
 };
 
+export interface LiveAvailabilityState { available: boolean; code: string | null; message: string | null }
+export type LiveAvailability = LiveAvailabilityState & { diarization: LiveAvailabilityState };
+
 export const liveApi = {
+  /** Whether a session would be admitted now (reserves nothing). */
+  async availability(): Promise<LiveAvailability> {
+    const response = await apiFetch(`${API_URL}/transcribe/live/sessions/availability`, { headers: getHeaders(true) });
+    if (!response.ok) await throwApiError(response, "Não foi possível verificar a transcrição ao vivo");
+    return response.json();
+  },
   async getStatus(jobId: string): Promise<{ job_id: string; state: string; duration_seconds: number; error_code: string | null }> {
     const response = await apiFetch(`${API_URL}/transcribe/live/sessions/${jobId}`, { headers: getHeaders(true) });
     if (!response.ok) await throwApiError(response, "Não foi possível consultar a sessão");

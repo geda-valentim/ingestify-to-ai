@@ -2,7 +2,7 @@
 
 Gerado do OpenAPI da aplicação por `scripts/generate_api_docs.py`. Não edite este arquivo à mão.
 
-API `1.5.0`: **139 operações HTTP** e **1 WebSocket(s)**.
+API `1.6.0`: **140 operações HTTP** e **1 WebSocket(s)**.
 
 Base pública de desenvolvimento: `https://dev.ingestify.ai/api`. Os caminhos abaixo são relativos à base.
 
@@ -141,6 +141,7 @@ Guias de imagem: [PT](https://dev.ingestify.ai/pt/docs/images) / [EN](https://de
 | GET | `/projects` | JWT ou API key | Listar projetos com contagens |
 | GET | `/projects/resolve` | JWT ou API key | Resolver nome de projeto |
 | GET | `/projects/{project_id}/folders/resolve` | JWT ou API key | Resolver nome de pasta do projeto |
+| GET | `/transcribe/live/sessions/availability` | JWT ou API key | Disponibilidade da transcrição ao vivo |
 | POST | `/transcribe/live/sessions` | JWT ou API key | Criar sessão de transcrição ao vivo |
 | GET | `/transcribe/live/sessions/{job_id}` | JWT ou API key | Estado da sessão ao vivo |
 | DELETE | `/transcribe/live/sessions/{job_id}` | JWT ou API key | Cancelar sessão ao vivo |
@@ -1810,6 +1811,29 @@ Respostas declaradas:
 ## Live transcription
 
 Sessões de transcrição ao vivo: criar (ticket do WebSocket), consultar e cancelar.
+
+### GET /transcribe/live/sessions/availability
+
+Disponibilidade da transcrição ao vivo
+
+Autorização: **JWT ou API key**. Operation ID: `session_availability_transcribe_live_sessions_availability_get`.
+
+Se uma sessão seria aceita agora, sem reservar vaga. Consulte antes de abrir o
+microfone: `available: false` traz o mesmo `code` que `POST` responderia (503).
+
+- `LIVE_DISABLED`: desligada neste servidor (`LIVE_TRANSCRIPTION_ENABLED`)
+- `LIVE_NOT_READY`: worker ao vivo fora do ar ou aquecendo
+- `LIVE_CAPACITY_FULL`: todas as vagas em uso
+- `diarization`: o mesmo para sessões com identificação de falantes
+  (`LIVE_DIARIZATION_NOT_READY` quando não qualificada ou sem vaga)
+
+É um retrato: entre esta resposta e o `POST` a vaga pode ser ocupada.
+
+Respostas declaradas:
+
+| Status | Content-Type | Esquema | Descrição |
+| --- | --- | --- | --- |
+| 200 | application/json | objeto livre | Successful Response |
 
 ### POST /transcribe/live/sessions
 

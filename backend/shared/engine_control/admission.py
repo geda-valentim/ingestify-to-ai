@@ -11,7 +11,7 @@ from shared.engine_control.service import ControlError, locked_engine, now
 from shared.models import Engine
 
 
-def resource_rows(db, engine, feature):
+def resource_rows(db, engine, feature, lock=True):
     # Canonical service keys plus GPU shared by the lane; profile can still be desired.
     from shared.engine_control import registry
     from shared.engine_control.service import latest_profile
@@ -20,13 +20,12 @@ def resource_rows(db, engine, feature):
     if not p:
         # Generic tasks can execute multiple features in the same managed service.
         if engine.adapter_type == "local":
-            return (
+            return _lockable(
                 db.query(ControlResource)
                 .filter_by(owner_engine_id=engine.id)
-                .order_by(ControlResource.key)
-                .with_for_update()
-                .all()
-            )
+                .order_by(ControlResource.key),
+                lock,
+            ).all()
         return []
     driver = registry.create(engine.adapter_type)
     keys = set(driver.resource_keys(engine, feature, p.profile))
@@ -39,13 +38,46 @@ def resource_rows(db, engine, feature):
     )
     if applied:
         keys.update(driver.resource_keys(engine, feature, applied.profile))
-    return (
+    return _lockable(
         db.query(ControlResource)
         .filter(ControlResource.key.in_(sorted(keys)))
-        .order_by(ControlResource.key)
-        .with_for_update()
-        .all()
+        .order_by(ControlResource.key),
+        lock,
+    ).all()
+
+
+def _lockable(query, lock):
+    return query.with_for_update() if lock else query
+
+
+def _find_engine(db, engine_id):
+    return (
+        db.query(Engine).filter_by(id=engine_id).first()
+        if engine_id
+        else db.query(Engine).filter_by(slug="local").first()
     )
+
+
+def _refusal(rows, feature):
+    """The code admission refuses with for these resources, or None. Shared by acquire and admission_refusal."""
+    if any(r.gate_closed for r in rows):
+        return "ENGINE_MAINTENANCE"
+    if any(
+        (r.applied or {}).get("feature_modes", {}).get(feature) in ("standby", "stopped")
+        for r in rows
+    ):
+        return "ENGINE_NOT_RUNNING"
+    return None
+
+
+def admission_refusal(db, feature, engine_id=None):
+    """What acquire would refuse with right now (None = admitted), by plain SELECTs: no row locks, no ticket."""
+    if not get_settings().engine_control_enabled:
+        return None
+    e = _find_engine(db, engine_id)
+    if not e:
+        return "ADMISSION_AUTHORITY_UNAVAILABLE"
+    return _refusal(resource_rows(db, e, feature, lock=False), feature)
 
 
 def acquire(feature, holder, engine_id=None, session_factory=None):
@@ -56,23 +88,14 @@ def acquire(feature, holder, engine_id=None, session_factory=None):
 
         session_factory = SessionLocal
     with session_factory() as db:
-        e = (
-            db.query(Engine).filter_by(id=engine_id).first()
-            if engine_id
-            else db.query(Engine).filter_by(slug="local").first()
-        )
+        e = _find_engine(db, engine_id)
         if not e:
             raise ControlError("ADMISSION_AUTHORITY_UNAVAILABLE", 503)
         e = locked_engine(db, e.id)
         rows = resource_rows(db, e, feature)
-        if any(r.gate_closed for r in rows):
-            raise ControlError("ENGINE_MAINTENANCE", 503)
-        if any(
-            (r.applied or {}).get("feature_modes", {}).get(feature)
-            in ("standby", "stopped")
-            for r in rows
-        ):
-            raise ControlError("ENGINE_NOT_RUNNING", 503)
+        refusal = _refusal(rows, feature)
+        if refusal:
+            raise ControlError(refusal, 503)
         tickets = []
         for r in rows:
             ticket = ControlAdmission(

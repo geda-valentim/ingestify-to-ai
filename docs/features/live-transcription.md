@@ -7,7 +7,9 @@ ativação em produção antes dos gates da spec 0005.
 
 ## Uso
 
-Abra `/live`, selecione projeto e pasta, permita o microfone e inicie. A captura
+Abra `/live`, selecione projeto e pasta, permita o microfone e inicie. A página
+consulta `GET /transcribe/live/sessions/availability` ao abrir e a cada 5 s: com o
+worker fora do ar, desligado ou sem vaga, avisa antes e não deixa iniciar. A captura
 começa após `session.ready`; texto provisório substitui a revisão anterior, e
 segmentos confirmados aparecem imediatamente. **Finalizar** envia a cauda e espera
 persistência; o resultado abre na página existente do job, com TXT/JSON/VTT/SRT.
@@ -85,6 +87,8 @@ que aquela geração tentou escrever. Sessão não é reexecutada após restart.
 4. Suba o perfil opt-in com os overlays base/GPU/live e `--profile live`. O worker
    aquece antes de publicar readiness, heartbeat 2 s / TTL 10 s. A API permanece
    desligada até `LIVE_TRANSCRIPTION_ENABLED=true`, após validação dos gates.
+   O worker sobe com `ENVIRONMENT=development` por padrão, como os demais serviços
+   da stack hoje. Em produção defina `LIVE_WORKER_ENVIRONMENT=production` no `.env`.
 5. Confirme inventário em `/admin/gpus`: o footprint live entra no orçamento e
    aparece separado das lanes Celery. Verifique VRAM real sob concorrência planejada.
 

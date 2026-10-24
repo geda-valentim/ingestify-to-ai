@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { AppHeader } from "@/components/app-header";
@@ -14,6 +15,7 @@ import { LiveTranscriptView } from "@/components/job/live-transcript";
 import { useLiveCapture } from "@/hooks/use-live-capture";
 import { useAuthStore } from "@/lib/store/auth";
 import { loginUrl } from "@/lib/session";
+import { ApiError, liveApi } from "@/lib/api";
 
 export default function LivePage() {
   const user = useAuthStore((s) => s.user);
@@ -26,6 +28,19 @@ export default function LivePage() {
   const [diarize, setDiarize] = useState(false);
   const [name, setName] = useState("Transcrição ao vivo");
   const busy = ["starting", "listening", "finishing"].includes(capture.state);
+  // Asked before the microphone opens (and again every few seconds while idle), so an
+  // unavailable worker is announced instead of discovered after "Iniciar microfone".
+  const availability = useQuery({
+    queryKey: ["live-availability"], queryFn: liveApi.availability, enabled: !!user && !busy,
+    refetchInterval: 5000, refetchOnWindowFocus: true, retry: false,
+  });
+  const live = availability.data;
+  const blocked = live ? !(diarize ? live.diarization.available : live.available) : false;
+  const denied = availability.error instanceof ApiError && availability.error.status === 403;
+  const notice = availability.isError ? (denied ? availability.error.message : "Não foi possível verificar a transcrição ao vivo. Tente recarregar a página.")
+    : live && !live.available ? live.message
+    : live && diarize && !live.diarization.available ? live.diarization.message : null;
+  useEffect(() => { if (live && !live.diarization.available && diarize && !busy) setDiarize(false); }, [live, diarize, busy]);
   useEffect(() => { if (hydrated && !user) router.replace(loginUrl()); }, [hydrated, user, router]);
   if (!hydrated || !user) return null;
   return <div className="min-h-screen bg-background">
@@ -39,15 +54,16 @@ export default function LivePage() {
           onProjectChange={(value) => { setProject(value); setFolder(null); }} onFolderChange={setFolder}
           disabled={busy} loadError={projects.isError ? "Tente novamente ou informe um nome." : null} />
         <p className="text-sm">Idioma: Português · O áudio não é armazenado.</p>
-        <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={diarize} disabled={busy} onChange={(e) => setDiarize(e.target.checked)} />Identificar falantes durante a captura</label>
+        <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={diarize} disabled={busy || !live?.diarization.available} onChange={(e) => setDiarize(e.target.checked)} />Identificar falantes durante a captura{live && live.available && !live.diarization.available && <span className="text-muted-foreground">(indisponível agora)</span>}</label>
+        {!busy && notice && <p role="alert" className="rounded-md border border-amber-500/50 bg-amber-500/10 p-3 text-sm">{notice}</p>}
         <div className="flex gap-3 flex-wrap">
-          {!busy && <Button disabled={!project || !name.trim()} onClick={() => capture.start({
+          {!busy && <Button disabled={!project || !name.trim() || (!live && !availability.isError) || blocked} onClick={() => capture.start({
             ...(project?.id ? { project_id: project.id } : { project: project?.name }),
             ...(folder?.id ? { folder_id: folder.id } : folder ? { folder: folder.name } : {}),
           }, name.trim(), diarize)}>Iniciar microfone</Button>}
           {capture.state === "listening" && <Button onClick={() => void capture.finish()}>Finalizar</Button>}
           {busy && <Button variant="outline" onClick={() => void capture.cancel()}>Cancelar</Button>}
-          <span role="status" className="self-center text-sm text-muted-foreground">{{idle: "Pronto para iniciar", starting: "Conectando e verificando disponibilidade…", listening: "Ouvindo", finishing: "Finalizando e salvando…", completed: "Transcrição salva", interrupted: "Sessão interrompida", cancelled: "Sessão cancelada"}[capture.state]}</span>
+          <span role="status" className="self-center text-sm text-muted-foreground">{{idle: availability.isError ? "Pronto para iniciar" : !live ? "Verificando disponibilidade…" : blocked ? "Indisponível no momento" : "Pronto para iniciar", starting: "Conectando e verificando disponibilidade…", listening: "Ouvindo", finishing: "Finalizando e salvando…", completed: "Transcrição salva", interrupted: "Sessão interrompida", cancelled: "Sessão cancelada"}[capture.state]}</span>
         </div>
         {capture.error && <p role="alert" className="text-destructive">{capture.error}</p>}
         {capture.state === "completed" && capture.jobId && <Button asChild><Link href={`/jobs/${capture.jobId}`}>Ver resultado e baixar legendas</Link></Button>}

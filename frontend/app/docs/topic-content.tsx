@@ -1939,6 +1939,7 @@ function LiveCaptureDocs({
       </P>
       <Subheading>{t.api}</Subheading>
       <Endpoint method="POST" path="/transcribe/live/sessions" />
+      <Endpoint method="GET" path="/transcribe/live/sessions/availability" />
       <Endpoint method="GET" path="/transcribe/live/sessions/{job_id}" />
       <Endpoint method="DELETE" path="/transcribe/live/sessions/{job_id}" />
       <P>{t.auth}</P>

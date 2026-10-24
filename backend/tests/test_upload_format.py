@@ -173,4 +173,4 @@ def test_health_reports_the_api_version(monkeypatch):
     monkeypatch.setattr(routes, "get_es_client", lambda: SimpleNamespace(health_check=lambda: True))
     from workers.celery_app import celery_app
     monkeypatch.setattr(celery_app.control, "inspect", lambda: SimpleNamespace(stats=lambda: {"w1": {}}))
-    assert asyncio.run(routes.health_check()).version == API_VERSION == "1.5.0"
+    assert asyncio.run(routes.health_check()).version == API_VERSION
