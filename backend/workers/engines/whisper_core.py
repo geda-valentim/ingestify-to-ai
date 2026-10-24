@@ -153,7 +153,8 @@ def transcribe(
     temperature = options.get('temperature', 0.0)
     beam_size = options.get('beam_size', 5)
 
-    audio = load_bounded_audio(audio_path, options.get('max_audio_seconds') or max_audio_seconds)
+    # The request option (Modal) may only tighten the configured limit, never raise it
+    audio = load_bounded_audio(audio_path, min(options.get('max_audio_seconds') or max_audio_seconds, max_audio_seconds))
 
     segments, info = model.transcribe(
         audio,
