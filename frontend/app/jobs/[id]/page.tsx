@@ -184,6 +184,13 @@ export default function JobStatusPage({ params }: PageProps) {
   useEffect(() => {
     if (liveEligible && liveActive) setSawActive(true);
   }, [liveEligible, liveActive]);
+  // The pages poll stops with the job: one last read so no page is left "converting"
+  const jobStatus = status?.status;
+  useEffect(() => {
+    if (jobStatus && ["completed", "partial", "failed", "cancelled"].includes(jobStatus)) {
+      void queryClient.invalidateQueries({ queryKey: ["job-pages", resolvedParams.id] });
+    }
+  }, [jobStatus, queryClient, resolvedParams.id]);
   const donePages = pages.filter((p: PageInfo) => p.status === "completed").length;
   const liveMounted =
     liveEligible &&
@@ -934,8 +941,9 @@ export default function JobStatusPage({ params }: PageProps) {
 
           {/* Content */}
           <main className="flex-1 min-w-0 min-h-[70vh] lg:min-h-0 lg:overflow-hidden flex flex-col">
-            {/* Stays mounted while a single page is open or the merged result is shown,
-                so coming back keeps the scroll position and the loaded pages */}
+            {/* Stays mounted (display:none) while a single page is open or the merged result
+                is shown, so coming back keeps the loaded pages; LiveDocument saves and
+                restores its own scroll position */}
             {liveMounted && (
               <div className={!selectedPage && liveVisible ? "flex flex-1 min-h-0 flex-col" : "hidden"}>
                 <LiveDocument
@@ -943,6 +951,7 @@ export default function JobStatusPage({ params }: PageProps) {
                   pages={pages}
                   fileName={fileName}
                   token={token}
+                  visible={!selectedPage && liveVisible}
                   canRetry={canRetryPages}
                   retrying={retryPageMutation.isPending}
                   onRetry={(pageNumber) => retryPageMutation.mutate({ pageNumber })}
@@ -1144,7 +1153,7 @@ export default function JobStatusPage({ params }: PageProps) {
             ) : liveVisible ? null : (
               // No page selected: the job's own result
               <>
-              {liveMounted && status.status === "completed" && (
+              {liveEligible && status.status === "completed" && (
                 <div className="flex justify-end border-b px-4 py-2 md:px-6">
                   <LiveViewToggle value={effectiveDocView} onChange={setDocView} />
                 </div>

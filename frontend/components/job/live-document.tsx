@@ -1,8 +1,20 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { AlertCircle, CheckCircle2, Clock, Columns2, Loader2, RotateCw, XCircle } from "lucide-react";
+import {
+  createContext,
+  memo,
+  useCallback,
+  useContext,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type FormEvent,
+  type ReactNode,
+} from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { AlertCircle, CheckCircle2, CircleSlash, Clock, Columns2, Loader2, RotateCw, XCircle } from "lucide-react";
 import { jobsApi } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import {
@@ -10,6 +22,7 @@ import {
   countStates,
   createLimiter,
   isFetchable,
+  reuseSlots,
   trailSegments,
   type LivePageInput,
   type LivePageState,
@@ -22,18 +35,21 @@ import { engineKindLabel, queueReasonText } from "./job-progress";
 import type { JobStatusResponse } from "@/types/api";
 
 // Page Markdown is fetched on demand, a few requests at a time, however long the PDF.
+// LIFO: the page the reader just jumped to starts before those queued while scrolling past.
 const MAX_PAGE_REQUESTS = 4;
-const limitPageRequests = createLimiter(MAX_PAGE_REQUESTS);
+const limitPageRequests = createLimiter(MAX_PAGE_REQUESTS, { lifo: true });
 // Start loading a page a couple of screens before it is reached.
 const NEAR_MARGIN = "1200px 0px";
-const TRAIL_MAX_SEGMENTS = 120;
 const MAX_PAGE_RETRIES = 3;
+const TRAIL_SEGMENT_PX = 4;
+const GO_TO_PAGE_THRESHOLD = 40;
 
 const STATE_LABEL: Record<LivePageState, string> = {
   done: "Converted",
   converting: "Converting",
   queued: "Queued",
   failed: "Failed",
+  skipped: "Not converted",
 };
 
 const STATE_TRAIL_CLASS: Record<LivePageState, string> = {
@@ -41,6 +57,7 @@ const STATE_TRAIL_CLASS: Record<LivePageState, string> = {
   converting: "bg-primary/40 motion-safe:animate-pulse",
   queued: "bg-muted-foreground/25",
   failed: "bg-destructive",
+  skipped: "bg-muted-foreground/10",
 };
 
 const STATE_PILL_CLASS: Record<LivePageState, string> = {
@@ -48,12 +65,14 @@ const STATE_PILL_CLASS: Record<LivePageState, string> = {
   converting: "bg-muted text-foreground",
   queued: "text-muted-foreground ring-1 ring-inset ring-border",
   failed: "bg-destructive/10 text-destructive",
+  skipped: "text-muted-foreground ring-1 ring-inset ring-border",
 };
 
 function StateIcon({ state, className }: { state: LivePageState; className?: string }) {
   const cls = cn("h-3.5 w-3.5 shrink-0", className);
   if (state === "done") return <CheckCircle2 aria-hidden="true" className={cls} />;
   if (state === "failed") return <XCircle aria-hidden="true" className={cls} />;
+  if (state === "skipped") return <CircleSlash aria-hidden="true" className={cls} />;
   if (state === "converting") return <Loader2 aria-hidden="true" className={cn(cls, "motion-safe:animate-spin")} />;
   return <Clock aria-hidden="true" className={cls} />;
 }
@@ -72,29 +91,61 @@ function StatePill({ state, children }: { state: LivePageState; children: ReactN
   );
 }
 
-/** True from the moment the element gets within NEAR_MARGIN of the viewport, and stays true. */
+/**
+ * One IntersectionObserver for every page section, rooted at the element that
+ * actually scrolls (the column from lg up, the window below it) so the margin
+ * counts. Sections register before the root exists, hence the pending list.
+ */
+class ViewportWatcher {
+  private callbacks = new Map<Element, (near: boolean) => void>();
+  private observer: IntersectionObserver | null = null;
+
+  attach(root: Element | null) {
+    this.observer?.disconnect();
+    if (typeof IntersectionObserver === "undefined") {
+      this.callbacks.forEach((cb) => cb(true));
+      return;
+    }
+    this.observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) this.callbacks.get(entry.target)?.(entry.isIntersecting);
+      },
+      { root, rootMargin: NEAR_MARGIN },
+    );
+    this.callbacks.forEach((_cb, el) => this.observer!.observe(el));
+  }
+
+  detach() {
+    this.observer?.disconnect();
+    this.observer = null;
+  }
+
+  observe(el: Element, cb: (near: boolean) => void) {
+    this.callbacks.set(el, cb);
+    if (typeof IntersectionObserver === "undefined" && !this.observer) cb(true);
+    this.observer?.observe(el);
+    return () => {
+      this.callbacks.delete(el);
+      this.observer?.unobserve(el);
+    };
+  }
+}
+
+const ViewportContext = createContext<ViewportWatcher | null>(null);
+
+/** Whether the element is within NEAR_MARGIN of the viewport right now. */
 function useNearViewport<T extends Element>() {
+  const watcher = useContext(ViewportContext);
   const ref = useRef<T | null>(null);
   const [near, setNear] = useState(false);
   useEffect(() => {
     const el = ref.current;
-    if (!el || near) return;
-    if (typeof IntersectionObserver === "undefined") {
+    if (!el || !watcher) {
       setNear(true);
       return;
     }
-    const observer = new IntersectionObserver(
-      (entries) => {
-        if (entries.some((e) => e.isIntersecting)) {
-          setNear(true);
-          observer.disconnect();
-        }
-      },
-      { rootMargin: NEAR_MARGIN },
-    );
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, [near]);
+    return watcher.observe(el, setNear);
+  }, [watcher]);
   return { ref, near };
 }
 
@@ -138,10 +189,23 @@ export function LiveViewToggle({
 }
 
 function PageTrail({ slots }: { slots: LiveSlot[] }) {
-  const segments = useMemo(() => trailSegments(slots, TRAIL_MAX_SEGMENTS), [slots]);
-  const focusable = segments.length <= 40;
+  const ref = useRef<HTMLDivElement | null>(null);
+  const [max, setMax] = useState(60);
+  // As many segments as fit: a few px each, whatever the column width
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(([entry]) => {
+      const width = entry.contentRect.width;
+      if (width > 0) setMax(Math.max(10, Math.floor(width / TRAIL_SEGMENT_PX)));
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  const segments = useMemo(() => trailSegments(slots, max), [slots, max]);
+  const focusable = segments.length <= GO_TO_PAGE_THRESHOLD;
   return (
-    <div role="group" aria-label="Page map" className="flex h-3 items-stretch gap-px">
+    <div ref={ref} role="group" aria-label="Page map" className="flex h-3 items-stretch gap-px overflow-hidden">
       {segments.map((seg) => {
         const label =
           seg.from === seg.to
@@ -165,7 +229,38 @@ function PageTrail({ slots }: { slots: LiveSlot[] }) {
   );
 }
 
+/** Keyboard route to any page when the trail has too many segments to tab through. */
+function GoToPage({ total }: { total: number }) {
+  const [value, setValue] = useState("");
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    const n = Math.min(total, Math.max(1, parseInt(value, 10) || 0));
+    if (n > 0) scrollToPage(n);
+  };
+  return (
+    <form onSubmit={submit} className="flex items-center gap-1.5">
+      <label htmlFor="live-go-to-page" className="text-xs text-muted-foreground">
+        Go to page
+      </label>
+      <input
+        id="live-go-to-page"
+        type="number"
+        inputMode="numeric"
+        min={1}
+        max={total}
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        className="h-7 w-16 rounded-md border bg-background px-2 text-xs tabular-nums focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      />
+      <Button type="submit" size="sm" variant="outline" className="h-7 px-2 text-xs">
+        Go
+      </Button>
+    </form>
+  );
+}
+
 function PageBody({
+  jobId,
   slot,
   token,
   near,
@@ -173,6 +268,7 @@ function PageBody({
   retrying,
   onRetry,
 }: {
+  jobId: string;
   slot: LiveSlot;
   token: string | null;
   near: boolean;
@@ -180,17 +276,29 @@ function PageBody({
   retrying: boolean;
   onRetry: (pageNumber: number) => void;
 }) {
+  const queryClient = useQueryClient();
   const fetchable = isFetchable(slot);
-  // Same key as the single-page viewer, so a page read there is already cached here.
-  // A retried page has a new job id: the key changes and the new text is fetched.
+  // By main job + page number: the stored page result outlives the Redis cache that
+  // GET /jobs/{page_job_id}/result reads. A retried page has a new job id: the key
+  // changes and the new text is fetched. Never refetched once cached.
+  const queryKey = useMemo(
+    () => ["live-page-result", jobId, slot.page_number, slot.job_id, token],
+    [jobId, slot.page_number, slot.job_id, token],
+  );
   const query = useQuery({
-    queryKey: ["page-result", slot.job_id, token],
-    queryFn: () => limitPageRequests(() => jobsApi.getResult(slot.job_id!)),
+    queryKey,
+    queryFn: ({ signal }) => limitPageRequests(() => jobsApi.getPageResult(jobId, slot.page_number, signal), signal),
     enabled: fetchable && near && !!token,
     staleTime: Infinity,
     retry: 1,
     refetchOnWindowFocus: false,
   });
+
+  // Scrolled away while still waiting its turn: drop the request (the limiter
+  // removes it from the queue when the signal aborts)
+  useEffect(() => {
+    if (!near && query.fetchStatus === "fetching") void queryClient.cancelQueries({ queryKey });
+  }, [near, query.fetchStatus, queryClient, queryKey]);
 
   if (slot.state === "failed") {
     const exhausted = slot.retry_count >= MAX_PAGE_RETRIES;
@@ -217,12 +325,18 @@ function PageBody({
     );
   }
 
+  if (slot.state === "skipped") {
+    return (
+      <p className="flex items-center gap-2 rounded-md border border-dashed px-3 py-4 text-sm text-muted-foreground">
+        <StateIcon state="skipped" />
+        This page was not converted.
+      </p>
+    );
+  }
+
   if (slot.state === "queued" || slot.state === "converting") {
     return (
-      <div
-        className="flex items-center gap-2 rounded-md bg-muted/50 px-3 py-4 text-sm text-muted-foreground motion-safe:animate-pulse"
-        role="status"
-      >
+      <div className="flex items-center gap-2 rounded-md bg-muted/50 px-3 py-4 text-sm text-muted-foreground motion-safe:animate-pulse">
         <StateIcon state={slot.state} />
         {slot.state === "converting" ? "Converting this page…" : "Waiting in the queue"}
       </div>
@@ -248,27 +362,28 @@ function PageBody({
       </div>
     );
   }
-  return <div className="h-48 rounded-md bg-muted/50 motion-safe:animate-pulse" aria-label="Loading page" role="status" />;
+  return <div aria-hidden="true" className="h-48 rounded-md bg-muted/50 motion-safe:animate-pulse" />;
 }
 
-function LivePage({
-  slot,
-  token,
-  canRetry,
-  retrying,
-  onRetry,
-  onOpenPage,
-}: {
+interface LivePageProps {
+  jobId: string;
   slot: LiveSlot;
   token: string | null;
   canRetry: boolean;
   retrying: boolean;
   onRetry: (pageNumber: number) => void;
   onOpenPage: (pageNumber: number) => void;
-}) {
+}
+
+const LivePage = memo(function LivePage({ jobId, slot, token, canRetry, retrying, onRetry, onOpenPage }: LivePageProps) {
   const { ref, near } = useNearViewport<HTMLElement>();
   return (
-    <section ref={ref} id={`live-page-${slot.page_number}`} aria-label={`Page ${slot.page_number}`} className="scroll-mt-40 lg:scroll-mt-32">
+    <section
+      ref={ref}
+      id={`live-page-${slot.page_number}`}
+      aria-label={`Page ${slot.page_number}`}
+      style={{ scrollMarginTop: "calc(var(--live-sticky-top, 0px) + var(--live-header-h, 8rem) + 1rem)" }}
+    >
       <div className="mb-3 flex items-center gap-3">
         <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground tabular-nums">
           Page {slot.page_number}
@@ -288,16 +403,28 @@ function LivePage({
           </Button>
         )}
       </div>
-      <PageBody slot={slot} token={token} near={near} canRetry={canRetry} retrying={retrying} onRetry={onRetry} />
+      <PageBody
+        jobId={jobId}
+        slot={slot}
+        token={token}
+        near={near}
+        canRetry={canRetry}
+        retrying={retrying}
+        onRetry={onRetry}
+      />
     </section>
   );
-}
+});
 
 /**
  * The document as it is being converted: the Markdown of every finished page in
  * page order, a placeholder where a page is not ready, and a progress header that
- * stays on screen while the document scrolls. Page text is requested only when
- * a page nears the viewport, four requests at a time.
+ * stays on screen while the document scrolls. Page text is requested only while
+ * a page is near the viewport, four requests at a time.
+ *
+ * `visible` is false while a single page or the merged result is shown instead:
+ * the parent hides this with display:none, which resets scrollTop, so the position
+ * is saved on scroll and restored when it is visible again.
  */
 export function LiveDocument({
   status,
@@ -309,6 +436,7 @@ export function LiveDocument({
   onRetry,
   onOpenPage,
   actions,
+  visible = true,
 }: {
   status: JobStatusResponse;
   pages: LivePageInput[];
@@ -319,8 +447,14 @@ export function LiveDocument({
   onRetry: (pageNumber: number) => void;
   onOpenPage: (pageNumber: number) => void;
   actions?: ReactNode;
+  visible?: boolean;
 }) {
-  const slots = useMemo(() => buildSlots(pages, status.total_pages ?? 0), [pages, status.total_pages]);
+  const prevSlots = useRef<LiveSlot[]>([]);
+  const slots = useMemo(() => {
+    const next = reuseSlots(prevSlots.current, buildSlots(pages, status.total_pages ?? 0, status.status));
+    prevSlots.current = next;
+    return next;
+  }, [pages, status.total_pages, status.status]);
   const counts = useMemo(() => countStates(slots), [slots]);
   const total = slots.length;
   const settled = ["completed", "partial", "failed", "cancelled"].includes(status.status);
@@ -328,73 +462,129 @@ export function LiveDocument({
   const queueText = queueReasonText(status);
   const where = engineKindLabel(status);
 
-  const handleRetry = useCallback((n: number) => onRetry(n), [onRetry]);
+  // Stable callbacks: pages are memoised and must not re-render on every poll
+  const onRetryRef = useRef(onRetry);
+  const onOpenRef = useRef(onOpenPage);
+  onRetryRef.current = onRetry;
+  onOpenRef.current = onOpenPage;
+  const handleRetry = useCallback((n: number) => onRetryRef.current(n), []);
+  const handleOpen = useCallback((n: number) => onOpenRef.current(n), []);
+
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const headerRef = useRef<HTMLElement | null>(null);
+  const [watcher] = useState(() => new ViewportWatcher());
+
+  // The scroller is this column from lg up and the window below; follow the breakpoint
+  useEffect(() => {
+    const mq = window.matchMedia("(min-width: 1024px)");
+    const attach = () => watcher.attach(mq.matches ? rootRef.current : null);
+    attach();
+    mq.addEventListener?.("change", attach);
+    return () => {
+      mq.removeEventListener?.("change", attach);
+      watcher.detach();
+    };
+  }, [watcher]);
+
+  // Real height of the sticky header, for scroll-margin of the page anchors
+  useEffect(() => {
+    const header = headerRef.current;
+    const root = rootRef.current;
+    if (!header || !root || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(() => {
+      const h = header.offsetHeight;
+      if (h > 0) root.style.setProperty("--live-header-h", `${h}px`);
+    });
+    ro.observe(header);
+    return () => ro.disconnect();
+  }, []);
+
+  // Keep the scroll position across display:none
+  const lastTop = useRef(0);
+  const handleScroll = useCallback(() => {
+    if (rootRef.current && rootRef.current.offsetParent !== null) lastTop.current = rootRef.current.scrollTop;
+  }, []);
+  useLayoutEffect(() => {
+    if (visible && rootRef.current) rootRef.current.scrollTop = lastTop.current;
+  }, [visible]);
 
   return (
-    <div className="flex-1 min-h-0 lg:overflow-y-auto">
-      {/* Progress header: sticks under the app header (mobile) or to the top of this column (lg) */}
-      <header className="sticky top-16 lg:top-0 z-[5] border-b bg-background px-4 py-3 md:px-6">
-        <div className="mx-auto flex w-full max-w-[72ch] flex-col gap-2.5">
-          <div className="flex items-start gap-3">
-            <div className="min-w-0 flex-1">
-              <p className="truncate text-sm font-medium" title={fileName}>
-                {fileName}
-              </p>
-              <p className="text-xs text-muted-foreground tabular-nums">
-                {counts.done} of {total} pages converted
-                {where && !settled ? ` · ${where}` : ""}
+    <ViewportContext.Provider value={watcher}>
+      <div
+        ref={rootRef}
+        onScroll={handleScroll}
+        className="flex-1 min-h-0 lg:overflow-y-auto [--live-sticky-top:4rem] lg:[--live-sticky-top:0px]"
+      >
+        {/* Progress header: sticks under the app header (below lg) or to the top of this column */}
+        <header
+          ref={headerRef}
+          className="sticky top-[var(--live-sticky-top)] z-[5] border-b bg-background px-4 py-3 md:px-6"
+        >
+          <div className="mx-auto flex w-full max-w-[72ch] flex-col gap-2.5">
+            <div className="flex items-start gap-3">
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-sm font-medium" title={fileName}>
+                  {fileName}
+                </p>
+                <p className="text-xs text-muted-foreground tabular-nums">
+                  {counts.done} of {total} pages converted
+                  {where && !settled ? ` · ${where}` : ""}
+                </p>
+              </div>
+              <Badge variant="outline" className="shrink-0 capitalize">
+                {status.status}
+              </Badge>
+              <p className="shrink-0 text-3xl font-semibold leading-none tabular-nums">
+                {percent}
+                <span className="text-base font-normal text-muted-foreground">%</span>
               </p>
             </div>
-            <Badge variant="outline" className="shrink-0 capitalize">
-              {status.status}
-            </Badge>
-            <p className="shrink-0 text-3xl font-semibold leading-none tabular-nums" aria-label={`${percent} percent`}>
-              {percent}
-              <span className="text-base font-normal text-muted-foreground">%</span>
+
+            <div
+              role="progressbar"
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={percent}
+              aria-label="Overall progress"
+              className="h-1.5 w-full overflow-hidden rounded-full bg-secondary"
+            >
+              <div className="h-full rounded-full bg-primary transition-[width] duration-300" style={{ width: `${percent}%` }} />
+            </div>
+
+            <PageTrail slots={slots} />
+
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5">
+              <StatePill state="done">{counts.done} converted</StatePill>
+              {counts.converting > 0 && <StatePill state="converting">{counts.converting} converting</StatePill>}
+              {counts.queued > 0 && <StatePill state="queued">{counts.queued} queued</StatePill>}
+              {counts.failed > 0 && <StatePill state="failed">{counts.failed} failed</StatePill>}
+              {counts.skipped > 0 && <StatePill state="skipped">{counts.skipped} not converted</StatePill>}
+              {total > GO_TO_PAGE_THRESHOLD && <GoToPage total={total} />}
+              {actions && <div className="ml-auto">{actions}</div>}
+            </div>
+            {queueText && <p className="text-xs text-muted-foreground">{queueText}</p>}
+            {/* The one live region: a summary, not a announcement per page */}
+            <p className="sr-only" role="status" aria-live="polite">
+              {counts.done} of {total} pages converted, {percent} percent
             </p>
           </div>
+        </header>
 
-          <div
-            role="progressbar"
-            aria-valuemin={0}
-            aria-valuemax={100}
-            aria-valuenow={percent}
-            aria-label="Overall progress"
-            className="h-1.5 w-full overflow-hidden rounded-full bg-secondary"
-          >
-            <div className="h-full rounded-full bg-primary transition-[width] duration-300" style={{ width: `${percent}%` }} />
-          </div>
-
-          <PageTrail slots={slots} />
-
-          <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5">
-            <StatePill state="done">{counts.done} converted</StatePill>
-            {counts.converting > 0 && <StatePill state="converting">{counts.converting} converting</StatePill>}
-            {counts.queued > 0 && <StatePill state="queued">{counts.queued} queued</StatePill>}
-            {counts.failed > 0 && <StatePill state="failed">{counts.failed} failed</StatePill>}
-            {actions && <div className="ml-auto">{actions}</div>}
-          </div>
-          {queueText && (
-            <p className="text-xs text-muted-foreground" role="status">
-              {queueText}
-            </p>
-          )}
-        </div>
-      </header>
-
-      <article className="mx-auto flex w-full max-w-[72ch] min-w-0 flex-col gap-10 px-4 py-6 md:px-6">
-        {slots.map((slot) => (
-          <LivePage
-            key={slot.page_number}
-            slot={slot}
-            token={token}
-            canRetry={canRetry}
-            retrying={retrying}
-            onRetry={handleRetry}
-            onOpenPage={onOpenPage}
-          />
-        ))}
-      </article>
-    </div>
+        <article className="mx-auto flex w-full max-w-[72ch] min-w-0 flex-col gap-10 px-4 py-6 md:px-6">
+          {slots.map((slot) => (
+            <LivePage
+              key={slot.page_number}
+              jobId={status.job_id}
+              slot={slot}
+              token={token}
+              canRetry={canRetry}
+              retrying={retrying && slot.state === "failed"}
+              onRetry={handleRetry}
+              onOpenPage={handleOpen}
+            />
+          ))}
+        </article>
+      </div>
+    </ViewportContext.Provider>
   );
 }

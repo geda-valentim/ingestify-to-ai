@@ -529,6 +529,21 @@ export const jobsApi = {
   // rather than left as a trap for whoever wires up a Cancel button next.
   // Reinstating it means adding the endpoint first.
 
+  /**
+   * One page's Markdown by main job + page number. Unlike GET /jobs/{page_job_id}/result
+   * this reads the stored page result, which outlives the Redis cache (RESULT_TTL).
+   */
+  async getPageResult(jobId: string, pageNumber: number, signal?: AbortSignal): Promise<JobResultResponse> {
+    const response = await apiFetch(`${API_URL}/jobs/${jobId}/pages/${pageNumber}/result`, {
+      headers: getHeaders(true),
+      signal,
+    });
+    if (!response.ok) {
+      throw new Error(`Failed to fetch page ${pageNumber}: ${response.statusText}`);
+    }
+    return response.json();
+  },
+
   async getPageResultByNumber(jobId: string, pageNumber: number): Promise<JobResultResponse> {
     // First get all pages to find the job_id for this page number
     const pagesResponse = await this.getPages(jobId);
