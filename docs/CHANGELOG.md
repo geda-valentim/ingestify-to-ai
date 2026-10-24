@@ -2,9 +2,14 @@
 
 > **Registro histórico (2025-10).** Não é mantido; para mudanças posteriores use `git log`. Observação: `workers/tasks_old.py`, citado abaixo, não existe (há um `workers/tasks.py.backup`). Exceção: mudanças de comportamento intencionais que uma spec manda registrar aqui entram na seção abaixo.
 
-## 2026-10: correções de segurança e de confiabilidade (API 1.11.2)
+## 2026-10: correções de segurança e de confiabilidade (API 1.12.0)
 
-Release só de correções (patch). Os códigos de erro existentes não mudam.
+**Por que é minor e não patch:**
+- há um código novo que o cliente pode tratar, `AUDIO_SAMPLE_RATE_UNSUPPORTED`;
+- a transcrição local passa a recusar áudio acima de `MAX_AUDIO_DURATION_SECONDS`, o que
+  antes era aceito.
+
+O resto são correções. Os códigos de erro existentes não mudam.
 
 **Segurança**
 - **Dependências de parsing:** python-multipart 0.0.6 → 0.0.31, Starlette 1.3.1 e FastAPI
@@ -12,7 +17,7 @@ Release só de correções (patch). Os códigos de erro existentes não mudam.
   limit (CVE-2024-24762); também ficam corrigidos os DoS posteriores de multipart e de
   formulário urlencoded.
   - Formulários passam a ter limite de 1000 campos e 1 MB por parte que não é arquivo;
-    acima disso a resposta é **400**.
+    acima disso a resposta é **400**, com `detail` em texto e sem `code`.
   - Um JSON enviado sem `Content-Type` continua aceito.
   - No OpenAPI, os campos de arquivo passam de `format: binary` para `contentMediaType`
     (estilo 3.1), e `ValidationError` documenta `input`/`ctx`. Os itens do 422 deixam de
@@ -28,9 +33,16 @@ Release só de correções (patch). Os códigos de erro existentes não mudam.
     em minutos.
   - Taxa de amostragem abaixo de 8 kHz: o código novo `AUDIO_SAMPLE_RATE_UNSUPPORTED`.
   - Nenhum dos dois casos tem nova tentativa.
+  - **Onde o código aparece:** no caminho roteado (fila de engines), em `error` do
+    `GET /jobs/{id}` (`CODE: mensagem`) e em `data.error.code` do webhook. No caminho local
+    não roteado, o job leva só a mensagem do catálogo, sem código. No Modal, a recusa vira
+    `INPUT_REJECTED`, e o limite fica em 3600 s mesmo que `MAX_AUDIO_DURATION_SECONDS` seja
+    maior.
 - **Datalakes:** respostas de S3/MinIO são limitadas a `DATALAKE_MAX_RESPONSE_BYTES`
   (8 MiB) antes de ir para a memória. Redirects e `Retry-After` não são seguidos, e corpo
-  comprimido é recusado. O erro é o `DATALAKE_DISCOVER_FAILED`, que já existia.
+  comprimido é recusado. Cada rota responde com o seu 502 que já existia (por exemplo
+  `DATALAKE_DISCOVER_FAILED` no discover, `DATALAKE_DESTINATION_UNREACHABLE` no destino de
+  imagens).
 
 **Correções**
 - **`POST /upload`:** um `docling_preset` desconhecido dá **422 `VALIDATION_ERROR`**, igual
@@ -58,10 +70,18 @@ Release só de correções (patch). Os códigos de erro existentes não mudam.
 **Interface:** o Live passa para o menu **Labs** (mesma URL `/live`).
 
 **Rollout**
-- **Imagens:** as da API e dos workers precisam de rebuild por causa das dependências novas,
-  e o worker-live também, porque leva o código dentro da imagem. O `make deploy` detecta
-  isso e reconstrói.
+- **Imagens:** precisam de rebuild:
+  - API e workers, por causa das dependências novas;
+  - worker-live, porque leva o código dentro da imagem;
+  - frontend, por causa do menu Labs.
+- **Sem pendências de banco ou de configuração:** nenhuma migration e nenhuma variável de
+  ambiente obrigatória nova (`DATALAKE_MAX_RESPONSE_BYTES` tem padrão).
+- **Áudio acima de 1 h:** passa a falhar no faster-whisper/openai-whisper. Ajuste
+  `MAX_AUDIO_DURATION_SECONDS` se isso for necessário.
 - **Modal:** precisa de redeploy, porque `whisper_core` faz parte do fingerprint.
+- **Exceção na atualização de segurança:** a imagem live-whisperx mantém o próprio lock
+  (fastapi 0.116.1, starlette 0.47.3). Ela só serve um WebSocket interno protegido por
+  `LIVE_INTERNAL_TOKEN`.
 
 ## 2026-10: health check não congela mais a API (API 1.11.1)
 
