@@ -219,7 +219,8 @@ function ConversionWorkspace() {
     // Document uploads have no client-side key: the server deduplicates them by
     // checksum + operation (docling_preset, image_mode, page_images,
     // describe_images, ocr_images), so changing any of these options is already
-    // another job there. Audio takes none of the PDF options.
+    // another job there. Audio takes none of the PDF options (the form still
+    // carries docling_preset, which the transcription profile ignores).
     uploadMutation.mutate({
       route: "upload",
       body: {
