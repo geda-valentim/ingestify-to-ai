@@ -516,9 +516,13 @@ process_conversion (worker)
 - Ao concluir, os arquivos locais do job são apagados (`_remove_job_files`); o original
   continua no MinIO (salvo `purge_source`). Sobras de jobs que falharam são varridas pela task diária
   `cleanup_stale_files` (ver [storage-and-retention.md](storage-and-retention.md)).
-- Se o pacote `docling` não puder ser importado, o conversor devolve um Markdown
-  **MOCK** ("This is a **MOCK conversion**…") em vez de falhar. Útil em testes, perigoso
-  em produção: confira o log `Failed to import Docling` se o resultado parecer falso.
+- Se o pacote `docling` não puder ser importado, a conversão **falha** com
+  `Docling is not available in this worker: <erro de import>` e o job segue o caminho
+  normal de falha (retentativas da task): documento único termina `failed`; PDF dividido
+  (2 ou mais páginas) divide normalmente, cada página falha após as retentativas e o job
+  termina `partial` (`PAGES_FAILED`) com o erro em cada página. Não existe mais Markdown de
+  exemplo: um worker sem Docling nunca marca job como `completed`. O log
+  `Failed to import Docling` traz o erro de import.
 
 ### GPU
 

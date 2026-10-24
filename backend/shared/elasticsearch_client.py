@@ -2,9 +2,15 @@ from elasticsearch import Elasticsearch, NotFoundError
 from typing import Dict, Any, Optional, List
 from datetime import datetime
 import json
+import logging
 from shared.config import get_settings
 
 settings = get_settings()
+logger = logging.getLogger(__name__)
+
+
+class SearchUnavailable(Exception):
+    """Elasticsearch could not answer a search: that is not the same as "no results"."""
 
 
 class ElasticsearchClient:
@@ -255,6 +261,9 @@ class ElasticsearchClient:
             query: Search query string
             user_id: Filter by user (optional)
             limit: Max results to return
+
+        Raises:
+            SearchUnavailable: Elasticsearch failed (an empty list means no match)
         """
         try:
             must_clauses = [
@@ -273,8 +282,8 @@ class ElasticsearchClient:
             response = self.client.search(index="job_results", body=search_query)
             return [hit["_source"] for hit in response["hits"]["hits"]]
         except Exception as e:
-            print(f"Error searching jobs in ES: {e}")
-            return []
+            logger.error(f"Error searching jobs in ES: {e}", exc_info=True)
+            raise SearchUnavailable(str(e)) from e
 
     def search_pages(
         self,

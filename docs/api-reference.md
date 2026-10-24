@@ -2,7 +2,7 @@
 
 Gerado do OpenAPI da aplicação por `scripts/generate_api_docs.py`. Não edite este arquivo à mão.
 
-API `1.6.0`: **140 operações HTTP** e **1 WebSocket(s)**.
+API `1.6.1`: **140 operações HTTP** e **1 WebSocket(s)**.
 
 Base pública de desenvolvimento: `https://dev.ingestify.ai/api`. Os caminhos abaixo são relativos à base.
 
@@ -1264,6 +1264,7 @@ Respostas declaradas:
 | Status | Content-Type | Esquema | Descrição |
 | --- | --- | --- | --- |
 | 200 | application/json | objeto livre | Successful Response |
+| 503 | — | objeto livre | Elasticsearch indisponível: `{"detail": {"code": "SEARCH_UNAVAILABLE", "message"}}`. |
 | 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
 
 ### POST /jobs/{job_id}/pages/{page_number}/retry

@@ -68,8 +68,10 @@ O Elasticsearch é opcional para o startup da API (só loga um aviso) e para o `
 
 ## Limites e lacunas conhecidas
 
-- Erros do Elasticsearch são engolidos pelo cliente: com o ES fora do ar, `/search`
-  responde `200` com `results: []` em vez de um erro.
+- Com o ES fora do ar, `/search` responde `503` com
+  `{"detail": {"code": "SEARCH_UNAVAILABLE", "message": "..."}}` (nunca `200` com
+  `results: []`, que significa "nenhum acerto"). Os outros métodos de leitura do cliente
+  (`get_job_result`, `get_page_result`...) ainda engolem erros e devolvem vazio.
 - Ordenação por data, não por relevância; sem destaque (highlight), paginação ou filtros
   por tag/tipo.
 - Analisador padrão do ES (sem analisador para português).
