@@ -112,10 +112,12 @@ Endpoint unificado que detecta automaticamente o tipo de fonte e realiza a conve
     "format": "markdown",
     "include_images": true,
     "preserve_tables": true
-  },
-  "callback_url": "https://optional-webhook.com/callback"
+  }
 }
 ```
+
+Para ser avisado quando o job terminar, envie o campo de formulário `callback_url`
+(https) junto com o pedido; veja [docs/features/webhooks.md](docs/features/webhooks.md).
 
 **Upload de Arquivo:**
 ```bash

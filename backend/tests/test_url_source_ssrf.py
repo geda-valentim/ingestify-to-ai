@@ -172,7 +172,7 @@ def test_https_connects_to_pinned_ip_with_original_sni(allow_loopback, resolve_t
     real_client = httpx.AsyncClient
     monkeypatch.setattr(
         sources.httpx, "AsyncClient",
-        lambda **kwargs: real_client(verify=str(cert_file), trust_env=False, **kwargs),
+        lambda **kwargs: real_client(verify=str(cert_file), **kwargs),
     )
     try:
         out = tmp_path / "out"

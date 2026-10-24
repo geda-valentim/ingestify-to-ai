@@ -373,7 +373,8 @@ Só figuras, nunca as páginas renderizadas (`page_images`). Qualquer um dos doi
    `workers.tasks.finalize_figures_task`, que reescreve o Markdown, atualiza o
    manifesto, grava o resultado (Redis, Elasticsearch, MySQL `completed`, marcador
    `finishing`) e depois roda, cada passo por conta própria e idempotente, o status no
-   Redis, a limpeza de `figures/{job_id}/`, o `purge_source` e o callback. Um passo que
+   Redis, a limpeza de `figures/{job_id}/`, e o `purge_source` (o webhook de conclusão não é um passo: sai do próprio commit de
+   `completed`, ver [webhooks.md](webhooks.md)). Um passo que
    falha deixa o marcador em `finishing` e é refeito pelo próximo finalize / varredura —
    sem refazer a reescrita.
 
@@ -568,8 +569,8 @@ Variáveis lidas por [backend/shared/config.py](../../backend/shared/config.py):
   manual.
 - Metadados do resultado: `pages` vem `null` para documentos não divididos; `title` é o
   nome do arquivo; `author` é sempre `null`; no merge, `size_bytes` é `0`.
-- O parâmetro `callback_url` (webhook) existe em `process_conversion`, mas nenhum endpoint
-  o expõe.
+- `callback_url` é um campo de `/upload`, `/convert` e `/transcribe` (webhook de conclusão,
+  [webhooks.md](webhooks.md)); o parâmetro de mesmo nome em `process_conversion` é ignorado.
 - `GET /jobs/{id}/result` de um job em `processing`/`queued` devolve `400`; de um job
   `failed`, `500` com a mensagem de erro.
 

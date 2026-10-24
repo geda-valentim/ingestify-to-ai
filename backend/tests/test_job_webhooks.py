@@ -20,6 +20,7 @@ import hmac
 import json
 import socket
 import threading
+import time
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
@@ -75,7 +76,7 @@ def settle(Session, status, job_id=JOB_ID, **fields):
 
 @pytest.mark.parametrize("url", [
     "http://hooks.example.com/x",  # http is off by default
-    "https://127.0.0.1/x", "https://10.0.0.5/x", "https://[::1]/x", "https://169.254.169.254/latest",
+    "https://127.0.0.1/x", "https://10.0.0.5/x", "https://[::1]/x", "https://[::ffff:10.0.0.5]/x", "https://169.254.169.254/latest",
     "https://redis/x", "https://localhost/x", "https://minio.internal/x", "https://printer.local/x",
     "https://user:pw@hooks.example.com/x", "ftp://hooks.example.com/x", "https:///nohost",
     "https://hooks.example.com/" + "a" * 2100, "not a url",
@@ -83,6 +84,11 @@ def settle(Session, status, job_id=JOB_ID, **fields):
 def test_unsafe_callback_urls_are_refused(url):
     with pytest.raises(webhooks.InvalidCallbackUrl):
         webhooks.validate_callback_url(url)
+
+
+def test_an_octal_looking_host_passes_the_api_and_is_judged_at_delivery():
+    # glibc reads 0177.0.0.1 as 127.0.0.1; the API cannot tell, delivery refuses it
+    assert webhooks.validate_callback_url("https://0177.0.0.1/x") == "https://0177.0.0.1/x"
 
 
 def test_a_public_https_url_is_kept_without_its_fragment():
@@ -333,6 +339,7 @@ def test_secret_endpoint_answers_each_user_with_their_own_secret(Session):
         b = client.get("/webhooks/signing-secret", headers=jwt(BOB))
     assert a.status_code == b.status_code == 200
     assert a.json()["secret"] == webhooks.signing_secret(ALICE) != b.json()["secret"]
+    assert a.headers["Cache-Control"] == "no-store"
     assert client.get("/webhooks/signing-secret").status_code in (401, 403)
 
 
@@ -345,6 +352,7 @@ class Receiver:
 
     def __init__(self):
         self.status, self.location, self.body = 200, None, b"ok"
+        self.delay = 0.0
         self.requests = []
         receiver = self
 
@@ -353,6 +361,7 @@ class Receiver:
                 size = int(self.headers.get("Content-Length") or 0)
                 receiver.requests.append({"path": self.path, "headers": dict(self.headers),
                                           "body": self.rfile.read(size)})
+                time.sleep(receiver.delay)
                 self.send_response(receiver.status)
                 if receiver.location:
                     self.send_header("Location", receiver.location)
@@ -394,7 +403,13 @@ def resolve_to(monkeypatch):
 
 
 @pytest.fixture
-def delivery(Session, queued, monkeypatch, receiver, allow_loopback):
+def delivery(delivery_base, allow_loopback):
+    """The same, with loopback treated as public so the local receiver is reachable"""
+    return delivery_base
+
+
+@pytest.fixture
+def delivery_base(Session, queued, monkeypatch, receiver):
     """A completed MAIN job pointing at the local receiver, and a way to run one attempt"""
     monkeypatch.setattr(webhook_tasks, "SessionLocal", Session)
     add_main(Session)
@@ -503,17 +518,54 @@ def test_a_connection_error_is_retried(delivery):
     assert state_of(delivery.Session)["last_error"].startswith("NETWORK_ERROR")
 
 
+@pytest.mark.parametrize("host, address, error", [
+    ("hooks.example.com", "10.0.0.5", "CALLBACK_URL_NOT_PUBLIC"),
+    ("0177.0.0.1", "127.0.0.1", "INVALID_CALLBACK_URL"),  # httpx refuses the octal form itself
+])
 def test_a_host_that_resolves_to_a_private_address_is_refused_without_connecting(
-        delivery, resolve_to, monkeypatch):
-    monkeypatch.undo()  # the real _is_public_ip: loopback is private again
-    monkeypatch.setattr(webhook_tasks, "SessionLocal", delivery.Session)
-    set_job(delivery.Session, callback_url=f"http://hooks.example.com:{delivery.receiver.port}/hook")
-    resolve_to("10.0.0.5")
+        delivery_base, resolve_to, host, address, error):
+    delivery = delivery_base  # the real _is_public_ip: loopback is private
+    set_job(delivery.Session, callback_url=f"http://{host}:{delivery.receiver.port}/hook")
+    resolve_to(address)
 
     assert delivery.attempt() == "failed"
 
     assert delivery.receiver.requests == [] and delivery.retries == []
-    assert state_of(delivery.Session)["last_error"] == "CALLBACK_URL_NOT_PUBLIC"
+    assert state_of(delivery.Session)["last_error"] == error
+
+
+def test_a_receiver_slower_than_the_deadline_is_a_retryable_timeout(delivery, monkeypatch):
+    monkeypatch.setattr(webhook_tasks, "DELIVERY_DEADLINE_SECONDS", 0.3)
+    delivery.receiver.delay = 1.5
+
+    started = time.monotonic()
+    assert delivery.attempt() == "retry"
+
+    assert time.monotonic() - started < 1.4
+    state = state_of(delivery.Session)
+    assert (state["status"], state["last_error"]) == ("pending", "TIMEOUT") and delivery.retries == [30]
+
+
+def test_the_soft_time_limit_is_a_timeout_not_an_invalid_url(delivery, monkeypatch):
+    from celery.exceptions import SoftTimeLimitExceeded
+
+    def slow(*a, **kw):
+        raise SoftTimeLimitExceeded()
+    monkeypatch.setattr(webhook_tasks, "_post", slow)
+
+    assert delivery.attempt() == "retry"
+    assert state_of(delivery.Session)["last_error"] == "TIMEOUT"
+
+
+def test_a_redelivered_message_after_the_2xx_does_not_post_again(delivery):
+    assert delivery.attempt() == "delivered"
+    assert delivery.attempt() == "already_delivered"
+    assert len(delivery.receiver.requests) == 1
+
+
+def test_the_answer_is_read_raw_with_identity_encoding(delivery):
+    assert delivery.attempt() == "delivered"
+    assert delivery.receiver.requests[0]["headers"]["Accept-Encoding"] == "identity"
 
 
 def test_the_connection_goes_to_the_validated_address_with_the_original_host(delivery, resolve_to):

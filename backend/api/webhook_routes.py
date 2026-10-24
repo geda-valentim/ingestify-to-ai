@@ -5,7 +5,7 @@ Job completion webhook: the caller's signing secret (docs/features/webhooks.md).
 (api/routes.py); the delivery is shared/webhooks.py + workers/webhook_tasks.py.
 """
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Response
 from pydantic import BaseModel
 
 from api.iam_deps import require
@@ -21,7 +21,7 @@ class SigningSecretResponse(BaseModel):
 
 @router.get("/webhooks/signing-secret", response_model=SigningSecretResponse,
             summary="Segredo de assinatura dos webhooks")
-async def get_signing_secret(current_user: User = Depends(require("jobs.create"))):
+async def get_signing_secret(response: Response, current_user: User = Depends(require("jobs.create"))):
     """
     Segredo com que o receptor verifica o cabeçalho `X-Ingestify-Signature` dos
     webhooks de conclusão (`callback_url`). Um por usuário, estável: não há como
@@ -32,4 +32,5 @@ async def get_signing_secret(current_user: User = Depends(require("jobs.create")
     muito antigo (ex.: mais de 5 minutos). Exemplos em Python e Node:
     docs/features/webhooks.md.
     """
+    response.headers["Cache-Control"] = "no-store"
     return SigningSecretResponse(secret=webhooks.signing_secret(current_user.id))

@@ -22,6 +22,7 @@ from datetime import datetime
 from typing import Optional, Tuple
 
 import httpx
+from celery.exceptions import SoftTimeLimitExceeded
 from sqlalchemy import update
 
 from workers.celery_app import celery_app
@@ -37,6 +38,9 @@ RETRY_COUNTDOWNS = (30, 120, 600, 1800, 7200)
 MAX_RESPONSE_BYTES = 4096
 USER_AGENT = "Ingestify-Webhook/1"
 _TIMEOUT = httpx.Timeout(10.0, connect=5.0)
+# Total budget of one attempt (DNS, connect, send, the 4 KB of the answer): httpx
+# timeouts are per read, so a receiver trickling bytes would hold the slot otherwise
+DELIVERY_DEADLINE_SECONDS = 20.0
 _RETRYABLE_STATUS = {408, 429}
 
 
@@ -59,11 +63,13 @@ def _record(job_id: str, delivery_id: str, **fields) -> bool:
 
 async def _post(url: str, body: bytes, headers: dict) -> Tuple[int, str]:
     """POST and return (status, first bytes of the answer); redirects are not followed"""
-    async with httpx.AsyncClient(follow_redirects=False, timeout=_TIMEOUT) as client:
-        response = await _send_pinned(client, url, method="POST", content=body, headers=headers)
+    # trust_env=False: no HTTP(S)_PROXY from the environment may reroute the pinned connection
+    async with httpx.AsyncClient(follow_redirects=False, timeout=_TIMEOUT, trust_env=False) as client:
+        response = await _send_pinned(client, url, method="POST", content=body,
+                                      headers={**headers, "Accept-Encoding": "identity"})
         try:
             received = b""
-            async for chunk in response.aiter_bytes():
+            async for chunk in response.aiter_raw():  # raw: a small gzip must not expand before the cut
                 received += chunk
                 if len(received) >= MAX_RESPONSE_BYTES:
                     break
@@ -74,7 +80,7 @@ async def _post(url: str, body: bytes, headers: dict) -> Tuple[int, str]:
 
 def _classify_refusal(error: Exception) -> Tuple[bool, str]:
     """(retryable, last_error) of an exception raised before any answer"""
-    if isinstance(error, httpx.TimeoutException):
+    if isinstance(error, (httpx.TimeoutException, asyncio.TimeoutError)):
         return True, "TIMEOUT"
     if isinstance(error, httpx.HTTPError):
         return True, f"NETWORK_ERROR: {type(error).__name__}"
@@ -87,7 +93,7 @@ def _classify_refusal(error: Exception) -> Tuple[bool, str]:
 
 
 @celery_app.task(bind=True, max_retries=len(RETRY_COUNTDOWNS), name="workers.webhook_tasks.deliver_webhook",
-                 acks_late=True)
+                 acks_late=True, soft_time_limit=45, time_limit=60)
 def deliver_webhook(self, job_id: str, delivery_id: str) -> Optional[str]:
     """Send one terminal event of a MAIN job; returns delivered | failed | superseded"""
     retry_in = None
@@ -99,6 +105,8 @@ def deliver_webhook(self, job_id: str, delivery_id: str) -> Optional[str]:
                     or not job.user_id or state.get("job_status") != getattr(job.status, "value", job.status)):
                 # Another terminal transition, or the job went back to work: that one has its own delivery
                 return "superseded"
+            if state.get("status") == "delivered":
+                return "already_delivered"  # a redelivered message after the 2xx
             event_name = state.get("event") or webhooks.event_for(job.status)
             body = webhooks.build_payload(job, delivery_id, event_name)
             url = job.callback_url
@@ -116,7 +124,9 @@ def deliver_webhook(self, job_id: str, delivery_id: str) -> Optional[str]:
         outcome = {"attempts": attempt, "last_attempt_at": datetime.utcnow().isoformat(),
                    "last_http_status": None, "last_error": None}
         try:
-            status_code, _answer = asyncio.run(_post(url, body, headers))
+            status_code, _answer = asyncio.run(asyncio.wait_for(_post(url, body, headers), DELIVERY_DEADLINE_SECONDS))
+        except SoftTimeLimitExceeded:
+            raise  # an Exception subclass: it must not be classified as a refusal
         except Exception as error:
             retryable, outcome["last_error"] = _classify_refusal(error)
             logger.warning("Webhook of job %s attempt %s: %s (%s)", job_id, attempt,
@@ -132,6 +142,17 @@ def deliver_webhook(self, job_id: str, delivery_id: str) -> Optional[str]:
             logger.warning("Webhook of job %s attempt %s answered %s", job_id, attempt, status_code)
 
         if retryable and attempt <= len(RETRY_COUNTDOWNS):
+            _record(job_id, delivery_id, status="pending", **outcome)
+            retry_in = RETRY_COUNTDOWNS[attempt - 1]
+        else:
+            _record(job_id, delivery_id, status="failed", **outcome)
+            return "failed"
+    except SoftTimeLimitExceeded:
+        # Past the task's own limit: a timeout, retried like any other
+        attempt = int(self.request.retries or 0) + 1
+        outcome = {"attempts": attempt, "last_error": "TIMEOUT", "last_http_status": None,
+                   "last_attempt_at": datetime.utcnow().isoformat()}
+        if attempt <= len(RETRY_COUNTDOWNS):
             _record(job_id, delivery_id, status="pending", **outcome)
             retry_in = RETRY_COUNTDOWNS[attempt - 1]
         else:

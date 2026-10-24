@@ -66,7 +66,7 @@ nunca vai no corpo, busque-o em `GET /jobs/{job_id}/result` com as suas credenci
 | `job.partial` | Terminou com lacunas (páginas que falharam). `data.error` explica. |
 
 Um job com tentativa automática pela frente (retry do Celery) **não** gera evento: só o
-resultado final conta. Um PDF dividido gera um evento só, depois do merge (e, com
+resultado final conta. Job `cancelled` também não gera evento. Um PDF dividido gera um evento só, depois do merge (e, com
 `describe_images`/`ocr_images`, depois de os textos das figuras entrarem no Markdown).
 `created` e `completed_at` são UTC.
 
@@ -115,7 +115,7 @@ export function verify(secret, header, rawBody, tolerance = 300) {
 
 ## Entrega e novas tentativas
 
-Responda rápido (o timeout é 10 s, 5 s para conectar) com um status 2xx. A plataforma lê no
+Responda rápido (cada tentativa tem 20 s no total, contando DNS, conexão e resposta; 5 s para conectar) com um status 2xx. A plataforma lê no
 máximo 4 KB da resposta e **não segue redirecionamentos**.
 
 | Resposta | Resultado |
@@ -165,5 +165,8 @@ O segredo é derivado por usuário, sem tabela: um usuário não lê o de outro.
 
 - Se o broker estiver fora no instante do commit, o evento não é enfileirado: `webhook.status`
   fica `pending` e nada o reenvia sozinho (varredura periódica fica para uma próxima versão).
+- Portas: como na fonte por URL, qualquer porta de um host público é aceita (o https obrigatório
+  mitiga). O estado só é regravado quando o `status` do job muda de fato; reatribuir o mesmo
+  valor não gera novo evento.
 - A entrega usa a fila padrão: com a fila cheia de conversões, o evento espera junto.
 - Sem `WEBHOOK_SIGNING_SECRET`, girar o `JWT_SECRET_KEY` gira os segredos de todos os usuários.

@@ -71,7 +71,7 @@ class URLHandler(SourceHandler):
 
         try:
             # Redirects are followed manually so every hop is re-validated
-            async with httpx.AsyncClient(follow_redirects=False, timeout=30.0) as client:
+            async with httpx.AsyncClient(follow_redirects=False, timeout=30.0, trust_env=False) as client:
                 url = source
                 for _ in range(self.MAX_REDIRECTS + 1):
                     response = await _send_pinned(client, url)
