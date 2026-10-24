@@ -36,3 +36,26 @@ def test_the_task_helper_propagates_the_error_so_the_job_fails(converter_without
 
     with pytest.raises(RuntimeError, match="Docling is not available"):
         _convert(converter_without_docling, source, {}, None)
+
+
+from tests.test_purge_source import (  # noqa: E402,F401
+    JOB_ID, JobStatus, Session, _Retry, add_job, run_as_attempt, worker,
+)
+from workers import tasks  # noqa: E402
+
+
+def test_single_document_job_ends_failed_not_completed(
+        worker, converter_without_docling, monkeypatch, fake_redis):  # noqa: F811
+    add_job(worker.Session)
+    monkeypatch.setattr(tasks, "get_converter", lambda *a, **kw: converter_without_docling)
+
+    with pytest.raises(_Retry):
+        run_as_attempt(tasks.process_conversion, worker.convert,
+                       retries=tasks.process_conversion.max_retries, monkeypatch=monkeypatch)
+
+    job = worker.job()
+    assert job.status == JobStatus.FAILED
+    assert "Docling is not available" in job.error_message
+    status = fake_redis.get_job_status(JOB_ID)
+    assert status["status"] == "failed"
+    assert "Docling is not available" in status["error"]

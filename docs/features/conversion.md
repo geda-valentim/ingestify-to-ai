@@ -518,7 +518,9 @@ process_conversion (worker)
   `cleanup_stale_files` (ver [storage-and-retention.md](storage-and-retention.md)).
 - Se o pacote `docling` não puder ser importado, a conversão **falha** com
   `Docling is not available in this worker: <erro de import>` e o job segue o caminho
-  normal de falha (retentativas da task, depois `failed`). Não existe mais Markdown de
+  normal de falha (retentativas da task): documento único termina `failed`; PDF dividido
+  (2 ou mais páginas) divide normalmente, cada página falha após as retentativas e o job
+  termina `partial` (`PAGES_FAILED`) com o erro em cada página. Não existe mais Markdown de
   exemplo: um worker sem Docling nunca marca job como `completed`. O log
   `Failed to import Docling` traz o erro de import.
 

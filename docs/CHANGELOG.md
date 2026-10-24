@@ -8,8 +8,10 @@
   quando o Elasticsearch falha. Antes respondia `200` com `results: []`, indistinguível de
   "nenhum documento encontrado".
 - Worker sem Docling instalado **falha** a conversão (`Docling is not available in this
-  worker: <erro de import>`; o job vai a `failed` pelo caminho normal, com as retentativas
-  de sempre). Antes o job era marcado `completed` com um Markdown de exemplo (Lorem ipsum).
+  worker: <erro de import>`, com as retentativas de sempre). Documento único termina
+  `failed`; PDF dividido (2 ou mais páginas) divide normalmente, cada página falha após
+  as retentativas e o job termina `partial` (`PAGES_FAILED`) com o erro em cada página.
+  Antes o job era marcado `completed` com um Markdown de exemplo (Lorem ipsum).
 
 ## 2026-10: Disponibilidade da transcrição ao vivo (API 1.6.0)
 
