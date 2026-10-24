@@ -41,6 +41,12 @@ def test_the_package_still_exposes_the_factory_lazily():
         audio_pkg.not_a_thing
 
 
+@pytest.fixture(autouse=True)
+def _no_real_decoding(monkeypatch):
+    """These tests pass paths that do not exist; the decoder has its own tests"""
+    monkeypatch.setattr(whisper_core, "load_bounded_audio", lambda path, maximum: b"audio")
+
+
 def _model(ends):
     segments = (SimpleNamespace(start=e - 1.0, end=e, text=f" s{i} ", words=None) for i, e in enumerate(ends))
     model = MagicMock()

@@ -27,6 +27,11 @@ EN = {
         "the same file again will not help. Regenerate the PDF (for example with \"print to "
         "PDF\") and upload the new version."
     ),
+    "AUDIO_DURATION_LIMIT_EXCEEDED": (
+        "The decoded audio is longer than the allowed duration limit, so the transcription was "
+        "refused. Duration is measured on the decoded samples, not on the file's metadata. "
+        "Split the audio into shorter parts and upload each one."
+    ),
     "FIGURES_FAILED": (
         "The conversion finished, but the figure description/OCR step (describe_images / "
         "ocr_images) could not be completed after the automatic retries. Upload the file "

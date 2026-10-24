@@ -8,6 +8,7 @@ workers.audio.feature_extractor - nothing that needs Ingestify's settings, so
 it runs inside a remote container as is.
 """
 
+import gc
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
@@ -15,8 +16,71 @@ from typing import Any, Callable, Dict, Optional
 ProgressCallback = Callable[..., None]
 
 
+# Mirrors Settings.max_audio_duration_seconds; callers with settings pass theirs
+DEFAULT_MAX_AUDIO_SECONDS = 3600
+SAMPLE_RATE = 16000
+# Container rounding and codec priming may add a little to a file that is exactly at the limit
+DURATION_TOLERANCE_SECONDS = 1.0
+
+
 class TranscriptionCancelled(Exception):
     """should_cancel() asked to stop between segments"""
+
+
+class AudioDurationExceeded(ValueError):
+    """The decoded audio is longer than the limit (the container's own duration is never trusted)"""
+
+    code = "AUDIO_DURATION_LIMIT_EXCEEDED"
+
+    def __init__(self, maximum_seconds: float):
+        self.maximum_seconds = maximum_seconds
+        super().__init__(f"{self.code}: audio is longer than {maximum_seconds:g}s")
+
+
+def load_bounded_audio(path, maximum_seconds: float = DEFAULT_MAX_AUDIO_SECONDS):
+    """
+    Decode a media file to 16 kHz mono float32, like faster_whisper.audio.decode_audio
+    but counting the samples as they come out of the decoder. Raises
+    AudioDurationExceeded as soon as they pass maximum_seconds, before the rest of
+    the file is decoded, so a small file that expands to hours (a FLAC of silence,
+    metadata that lies about its length) cannot exhaust the worker's memory.
+    """
+    import av
+    import numpy as np
+
+    limit = int((maximum_seconds + DURATION_TOLERANCE_SECONDS) * SAMPLE_RATE)
+    resampler = av.audio.resampler.AudioResampler(format="s16", layout="mono", rate=SAMPLE_RATE)
+    chunks, total = [], 0
+
+    def take(frames):
+        nonlocal total
+        for frame in frames:
+            array = frame.to_ndarray().reshape(-1)
+            total += array.shape[0]
+            if total > limit:
+                raise AudioDurationExceeded(maximum_seconds)
+            chunks.append(array)
+
+    try:
+        with av.open(str(path), mode="r", metadata_errors="ignore") as container:
+            frames = iter(container.decode(audio=0))
+            while True:
+                try:
+                    frame = next(frames)
+                except StopIteration:
+                    break
+                except av.error.InvalidDataError:
+                    continue  # as faster-whisper does: a corrupt frame is skipped
+                take(resampler.resample(frame))
+            take(resampler.resample(None))  # flush
+    finally:
+        del resampler
+        gc.collect()  # PyAV resampler objects are not freed otherwise (faster-whisper#390)
+
+    if not chunks:
+        return np.zeros(0, dtype=np.float32)
+    # s16 back to f32, as faster-whisper does
+    return np.concatenate(chunks).astype(np.float32) / 32768.0
 
 
 def load_model(model_size: str, device: str, compute_type: str, download_root: Optional[str] = None):
@@ -39,6 +103,7 @@ def transcribe(
     model_name: str,
     on_progress: Optional[ProgressCallback] = None,
     should_cancel: Optional[Callable[[], bool]] = None,
+    max_audio_seconds: float = DEFAULT_MAX_AUDIO_SECONDS,
 ) -> Dict[str, Any]:
     """
     Transcribe one file with a loaded model.
@@ -48,14 +113,17 @@ def transcribe(
     provider). should_cancel is checked after each decoded segment - the only
     point where Python regains control from CTranslate2 - and raises
     TranscriptionCancelled, so a remote call past its deadline stops spending.
+    Audio longer than max_audio_seconds raises AudioDurationExceeded while decoding.
     """
     language = options.get('language')  # None = auto-detect
     include_word_timestamps = options.get('include_word_timestamps', False)
     temperature = options.get('temperature', 0.0)
     beam_size = options.get('beam_size', 5)
 
+    audio = load_bounded_audio(audio_path, max_audio_seconds)
+
     segments, info = model.transcribe(
-        str(audio_path),
+        audio,
         language=language,
         word_timestamps=include_word_timestamps,
         temperature=temperature,

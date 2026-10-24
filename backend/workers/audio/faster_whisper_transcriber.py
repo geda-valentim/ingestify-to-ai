@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional
 import logging
 
 from workers.audio.base_transcriber import AudioTranscriber, ProgressCallback, VIDEO_FORMATS
+from workers.engines import whisper_core
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +30,8 @@ class FasterWhisperTranscriber(AudioTranscriber):
         model_size: str = "turbo",
         device: str = "cpu",
         compute_type: str = "int8",
-        download_root: str = None
+        download_root: str = None,
+        max_audio_seconds: float = 3600,
     ):
         """
         Initialize FasterWhisper transcriber
@@ -39,6 +41,7 @@ class FasterWhisperTranscriber(AudioTranscriber):
             device: Device to use ('cpu' or 'cuda')
             compute_type: Compute type ('int8', 'float16', 'float32')
             download_root: Directory to store downloaded models
+            max_audio_seconds: Longest audio accepted, measured on the decoded samples
         """
         try:
             import faster_whisper  # noqa: F401  (fail here with a clear message if missing)
@@ -54,6 +57,7 @@ class FasterWhisperTranscriber(AudioTranscriber):
         self.model_size = model_size
         self.device = device
         self.compute_type = compute_type
+        self.max_audio_seconds = max_audio_seconds
 
         logger.info(
             f"Initializing FasterWhisper (model={model_size}, device={device}, "
@@ -61,7 +65,6 @@ class FasterWhisperTranscriber(AudioTranscriber):
         )
 
         # Initialize model (with the bounded-memory spectrogram)
-        from workers.engines import whisper_core
         self.model = whisper_core.load_model(model_size, device, compute_type, download_root)
 
         logger.info(f"FasterWhisper model '{model_size}' loaded successfully")
@@ -82,9 +85,9 @@ class FasterWhisperTranscriber(AudioTranscriber):
         logger.info(f"Transcribing audio file: {audio_path}")
 
         try:
-            from workers.engines import whisper_core
             result = whisper_core.transcribe(
                 self.model, audio_path, options, model_name=self.model_size, on_progress=on_progress,
+                max_audio_seconds=self.max_audio_seconds,
             )
             logger.info(
                 f"Transcription complete: {result['word_count']} words, "
@@ -93,6 +96,8 @@ class FasterWhisperTranscriber(AudioTranscriber):
 
             return result
 
+        except whisper_core.AudioDurationExceeded:
+            raise  # a coded rejection of the input, not a transcription failure
         except Exception as e:
             logger.error(f"Transcription failed: {e}", exc_info=True)
             raise Exception(f"Failed to transcribe audio: {str(e)}") from e
@@ -105,8 +110,9 @@ class FasterWhisperTranscriber(AudioTranscriber):
 
         try:
             # Transcribe only first 30 seconds for language detection
+            audio = whisper_core.load_bounded_audio(audio_path, self.max_audio_seconds)
             segments, info = self.model.transcribe(
-                str(audio_path),
+                audio,
                 language=None,  # Auto-detect
                 beam_size=5,
                 vad_filter=True
@@ -126,6 +132,8 @@ class FasterWhisperTranscriber(AudioTranscriber):
             return language
 
         except Exception as e:
+            if isinstance(e, whisper_core.AudioDurationExceeded):
+                raise
             logger.error(f"Language detection failed: {e}", exc_info=True)
             raise Exception(f"Failed to detect language: {str(e)}") from e
 

@@ -94,6 +94,12 @@ _PT = {
         "(por exemplo, \"imprimir como PDF\") e envie a nova versão.",
         ["fix_input"],
     ),
+    "AUDIO_DURATION_LIMIT_EXCEEDED": (
+        "O áudio decodificado é mais longo que o limite de duração permitido, então a "
+        "transcrição foi recusada. A duração é medida nas amostras decodificadas, não nos "
+        "metadados do arquivo. Divida o áudio em partes menores e envie cada uma.",
+        ["fix_input"],
+    ),
     "FIGURES_FAILED": (
         "A conversão terminou, mas não foi possível concluir a etapa de descrição/OCR "
         "das figuras (describe_images / ocr_images) depois das novas tentativas "

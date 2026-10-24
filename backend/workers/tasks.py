@@ -552,8 +552,14 @@ def _run_routed_transcription(job_id: str, source: str, options: dict, usage_id:
     except Exception as exc:
         heartbeat.stop()
         logger.error(f"[MAIN JOB {job_id}] Routed transcription failed: {exc}", exc_info=True)
-        _, change = ledger.settle_failed(usage_id, holder, error_code="INTERNAL", detail=str(exc),
-                                         session_factory=SessionLocal)
+        if _is_duration_limit(exc):
+            # The backlog must not place the same file again: fail the job for good
+            _, change = ledger.settle_failed(usage_id, holder, error_code="AUDIO_DURATION_LIMIT_EXCEEDED",
+                                             detail=_catalog_error("AUDIO_DURATION_LIMIT_EXCEEDED", None),
+                                             counts=False, terminal=True, session_factory=SessionLocal)
+        else:
+            _, change = ledger.settle_failed(usage_id, holder, error_code="INTERNAL", detail=str(exc),
+                                             session_factory=SessionLocal)
         if not _strict_audio_task(options):
             try:
                 shutil.rmtree(Path(settings.temp_storage_path) / job_id, ignore_errors=True)
@@ -570,6 +576,11 @@ def _run_routed_transcription(job_id: str, source: str, options: dict, usage_id:
                             session_factory=SessionLocal)
     engine_dispatch.kick(celery_app)
     return {"job_id": job_id, "status": "completed"}
+
+
+def _is_duration_limit(exc: BaseException) -> bool:
+    """The decoded audio is over the duration limit: the input's fault, retrying cannot help"""
+    return getattr(exc, "code", None) == "AUDIO_DURATION_LIMIT_EXCEEDED"
 
 
 def _strict_audio_task(options):
@@ -867,6 +878,16 @@ def process_conversion(
             if retrying else None)
 
     except Exception as exc:
+        if _is_duration_limit(exc):
+            # Coded rejection, never retried: the same file is as long the next time
+            error_msg = _catalog_error("AUDIO_DURATION_LIMIT_EXCEEDED", None)
+            logger.warning(f"[MAIN JOB {job_id}] {exc}")
+            if _strict_audio_task(options):
+                changed = _fail_transcription_attempt(job_id, options, redis_client, error_msg, retry=False)
+                return {"job_id": job_id, "status": "failed" if changed else "discarded"}
+            _record_main_failure(job_id, redis_client, error_msg, retrying=False)
+            shutil.rmtree(Path(settings.temp_storage_path) / job_id, ignore_errors=True)
+            return {"job_id": job_id, "status": "failed", "error": error_msg}
         logger.error(f"[MAIN JOB {job_id}] Failed: {exc}", exc_info=True)
         if _strict_audio_task(options):
             retry = self.request.retries < self.max_retries

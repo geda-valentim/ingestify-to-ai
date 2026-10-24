@@ -17,9 +17,10 @@ class WhisperXTranscriber(AudioTranscriber):
 
     def detect_language(self, audio_path):
         self._validate_audio_file(audio_path)
-        import whisperx
+        from workers.engines.whisperx_core import load_bounded_audio
         with self.runtime.lock:
-            return self.runtime._load_asr().detect_language(whisperx.load_audio(str(audio_path))[:30 * 16000])
+            audio = load_bounded_audio(audio_path, self.runtime.max_audio_seconds)
+            return self.runtime._load_asr().detect_language(audio[:30 * 16000])
 
     def get_audio_info(self, audio_path):
         self._validate_audio_file(audio_path)
