@@ -76,6 +76,7 @@ import { DocumentView } from "@/components/job/document-view";
 import { JobResultPanel } from "@/components/job/job-result-panel";
 import { engineKindLabel, queueReasonText, transcriptionProgress } from "@/components/job/job-progress";
 import { JobTagsCard } from "@/components/job/job-tags-card";
+import { LiveDocument, LiveViewToggle } from "@/components/job/live-document";
 import type { JobResultResponse, JobStatusResponse } from "@/types/api";
 
 // Dynamically import PDF viewer to avoid canvas module issues
@@ -171,6 +172,28 @@ export default function JobStatusPage({ params }: PageProps) {
   });
 
   const pages = pagesData?.pages || status?.pages || [];
+
+  // Live document: a split PDF shows its converted pages as they finish. Once the
+  // user has watched a job run, the page-by-page view stays after completion (no
+  // flash, scroll kept); a job opened already completed starts on the merged result.
+  const liveEligible =
+    status?.type === "main" && (status.total_pages ?? 0) > 0 && !status.media_duration;
+  const liveActive = !!status && ["queued", "pending", "processing", "partial"].includes(status.status);
+  const [sawActive, setSawActive] = useState(false);
+  const [docView, setDocView] = useState<"pages" | "merged" | null>(null);
+  useEffect(() => {
+    if (liveEligible && liveActive) setSawActive(true);
+  }, [liveEligible, liveActive]);
+  const donePages = pages.filter((p: PageInfo) => p.status === "completed").length;
+  const liveMounted =
+    liveEligible &&
+    (sawActive ||
+      docView === "pages" ||
+      liveActive ||
+      (!!status && ["failed", "cancelled"].includes(status.status) && donePages > 0));
+  const effectiveDocView: "pages" | "merged" =
+    docView ?? (sawActive || status?.status !== "completed" ? "pages" : "merged");
+  const liveVisible = liveMounted && effectiveDocView === "pages";
 
   // Fetch specific page result
   const { data: pageResult, isLoading: isLoadingPage } = useQuery({
@@ -910,7 +933,31 @@ export default function JobStatusPage({ params }: PageProps) {
           </aside>
 
           {/* Content */}
-          <main className="flex-1 min-w-0 min-h-[70vh] lg:min-h-0 overflow-hidden flex flex-col">
+          <main className="flex-1 min-w-0 min-h-[70vh] lg:min-h-0 lg:overflow-hidden flex flex-col">
+            {/* Stays mounted while a single page is open or the merged result is shown,
+                so coming back keeps the scroll position and the loaded pages */}
+            {liveMounted && (
+              <div className={!selectedPage && liveVisible ? "flex flex-1 min-h-0 flex-col" : "hidden"}>
+                <LiveDocument
+                  status={status}
+                  pages={pages}
+                  fileName={fileName}
+                  token={token}
+                  canRetry={canRetryPages}
+                  retrying={retryPageMutation.isPending}
+                  onRetry={(pageNumber) => retryPageMutation.mutate({ pageNumber })}
+                  onOpenPage={(pageNumber) => {
+                    const page = pages.find((p: PageInfo) => p.page_number === pageNumber);
+                    if (page) handlePageClick(page);
+                  }}
+                  actions={
+                    status.status === "completed" ? (
+                      <LiveViewToggle value={effectiveDocView} onChange={setDocView} />
+                    ) : undefined
+                  }
+                />
+              </div>
+            )}
             {selectedPage ? (
               selectedPage.status === "failed" ? (
                 // Failed page error display
@@ -1094,8 +1141,14 @@ export default function JobStatusPage({ params }: PageProps) {
                   </Tabs>
                 </div>
               )
-            ) : (
+            ) : liveVisible ? null : (
               // No page selected: the job's own result
+              <>
+              {liveMounted && status.status === "completed" && (
+                <div className="flex justify-end border-b px-4 py-2 md:px-6">
+                  <LiveViewToggle value={effectiveDocView} onChange={setDocView} />
+                </div>
+              )}
               <JobResultPanel
                 status={status}
                 result={result}
@@ -1104,6 +1157,7 @@ export default function JobStatusPage({ params }: PageProps) {
                 fileName={fileName}
                 token={token}
               />
+              </>
             )}
           </main>
         </div>
