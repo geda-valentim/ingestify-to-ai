@@ -119,6 +119,10 @@ services:
       - DATABASE_URL=${DATABASE_URL:-mysql+pymysql://root:root@host.docker.internal:3306/ingestify}
       - ELASTICSEARCH_URL=${ELASTICSEARCH_URL:-http://${ELASTICSEARCH_HOST:-elasticsearch}:9200}
       - ELASTICSEARCH_HOST=${ELASTICSEARCH_HOST:-elasticsearch}
+      # Optional ES auth/TLS (shared/config.py); empty user = no auth
+      - ELASTICSEARCH_USER=${ELASTICSEARCH_USER:-}
+      - ELASTICSEARCH_PASSWORD=${ELASTICSEARCH_PASSWORD:-}
+      - ELASTICSEARCH_VERIFY_CERTS=${ELASTICSEARCH_VERIFY_CERTS:-false}
       - MINIO_ENDPOINT=${MINIO_HOST:-minio}:9000
       - MINIO_HOST=${MINIO_HOST:-minio}
       # Endereço do MinIO visto pelo NAVEGADOR. Presigned URLs são assinadas
@@ -205,6 +209,7 @@ services:
       - CELERY_BROKER_URL=${CELERY_BROKER_URL:-redis://${REDIS_HOST:-redis}:6379/0}
       - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND:-redis://${REDIS_HOST:-redis}:6379/1}
       - CELERY_TASK_DEFAULT_QUEUE=ingestify
+      - VISION_QUEUE=${VISION_QUEUE:-ingestify-vision}
       - CELERY_WORKER_NAME=ingestify-worker
       - ENVIRONMENT=development
       - SQL_ECHO=${SQL_ECHO:-false}  # true = log every SQL statement (debug only)
@@ -216,6 +221,10 @@ services:
       - DATABASE_URL=${DATABASE_URL:-mysql+pymysql://root:root@host.docker.internal:3306/ingestify}
       - ELASTICSEARCH_URL=${ELASTICSEARCH_URL:-http://${ELASTICSEARCH_HOST:-elasticsearch}:9200}
       - ELASTICSEARCH_HOST=${ELASTICSEARCH_HOST:-elasticsearch}
+      # Optional ES auth/TLS (shared/config.py); empty user = no auth
+      - ELASTICSEARCH_USER=${ELASTICSEARCH_USER:-}
+      - ELASTICSEARCH_PASSWORD=${ELASTICSEARCH_PASSWORD:-}
+      - ELASTICSEARCH_VERIFY_CERTS=${ELASTICSEARCH_VERIFY_CERTS:-false}
       - MINIO_ENDPOINT=${MINIO_HOST:-minio}:9000
       - MINIO_HOST=${MINIO_HOST:-minio}
       - MINIO_ACCESS_KEY=${MINIO_ROOT_USER:?MINIO_ROOT_USER is required - set it in .env (see .env.example)}
@@ -306,8 +315,9 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.worker
-    command: celery -A workers.celery_app worker --loglevel=info --concurrency=1 -Q ingestify-vision -n ingestify-vision@%h
+    command: celery -A workers.celery_app worker --loglevel=info --concurrency=1 -Q ${VISION_QUEUE:-ingestify-vision} -n ingestify-vision@%h
     environment:
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
       - REDIS_HOST=${REDIS_HOST:-redis}
       - REDIS_PORT=${REDIS_PORT:-6379}
       - CELERY_BROKER_URL=${CELERY_BROKER_URL:-redis://${REDIS_HOST:-redis}:6379/0}
@@ -326,6 +336,10 @@ services:
       - DATABASE_URL=${DATABASE_URL:-mysql+pymysql://root:root@host.docker.internal:3306/ingestify}
       - ELASTICSEARCH_URL=${ELASTICSEARCH_URL:-http://${ELASTICSEARCH_HOST:-elasticsearch}:9200}
       - ELASTICSEARCH_HOST=${ELASTICSEARCH_HOST:-elasticsearch}
+      # Optional ES auth/TLS (shared/config.py); empty user = no auth
+      - ELASTICSEARCH_USER=${ELASTICSEARCH_USER:-}
+      - ELASTICSEARCH_PASSWORD=${ELASTICSEARCH_PASSWORD:-}
+      - ELASTICSEARCH_VERIFY_CERTS=${ELASTICSEARCH_VERIFY_CERTS:-false}
       - MINIO_ENDPOINT=${MINIO_HOST:-minio}:9000
       - MINIO_HOST=${MINIO_HOST:-minio}
       - MINIO_ACCESS_KEY=${MINIO_ROOT_USER:?MINIO_ROOT_USER is required - set it in .env (see .env.example)}
@@ -426,6 +440,7 @@ services:
       - CELERY_BROKER_URL=${CELERY_BROKER_URL:-redis://${REDIS_HOST:-redis}:6379/0}
       - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND:-redis://${REDIS_HOST:-redis}:6379/1}
       - CELERY_TASK_DEFAULT_QUEUE=ingestify
+      - VISION_QUEUE=${VISION_QUEUE:-ingestify-vision}
       - CELERY_WORKER_NAME=ingestify-remote
       # Same IAM flag as the api: shared.access.policy runs here too (spec 0018 CA15)
       - IAM_MODE=${IAM_MODE:-off}
@@ -437,6 +452,10 @@ services:
       - DATABASE_URL=${DATABASE_URL:-mysql+pymysql://root:root@host.docker.internal:3306/ingestify}
       - ELASTICSEARCH_URL=${ELASTICSEARCH_URL:-http://${ELASTICSEARCH_HOST:-elasticsearch}:9200}
       - ELASTICSEARCH_HOST=${ELASTICSEARCH_HOST:-elasticsearch}
+      # Optional ES auth/TLS (shared/config.py); empty user = no auth
+      - ELASTICSEARCH_USER=${ELASTICSEARCH_USER:-}
+      - ELASTICSEARCH_PASSWORD=${ELASTICSEARCH_PASSWORD:-}
+      - ELASTICSEARCH_VERIFY_CERTS=${ELASTICSEARCH_VERIFY_CERTS:-false}
       - MINIO_ENDPOINT=${MINIO_HOST:-minio}:9000
       - MINIO_HOST=${MINIO_HOST:-minio}
       - MINIO_ACCESS_KEY=${MINIO_ROOT_USER:?MINIO_ROOT_USER is required - set it in .env (see .env.example)}
@@ -489,6 +508,7 @@ services:
       - CELERY_BROKER_URL=${CELERY_BROKER_URL:-redis://${REDIS_HOST:-redis}:6379/0}
       - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND:-redis://${REDIS_HOST:-redis}:6379/1}
       - CELERY_TASK_DEFAULT_QUEUE=ingestify
+      - VISION_QUEUE=${VISION_QUEUE:-ingestify-vision}
       - CELERY_WORKER_NAME=ingestify-beat
       # Same IAM flag as the api: shared.access.policy runs here too (spec 0018 CA15)
       - IAM_MODE=${IAM_MODE:-off}
@@ -499,6 +519,10 @@ services:
       - DATABASE_URL=${DATABASE_URL:-mysql+pymysql://root:root@host.docker.internal:3306/ingestify}
       - ELASTICSEARCH_URL=${ELASTICSEARCH_URL:-http://${ELASTICSEARCH_HOST:-elasticsearch}:9200}
       - ELASTICSEARCH_HOST=${ELASTICSEARCH_HOST:-elasticsearch}
+      # Optional ES auth/TLS (shared/config.py); empty user = no auth
+      - ELASTICSEARCH_USER=${ELASTICSEARCH_USER:-}
+      - ELASTICSEARCH_PASSWORD=${ELASTICSEARCH_PASSWORD:-}
+      - ELASTICSEARCH_VERIFY_CERTS=${ELASTICSEARCH_VERIFY_CERTS:-false}
       - MINIO_ENDPOINT=${MINIO_HOST:-minio}:9000
       - MINIO_HOST=${MINIO_HOST:-minio}
       - MINIO_ACCESS_KEY=${MINIO_ROOT_USER:?MINIO_ROOT_USER is required - set it in .env (see .env.example)}
