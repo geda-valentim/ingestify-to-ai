@@ -228,7 +228,7 @@ class RedisClient:
         key = f"job:{job_id}:transcript:partial"
         try:
             total = self.client.llen(key)
-            raw = self.client.lrange(key, since, -1) if since < total else []
+            raw = self.client.lrange(key, since, total - 1) if since < total else []
             return [json.loads(s) for s in raw], total
         except Exception as e:
             logger.error("Failed to read live transcript for job %s: %s", job_id, e)
