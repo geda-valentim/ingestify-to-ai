@@ -1,5 +1,6 @@
 """Startup/shutdown hooks run through `lifespan` (Starlette 1.x has no on_event) in the right order."""
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -96,6 +97,10 @@ def test_live_worker_startup_and_shutdown_run_through_lifespan(monkeypatch):
     monkeypatch.setattr(server, "heartbeat", _quiet_task(events, "heartbeat"))
     monkeypatch.setattr(server, "warm_diarizers", _quiet_task(events, "diarizers"))
     monkeypatch.setattr(server, "get_store", lambda: store)
+    # the real shutdown stops the executor and clears the globals: give it throwaway ones
+    monkeypatch.setattr(server, "executor", ThreadPoolExecutor(1))
+    monkeypatch.setattr(server, "heartbeat_task", None)
+    monkeypatch.setattr(server, "diarizer_task", None)
 
     with TestClient(server.app):
         assert events[0] == "load_resident"

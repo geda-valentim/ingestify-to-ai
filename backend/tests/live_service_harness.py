@@ -9,7 +9,7 @@ worker service, unchanged. No production service/database is accessed.
 import asyncio
 import os
 from pathlib import Path
-from contextlib import suppress
+from contextlib import asynccontextmanager, suppress
 import json
 from fastapi import FastAPI
 from shared.config import get_settings
@@ -75,18 +75,17 @@ persistence.get_minio_client = lambda: objects
 routes.get_minio_client = lambda: objects
 routes.get_es_client = lambda: index
 live_routes.get_es_client = lambda: index
-app = FastAPI()
+@asynccontextmanager
+async def lifespan(_app):
+    app.state.sweeper = asyncio.create_task(live_routes.sweeper_loop())
+    try:
+        yield
+    finally:
+        app.state.sweeper.cancel()
+        with suppress(asyncio.CancelledError):
+            await app.state.sweeper
+
+
+app = FastAPI(lifespan=lifespan)
 app.include_router(live_routes.router)
 app.include_router(routes.router)
-
-
-@app.on_event('startup')
-async def startup():
-    app.state.sweeper = asyncio.create_task(live_routes.sweeper_loop())
-
-
-@app.on_event('shutdown')
-async def shutdown():
-    app.state.sweeper.cancel()
-    with suppress(asyncio.CancelledError):
-        await app.state.sweeper

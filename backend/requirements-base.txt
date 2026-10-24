@@ -43,8 +43,8 @@ pydantic-settings>=2.3.0,<3.0.0
 # SOCKS proxy support for crawler. The cap was added for starlette 0.27 TestClient; kept as-is because
 # 0.28 is untested against the crawler/proxy code and is not part of the security fix.
 httpx[socks]>=0.27.0,<0.28
-# python-multipart >=0.0.30 fixes the Content-Type ReDoS (CVE-2024-24762, reachable unauthenticated
-# through /auth/login) and the later multipart/querystring DoS advisories
+# python-multipart: CVE-2024-24762 (Content-Type ReDoS, reachable unauthenticated through /auth/login)
+# is fixed in 0.0.7; >=0.0.30 also covers the later multipart/querystring DoS advisories
 python-multipart==0.0.31
 python-dotenv==1.0.0
 
