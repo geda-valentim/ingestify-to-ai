@@ -63,6 +63,10 @@ class RedisClient:
                 db=settings.redis_db,
                 password=settings.redis_password if settings.redis_password else None,
                 decode_responses=True,
+                # A dead Redis must fail fast, not hold a worker thread / the loop
+                # indefinitely. No blocking commands (BLPOP, pubsub) go through this client.
+                socket_connect_timeout=5,
+                socket_timeout=5,
             )
 
         self.result_ttl = settings.result_ttl_seconds

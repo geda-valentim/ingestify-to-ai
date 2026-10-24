@@ -267,15 +267,33 @@ async def live_stream(ws: WebSocket, job_id: str):
             event_seq += 1
             await asyncio.wait_for(ws.send_json({**event, 'event_seq': event_seq, 'job_id': job_id}), 5)
 
+    def _session_state():
+        with SessionLocal() as db:
+            live = db.get(LiveSession, job_id)
+            return live.state if live else None
+
+    def _handshake_check():
+        with SessionLocal() as db:
+            job = db.get(Job, job_id)
+            owner = db.get(User, binding['user_id'])
+            live = db.get(LiveSession, job_id) if available(db) else None
+            # The WS is public in the route inventory (CA1): it is authenticated by the
+            # single-use ticket, and the ticket's user must still own the job, decided
+            # here by shared.iam (an inactive or deleted owner, or another job, is 4404).
+            # Not mode-dependent: for data the legacy rule and IAM are one code path.
+            owns = owner is not None and job is not None and decide(
+                db, principal_for_user(owner), 'jobs.update', job).allow
+            if not owns or not live or live.generation != generation or live.state != 'created':
+                raise LiveError('LIVE_SESSION_GONE', 4404)
+            return live.model, live.language
+
     async def periodic():
         while True:
             await asyncio.sleep(5)
             if not await asyncio.to_thread(store.renew, job_id, generation):
                 raise LiveError('LIVE_LEASE_LOST', 1011)
             # Reload short-lived transaction; never hold a read view across WS awaits.
-            with SessionLocal() as db:
-                live = db.get(LiveSession, job_id)
-                state = live.state if live else None
+            state = await asyncio.to_thread(_session_state)
             if state not in ('streaming', 'finalizing'):
                 raise LiveError('LIVE_SESSION_GONE', 4404)
             await asyncio.to_thread(transition, job_id, generation, [state], state, clock.samples)
@@ -291,23 +309,11 @@ async def live_stream(ws: WebSocket, job_id: str):
             raise LiveError('LIVE_INVALID_TICKET', 4401)
         if protocol == 2:
             diarization = DiarizationState(generation)
-        with SessionLocal() as db:
-            job = db.get(Job, job_id)
-            owner = db.get(User, binding['user_id'])
-            live = db.get(LiveSession, job_id) if available(db) else None
-            # The WS is public in the route inventory (CA1): it is authenticated by the
-            # single-use ticket, and the ticket's user must still own the job, decided
-            # here by shared.iam (an inactive or deleted owner, or another job, is 4404).
-            # Not mode-dependent: for data the legacy rule and IAM are one code path.
-            owns = owner is not None and job is not None and decide(
-                db, principal_for_user(owner), 'jobs.update', job).allow
-            if not owns or not live or live.generation != generation or live.state != 'created':
-                raise LiveError('LIVE_SESSION_GONE', 4404)
-            model_name, language = live.model, live.language
+        model_name, language = await asyncio.to_thread(_handshake_check)
         if not await asyncio.to_thread(store.renew, job_id, generation, True):
             raise LiveError('LIVE_INVALID_TICKET', 4401)
         await asyncio.to_thread(transition, job_id, generation, ['created'], 'streaming')
-        cache.set_job_status(job_id, 'main', 'processing')
+        await asyncio.to_thread(cache.set_job_status, job_id, 'main', 'processing')
         handshakes -= 1
         handshake_pending = False
         import websockets

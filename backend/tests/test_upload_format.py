@@ -171,7 +171,8 @@ def test_health_reports_the_api_version(monkeypatch):
     monkeypatch.setattr(routes, "get_redis_client", lambda: SimpleNamespace(ping=lambda: True))
     monkeypatch.setattr(routes, "get_es_client", lambda: SimpleNamespace(health_check=lambda: True))
     from workers.celery_app import celery_app
-    monkeypatch.setattr(celery_app.control, "inspect", lambda: SimpleNamespace(stats=lambda: {"w1": {}}))
+    monkeypatch.setattr(celery_app.control, "inspect", lambda **kw: SimpleNamespace(stats=lambda: {"w1": {}}))
+    monkeypatch.setitem(routes._health_cache, "payload", None)
     assert routes.health_check().version == API_VERSION
 
 

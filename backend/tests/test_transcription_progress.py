@@ -250,7 +250,7 @@ def test_partial_transcript_endpoint_returns_only_the_new_segments(monkeypatch):
     monkeypatch.setattr(routes, "get_redis_client", lambda: redis_client)
 
     def get(since):
-        return asyncio.run(routes.get_partial_transcript(job_id, since=since, current_user=None, owned_job=None))
+        return routes.get_partial_transcript(job_id, since=since, current_user=None, owned_job=None)
 
     first = get(0)
     assert first.status == "processing"
@@ -277,5 +277,5 @@ def test_partial_transcript_endpoint_404s_for_an_unknown_job(monkeypatch):
     monkeypatch.setattr(routes, "get_redis_client", lambda: redis_client)
 
     with pytest.raises(HTTPException) as exc:
-        asyncio.run(routes.get_partial_transcript("nope", since=0, current_user=None, owned_job=None))
+        routes.get_partial_transcript("nope", since=0, current_user=None, owned_job=None)
     assert exc.value.status_code == 404
