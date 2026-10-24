@@ -172,6 +172,9 @@ export function AppHeader({ className }: { className?: string }) {
                 >
                   <FlaskConical aria-hidden="true" className="h-4 w-4 shrink-0" />
                   Labs
+                  {LABS_LINKS.some(({ href }) => isActive(href)) && (
+                    <span className="sr-only"> (current section)</span>
+                  )}
                   <ChevronDown aria-hidden="true" className="h-3 w-3" />
                 </button>
               </DropdownMenu.Trigger>
@@ -287,15 +290,18 @@ export function AppHeader({ className }: { className?: string }) {
                     renderLink(link, () => setMobileOpen(false)),
                   )}
                 {user && (
-                  <>
-                    <p className="flex items-center gap-2 px-3 pb-1 pt-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  <div role="group" aria-labelledby="mobile-labs-heading">
+                    <p
+                      id="mobile-labs-heading"
+                      className="flex items-center gap-2 px-3 pb-1 pt-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground"
+                    >
                       <FlaskConical aria-hidden="true" className="h-3.5 w-3.5" />
                       Labs
                     </p>
                     {LABS_LINKS.map((link) =>
                       renderLink(link, () => setMobileOpen(false)),
                     )}
-                  </>
+                  </div>
                 )}
                 {renderLink(DOCS_LINK, () => setMobileOpen(false))}
                 {renderLink(BUSINESS_LINK, () => setMobileOpen(false))}
