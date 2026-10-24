@@ -2,6 +2,7 @@
 
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
+import { effectiveDoclingPreset } from "@/lib/document-preset";
 import { cn } from "@/lib/utils";
 import type { DoclingPreset, DocumentImageOptions } from "@/types/api";
 
@@ -62,8 +63,8 @@ function OptionCheckbox({
  * accept them for every source type): the Docling preset, extract the pictures
  * (image_mode=referenced), render every PDF page (page_images), describe / OCR
  * the figures inline in the Markdown (describe_images / ocr_images) and delete
- * the original (purge_source). All default off / "fast", so an untouched form
- * sends the same request as before.
+ * the original (purge_source). All default off / "fast"; the preset is always sent
+ * explicitly (an omitted one would mean the server's own defaults).
  *
  * With purge_source the images do not live as long as the job, they expire
  * ASSET_RETENTION_SECONDS after it ends (1 hour by default; the browser does not
@@ -84,7 +85,7 @@ export function DocumentImageFields({
   purgeSource: boolean;
   onPurgeSourceChange: (next: boolean) => void;
 }) {
-  const preset = value.docling_preset ?? "fast";
+  const preset = effectiveDoclingPreset(value.docling_preset);
   const extract = value.image_mode === "referenced";
   const pages = value.page_images === true;
   const describe = value.describe_images === true;
@@ -115,9 +116,8 @@ export function DocumentImageFields({
                 role="radio"
                 aria-checked={selected}
                 disabled={disabled}
-                // "fast" is the default: leaving it out keeps the request (and the
-                // server's dedup key) identical to one sent without a preset
-                onClick={() => onChange({ ...value, docling_preset: option.value === "fast" ? undefined : option.value })}
+                // explicit, "fast" included: an omitted preset means the server's own defaults
+                onClick={() => onChange({ ...value, docling_preset: option.value })}
                 className={cn(
                   "rounded-md border p-2 text-left transition-colors disabled:opacity-50",
                   selected ? "border-primary bg-primary/5 ring-1 ring-primary" : "hover:bg-muted/50"

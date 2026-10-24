@@ -91,7 +91,8 @@ def check(browser, url, viewport):
         page.wait_for_url(f'**/jobs/{JOB}', timeout=10000)
         path, parts, _ = sent[-1]
         assert path == '/upload' and parts['image_mode'] == b'referenced' and parts['page_images'] == b'true' \
-            and parts['purge_source'] == b'true' and parts['file'] == PDF, (path, parts.keys())
+            and parts['purge_source'] == b'true' and parts['file'] == PDF \
+            and parts['docling_preset'] == b'fast', (path, parts.keys())
 
         # Job page: Images tab, thumbnails with the session's credentials, expiry, zip
         expect(page.get_by_role('heading', name='Converted document')).to_be_visible()
@@ -130,7 +131,8 @@ def check(browser, url, viewport):
         page.wait_for_url(f'**/jobs/{JOB}', timeout=10000)
         path, parts, _ = sent[-1]
         assert path == '/convert' and parts['source_type'] == b'url' and parts['source'] == b'https://example.com/deck.pdf' \
-            and parts['image_mode'] == b'referenced' and 'page_images' not in parts and 'purge_source' not in parts, parts
+            and parts['image_mode'] == b'referenced' and 'page_images' not in parts and 'purge_source' not in parts \
+            and parts['docling_preset'] == b'fast', parts
         page.goto(url.rstrip('/') + '/convert?project_id=' + PROJECT['id'])
         page.get_by_role('tab', name='Dropbox').click()
         page.get_by_label('Dropbox File Path').fill('/slides/deck.pdf')
@@ -140,7 +142,8 @@ def check(browser, url, viewport):
         page.wait_for_url(f'**/jobs/{JOB}', timeout=10000)
         path, parts, headers = sent[-1]
         assert path == '/convert' and parts['source_type'] == b'dropbox' and parts['page_images'] == b'true' \
-            and 'image_mode' not in parts and 'auth_token' not in parts, parts
+            and 'image_mode' not in parts and 'auth_token' not in parts \
+            and parts['docling_preset'] == b'fast', parts
         assert headers.get('x-source-token') == 'sl.provider-token' and headers.get('authorization') == 'Bearer synthetic-assets-token'
         assert not errors, errors
         print(f"PASS convert image options (file/url/dropbox), Images tab, zip, expiry and delete viewport {viewport['width']}", flush=True)
