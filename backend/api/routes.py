@@ -3303,8 +3303,11 @@ async def get_page_pdf(
 
 
 @router.get("/health", summary="Verificar saúde da API", response_model=HealthCheckResponse)
-async def health_check():
+def health_check():
     """Health check endpoint"""
+    # Sync on purpose: the Celery inspect below blocks for ~1-2 s, and FastAPI runs a
+    # plain def in its threadpool. As async def it froze the event loop on every
+    # container healthcheck and dropped live sessions with LIVE_BACKPRESSURE.
     redis_client = get_redis_client()
     es_client = get_es_client()
 

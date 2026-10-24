@@ -336,7 +336,7 @@ async def trigger_cleanup(
 
 
 @router.get("/health/monitoring", summary="Saúde do monitoramento")
-async def monitoring_health(admin_user=Depends(require("platform.monitoring.read"))) -> Dict[str, Any]:
+def monitoring_health(admin_user=Depends(require("platform.monitoring.read"))) -> Dict[str, Any]:
     """
     Check if the monitoring system (Celery Beat) is functioning
 
