@@ -872,13 +872,23 @@ def process_conversion(
         from shared import error_catalog
 
         error_msg = error_catalog.render("FILE_TOO_LARGE", max_size_mb=exc.max_mb)
-        if _strict_audio_task(options):
-            if not _fail_transcription_attempt(job_id, options, redis_client, error_msg, retry=False):
-                return {"job_id": job_id, "status": "discarded"}
-        else:
-            _record_main_failure(job_id, redis_client, error_msg, retrying=False)
+        strict = _strict_audio_task(options)
+        try:
+            if strict:
+                if not _fail_transcription_attempt(job_id, options, redis_client, error_msg, retry=False):
+                    return {"job_id": job_id, "status": "discarded"}
+            else:
+                _record_main_failure(job_id, redis_client, error_msg, retrying=False)
+        except BaseException:
+            # A status write that fails must not leave the provider token or the download behind
+            redis_client.delete_source_token(job_id)
+            if not strict:
+                shutil.rmtree(Path(settings.temp_storage_path) / job_id, ignore_errors=True)
+            raise
         redis_client.delete_source_token(job_id)
-        shutil.rmtree(Path(settings.temp_storage_path) / job_id, ignore_errors=True)
+        if not strict:
+            # The strict audio path leaves the job directory alone: a successor attempt may share it
+            shutil.rmtree(Path(settings.temp_storage_path) / job_id, ignore_errors=True)
         return {"job_id": job_id, "status": "failed", "error": error_msg}
 
     except Exception as exc:
