@@ -30,7 +30,12 @@ from fastapi.routing import APIRoute, APIWebSocketRoute
 # 1.7.0: completion webhook (`callback_url` on /upload, /convert and /transcribe,
 # GET /webhooks/signing-secret, `webhook` in GET /jobs/{job_id}); backward compatible,
 # new 422 code INVALID_CALLBACK_URL.
-API_VERSION = "1.7.0"
+# 1.8.0: the API is bilingual, English by default. Human text (`message`) follows
+# Accept-Language (en, pt-BR); `code` never changes. Behaviour change: clients that
+# sent no Accept-Language used to get Portuguese and now get English; responses
+# carry Content-Language and Vary: Accept-Language. Part 1 covers the job-creating
+# routes, upload locations, tags and live sessions.
+API_VERSION = "1.8.0"
 
 API_DESCRIPTION = """
 API assíncrona que converte documentos (PDF, DOCX, HTML, PPTX, XLSX...) em Markdown,

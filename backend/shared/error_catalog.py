@@ -1,9 +1,14 @@
-"""One Portuguese message catalog for engine-control, execution-profile, access,
-IAM and root error codes (spec 0009 CA1: never show only a code).
+"""One bilingual (en/pt) message catalog for API, engine-control, execution-profile,
+access, IAM and root error codes (spec 0009 CA1: never show only a code; P-13).
+
+``CATALOG[code] = ({"en": template, "pt": template}, next_steps)``. English is the
+default; ``render``/``describe``/``detail`` use the request language
+(``shared.i18n.current_lang``) unless ``lang=`` is given. A language missing for a
+code falls back to the other one, then to the code itself.
 
 Every refusal keeps its machine ``code`` unchanged. ``detail()`` adds:
 
-- ``message``: what happened, in plain Portuguese;
+- ``message``: what happened, in plain language (English or Portuguese);
 - ``next_steps``: identifiers from the closed vocabulary below, which the admin
   UI turns into labels and buttons;
 - ``cause``: the inner gate when a generic code wraps one
@@ -18,6 +23,10 @@ when a code is raised without an entry here.
 
 import re
 from datetime import datetime
+
+from shared.catalog_api import API_CATALOG
+from shared.catalog_en import EN
+from shared.i18n import DEFAULT, LANGS, current_lang
 
 # Closed vocabulary of next steps (labels live in frontend/lib/admin-errors.ts).
 NEXT_STEPS = {
@@ -50,9 +59,10 @@ _HOST_AGENT_HINT = (
     "(journalctl -u ingestify-engine-host-agent)."
 )
 
-# code -> (message template, next steps). Templates may use {for_feature},
-# {host} and {since}; missing context renders as an empty string.
-CATALOG = {
+# code -> (Portuguese template, next steps). The English texts live in
+# ``shared.catalog_en.EN``; ``CATALOG`` below joins both. Templates may use
+# {for_feature}, {host} and {since}; missing context renders as an empty string.
+_PT = {
     # --- jobs ------------------------------------------------------------------
     "JOB_STILL_PROCESSING": (
         "O job (ou uma página dele) ainda está na fila, em processamento ou "
@@ -568,6 +578,20 @@ CATALOG = {
     ),
 }
 
+
+def _bilingual(pt_entries):
+    out = {}
+    for code, (pt, steps) in pt_entries.items():
+        texts = {"pt": pt}
+        if code in EN:
+            texts["en"] = EN[code]
+        out[code] = (texts, steps)
+    return out
+
+
+CATALOG = _bilingual(_PT)
+CATALOG.update(API_CATALOG)
+
 _CODE = re.compile(r"^([A-Z][A-Z0-9_]{3,})(?:\s*:\s*(.*))?$", re.S)
 
 
@@ -593,10 +617,24 @@ class _Blank(dict):
         return ""
 
 
-def _since(seen_at):
+_FOR_FEATURE = {"en": " for {}", "pt": " para {}"}
+_HOST = {"en": " \u201c{}\u201d", "pt": " \u201c{}\u201d"}
+_NEEDS_CONNECTION = {
+    "en": " The connection to the provider has not been verified yet: use \u201cTest\u201d first.",
+    "pt": " A conexão com o provedor ainda não foi verificada: use “Testar” primeiro.",
+}
+
+
+def _since(seen_at, lang):
     if not seen_at:
-        return " (nenhum heartbeat registrado)"
+        return {"en": " (no heartbeat recorded)", "pt": " (nenhum heartbeat registrado)"}[lang]
     minutes = int((datetime.utcnow() - seen_at).total_seconds() // 60)
+    if lang == "en":
+        if minutes < 1:
+            return " less than a minute ago"
+        if minutes < 120:
+            return f" {minutes} minute{'s' if minutes != 1 else ''} ago"
+        return f" {minutes // 60} hours ago"
     if minutes < 1:
         return " há menos de 1 minuto"
     if minutes < 120:
@@ -604,29 +642,55 @@ def _since(seen_at):
     return f" há {minutes // 60} horas"
 
 
-def describe(code, *, feature=None, needs_connection=False, **context):
-    """``(message, next_steps)`` for a known code, else ``(None, [])``."""
-    known = CATALOG.get(code)
-    if not known:
-        return None, []
-    template, steps = known
-    values = _Blank(
-        for_feature=f" para {feature}" if feature else "",
-        host=f" “{context['host']}”" if context.get("host") else "",
-        since=_since(context.get("seen_at")) if "seen_at" in context else "",
-        **{k: context[k] for k in ("failed", "total", "deleted_at", "format", "kind") if k in context},
+def _template(code, lang):
+    """``(template, language of the template)``: the other language when ``lang`` is missing."""
+    texts = CATALOG[code][0]
+    if lang in texts:
+        return texts[lang], lang
+    used = DEFAULT if DEFAULT in texts else next(iter(texts))
+    return texts[used], used
+
+
+def _render(code, lang, params):
+    """``(message, language it is written in)``; the code itself when unknown."""
+    template, used = _template(code, lang)
+    return template.format_map(_values(used, params)), used
+
+
+def render(code, lang=None, **params):
+    """The message of ``code`` in ``lang`` (default: the request language); the code itself if unknown."""
+    lang = lang if lang in LANGS else current_lang()
+    if code not in CATALOG:
+        return code
+    return _render(code, lang, params)[0]
+
+
+def _values(lang, context):
+    values = {k: v for k, v in context.items() if k not in ("feature", "host", "seen_at")}
+    values.update(
+        for_feature=_FOR_FEATURE[lang].format(context["feature"]) if context.get("feature") else "",
+        host=_HOST[lang].format(context["host"]) if context.get("host") else "",
+        since=_since(context.get("seen_at"), lang) if "seen_at" in context else "",
     )
-    message = template.format_map(values)
-    steps = list(steps)
+    return _Blank(values)
+
+
+def describe(code, *, feature=None, needs_connection=False, lang=None, **context):
+    """``(message, next_steps)`` for a known code, else ``(None, [])``."""
+    if code not in CATALOG:
+        return None, []
+    lang = lang if lang in LANGS else current_lang()
+    steps = list(CATALOG[code][1])
+    message, used = _render(code, lang, {"feature": feature, **context})
     if needs_connection and code in ("RUNTIME_PROFILE_REQUIRED", "NOTHING_TO_COOL_DOWN"):
-        message += " A conexão com o provedor ainda não foi verificada: use “Testar” primeiro."
+        message += _NEEDS_CONNECTION[used]
         steps = ["test_connection"] + [s for s in steps if s != "test_connection"]
         if code == "NOTHING_TO_COOL_DOWN":
             steps.append("bind_profile")
     return message, steps
 
 
-def detail(code, *, text=None, cause=None, context=None, feature=None, needs_connection=False):
+def detail(code, *, text=None, cause=None, context=None, feature=None, needs_connection=False, lang=None):
     """The HTTP ``detail`` body: ``code`` unchanged plus human guidance.
 
     ``text`` is the raw exception text; a ``"CODE: rest"`` text whose CODE differs
@@ -638,10 +702,10 @@ def detail(code, *, text=None, cause=None, context=None, feature=None, needs_con
         cause = raw_code
     out = {"code": code}
     message, steps = describe(
-        cause or code, feature=feature, needs_connection=needs_connection, **context
+        cause or code, feature=feature, needs_connection=needs_connection, lang=lang, **context
     )
     if message is None and cause:
-        message, steps = describe(code, feature=feature)
+        message, steps = describe(code, feature=feature, lang=lang)
     if message is None:
         message = text if text and not raw_code else None
     out["message"] = message or code
