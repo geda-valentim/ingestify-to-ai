@@ -561,12 +561,12 @@ async def upload_and_convert(
                 job_type="main",
                 status="failed",
                 progress=0,
-                error="Celery workers não disponíveis"
+                error=render("QUEUE_UNAVAILABLE", lang="en")
             )
             # Update MySQL
             try:
                 db_job.status = DBJobStatus.FAILED
-                db_job.error_message = "Celery workers não disponíveis"
+                db_job.error_message = render("QUEUE_UNAVAILABLE", lang="en")
                 db.commit()
             except Exception:
                 db.rollback()
@@ -1070,12 +1070,12 @@ async def transcribe_audio(
                 job_type="main",
                 status="failed",
                 progress=0,
-                error="Celery workers não disponíveis"
+                error=render("QUEUE_UNAVAILABLE", lang="en")
             )
             # Update MySQL
             try:
                 db_job.status = DBJobStatus.FAILED
-                db_job.error_message = "Celery workers não disponíveis"
+                db_job.error_message = render("QUEUE_UNAVAILABLE", lang="en")
                 db.commit()
             except Exception:
                 db.rollback()
@@ -1459,12 +1459,12 @@ async def convert_document(
                 job_type="main",
                 status="failed",
                 progress=0,
-                error="Celery workers não disponíveis"
+                error=render("QUEUE_UNAVAILABLE", lang="en")
             )
             # Update MySQL
             try:
                 db_job.status = DBJobStatus.FAILED
-                db_job.error_message = "Celery workers não disponíveis"
+                db_job.error_message = render("QUEUE_UNAVAILABLE", lang="en")
                 db.commit()
             except Exception:
                 db.rollback()

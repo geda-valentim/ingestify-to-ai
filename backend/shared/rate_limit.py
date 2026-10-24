@@ -58,7 +58,7 @@ def hit(bucket: str, identity: str, limit: int, window_seconds: int) -> None:
         count = _increment(redis, key, window_seconds)
         if count > limit:
             ttl = redis.ttl(key)
-            raise _too_many(ttl if ttl and ttl > 0 else window_seconds, "RATE_LIMITED")
+            raise _too_many(ttl if ttl and ttl > 0 else window_seconds, "REQUEST_RATE_LIMITED")
     except HTTPException:
         raise
     except Exception as e:

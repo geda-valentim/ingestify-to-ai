@@ -164,7 +164,7 @@ curl -X POST http://localhost:8080/convert \
   "job_id": "550e8400-e29b-41d4-a716-446655440000",
   "status": "queued",
   "created_at": "2025-10-01T17:45:00Z",
-  "message": "Job enfileirado para processamento"
+  "message": "Job queued for processing"
 }
 ```
 

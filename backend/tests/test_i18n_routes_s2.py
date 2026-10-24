@@ -149,8 +149,8 @@ def auth_client():
 def test_401_is_coded_localized_and_keeps_www_authenticate(auth_client):
     en = auth_client.get("/whoami")
     pt = auth_client.get("/whoami", headers=PT)
-    assert _coded(en, 401, "CREDENTIALS_INVALID") == "Could not validate credentials"
-    assert _coded(pt, 401, "CREDENTIALS_INVALID") == "Não foi possível validar as credenciais"
+    assert _coded(en, 401, "NOT_AUTHENTICATED") == "Could not validate credentials"
+    assert _coded(pt, 401, "NOT_AUTHENTICATED") == "Não foi possível validar as credenciais"
     assert en.headers["www-authenticate"] == pt.headers["www-authenticate"] == "Bearer"
 
 
@@ -189,7 +189,7 @@ def test_ip_rate_limit_429_is_coded_and_keeps_retry_after(redis):  # noqa: F811
         with use_lang(lang), pytest.raises(HTTPException) as exc:
             rate_limit.hit("t:ip", "198.51.100.9", 1, 60)
         assert exc.value.status_code == 429
-        assert exc.value.detail == {"code": "RATE_LIMITED", "message": text}
+        assert exc.value.detail == {"code": "REQUEST_RATE_LIMITED", "message": text}
         assert exc.value.headers["Retry-After"] == "60"
 
 
@@ -204,14 +204,15 @@ def test_inactive_user_is_coded_in_both_languages():
         assert exc.value.detail == {"code": "USER_INACTIVE", "message": text}
 
 
-def test_register_duplicates_are_coded_and_render_a_string_for_the_form(db):  # noqa: F811
+def test_register_with_a_taken_email_is_coded_in_both_languages_and_creates_nothing(db):  # noqa: F811
     from shared.models import User
     from shared.schemas import UserCreate
 
+    before = db.query(User).count()
     data = UserCreate(email="a@example.com", username="newname", password="Str0ng!Passw0rd")
     for lang, text in (("en", "Email already registered"), ("pt", "E-mail já cadastrado")):
         with use_lang(lang), pytest.raises(HTTPException) as exc:
             asyncio.run(auth_routes.register(data, request(), db=db))
         assert exc.value.status_code == 400
         assert exc.value.detail == {"code": "EMAIL_ALREADY_REGISTERED", "message": text}
-    assert db.query(User).count() == 3
+    assert db.query(User).count() == before

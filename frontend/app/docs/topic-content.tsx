@@ -267,7 +267,7 @@ const RESPONSES = {
   "job_id": "${EXAMPLE_JOB_ID}",
   "status": "queued",
   "created_at": "2026-09-25T18:32:29.301477",
-  "message": "Job de transcrição de áudio enfileirado para processamento",
+  "message": "Audio transcription job queued for processing",
   "project": { "id": "${EXAMPLE_PROJECT_ID}", "name": "Aulas", "created": false, "source": "request" },
   "folder": null
 }`,

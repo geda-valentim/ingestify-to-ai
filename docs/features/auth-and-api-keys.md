@@ -158,7 +158,7 @@ O texto de `message` segue `Accept-Language` (inglês por padrão, `pt-BR` sob p
 
 ## Limites e lacunas conhecidas
 
-- Um usuário desativado (`is_active=false`) recebe `400 Inactive user`, não `401/403`.
+- Um usuário desativado (`is_active=false`) recebe `400` com `{"code": "USER_INACTIVE", "message": ...}` (a mensagem segue `Accept-Language`), não `401/403`.
 - Revogar uma API key a apaga (não há "desativar"); o campo `is_active` não tem endpoint.
 - Não há escopos configuráveis por chave nas APIs de jobs. Controle, biblioteca e IAM
   humano exigem sessão JWT; bindings de engines não autorizam essas rotas por API key.

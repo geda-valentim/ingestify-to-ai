@@ -269,7 +269,7 @@ async def get_current_user(
     Raises:
         HTTPException 401: If authentication fails
     """
-    credentials_exception = api_error(401, "CREDENTIALS_INVALID", headers={"WWW-Authenticate": "Bearer"})
+    credentials_exception = api_error(401, "NOT_AUTHENTICATED", headers={"WWW-Authenticate": "Bearer"})
 
     request.state.api_key = None
 

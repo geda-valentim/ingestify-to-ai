@@ -123,11 +123,15 @@ def test_every_entry_is_bilingual():
 
 def test_api_codes_raised_by_routes_exist_in_the_catalog():
     """`_coded(status, "CODE", ...)` / `api_error(status, "CODE", ...)` / `InvalidNameError("CODE"...)`."""
-    pattern = re.compile(r"""(?:_coded|api_error|InvalidNameError|InvalidTagsError)\(\s*(?:\d+,\s*)?["']([A-Z_]+)["']""")
+    pattern = re.compile(
+        r"""(?:_coded|api_error|InvalidNameError|InvalidTagsError)\(\s*(?:(?:\d+|status\.\w+),\s*)?["']([A-Z_]+)["']"""
+        r"""|_too_many\([^"'\n]*,\s*["']([A-Z_]+)["']"""
+        r"""|\b(?:render|describe)\(\s*["']([A-Z_]+)["']"""
+    )
     found = set()
     for folder in ("api", "shared"):
         for path in (BACKEND / folder).glob("*.py"):
-            found |= set(pattern.findall(path.read_text()))
+            found |= {code for groups in pattern.findall(path.read_text()) for code in groups if code}
     assert {"FILE_EMPTY", "FILE_TOO_LARGE", "INVALID_FILE_FORMAT", "PROJECT_LIMIT"} <= found
     missing = {c for c in found if c not in error_catalog.CATALOG}
     assert not missing, missing

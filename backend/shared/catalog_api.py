@@ -400,14 +400,14 @@ API_CATALOG = {
         },
         [],
     ),
-    "CREDENTIALS_INVALID": (
+    "NOT_AUTHENTICATED": (
         {
             "en": "Could not validate credentials",
             "pt": "Não foi possível validar as credenciais",
         },
         [],
     ),
-    "RATE_LIMITED": (
+    "REQUEST_RATE_LIMITED": (
         {
             "en": "Too many attempts. Try again later.",
             "pt": "Muitas tentativas. Tente novamente mais tarde.",

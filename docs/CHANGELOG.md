@@ -24,10 +24,10 @@
     422 `FOLDER_NOT_IN_PROJECT`. `GET /search`: 500 `SEARCH_FAILED`.
   - `POST /auth/register`: 400 `EMAIL_ALREADY_REGISTERED`, `USERNAME_TAKEN`, `EMAIL_OR_USERNAME_EXISTS`.
     `POST /auth/login`: 401 `INVALID_CREDENTIALS` (com `WWW-Authenticate: Bearer`), 400 `USER_INACTIVE`.
-    `POST /auth/refresh`: 401 `SESSION_INVALID`. Qualquer rota autenticada: 401 `CREDENTIALS_INVALID`
+    `POST /auth/refresh`: 401 `SESSION_INVALID`. Qualquer rota autenticada: 401 `NOT_AUTHENTICATED`
     (com `WWW-Authenticate: Bearer`) e 400 `USER_INACTIVE`. O status 401 não muda, então a
     interface continua encerrando a sessão por ele.
-  - 429 `RATE_LIMITED` (limite por IP) e `LOGIN_RATE_LIMITED` (bloqueio de conta), ambos com `Retry-After`.
+  - 429 `REQUEST_RATE_LIMITED` (limite por IP) e `LOGIN_RATE_LIMITED` (bloqueio de conta), ambos com `Retry-After`.
   - `POST /api-keys`: 422 `LOCATION_PROJECT_AND_ID` e os erros de nome de projeto
     (`PROJECT_NAME_EMPTY`, `PROJECT_NAME_CONTROL_CHARS`, `NAME_TOO_LONG`, `NAME_KEY_TOO_LONG`).
 - Continuam **texto**, só que no idioma pedido: os 404 de job (`Job not found`), de job
