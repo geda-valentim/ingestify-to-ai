@@ -5032,7 +5032,7 @@ Esquema JSON completo:
     },
     "file": {
       "type": "string",
-      "format": "binary",
+      "contentMediaType": "application/octet-stream",
       "title": "File",
       "description": "Imagem PNG, JPEG, WEBP, BMP, GIF ou TIFF"
     },
@@ -5239,7 +5239,7 @@ Esquema JSON completo:
       "anyOf": [
         {
           "type": "string",
-          "format": "binary"
+          "contentMediaType": "application/octet-stream"
         },
         {
           "type": "null"
@@ -5476,7 +5476,7 @@ Esquema JSON completo:
   "properties": {
     "file": {
       "type": "string",
-      "format": "binary",
+      "contentMediaType": "application/octet-stream",
       "title": "File",
       "description": "Imagem (PNG, JPEG, WEBP, BMP, GIF, TIFF)"
     },
@@ -5625,7 +5625,7 @@ Esquema JSON completo:
   "properties": {
     "file": {
       "type": "string",
-      "format": "binary",
+      "contentMediaType": "application/octet-stream",
       "title": "File",
       "description": "Imagem (PNG, JPEG, WEBP, BMP, GIF, TIFF)"
     },
@@ -5744,7 +5744,7 @@ Esquema JSON completo:
   "properties": {
     "file": {
       "type": "string",
-      "format": "binary",
+      "contentMediaType": "application/octet-stream",
       "title": "File",
       "description": "Arquivo de áudio (MP3, WAV, M4A, FLAC, OGG...) ou vídeo (MP4, MKV, MOV, WEBM, AVI...)"
     },
@@ -5948,7 +5948,7 @@ Esquema JSON completo:
   "properties": {
     "file": {
       "type": "string",
-      "format": "binary",
+      "contentMediaType": "application/octet-stream",
       "title": "File",
       "description": "Arquivo para conversão (PDF, DOCX, HTML, etc.)"
     },
@@ -6183,7 +6183,7 @@ Esquema JSON completo:
   "properties": {
     "file": {
       "type": "string",
-      "format": "binary",
+      "contentMediaType": "application/octet-stream",
       "title": "File"
     },
     "face_options": {
@@ -15190,6 +15190,8 @@ Esquema JSON completo:
 | `loc` | sim | array de string / integer |  |  |
 | `msg` | sim | string |  |  |
 | `type` | sim | string |  |  |
+| `input` | não | objeto livre |  |  |
+| `ctx` | não | object |  |  |
 
 Esquema JSON completo:
 
@@ -15217,6 +15219,13 @@ Esquema JSON completo:
     "type": {
       "type": "string",
       "title": "Error Type"
+    },
+    "input": {
+      "title": "Input"
+    },
+    "ctx": {
+      "type": "object",
+      "title": "Context"
     }
   },
   "type": "object",
