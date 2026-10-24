@@ -28,6 +28,8 @@ from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from api.admin_errors import refusal
+from api.error_guidance import GuidedRoute
 from api.admin_routes import require_admin
 from api.access_deps import access_session, scoped_engine, scoped_features
 from api.iam_deps import engine_access
@@ -53,13 +55,14 @@ settings = get_settings()
 
 # 0009 routes: decided by require_admin(_session)/access_session + policy; engine_access only
 # declares them in the IAM inventory (0014 CA1).
-router = APIRouter(prefix="/admin", tags=["Admin - Engines"], dependencies=[Depends(engine_access())])
+router = APIRouter(prefix="/admin", tags=["Admin - Engines"], dependencies=[Depends(engine_access())],
+                   route_class=GuidedRoute)
 
 
 def require_admin_session(request: Request, admin_user=Depends(require_admin)):
     """An admin authenticated by a login session; API keys cannot change engines"""
     if request.headers.get("x-api-key") or not request.headers.get("authorization", "").lower().startswith("bearer "):
-        raise HTTPException(status_code=403, detail="Engine changes require a login session (JWT); API keys are not accepted")
+        raise refusal(403, "LOGIN_SESSION_REQUIRED")
     return admin_user
 
 
@@ -75,7 +78,7 @@ def _alive_by_feature() -> Dict[str, list]:
 def _engine_or_404(db: Session, engine_id: str) -> Engine:
     engine = db.query(Engine).filter((Engine.id == engine_id) | (Engine.slug == engine_id)).first()
     if engine is None:
-        raise HTTPException(status_code=404, detail="Engine not found")
+        raise refusal(404, "ENGINE_NOT_FOUND")
     return engine
 
 
@@ -89,7 +92,9 @@ def _ip(request: Request) -> Optional[str]:
 
 
 def _capacity_error(e: CapacityError) -> HTTPException:
-    return HTTPException(status_code=422, detail={"message": str(e), "vram": e.lines})
+    # `lines` is the VRAM arithmetic; a CapacityError without it is plain configuration validation
+    # (unknown gpu_type, executions_per_worker, adapter cannot run the feature...).
+    return refusal(422, "CAPACITY_EXCEEDED" if e.lines else "INVALID_CONFIGURATION", e, vram=e.lines)
 
 
 @router.get("/engine-adapters", summary="Adaptadores de engine, GPUs e limites")
@@ -240,14 +245,14 @@ async def put_engine_feature(engine_id: str, feature: str, body: BindingUpdate, 
                     auth_method="jwt", ip=request.client.host if request.client else None,
                     vision_model_id=settings.vision_model_id)
     except VersionConflict as e:
-        raise HTTPException(status_code=409, detail=str(e))
+        raise refusal(409, "VERSION_CONFLICT", e)
     except store.RemoteCapacityError as e:
         db.rollback()
-        raise HTTPException(status_code=409, detail=str(e))
+        raise refusal(409, "REMOTE_CAPACITY_EXCEEDED", e)
     except CapacityError as e:
         raise _capacity_error(e)
     except ValueError as e:
-        raise HTTPException(status_code=422, detail=str(e))
+        raise refusal(422, "INVALID_CONFIGURATION", e)
     logger.warning(f"[ADMIN] {admin_user.id} set {feature} capacity on engine {engine.slug}")
     return _view(db, engine)
 
@@ -261,9 +266,11 @@ async def delete_engine_feature(engine_id: str, feature: str, request: Request, 
                     auth_method="jwt", ip=request.client.host if request.client else None,
                     vision_model_id=settings.vision_model_id)
     except VersionConflict as e:
-        raise HTTPException(status_code=409, detail=str(e))
-    except (CapacityError, ValueError) as e:
-        raise HTTPException(status_code=422, detail=str(e))
+        raise refusal(409, "VERSION_CONFLICT", e)
+    except CapacityError as e:
+        raise _capacity_error(e)
+    except ValueError as e:
+        raise refusal(422, "INVALID_CONFIGURATION", e)
     return _view(db, engine)
 
 
@@ -276,7 +283,7 @@ async def put_engine_gpus(engine_id: str, body: GpusUpdate, request: Request,
                        actor_user_id=str(admin_user.id), auth_method="jwt",
                        ip=request.client.host if request.client else None, vision_model_id=settings.vision_model_id)
     except VersionConflict as e:
-        raise HTTPException(status_code=409, detail=str(e))
+        raise refusal(409, "VERSION_CONFLICT", e)
     except CapacityError as e:
         raise _capacity_error(e)
     return _view(db, engine)
@@ -310,13 +317,13 @@ class CredentialsDelete(BaseModel):
 
 
 def _state_error(e: "store.EngineStateError") -> HTTPException:
-    detail = {"message": str(e), "problems": e.problems} if e.problems else str(e)
-    return HTTPException(status_code=e.status, detail=detail)
+    extra = {"problems": e.problems} if e.problems else {}
+    return refusal(e.status, e.code or ("INVALID_CONFIGURATION" if e.status == 422 else "ENGINE_STATE_CONFLICT"), e, **extra)
 
 
 def _require_password(admin_user, password: str) -> None:
     if not password or not verify_password(password, admin_user.hashed_password):
-        raise HTTPException(status_code=403, detail="Changing engine credentials needs current_password")
+        raise refusal(403, "CURRENT_PASSWORD_REQUIRED")
 
 
 def _remote_worker_alive() -> bool:
@@ -352,10 +359,9 @@ async def test_engine(engine_id: str, request: Request, admin_user=Depends(requi
     if engine.adapter_type == "local":
         return {"ok": True, "code": None, "detail": "the local engine needs no connection test"}
     if not engine.credentials_sealed:
-        raise HTTPException(status_code=409, detail="The engine has no credentials")
+        raise refusal(409, "ENGINE_NO_CREDENTIALS")
     if not _remote_worker_alive():
-        raise HTTPException(status_code=409, detail="worker-remote is not running (docker compose --profile engines "
-                                                    "up -d worker-remote); only it can open credentials")
+        raise refusal(409, "REMOTE_WORKER_NOT_RUNNING")
     store.audit(db, actor_user_id=str(admin_user.id), auth_method="jwt", ip=_ip(request), action="engine.test",
                 engine=engine, before=None, after=None)
     db.commit()
@@ -366,7 +372,7 @@ async def test_engine(engine_id: str, request: Request, admin_user=Depends(requi
         report = await run_in_threadpool(_send_test, engine.id, 30.0, authorization)
     except Exception as e:
         logger.warning(f"[ADMIN] Test of engine {engine.slug} did not answer: {type(e).__name__}")
-        raise HTTPException(status_code=504, detail="worker-remote did not answer within 30 s")
+        raise refusal(504, "REMOTE_WORKER_TIMEOUT", params={"seconds": 30})
     db.expire_all()
     return {**report, "engine": _view(db, _engine_or_404(db, engine.id))}
 
@@ -380,7 +386,7 @@ async def activate_engine(engine_id: str, request: Request, body: Optional[Versi
                          actor_user_id=str(admin_user.id), auth_method="jwt", ip=_ip(request),
                          fingerprint_of=fingerprint_of, vision_model_id=settings.vision_model_id)
     except VersionConflict as e:
-        raise HTTPException(status_code=409, detail=str(e))
+        raise refusal(409, "VERSION_CONFLICT", e)
     except store.EngineStateError as e:
         raise _state_error(e)
     logger.warning(f"[ADMIN] {admin_user.id} activated engine {engine.slug}")
@@ -395,7 +401,7 @@ async def pause_engine(engine_id: str, request: Request, body: Optional[VersionB
         store.set_status(db, engine, "paused", version=body.version if body else None,
                          actor_user_id=str(admin_user.id), auth_method="jwt", ip=_ip(request))
     except VersionConflict as e:
-        raise HTTPException(status_code=409, detail=str(e))
+        raise refusal(409, "VERSION_CONFLICT", e)
     logger.warning(f"[ADMIN] {admin_user.id} paused engine {engine.slug}")
     return _view(db, engine)
 
@@ -417,7 +423,7 @@ async def put_engine_budget(engine_id: str, body: BudgetUpdate, request: Request
                          soft_pct=body.soft_pct, period_tz=body.period_tz, period_anchor_day=body.period_anchor_day,
                          version=body.version, actor_user_id=str(admin_user.id), auth_method="jwt", ip=_ip(request))
     except VersionConflict as e:
-        raise HTTPException(status_code=409, detail=str(e))
+        raise refusal(409, "VERSION_CONFLICT", e)
     except store.EngineStateError as e:
         raise _state_error(e)
     logger.warning(f"[ADMIN] {admin_user.id} set the budget of engine {engine.slug}")
@@ -434,14 +440,14 @@ async def put_engine_credentials(
 ) -> Dict[str, Any]:
     engine = scoped_engine(db, engine_id, admin_user.id)
     if not settings.engine_secrets_public_key:
-        raise HTTPException(status_code=409, detail="ENGINE_SECRETS_PUBLIC_KEY is not set: credentials cannot be stored")
+        raise refusal(409, "ENGINE_SECRETS_KEY_MISSING")
     _require_password(admin_user, body.current_password)
     try:
         store.set_credentials(db, engine, body.fields, public_key=settings.engine_secrets_public_key,
                               version=body.version, actor_user_id=str(admin_user.id), auth_method="jwt",
                               ip=_ip(request))
     except VersionConflict as e:
-        raise HTTPException(status_code=409, detail=str(e))
+        raise refusal(409, "VERSION_CONFLICT", e)
     except store.EngineStateError as e:
         raise _state_error(e)
     logger.warning(f"[ADMIN] {admin_user.id} replaced the credentials of engine {engine.slug}")
@@ -462,7 +468,7 @@ async def delete_engine_credentials(
         store.clear_credentials(db, engine, version=body.version, actor_user_id=str(admin_user.id),
                                 auth_method="jwt", ip=_ip(request))
     except VersionConflict as e:
-        raise HTTPException(status_code=409, detail=str(e))
+        raise refusal(409, "VERSION_CONFLICT", e)
     except store.EngineStateError as e:
         raise _state_error(e)
     logger.warning(f"[ADMIN] {admin_user.id} removed the credentials of engine {engine.slug}")
@@ -516,9 +522,9 @@ async def reconcile_engine(engine_id: str, request: Request, admin_user=Depends(
                            db: Session = Depends(get_db)) -> Dict[str, Any]:
     engine = _engine_or_404(db, engine_id)
     if engine.adapter_type == "local":
-        raise HTTPException(status_code=409, detail="The local engine has no provider spend")
+        raise refusal(409, "LOCAL_ENGINE_NO_SPEND")
     if not _remote_worker_alive():
-        raise HTTPException(status_code=409, detail="worker-remote is not running; only it can read spend reports")
+        raise refusal(409, "REMOTE_WORKER_NOT_RUNNING")
     store.audit(db, actor_user_id=str(admin_user.id), auth_method="jwt", ip=_ip(request), action="engine.reconcile",
                 engine=engine, before=None, after=None)
     db.commit()
@@ -534,7 +540,7 @@ async def reconcile_engine(engine_id: str, request: Request, admin_user=Depends(
         )
     except Exception as e:
         logger.warning(f"[ADMIN] Reconcile of engine {engine.slug} did not answer: {type(e).__name__}")
-        raise HTTPException(status_code=504, detail="worker-remote did not answer within 90 s")
+        raise refusal(504, "REMOTE_WORKER_TIMEOUT", params={"seconds": 90})
     db.expire_all()
     return {"reconcile": out, "engine": _view(db, _engine_or_404(db, engine.id))}
 
@@ -546,7 +552,7 @@ async def test_all_engines(request: Request, admin_user=Depends(require_admin_se
     if not remote:
         return {"results": {}}
     if not _remote_worker_alive():
-        raise HTTPException(status_code=409, detail="worker-remote is not running; only it can open credentials")
+        raise refusal(409, "REMOTE_WORKER_NOT_RUNNING")
     for engine in remote:
         store.audit(db, actor_user_id=str(admin_user.id), auth_method="jwt", ip=_ip(request), action="engine.test",
                     engine=engine, before=None, after=None)
@@ -564,7 +570,7 @@ async def test_all_engines(request: Request, admin_user=Depends(require_admin_se
         )
     except Exception as e:
         logger.warning(f"[ADMIN] Test of all engines did not answer: {type(e).__name__}")
-        raise HTTPException(status_code=504, detail=f"worker-remote did not answer within {timeout:.0f} s")
+        raise refusal(504, "REMOTE_WORKER_TIMEOUT", params={"seconds": f"{timeout:.0f}"})
     return {"results": out}
 
 

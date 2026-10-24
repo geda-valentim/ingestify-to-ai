@@ -20,6 +20,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from api.admin_errors import refusal
+from api.error_guidance import GuidedRoute
 from api.engine_admin_routes import _alive_by_feature, _remote_worker_alive, fingerprint_of
 from api.iam_deps import require
 from shared.auth import verify_password
@@ -32,14 +34,13 @@ from shared.models import DispatcherLease, Engine, EngineUsage, FeatureRoute, Jo
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/admin", tags=["Admin - Engines"])
+router = APIRouter(prefix="/admin", tags=["Admin - Engines"], route_class=GuidedRoute)
 
 ROUTING_READ = require("platform.routing.read")
 # Same rule and detail as the 0009 `require_admin_session` it replaces (CA12).
 ROUTING_UPDATE = require(
     "platform.routing.update",
     session=True,
-    session_detail="Engine changes require a login session (JWT); API keys are not accepted",
 )
 
 
@@ -103,7 +104,7 @@ async def put_route(feature: str, body: RouteUpdate, request: Request,
         current = db.query(FeatureRoute).filter(FeatureRoute.feature == feature).first()
         if current is None or current.remote_allowed_for != "all":
             if not body.current_password or not verify_password(body.current_password, admin_user.hashed_password):
-                raise HTTPException(status_code=403, detail="Opening remote engines to every user needs current_password")
+                raise refusal(403, "CURRENT_PASSWORD_REQUIRED")
     spec = routing.RouteSpec(**body.model_dump(exclude={"version", "current_password"}))
     try:
         route, warnings = routing.put_route(db, feature, spec, version=body.version, actor_user_id=str(admin_user.id),
@@ -111,10 +112,10 @@ async def put_route(feature: str, body: RouteUpdate, request: Request,
                                             fingerprint_of=fingerprint_of, remote_worker_alive=_remote_worker_alive)
     except routing.VersionConflict as e:
         db.rollback()
-        raise HTTPException(status_code=409, detail=str(e))
+        raise refusal(409, "VERSION_CONFLICT", e)
     except routing.RouteError as e:
         db.rollback()
-        raise HTTPException(status_code=e.status, detail=str(e))
+        raise refusal(e.status, e.code or "ROUTE_REJECTED", e)
 
     lease = db.get(DispatcherLease, 1)
     if dispatch.dispatcher_down(routing.load_route(db, feature), lease.dispatcher_seen_at if lease else None,
@@ -137,7 +138,7 @@ async def delete_route(feature: str, request: Request, admin_user=Depends(ROUTIN
         route = routing.drain_route(db, feature, actor_user_id=str(admin_user.id), auth_method="jwt",
                                     ip=request.client.host if request.client else None)
     except LookupError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise refusal(404, "ROUTE_NOT_FOUND", e)
     logger.warning(f"[ADMIN] {admin_user.id} removed the {feature} route; it drains")
     engines = {e.id: e for e in db.query(Engine)}
     view = routing.describe(route, engines, feature)

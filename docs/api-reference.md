@@ -2,7 +2,7 @@
 
 Gerado do OpenAPI da aplicação por `scripts/generate_api_docs.py`. Não edite este arquivo à mão.
 
-API `1.10.0`: **141 operações HTTP** e **1 WebSocket(s)**.
+API `1.11.0`: **141 operações HTTP** e **1 WebSocket(s)**.
 
 Base pública de desenvolvimento: `https://dev.ingestify.ai/api`. Os caminhos abaixo são relativos à base.
 

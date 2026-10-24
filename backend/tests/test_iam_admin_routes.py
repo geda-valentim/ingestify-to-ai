@@ -27,11 +27,12 @@ from sqlalchemy.pool import StaticPool
 import workers.celery_app  # noqa: F401  (import order used by the worker; avoids a circular import)
 from api import admin_routes, auth_routes, deps, iam_routes, routing_admin_routes
 from api import access_routes, engine_admin_routes
-from api.iam_deps import PLATFORM_DENIED_DETAIL
 from shared import broker_unacked
 from shared.auth import get_current_active_user
+from shared import error_catalog
 from shared.config import get_settings
 from shared.database import Base, get_db
+from shared.i18n import LanguageMiddleware, use_lang
 from shared.iam import catalog
 from shared.iam.models import IamBinding
 from shared.models import AdminAudit, User
@@ -131,6 +132,7 @@ def people(db, settings):
 @pytest.fixture
 def client(db):
     app = FastAPI()
+    app.add_middleware(LanguageMiddleware)
 
     def current_user(request: Request):
         if "x-test-user" not in request.headers:
@@ -194,7 +196,7 @@ def test_operator_recovers_stuck_work(people, client, method, path, body):
 @pytest.mark.parametrize("method,path,body", ADMIN_ONLY_MUTATIONS + [(None, "/admin/iam/bindings", None)])
 def test_operator_is_refused_settings_routing_cleanup_and_iam(people, client, method, path, body):
     r = call(client, method or "GET", path, people.op, json=body)
-    assert (r.status_code, r.json()["detail"]) == (403, PLATFORM_DENIED_DETAIL)
+    assert (r.status_code, r.json()["detail"]["code"]) == (403, "ADMIN_REQUIRED")
 
 
 @pytest.mark.parametrize("method,path", READS + [("GET", "/admin/iam/bindings")])
@@ -206,7 +208,7 @@ def test_auditor_reads_everything_including_bindings(people, client, method, pat
 @pytest.mark.parametrize("method,path,body", OPERATOR_MUTATIONS + ADMIN_ONLY_MUTATIONS)
 def test_auditor_mutates_nothing(people, client, method, path, body):
     r = call(client, method, path, people.aud, json=body)
-    assert (r.status_code, r.json()["detail"]) == (403, PLATFORM_DENIED_DETAIL)
+    assert (r.status_code, r.json()["detail"]["code"]) == (403, "ADMIN_REQUIRED")
 
 
 @pytest.mark.parametrize("method,path", READS + [("GET", "/admin/iam/bindings")])
@@ -217,7 +219,7 @@ def test_no_platform_role_no_admin_route(db, people, client, method, path, who):
         # engines.remote.use is a platform permission, but opens no admin route.
         _bind(db, user, "remote_engine_user", granted_by=people.root)
     r = call(client, method, path, user)
-    assert (r.status_code, r.json()["detail"]) == (403, PLATFORM_DENIED_DETAIL)
+    assert (r.status_code, r.json()["detail"]["code"]) == (403, "ADMIN_REQUIRED")
 
 
 @pytest.mark.parametrize("who", ["root", "admin"])
@@ -231,7 +233,7 @@ def test_platform_admin_and_bootstrap_hold_every_admin_route(people, client, who
 def test_routing_changes_still_need_a_login_session(people, client, method, path):
     r = call(client, method, path, people.root, headers=KEY, json={"steps": []} if method == "PUT" else None)
     assert r.status_code == 403
-    assert "login session" in r.json()["detail"]
+    assert r.json()["detail"]["code"] == "LOGIN_SESSION_REQUIRED"
 
 
 def test_off_mode_keeps_the_legacy_admin_rule(people, client, settings, monkeypatch):
@@ -344,7 +346,7 @@ def test_a_second_active_binding_of_the_same_role_conflicts(people, client):
 def test_grant_with_an_api_key_is_refused(db, people, client):
     r = _grant(client, people.root, people.alice, headers=KEY)
     assert r.status_code == 403
-    assert "login session" in r.json()["detail"]
+    assert r.json()["detail"]["code"] == "LOGIN_SESSION_REQUIRED"
     assert db.query(IamBinding).filter(IamBinding.subject_id == people.alice.id).count() == 0
 
 
@@ -493,3 +495,97 @@ def test_check_follows_the_mode(people, client, settings, monkeypatch):
     monkeypatch.setattr(settings, "iam_mode", "off")
     r = call(client, "POST", "/iam/check", people.op, json=[{"permission": "platform.stats.read"}])
     assert r.json() == [{"permission": "platform.stats.read", "allowed": False}]
+
+
+# -- P-13 slice 4: the admin refusals follow the request language --------------------
+
+PT = {"accept-language": "pt-BR"}
+
+
+def _both(people, client, user, method, path, **kw):
+    en = call(client, method, path, user, **kw)
+    pt = call(client, method, path, user, headers={**kw.pop("headers", JWT), **PT}, **kw)
+    return en, pt
+
+
+@pytest.mark.parametrize("method,path,status,code", [
+    ("GET", "/admin/iam/bindings", 403, "ADMIN_REQUIRED"),
+    ("POST", "/admin/cleanup", 403, "ADMIN_REQUIRED"),
+    ("POST", "/admin/engines/nope/activate", 404, "ENGINE_NOT_FOUND"),
+])
+def test_admin_refusals_speak_english_by_default_and_portuguese_on_request(people, client, method, path, status, code):
+    user = people.alice if status == 403 else people.root
+    en, pt = _both(people, client, user, method, path)
+    assert (en.status_code, pt.status_code) == (status, status)
+    en, pt = en.json()["detail"], pt.json()["detail"]
+    assert en["code"] == pt["code"] == code
+    assert en["message"] == error_catalog.render(code, lang="en")
+    assert pt["message"] == error_catalog.render(code, lang="pt")
+    assert en["message"] != pt["message"]
+    assert en["next_steps"] == pt["next_steps"] == list(error_catalog.CATALOG[code][1])
+
+
+def test_the_admin_api_key_and_job_refusals_are_coded(people, client):
+    en, pt = _both(people, client, people.root, "POST", "/admin/engines/nope/pause", headers=KEY)
+    assert en.json()["detail"]["code"] == pt.json()["detail"]["code"] == "LOGIN_SESSION_REQUIRED"
+    en, pt = _both(people, client, people.op, "POST", "/admin/jobs/ghost/retry-all-failed")
+    assert (en.status_code, pt.status_code) == (404, 404)
+    assert en.json()["detail"]["code"] == "ADMIN_JOB_NOT_FOUND"
+    assert "ghost" in en.json()["detail"]["message"] and "não encontrado" in pt.json()["detail"]["message"]
+    en, pt = _both(people, client, people.op, "POST", "/admin/broker/unacked/999/requeue")
+    assert (en.status_code, pt.status_code) == (409, 409)
+    assert en.json()["detail"]["code"] == "BROKER_MESSAGE_NOT_ORPHANED"
+    assert "órfã" in pt.json()["detail"]["message"]
+
+
+def test_engine_domain_errors_keep_their_extra_keys_and_the_raw_text():
+    from shared.engines.capacity import CapacityError
+    from shared.engines.store import EngineStateError
+
+    err = CapacityError("needs 24 GB, 16 GB free")
+    err.lines = ["gpu0: 24 > 16"]
+    for lang, word in (("en", "GPU memory"), ("pt", "memória de GPU")):
+        with use_lang(lang):
+            d = engine_admin_routes._capacity_error(err).detail
+            assert d["code"] == "CAPACITY_EXCEEDED" and d["vram"] == ["gpu0: 24 > 16"] and word in d["message"]
+            assert d["technical"] == "needs 24 GB, 16 GB free"
+            s = engine_admin_routes._state_error(
+                EngineStateError("e1 cannot be activated", 409, [{"code": "X"}], "ENGINE_NOT_ACTIVATABLE")
+            )
+            assert s.status_code == 409 and s.detail["code"] == "ENGINE_NOT_ACTIVATABLE"
+            assert s.detail["problems"] == [{"code": "X"}]
+    # an uncoded state error falls back by status; the message is never the bare exception text
+    assert engine_admin_routes._state_error(EngineStateError("odd", 422)).detail["code"] == "INVALID_CONFIGURATION"
+    assert engine_admin_routes._state_error(EngineStateError("odd", 409)).detail["code"] == "ENGINE_STATE_CONFLICT"
+
+
+def test_iam_write_refusals_follow_the_language_and_keep_the_specifics_as_technical(people, client):
+    body = {"subject_id": people.alice.id, "role": "no_such_role", "expires_at": "2099-01-01T00:00:00Z"}
+    en, pt = _both(people, client, people.root, "POST", "/admin/iam/bindings", json=body)
+    assert (en.status_code, pt.status_code) == (422, 422)
+    en, pt = en.json()["detail"], pt.json()["detail"]
+    assert en["code"] == pt["code"] == "UNKNOWN_ROLE"
+    assert en["message"] == error_catalog.render("UNKNOWN_ROLE", lang="en")
+    assert pt["message"] == error_catalog.render("UNKNOWN_ROLE", lang="pt")
+    assert en["message"] != pt["message"] and en["next_steps"] == pt["next_steps"]
+    assert "no_such_role" in en["technical"] and en["technical"] == pt["technical"]
+
+
+def test_a_capacity_error_without_vram_lines_is_plain_configuration_validation():
+    from shared.engines.capacity import CapacityError
+
+    err = CapacityError("gpu_type must be one of A10G, L4")
+    for lang in ("en", "pt"):
+        with use_lang(lang):
+            d = engine_admin_routes._capacity_error(err).detail
+        assert d["code"] == "INVALID_CONFIGURATION" and d["vram"] == []
+        assert d["technical"] == "gpu_type must be one of A10G, L4"
+    assert engine_admin_routes._capacity_error(CapacityError("no fit", ["gpu0: 24 > 16"])).detail["code"] == "CAPACITY_EXCEEDED"
+
+
+def test_dependency_refusals_of_the_engine_routers_are_guided_and_identical_for_missing_and_foreign(people, client):
+    # access_deps raises {"code": ...} only; the guided route adds message and next_steps.
+    r = call(client, "PUT", "/admin/engines/nope/credentials", people.alice,
+             json={"fields": {}, "current_password": "x"})
+    d = r.json()["detail"]
+    assert d["code"] in ("ACCESS_DENIED", "ENGINE_NOT_FOUND") and d["message"] != d["code"] and "next_steps" in d

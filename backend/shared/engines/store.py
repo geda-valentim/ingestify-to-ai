@@ -206,10 +206,12 @@ def engine_view(db: Session, engine: Engine, *, alive_by_feature: dict, vision_m
 class EngineStateError(Exception):
     """A change the engine's current state does not allow; `status` is the HTTP answer"""
 
-    def __init__(self, message: str, status: int = 409, problems: Optional[list] = None):
+    def __init__(self, message: str, status: int = 409, problems: Optional[list] = None,
+                 code: Optional[str] = None):
         super().__init__(message)
         self.status = status
         self.problems = problems or []
+        self.code = code  # machine code the API answers with (catalog entry); None = by status
 
 
 def _bump(engine: Engine) -> None:
@@ -261,7 +263,7 @@ def set_status(db: Session, engine: Engine, status: str, *, version: Optional[in
     if status == "active":
         problems = activation_problems(engine, fingerprint_of, vision_model_id)
         if problems:
-            raise EngineStateError(f"{engine.slug} cannot be activated", 409, problems)
+            raise EngineStateError(f"{engine.slug} cannot be activated", 409, problems, "ENGINE_NOT_ACTIVATABLE")
     before = {"status": engine.status}
     engine.status = status
     _bump(engine)
@@ -300,21 +302,21 @@ def set_budget(db: Session, engine: Engine, *, limit_usd, min_remaining_usd=None
     _check_version(engine, version)
     limit = Decimal(str(limit_usd)) if limit_usd is not None else None
     if limit is not None and limit <= 0:
-        raise EngineStateError("limit_usd must be positive", 422)
+        raise EngineStateError("limit_usd must be positive", 422, code="INVALID_BUDGET")
     if limit is None and engine.adapter_type != "local" and engine.status == "active":
-        raise EngineStateError("An active remote engine needs limit_usd: pause it first", 422)
+        raise EngineStateError("An active remote engine needs limit_usd: pause it first", 422, code="INVALID_BUDGET")
     remaining = Decimal(str(min_remaining_usd)) if min_remaining_usd is not None else engine.min_remaining_usd
     if remaining is None or remaining < 0:
-        raise EngineStateError("min_remaining_usd must be >= 0", 422)
+        raise EngineStateError("min_remaining_usd must be >= 0", 422, code="INVALID_BUDGET")
     if soft_pct is not None and not 1 <= int(soft_pct) <= 100:
-        raise EngineStateError("soft_pct must be 1..100", 422)
+        raise EngineStateError("soft_pct must be 1..100", 422, code="INVALID_BUDGET")
     if period_tz is not None:
         try:
             ZoneInfo(period_tz)
         except Exception:
-            raise EngineStateError(f"Unknown time zone {period_tz!r}", 422) from None
+            raise EngineStateError(f"Unknown time zone {period_tz!r}", 422, code="INVALID_BUDGET") from None
     if period_anchor_day is not None and not 1 <= int(period_anchor_day) <= 28:
-        raise EngineStateError("period_anchor_day must be 1..28", 422)
+        raise EngineStateError("period_anchor_day must be 1..28", 422, code="INVALID_BUDGET")
 
     before = {"limit_usd": str(engine.limit_usd) if engine.limit_usd is not None else None,
               "min_remaining_usd": str(engine.min_remaining_usd), "soft_pct": engine.soft_pct,
@@ -360,9 +362,9 @@ def set_credentials(db: Session, engine: Engine, fields: dict, *, public_key: st
     except ValueError:
         schema = CREDENTIAL_FIELDS.get(engine.adapter_type)
     if not schema:
-        raise EngineStateError(f"The {engine.adapter_type} engine takes no credentials", 422)
+        raise EngineStateError(f"The {engine.adapter_type} engine takes no credentials", 422, code="CREDENTIALS_NOT_SUPPORTED")
     if not public_key:
-        raise EngineStateError("ENGINE_SECRETS_PUBLIC_KEY is not set: credentials cannot be stored", 409)
+        raise EngineStateError("ENGINE_SECRETS_PUBLIC_KEY is not set: credentials cannot be stored", 409, code="ENGINE_SECRETS_KEY_MISSING")
     from shared.engine_control.guards import before_write
     before_write(
         db,
@@ -377,12 +379,12 @@ def set_credentials(db: Session, engine: Engine, fields: dict, *, public_key: st
     for name in schema:
         value = (fields or {}).get(name)
         if not isinstance(value, str) or not value.strip() or len(value) > 512:
-            raise EngineStateError(f"credentials need {', '.join(schema)}", 422)
+            raise EngineStateError(f"credentials need {', '.join(schema)}", 422, code="INVALID_CREDENTIAL_FIELDS")
         clean[name] = value.strip()
         register_secret(clean[name])
     unknown = set(fields or {}) - set(schema)
     if unknown:
-        raise EngineStateError(f"unknown credential fields: {', '.join(sorted(unknown))}", 422)
+        raise EngineStateError(f"unknown credential fields: {', '.join(sorted(unknown))}", 422, code="INVALID_CREDENTIAL_FIELDS")
 
     blob, kid = seal(clean, public_key, engine.id)
     masked = {name: mask(clean[name], hint) for name, hint in schema.items()}

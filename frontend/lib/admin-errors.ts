@@ -30,6 +30,7 @@ export const NEXT_STEP_LABELS: Record<string, string> = {
   fix_input: "Corrigir os campos enviados",
   enable_control: "Habilitar o controle na instalação",
   set_root_token: "Definir ROOT_SETUP_TOKEN no servidor",
+  set_server_secret: "Definir a variável de ambiente no servidor (ENGINE_SECRETS_PUBLIC_KEY)",
 };
 
 export interface GuidedError {

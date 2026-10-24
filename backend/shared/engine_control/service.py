@@ -29,7 +29,7 @@ from shared import error_catalog
 class ControlError(Exception):
     """A refusal with a stable machine `code` (0009). `str()` keeps the code (or the
     explicit technical message) for logs and callers that match on it; `detail()`
-    adds the Portuguese message and next steps from `shared.error_catalog`.
+    adds the localized message and next steps from `shared.error_catalog`.
     """
 
     def __init__(

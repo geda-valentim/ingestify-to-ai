@@ -53,6 +53,7 @@ from api import deps
 from shared.auth import get_current_active_user
 from shared.config import get_settings
 from shared.database import get_db
+from shared.datalake.errors import datalake_not_found_detail
 from shared.iam import catalog, ownership
 from shared.iam.decide import (
     PLATFORM,
@@ -66,13 +67,12 @@ from shared.iam.decide import (
 )
 from shared.models import AdminAudit, APIKey, DatalakeConnection, Folder, Job, Page, Project, User
 
+from api.admin_errors import refusal
+
 logger = logging.getLogger(__name__)
 
-# Same text as `admin_routes.require_admin`: converting a route changes no contract (CA12).
-# The 404 of `datalake_routes.connection_or_404` (missing and someone else's alike).
-DATALAKE_NOT_FOUND_DETAIL = "Conexão não encontrada"
-PLATFORM_DENIED_DETAIL = "Acesso negado: privilégios de administrador necessários"
-SESSION_REQUIRED_DETAIL = "This change requires a login session (JWT); API keys are not accepted"
+# The 403s are catalog codes rendered per request (P-13): ADMIN_REQUIRED, the same
+# refusal as `admin_routes.require_admin`, and LOGIN_SESSION_REQUIRED.
 
 
 # ============================================
@@ -177,7 +177,7 @@ def _check_require_permission(permission: str) -> catalog.Permission:
     return perm
 
 
-def require(permission: str, *, session: bool = False, session_detail: str = SESSION_REQUIRED_DETAIL):
+def require(permission: str, *, session: bool = False):
     """
     A platform/IAM permission (decided on PLATFORM), or a self-service data
     permission such as `documents.convert`. `session=True` additionally demands a
@@ -215,12 +215,12 @@ def require(permission: str, *, session: bool = False, session_detail: str = SES
         if not allowed:
             if perm.level == catalog.OWNER:
                 # Only an absent/inactive principal is refused a self-service permission.
-                raise HTTPException(status_code=status if status in (401, 403) else 403, detail="Inactive user")
+                raise refusal(status if status in (401, 403) else 403, "USER_INACTIVE")
             logger.warning(f"[IAM] {permission} denied for user {user.id}")
-            raise HTTPException(status_code=403, detail=PLATFORM_DENIED_DETAIL)
+            raise refusal(403, "ADMIN_REQUIRED")
 
         if session and not is_login_session(request):
-            raise HTTPException(status_code=403, detail=session_detail)
+            raise refusal(403, "LOGIN_SESSION_REQUIRED")
 
         _flush_audit(db)
         return user
@@ -287,7 +287,7 @@ _LOADERS: Dict[type, _Loader] = {
         family=("datalakes",),
         legacy=lambda db, connection_id, user: _owned_connection_or_404(db, connection_id, user),
         resource=lambda db, connection_id: ownership.row_by_id(db, DatalakeConnection, connection_id),
-        not_found=lambda: HTTPException(status_code=404, detail=DATALAKE_NOT_FOUND_DETAIL),
+        not_found=lambda: HTTPException(status_code=404, detail=datalake_not_found_detail()),
     ),
 }
 
@@ -296,7 +296,7 @@ def _owned_connection_or_404(db: Session, connection_id: str, user: User) -> Dat
     """The legacy `connection_or_404`: the caller's own connection, else 404."""
     row = ownership.owned_row(db, DatalakeConnection, connection_id, user.id)
     if row is None:
-        raise HTTPException(status_code=404, detail=DATALAKE_NOT_FOUND_DETAIL)
+        raise HTTPException(status_code=404, detail=datalake_not_found_detail())
     return row
 
 
@@ -345,7 +345,7 @@ def authorized(model: type, permission: str, *, param: Optional[str] = None,
                 return decision.target
             if decision.status == 404:
                 raise loader.not_found()
-            raise HTTPException(status_code=decision.status, detail="Acesso negado")
+            raise refusal(decision.status, "ACCESS_DENIED")
 
         if mode == "off":
             return loader.legacy(db, resource_id, user)
@@ -542,20 +542,17 @@ def binding_admin(*, write: bool):
         engines = bindings.engines_authority(db, principal)
         if not (platform or engines):
             logger.warning(f"[IAM] {permission} / access.grants.manage denied for user {user.id}")
-            raise HTTPException(status_code=403, detail=PLATFORM_DENIED_DETAIL)
+            raise refusal(403, "ADMIN_REQUIRED")
         session = is_login_session(request)
         if write and not session:
-            raise HTTPException(
-                status_code=403,
-                detail="Changing access requires a login session (JWT); API keys are not accepted",
-            )
+            raise refusal(403, "LOGIN_SESSION_REQUIRED")
         # The engines administration opens to a login session only, reads
         # included, as 0009's `access_session` did (CA8/CA13): an API key is
         # admitted on platform authority alone and never sees an engines row.
         engines = engines and session
         if not (platform or engines):
             logger.warning(f"[IAM] access.grants.manage needs a login session for user {user.id}")
-            raise HTTPException(status_code=403, detail=PLATFORM_DENIED_DETAIL)
+            raise refusal(403, "ADMIN_REQUIRED")
         return BindingAdmin(user, principal, platform, engines)
 
     suffix = "_session" if write else ""

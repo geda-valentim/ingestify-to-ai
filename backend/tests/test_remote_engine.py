@@ -386,7 +386,8 @@ def test_a_ready_remote_engine_can_be_routed_once_worker_remote_is_alive(world, 
     monkeypatch.setattr(routing_api, "_remote_worker_alive", lambda: False)
     with pytest.raises(HTTPException) as exc:
         put_route(world, steps=steps)
-    assert exc.value.status_code == 409 and "worker-remote" in exc.value.detail
+    assert exc.value.status_code == 409 and "worker-remote" in exc.value.detail["technical"]
+    assert exc.value.detail["code"] == "REMOTE_WORKER_NOT_RUNNING"
 
     monkeypatch.setattr(routing_api, "_remote_worker_alive", lambda: True)
     view = put_route(world, steps=steps)
@@ -408,7 +409,7 @@ def test_an_unready_remote_engine_cannot_be_routed(world, monkeypatch, change, m
     monkeypatch.setattr(routing_api, "_remote_worker_alive", lambda: True)
     with pytest.raises(HTTPException) as exc:
         put_route(world, steps=[{"engine_ids": ["local"]}, {"engine_ids": ["modal_1"]}])
-    assert exc.value.status_code == 409 and message in exc.value.detail
+    assert exc.value.status_code == 409 and message in exc.value.detail["technical"]
     assert world.count(FeatureRoute) == 0
 
 
@@ -418,7 +419,7 @@ def test_remote_capacity_is_bounded_by_worker_remote_threads(world, monkeypatch)
     monkeypatch.setattr(routing_api, "_remote_worker_alive", lambda: True)
     with pytest.raises(HTTPException) as exc:
         put_route(world, steps=[{"engine_ids": ["local"]}, {"engine_ids": ["modal_1"]}])
-    assert exc.value.status_code == 409 and "REMOTE_WORKER_CONCURRENCY" in exc.value.detail
+    assert exc.value.status_code == 409 and "REMOTE_WORKER_CONCURRENCY" in exc.value.detail["technical"]
 
 
 # --- zero-config -----------------------------------------------------------------------------------

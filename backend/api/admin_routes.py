@@ -28,6 +28,7 @@ from shared.redis_client import get_redis_client
 from shared.auth import get_current_active_user
 from shared.iam.decide import is_bootstrap_admin
 from api.iam_deps import require
+from api.admin_errors import refusal
 from workers.monitoring import detect_stuck_jobs, auto_retry_failed_pages, cleanup_old_jobs
 from uuid import uuid4
 
@@ -54,10 +55,7 @@ def require_admin(current_user=Depends(get_current_active_user)):
     """
     if not is_bootstrap_admin(current_user, settings):
         logger.warning(f"[ADMIN] Access denied for user {current_user.id}")
-        raise HTTPException(
-            status_code=403,
-            detail="Acesso negado: privilégios de administrador necessários"
-        )
+        raise refusal(403, "ADMIN_REQUIRED")
     return current_user
 
 
@@ -98,7 +96,7 @@ async def get_stats(admin_user=Depends(require("platform.stats.read"))) -> Dict[
 
     except Exception as e:
         logger.error(f"Error fetching stats: {e}")
-        raise HTTPException(status_code=500, detail="Failed to fetch stats")
+        raise refusal(500, "ADMIN_STATS_FAILED")
 
 
 @router.get("/jobs/stuck", summary="Listar jobs travados")
@@ -155,7 +153,7 @@ async def list_stuck_jobs(
 
     except Exception as e:
         logger.error(f"Error listing stuck jobs: {e}")
-        raise HTTPException(status_code=500, detail="Failed to list stuck jobs")
+        raise refusal(500, "STUCK_JOBS_LIST_FAILED")
 
 
 @router.post("/jobs/recover-stuck", summary="Recuperar jobs travados")
@@ -200,7 +198,7 @@ async def recover_stuck_jobs(
 
     except Exception as e:
         logger.error(f"Error recovering stuck jobs: {e}")
-        raise HTTPException(status_code=500, detail="Failed to recover stuck jobs")
+        raise refusal(500, "STUCK_JOBS_RECOVER_FAILED")
 
 
 @router.post("/jobs/{job_id}/retry-all-failed", summary="Refazer todas as páginas com falha de um job")
@@ -238,7 +236,7 @@ async def retry_all_failed_pages(
         job = lock_job(db, job_id)
         if job is None:
             db.rollback()
-            raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+            raise refusal(404, "ADMIN_JOB_NOT_FOUND", params={"job_id": job_id})
         total_pages = db.query(Page).filter(Page.job_id == job_id).count()
         failed_pages = page_retry.locked_failed_pages(db, job_id)
 
@@ -292,7 +290,7 @@ async def retry_all_failed_pages(
     except Exception as e:
         db.rollback()
         logger.error(f"Error bulk retrying pages for job {job_id}: {e}")
-        raise HTTPException(status_code=500, detail="Failed to retry pages")
+        raise refusal(500, "PAGES_RETRY_FAILED")
 
 
 @router.post("/cleanup", summary="Limpar jobs antigos")
@@ -334,7 +332,7 @@ async def trigger_cleanup(
 
     except Exception as e:
         logger.error(f"Error during manual cleanup: {e}")
-        raise HTTPException(status_code=500, detail="Failed to cleanup")
+        raise refusal(500, "CLEANUP_FAILED")
 
 
 @router.get("/health/monitoring", summary="Saúde do monitoramento")
@@ -373,7 +371,7 @@ async def monitoring_health(admin_user=Depends(require("platform.monitoring.read
 
     except Exception as e:
         logger.error(f"Error checking monitoring health: {e}")
-        raise HTTPException(status_code=500, detail="Failed to check health")
+        raise refusal(500, "HEALTH_CHECK_FAILED")
 
 
 @router.get("/broker/unacked", summary="Listar mensagens não confirmadas do broker")
@@ -416,21 +414,18 @@ async def requeue_broker_unacked(delivery_tag: str, admin_user=Depends(require("
     report = json.loads(get_redis_client().client.get(broker_unacked.REPORT_KEY) or "{}")
     flagged = {o["delivery_tag"]: o for o in report.get("orphans") or []}
     if delivery_tag not in flagged:
-        raise HTTPException(
-            status_code=409,
-            detail="Not flagged as orphaned by the latest monitoring check; wait for the next check",
-        )
+        raise refusal(409, "BROKER_MESSAGE_NOT_ORPHANED")
 
     live = await run_in_threadpool(
         lambda: broker_unacked.live_task_ids(celery_app.control.inspect(timeout=5))
     )
     if live is None:
-        raise HTTPException(status_code=409, detail="No worker answered; cannot confirm the task is not running")
+        raise refusal(409, "BROKER_NO_WORKER_ANSWERED")
     if flagged[delivery_tag].get("task_id") in live:
-        raise HTTPException(status_code=409, detail="A worker is holding this task now; not requeued")
+        raise refusal(409, "BROKER_TASK_RUNNING")
 
     if not await run_in_threadpool(lambda: broker_unacked.requeue(broker_unacked.broker_client(), delivery_tag)):
-        raise HTTPException(status_code=404, detail="No longer unacknowledged (acked or already restored)")
+        raise refusal(404, "BROKER_MESSAGE_GONE")
 
     logger.warning(
         f"[ADMIN] Requeued orphaned broker message {delivery_tag} "

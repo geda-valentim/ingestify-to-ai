@@ -61,7 +61,7 @@ export async function apiFetch(input: string, init?: RequestInit): Promise<Respo
 
 /**
  * Screens written in Portuguese (/live, the image screens and upload options, the
- * datalake screens) show API messages verbatim, so their calls ask for pt-BR explicitly (apiFetch keeps a header
+ * datalake screens, the engine-control/access/IAM/execution-profile admin screens) show API messages verbatim, so their calls ask for pt-BR explicitly (apiFetch keeps a header
  * that is already there). Everything else asks for English.
  */
 export const PT_LANGUAGE: HeadersInit = { "Accept-Language": "pt-BR" };
@@ -774,6 +774,7 @@ export const apiKeysApi = {
 };
 
 async function adminGet<T>(path: string): Promise<T> {
+  // The compute admin screens (engines, GPUs, routing, status) are English: default language.
   const response = await apiFetch(`${API_URL}${path}`, { headers: getHeaders(true) });
   if (!response.ok) {
     const body = await response.json().catch(() => null);
