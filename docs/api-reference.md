@@ -5979,7 +5979,12 @@ Esquema JSON completo:
     "docling_preset": {
       "anyOf": [
         {
-          "type": "string"
+          "type": "string",
+          "enum": [
+            "fast",
+            "balanced",
+            "quality"
+          ]
         },
         {
           "type": "null"

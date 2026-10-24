@@ -41,6 +41,11 @@ class DoclingPreset(str, Enum):
     BALANCED = "balanced"   # OCR: Off, Images: On, Tables: On   (~70-105s/MB)
     QUALITY = "quality"     # OCR: On, Images: On, Tables: On    (~350s/MB)
 
+# The single list of preset names: the routes validate against it (Form params) and the
+# worker's get_converter reads its flags from the same names.
+DOCLING_PRESETS = tuple(preset.value for preset in DoclingPreset)
+DoclingPresetName = Literal[DOCLING_PRESETS]  # == Literal["fast", "balanced", "quality"]
+
 
 class ConversionOptions(BaseModel):
     format: str = "markdown"
