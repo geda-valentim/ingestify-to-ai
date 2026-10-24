@@ -54,7 +54,8 @@ pedido. Admin, engines e IAM migram na próxima parte e, até lá, continuam em 
 `code` é o mesmo em qualquer idioma.
 
 Os 404 que não revelam o que existe continuam **texto** (não objeto), agora no idioma
-pedido. "Não existe" e "não é seu" respondem o mesmo corpo, em cada idioma.
+pedido (em `/images/*` só o de `POST /images/{id}/cancel`; o de conexão de datalake dentro de
+`/images/*` é `DATALAKE_NOT_FOUND` no envelope `error_code`). "Não existe" e "não é seu" respondem o mesmo corpo, em cada idioma.
 
 ## O que NÃO é traduzido
 

@@ -131,9 +131,9 @@ def test_every_entry_is_bilingual():
 def test_api_codes_raised_by_routes_exist_in_the_catalog():
     """`_coded(status, "CODE", ...)` / `api_error(status, "CODE", ...)` / `InvalidNameError("CODE"...)`."""
     pattern = re.compile(
-        r"""(?:_coded|api_error|InvalidNameError|InvalidTagsError)\(\s*(?:(?:\d+|status\.\w+),\s*)?["']([A-Z_]+)["']"""
-        r"""|_too_many\([^"'\n]*,\s*["']([A-Z_]+)["']"""
-        r"""|\b(?:render|describe)\(\s*["']([A-Z_]+)["']"""
+        r"""(?:_coded|api_error|InvalidNameError|InvalidTagsError)\(\s*(?:(?:\d+|status\.\w+),\s*)?["']([A-Z0-9_]+)["']"""
+        r"""|_too_many\([^"'\n]*,\s*["']([A-Z0-9_]+)["']"""
+        r"""|\b(?:render|describe)\(\s*["']([A-Z0-9_]+)["']"""
     )
     found = set()
     for folder in ("api", "shared"):

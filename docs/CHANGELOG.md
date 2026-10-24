@@ -21,11 +21,12 @@
   texto deve ler `detail.error_code` (em `/images/*`) ou `detail.code` (demais rotas).
 - **`/images/*` mantém `error_code` em toda parte:** todas as recusas dessas rotas (inclusive
   `mode=full`, `/images/faces/*` e o destino de datalake) respondem
-  `{"detail": {"error_code", "message", "job_id"}}`. O envelope de `/images/*` (`{"detail": {"error_code", "message",
-  "job_id"}}`, inclusive `VISION_TIMEOUT` com `poll_url`/`result_url`, `FACE_UNAVAILABLE` com
-  `stages` e `VISION_ENGINE_UNAVAILABLE` com `retry_after`); só `message` segue o idioma.
-  Os 404 que não revelam o que existe (conexão de datalake, Full Analysis) continuam texto,
-  localizado. Mensagens de validação do Pydantic do datalake (`ConnectionConfig`, partições)
+  `{"detail": {"error_code", "message", "job_id"}}`, inclusive `VISION_TIMEOUT` com
+  `poll_url`/`result_url`, `FACE_UNAVAILABLE` com `stages` e `VISION_ENGINE_UNAVAILABLE` com
+  `retry_after`; só `message` segue o idioma. Dentro de `/images/*`, a conexão de datalake
+  inexistente é `DATALAKE_NOT_FOUND` nesse envelope. Os 404 que não revelam o que existe
+  continuam texto, localizado, só em `POST /images/{id}/cancel` (Full Analysis) e nas rotas
+  `/datalakes*` (conexão). Mensagens de validação do Pydantic do datalake (`ConnectionConfig`, partições)
   seguem o idioma pedido, no formato de 422 de validação.
 - `GET /images/capabilities` devolve `reason` no idioma pedido quando a API não vê worker de
   visão; o `reason` que o worker publica, e o `detail` de falha devolvido pelo worker de

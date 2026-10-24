@@ -29,6 +29,17 @@ def test_the_composite_message_gets_the_job_id():
         assert "e o job abc-1 para o erro completo" in message
 
 
+def test_the_merged_catalogs_do_not_overlap():
+    """Bare asserts vanish under `python -O`: pin it here too."""
+    from shared import catalog_api, catalog_images, error_catalog
+
+    assert not set(catalog_api.API_CATALOG) & set(catalog_images.IMAGES_CATALOG)
+    for table in (catalog_api.API_CATALOG, catalog_images.IMAGES_CATALOG):
+        assert all(error_catalog.CATALOG[code] == table[code] for code in table)
+    base = set(error_catalog.CATALOG) - set(catalog_api.API_CATALOG) - set(catalog_images.IMAGES_CATALOG)
+    assert not base & (set(catalog_api.API_CATALOG) | set(catalog_images.IMAGES_CATALOG))
+
+
 def _full(env, headers=None, **fields):
     return env.client.post(
         "/images/analyze/upload",

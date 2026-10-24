@@ -686,7 +686,7 @@ async def _run_vision(
         logger.error(f"Vision tasks not available: {e}")
         # Nenhuma task foi enfileirada, então ninguém mais vai apagar isto.
         _discard_image(job_id)
-        _mark_job_failed(job_id, db, db_job, "Celery workers não disponíveis")
+        _mark_job_failed(job_id, db, db_job, render("CELERY_UNAVAILABLE", lang="en"))  # stored job error: English
         raise _error(503, "CELERY_UNAVAILABLE", job_id, key="VISION_TASKS_UNAVAILABLE")
     except Exception as e:
         # kombu.exceptions.OperationalError (broker fora do ar) e afins.

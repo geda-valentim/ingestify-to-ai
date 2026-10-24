@@ -115,7 +115,7 @@ def submit(request, http_request, image_bytes, filename, current_user, db, tags,
         # Same text for a missing and a foreign connection (non-disclosure 404).
         raise _error(404, 'DATALAKE_NOT_FOUND') from exc
     except DatalakeError as exc:
-        raise _error(422, exc.code, **exc.params) from exc
+        raise _error(422, exc.code, text=str(exc)) from exc  # rendered in the request language
     except ValueError as exc:
         raise _error(422, 'DATALAKE_DESTINATION_REJECTED') from exc
     location = _location_step(resolve_upload_location, db, current_user, plan, http_request.url.path)
