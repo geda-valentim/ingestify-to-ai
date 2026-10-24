@@ -131,7 +131,8 @@ app.add_middleware(
     # Methods actually exposed by the API (plus the CORS preflight verb).
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     # Headers the frontend / API clients actually send.
-    allow_headers=["Authorization", "Content-Type", "Accept", "Accept-Language", "X-API-Key", "X-Source-Token"],
+    allow_headers=["Authorization", "Content-Type", "Accept", "Accept-Language", "X-API-Key", "X-Source-Token",
+                   "Idempotency-Key"],
 )
 # Outermost: sets the request language (Accept-Language) before anything raises.
 app.add_middleware(LanguageMiddleware)
