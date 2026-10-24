@@ -300,6 +300,11 @@ Em vez de consultar o job em loop, passe `callback_url` (https) no `/upload`, `/
 | (fixo no código) | 15 min | Validade da URL de `/pages/{n}/pdf` (`PAGE_PDF_URL_TTL_SECONDS`). |
 | (fixo no código) | 3 | Limite de retries manuais por página. |
 
+## Idioma das mensagens
+
+O texto de `message` segue `Accept-Language` (inglês por padrão, `pt-BR` sob pedido); o
+`code` não muda. Ver [languages.md](languages.md).
+
 ## Limites e lacunas conhecidas
 
 - `GET /jobs/{id}` e `GET /jobs/{id}/result` dependem do status no Redis: depois de 24 h

@@ -47,12 +47,24 @@ function getAuthToken(): string | null {
  * instead of leaving each page to spin or show a raw error.
  */
 export async function apiFetch(input: string, init?: RequestInit): Promise<Response> {
-  const response = await fetch(input, init);
+  // The UI is English-only: pin the API's language instead of letting the browser's
+  // Accept-Language pick Portuguese messages inside an English screen. Replace "en"
+  // with the UI locale when the app gets one (P-13).
+  const headers = new Headers(init?.headers);
+  if (!headers.has("Accept-Language")) headers.set("Accept-Language", "en");
+  const response = await fetch(input, { ...init, headers });
   if (response.status === 401 && new Headers(init?.headers).has("Authorization")) {
     expireSession();
   }
   return response;
 }
+
+/**
+ * Screens written in Portuguese (/live, the image options of the upload form) show API
+ * messages verbatim, so their calls ask for pt-BR explicitly (apiFetch keeps a header
+ * that is already there). Everything else asks for English.
+ */
+const PT_LANGUAGE: HeadersInit = { "Accept-Language": "pt-BR" };
 
 /**
  * An HTTP error that keeps the server's body, so `formatApiError` can show
@@ -197,13 +209,13 @@ export function uploadSourceType(filename: string): "audio" | "file" | "image" {
 
 export const jobsApi = {
   async faceCapabilities(): Promise<import("@/types/faces").FaceCapabilities> {
-    const response = await apiFetch(`${API_URL}/images/faces/capabilities`, { headers: getHeaders(true) });
+    const response = await apiFetch(`${API_URL}/images/faces/capabilities`, { headers: { ...getHeaders(true), ...PT_LANGUAGE } });
     if (!response.ok) await throwApiError(response, "Facial capabilities unavailable");
     return response.json();
   },
 
   async imageCapabilities(): Promise<import("@/types/api").VisionCapabilities> {
-    const response = await apiFetch(`${API_URL}/images/capabilities`, { headers: getHeaders(true) });
+    const response = await apiFetch(`${API_URL}/images/capabilities`, { headers: { ...getHeaders(true), ...PT_LANGUAGE } });
     if (!response.ok) await throwApiError(response, "Could not load image capabilities");
     return response.json();
   },
@@ -765,7 +777,8 @@ async function adminGet<T>(path: string): Promise<T> {
   const response = await apiFetch(`${API_URL}${path}`, { headers: getHeaders(true) });
   if (!response.ok) {
     const body = await response.json().catch(() => null);
-    const detail = typeof body?.detail === "string" ? body.detail : response.statusText;
+    const text = typeof body?.detail === "string" ? body.detail : body?.detail?.message;
+    const detail = typeof text === "string" && text ? text : response.statusText;
     // ApiError keeps the HTTP status: the admin pages tell 403 and 404 apart
     throw new ApiError(response.status, body, detail || `Request failed (${response.status})`);
   }
@@ -792,12 +805,12 @@ export type LiveAvailability = LiveAvailabilityState & { diarization: LiveAvaila
 export const liveApi = {
   /** Whether a session would be admitted now (reserves nothing). */
   async availability(): Promise<LiveAvailability> {
-    const response = await apiFetch(`${API_URL}/transcribe/live/sessions/availability`, { headers: getHeaders(true) });
+    const response = await apiFetch(`${API_URL}/transcribe/live/sessions/availability`, { headers: { ...getHeaders(true), ...PT_LANGUAGE } });
     if (!response.ok) await throwApiError(response, "Não foi possível verificar a transcrição ao vivo");
     return response.json();
   },
   async getStatus(jobId: string): Promise<{ job_id: string; state: string; duration_seconds: number; error_code: string | null }> {
-    const response = await apiFetch(`${API_URL}/transcribe/live/sessions/${jobId}`, { headers: getHeaders(true) });
+    const response = await apiFetch(`${API_URL}/transcribe/live/sessions/${jobId}`, { headers: { ...getHeaders(true), ...PT_LANGUAGE } });
     if (!response.ok) await throwApiError(response, "Não foi possível consultar a sessão");
     return response.json();
   },
@@ -805,7 +818,7 @@ export const liveApi = {
     job_id: string; ws_url: string; ticket: string; max_duration_seconds: number; protocol?: 1 | 2;
   }> {
     const response = await apiFetch(`${API_URL}/transcribe/live/sessions`, {
-      method: "POST", headers: { ...getHeaders(true), "Content-Type": "application/json" },
+      method: "POST", headers: { ...getHeaders(true), ...PT_LANGUAGE, "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
     if (!response.ok) await throwApiError(response, "Serviço de transcrição ao vivo indisponível");
@@ -813,7 +826,7 @@ export const liveApi = {
   },
   async cancel(jobId: string): Promise<void> {
     const response = await apiFetch(`${API_URL}/transcribe/live/sessions/${jobId}`, {
-      method: "DELETE", headers: getHeaders(true),
+      method: "DELETE", headers: { ...getHeaders(true), ...PT_LANGUAGE },
     });
     if (!response.ok) await throwApiError(response, "Não foi possível cancelar a sessão");
   },

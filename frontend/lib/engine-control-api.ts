@@ -31,7 +31,7 @@ export async function controlRequest<T>(
     const message =
       typeof detail === "string"
         ? detail
-        : detail?.message || detail?.code || `Erro ${r.status}`;
+        : detail?.message || detail?.code || `Error ${r.status}`;
     throw new ApiError(r.status, data, message);
   }
   return data as T;

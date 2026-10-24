@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from api.deps import job_not_found_detail
 from api.iam_deps import Scope, authorized, visible
 from shared.database import get_db
 from shared.models import Job, JobTag
@@ -106,7 +107,7 @@ async def replace_job_tags(
     """
     if owned_job is None or str(owned_job.id) != job_id:
         # Child jobs (pages) and Redis-only jobs have no row to tag.
-        raise HTTPException(status_code=404, detail="Job não encontrado")
+        raise HTTPException(status_code=404, detail=job_not_found_detail())
 
     tags = parse_tags_or_422(body.tags)
     try:

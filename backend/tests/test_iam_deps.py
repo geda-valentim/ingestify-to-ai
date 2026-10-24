@@ -320,7 +320,7 @@ def test_authorized_job_is_owner_only_and_returns_the_legacy_row(db, people, cli
     assert _get(client, "/jobs/page-1", alice).json() == {"row": "main"}
     for user, job_id in ((bob, "main"), (alice, "bobs"), (alice, "missing"), (root, "main")):
         r = _get(client, f"/jobs/{job_id}", user)
-        assert (r.status_code, r.json()["detail"]) == (404, deps.JOB_NOT_FOUND_DETAIL), (user.id, job_id)
+        assert (r.status_code, r.json()["detail"]) == (404, deps.job_not_found_detail()), (user.id, job_id)
 
 
 @pytest.mark.parametrize("mode", ["off", "shadow", "enforce"])
@@ -349,7 +349,7 @@ def test_shadow_authorized_answers_legacy_and_logs(db, people, client, settings,
     # Make the legacy path deny what IAM allows, to observe a divergence.
     def legacy_denies(db, job_id, user):
         from fastapi import HTTPException
-        raise HTTPException(status_code=404, detail=deps.JOB_NOT_FOUND_DETAIL)
+        raise HTTPException(status_code=404, detail=deps.job_not_found_detail())
 
     monkeypatch.setattr(deps, "resolve_owned_job", legacy_denies)
     with caplog.at_level(logging.WARNING, logger="shared.iam.decide"):

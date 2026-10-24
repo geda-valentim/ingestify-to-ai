@@ -2,6 +2,26 @@
 
 > **Registro histórico (2025-10).** Não é mantido; para mudanças posteriores use `git log`. Observação: `workers/tasks_old.py`, citado abaixo, não existe (há um `workers/tasks.py.backup`). Exceção: mudanças de comportamento intencionais que uma spec manda registrar aqui entram na seção abaixo.
 
+## 2026-10: API bilíngue, inglês por padrão — parte 1 (API 1.8.0)
+
+- O texto legível (`message`) segue o header `Accept-Language`: inglês (padrão) ou
+  português (`pt`, `pt-BR`). O `code` não muda. Toda resposta traz `Content-Language` e
+  `Vary: Accept-Language`. Detalhes em [features/languages.md](features/languages.md).
+- **Mudança de comportamento: o padrão passou de português para inglês.** Clientes sem
+  `Accept-Language` (curl, SDKs, scripts) passam a receber mensagens em inglês; para manter
+  o português, enviem `Accept-Language: pt-BR`. Quem casava texto deve casar `detail.code`.
+- Esta parte cobre as recusas de `/upload`, `/convert` e `/transcribe`, projeto/pasta
+  (também em `/images/*` e o 422 de `POST /api-keys`), tags, sessões ao vivo e os 404 de
+  job/projeto/pasta/API key (continuam texto, no idioma pedido). As demais rotas (auth, API keys, datalake, imagens, admin, engines, IAM) migram
+  nas partes seguintes e seguem em português até lá.
+- Sessões ao vivo: os 503 de `POST /transcribe/live/sessions` e o `message` de
+  `GET /transcribe/live/sessions/availability` (1.6.0) seguem o idioma pedido; `Retry-After`
+  continua. `GET /search` 503 (`SEARCH_UNAVAILABLE`, 1.6.1) e o 422 `INVALID_CALLBACK_URL` (1.7.0)
+  também.
+- Mensagens de erro de job gravadas pelos workers (`error`) passam a sair em inglês; as já
+  gravadas continuam como estão. Mensagens do OpenAPI, validação do FastAPI e descrições de
+  figuras não são traduzidas.
+
 ## 2026-10: Webhook de conclusão de job (API 1.7.0)
 
 - `POST /upload`, `POST /convert` e `POST /transcribe` aceitam `callback_url` (https). Quando

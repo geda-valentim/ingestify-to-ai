@@ -181,7 +181,7 @@ def test_project_limit_is_a_422(db, monkeypatch):
     with pytest.raises(HTTPException) as exc:
         get_or_create_project(db, ALICE, "C")
     assert exc.value.status_code == 422
-    assert exc.value.detail == {"code": "PROJECT_LIMIT", "message": "Limite de 2 projetos atingido"}
+    assert exc.value.detail == {"code": "PROJECT_LIMIT", "message": "The limit of 2 projects has been reached."}
 
 
 def test_folder_limit_is_a_422(db, monkeypatch):

@@ -192,7 +192,7 @@ class TestAuthorization:
         _job_with_page(db, user_id=alice.id)
         response = _get(app, "/jobs/job-1/pages/1/pdf", mallory)
         assert response.status_code == 404
-        assert response.json()["detail"] == "Job não encontrado"
+        assert response.json()["detail"] == "Job not found"
         assert minio.presign_calls == []
 
     def test_orphan_job_authorizes_nobody(self, app, db, users, minio):

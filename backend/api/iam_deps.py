@@ -258,28 +258,28 @@ _LOADERS: Dict[type, _Loader] = {
         legacy=lambda db, job_id, user: deps.resolve_owned_job(db, job_id, user),
         # A JobRef, so child jobs (SPLIT/PAGE/MERGE, no row of their own) resolve.
         resource=lambda db, job_id: JobRef(job_id),
-        not_found=lambda: HTTPException(status_code=404, detail=deps.JOB_NOT_FOUND_DETAIL),
+        not_found=lambda: HTTPException(status_code=404, detail=deps.job_not_found_detail()),
     ),
     Project: _Loader(
         param="project_id",
         family=("projects",),
         legacy=lambda db, project_id, user: deps.owned_project_or_404(db, project_id, user),
         resource=lambda db, project_id: db.get(Project, str(project_id)) if project_id else None,
-        not_found=lambda: deps.LocationError(404, "PROJECT_NOT_FOUND", deps.PROJECT_NOT_FOUND_DETAIL),
+        not_found=lambda: deps.LocationError(404, "PROJECT_NOT_FOUND", deps.project_not_found_detail()),
     ),
     Folder: _Loader(
         param="folder_id",
         family=("folders",),
         legacy=lambda db, folder_id, user: deps.owned_folder_or_404(db, folder_id, user),
         resource=lambda db, folder_id: db.get(Folder, str(folder_id)) if folder_id else None,
-        not_found=lambda: deps.LocationError(404, "FOLDER_NOT_FOUND", deps.FOLDER_NOT_FOUND_DETAIL),
+        not_found=lambda: deps.LocationError(404, "FOLDER_NOT_FOUND", deps.folder_not_found_detail()),
     ),
     APIKey: _Loader(
         param="key_id",
         family=("api_keys",),
         legacy=lambda db, key_id, user: deps.owned_api_key_or_404(db, key_id, user),
         resource=lambda db, key_id: db.get(APIKey, str(key_id)) if key_id else None,
-        not_found=lambda: HTTPException(status_code=404, detail=deps.API_KEY_NOT_FOUND_DETAIL),
+        not_found=lambda: HTTPException(status_code=404, detail=deps.api_key_not_found_detail()),
         annotation=UUID,
     ),
     DatalakeConnection: _Loader(

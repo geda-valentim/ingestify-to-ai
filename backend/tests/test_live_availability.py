@@ -40,7 +40,7 @@ def test_worker_down_is_not_ready(world):
     world.redis.client.delete(world.store.worker_key)
     body = get(world)
     assert (body['available'], body['code']) == (False, 'LIVE_NOT_READY')
-    assert 'não está disponível' in body['message']
+    assert body['message'] == 'The live transcription service is not available right now. Try again in a moment.'
 
 
 def test_worker_warming_up_is_not_ready(world):
@@ -76,7 +76,24 @@ def test_the_post_503_carries_a_message(world, monkeypatch):
     monkeypatch.setattr(live_routes.get_settings(), 'live_transcription_enabled', False)
     response = world.client.post('/transcribe/live/sessions', json={'project_id': 'p'})
     assert response.status_code == 503
-    assert response.json()['detail'] == {'code': 'LIVE_DISABLED', 'message': live_routes.UNAVAILABLE_MESSAGES['LIVE_DISABLED']}
+    assert response.json()['detail'] == {'code': 'LIVE_DISABLED', 'message': 'Live transcription is turned off on this server.'}
+
+
+def test_messages_follow_accept_language(world, monkeypatch):
+    from shared.i18n import LanguageMiddleware
+
+    from fastapi.testclient import TestClient
+
+    client = TestClient(LanguageMiddleware(world.client.app), headers=dict(world.client.headers))
+    world.store.reserve('one')
+    headers = {'Accept-Language': 'pt-BR'}
+    body = client.get(PATH, headers=headers).json()
+    assert (body['code'], body['message']) == ('LIVE_CAPACITY_FULL', 'Todas as vagas de transcrição ao vivo estão em uso. Tente de novo em instantes.')
+    assert client.get(PATH).json()['message'] == 'All live transcription slots are in use. Try again in a moment.'
+    monkeypatch.setattr(live_routes.get_settings(), 'live_transcription_enabled', False)
+    response = client.post('/transcribe/live/sessions', json={'project_id': 'p'}, headers=headers)
+    assert response.json()['detail'] == {'code': 'LIVE_DISABLED', 'message': 'A transcrição ao vivo está desligada neste servidor.'}
+    assert response.headers['retry-after'] == '5'
 
 
 def ready_diarization(world, monkeypatch, **worker):

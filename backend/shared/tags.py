@@ -11,6 +11,8 @@ needs.
 import re
 from typing import Iterable, List, Optional, Union
 
+from shared.error_catalog import render
+
 MAX_TAGS_PER_JOB = 20
 MAX_TAG_LENGTH = 50
 
@@ -18,7 +20,13 @@ _WHITESPACE = re.compile(r"\s+")
 
 
 class InvalidTagsError(ValueError):
-    """The tags cannot be accepted; the message is safe to show the caller."""
+    """The tags cannot be accepted; the message is safe to show the caller.
+
+    `code` is the catalog entry; the message is rendered in the request language."""
+
+    def __init__(self, code: str, **params):
+        self.code = code
+        super().__init__(render(code, **params))
 
 
 def normalize_tag(raw: str) -> str:
@@ -42,11 +50,11 @@ def parse_tags(raw: Union[None, str, Iterable[str]]) -> List[str]:
         if not tag or tag in tags:
             continue
         if len(tag) > MAX_TAG_LENGTH:
-            raise InvalidTagsError(f"Tag muito longa (máximo {MAX_TAG_LENGTH} caracteres): {tag[:60]}")
+            raise InvalidTagsError("TAG_TOO_LONG", max=MAX_TAG_LENGTH, tag=tag[:60])
         tags.append(tag)
 
     if len(tags) > MAX_TAGS_PER_JOB:
-        raise InvalidTagsError(f"Máximo de {MAX_TAGS_PER_JOB} tags por job ({len(tags)} enviadas)")
+        raise InvalidTagsError("TAGS_TOO_MANY", max=MAX_TAGS_PER_JOB, count=len(tags))
     return tags
 
 
@@ -56,7 +64,7 @@ def set_job_tags(job, tags: List[str]) -> None:
 
     wanted = list(dict.fromkeys(tags))
     if len(wanted) > MAX_TAGS_PER_JOB:
-        raise InvalidTagsError(f"Máximo de {MAX_TAGS_PER_JOB} tags por job ({len(wanted)} no total)")
+        raise InvalidTagsError("TAGS_TOO_MANY_TOTAL", max=MAX_TAGS_PER_JOB, count=len(wanted))
     job.tag_rows = [row for row in job.tag_rows if row.tag in wanted] + [
         JobTag(tag=tag) for tag in wanted if tag not in job.tags
     ]

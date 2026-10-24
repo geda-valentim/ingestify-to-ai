@@ -1,6 +1,6 @@
 """Human guidance for engine-control / access / IAM refusals (spec 0009 CA1).
 
-- every error code raised in those modules has a Portuguese catalog entry;
+- every error code raised in those modules has an English and a Portuguese catalog entry;
 - a Modal engine without a desired profile says what to do (test connection,
   bind/create a profile) and disables the operations that cannot be planned;
 - cooldown with no profile is NOTHING_TO_COOL_DOWN, not a setup error;
@@ -37,7 +37,37 @@ SCANNED = [
     "api/access_deps.py",
     "api/iam_routes.py",
     "api/iam_deps.py",
+    # P-13 slice 1
+    "api/deps.py",
+    "shared/projects.py",
+    "shared/tags.py",
 ]
+# Codes whose English text is still missing: they answer in Portuguese when English
+# is asked. P-13 slice 4 translates them and must leave this set empty.
+PENDING_EN = {
+    'ACTION_OR_TARGET_NOT_REGISTERED', 'ADAPTER_NOT_REGISTERED',
+    'ADMISSION_AUTHORITY_UNAVAILABLE', 'BOOTSTRAP_ACTOR_REQUIRED', 'BOUND_TO_LIBRARY_PROFILE',
+    'BUDGET_INSUFFICIENT', 'BUDGET_STOP_UNCONFIRMED', 'CLEANUP_CREDENTIAL_REQUIRED',
+    'CLEANUP_WATCHDOG_NOT_READY', 'CLI_ADMISSION_LOST', 'CONSUMER_NOT_CLASSIFIED',
+    'CONTROL_REDEPLOY_REQUIRED', 'COOLDOWN_NOT_VERIFIED', 'CREDENTIALS_NOT_ALLOWED_IN_PROFILE',
+    'CREDENTIALS_REQUIRED', 'ENGINE_ENVIRONMENT_REQUIRED', 'ENVIRONMENT_UNKNOWN',
+    'EXECUTOR_NOT_NEUTRALIZED', 'GPU_NOT_REGISTERED', 'GPU_UUID_NOT_REGISTERED',
+    'HASHED_MODEL_LOCK_REQUIRED', 'HOST_AMBIGUOUS', 'HOST_APPLY_FAILED',
+    'HOST_AUTHORITY_UNAVAILABLE', 'HOST_COMMAND_FAILED', 'HOST_EFFECT_UNCERTAIN',
+    'HOST_IDENTITY_REQUIRED', 'IDEMPOTENCY_CONFLICT', 'IMAGE_MISMATCH', 'INVALID_SETTINGS',
+    'INVALID_WARM_DEADLINE', 'MANIFEST_STALE', 'MODEL_FOOTPRINT_NOT_QUALIFIED',
+    'MODEL_METADATA_CHANGED', 'MODEL_NOT_APPROVED', 'NOTHING_TO_COOL_DOWN',
+    'NO_REGISTERED_HOST', 'PAID_BUDGET_REQUIRED', 'PAID_CONFIRMATION_REQUIRED', 'PLAN_STALE',
+    'POOL_OBSERVATION_UNAVAILABLE', 'PROFILE_CONTENT_MISMATCH', 'PROFILE_INCOMPATIBLE',
+    'PROFILE_INVENTORY_CHANGED', 'PROVIDER_SETTINGS_REQUIRED', 'RECOVERY_STATE_UNCONFIRMED',
+    'REGISTERED_COMMAND_NOT_SUPPORTED', 'REGISTERED_MANIFEST_CHANGED',
+    'RESOURCE_OWNED_BY_ANOTHER_ENGINE', 'RESOURCE_OWNERSHIP_CONFLICT',
+    'RUNTIME_OPERATION_REQUIRED', 'RUNTIME_PROFILE_EXISTS', 'RUNTIME_PROFILE_NOT_FOUND',
+    'RUNTIME_PROFILE_REQUIRED', 'SDK_AUTOSCALER_UNAVAILABLE', 'SEEDED_PROFILE_STALE',
+    'SERVICE_NOT_REGISTERED', 'TEST_CONNECTION_FIRST', 'TEST_FAILED', 'USE_WARM_DURATION',
+    'WARM_EXPIRATION_REQUIRED', 'WARM_POOL_NOT_VERIFIED',
+    'WHISPERX_CONTROL_PROFILE_NOT_QUALIFIED'
+}
 # Any string literal that is (or starts with) an UPPER_SNAKE code: "CODE",
 # "CODE: detail", f"CODE:{n}" — raised directly, picked by a conditional or put in
 # a {"code": ...} detail. Environment variable names are the only other such literals.
@@ -66,16 +96,53 @@ def raised_codes():
     return found
 
 
-def test_every_raised_code_has_a_portuguese_message():
+def test_every_raised_code_has_en_and_pt_messages():
     found = raised_codes()
     assert len(found) > 80, "the scan must actually find the codes"
     missing = {c: sorted(f) for c, f in found.items() if c not in error_catalog.CATALOG}
     assert not missing, f"add these codes to shared/error_catalog.py: {missing}"
+    no_pt = [c for c in found if "pt" not in error_catalog.CATALOG[c][0]]
+    assert not no_pt, f"Portuguese text missing: {no_pt}"
+
+
+def _params(template):
+    return set(re.findall(r"\{([a-z_]+)\}", template.replace("{{", "").replace("}}", "")))
+
+
+def test_every_entry_is_bilingual():
+    pending = {c for c, (texts, _s) in error_catalog.CATALOG.items() if "en" not in texts}
+    assert pending == PENDING_EN, (
+        f"untranslated: {sorted(pending - PENDING_EN)}; translated but still listed: {sorted(PENDING_EN - pending)}"
+    )
+    for code, (texts, _steps) in error_catalog.CATALOG.items():
+        assert texts.get("pt"), code
+        assert set(texts) <= {"en", "pt"}, code
+        if "en" in texts:
+            assert _params(texts["en"]) == _params(texts["pt"]), (code, "placeholders differ between en and pt")
+
+
+def test_api_codes_raised_by_routes_exist_in_the_catalog():
+    """`_coded(status, "CODE", ...)` / `api_error(status, "CODE", ...)` / `InvalidNameError("CODE"...)`."""
+    pattern = re.compile(r"""(?:_coded|api_error|InvalidNameError|InvalidTagsError)\(\s*(?:\d+,\s*)?["']([A-Z_]+)["']""")
+    found = set()
+    for folder in ("api", "shared"):
+        for path in (BACKEND / folder).glob("*.py"):
+            found |= set(pattern.findall(path.read_text()))
+    assert {"FILE_EMPTY", "FILE_TOO_LARGE", "INVALID_FILE_FORMAT", "PROJECT_LIMIT"} <= found
+    missing = {c for c in found if c not in error_catalog.CATALOG}
+    assert not missing, missing
+    assert not [c for c in found if c in PENDING_EN]
+
+
+def test_the_live_503s_are_bilingual():
+    for code in ("LIVE_DISABLED", "LIVE_NOT_READY", "LIVE_CAPACITY_FULL", "LIVE_DIARIZATION_NOT_READY"):
+        assert code not in PENDING_EN
+        assert error_catalog.render(code, lang="en") != error_catalog.render(code, lang="pt")
 
 
 def test_catalog_entries_use_the_closed_next_step_vocabulary():
-    for code, (message, steps) in error_catalog.CATALOG.items():
-        assert message and message != code, code
+    for code, (texts, steps) in error_catalog.CATALOG.items():
+        assert all(text and text != code for text in texts.values()), code
         assert set(steps) <= error_catalog.NEXT_STEPS, code
 
 
@@ -97,7 +164,10 @@ def test_detail_surfaces_a_wrapped_gate_as_cause():
     )
     assert d["code"] == "INVALID_CONFIGURATION"
     assert d["cause"] == "HOST_AGENT_NOT_READY"
-    assert "há 7 minutos" in d["message"] and "dev-host" in d["message"]
+    assert "7 minutes ago" in d["message"] and "dev-host" in d["message"]
+    assert "há 7 minutos" in error_catalog.detail(
+        "INVALID_CONFIGURATION", text="HOST_AGENT_NOT_READY", lang="pt",
+        context={"host": "dev-host", "seen_at": seen})["message"]
     assert "journalctl -u ingestify-engine-host-agent" in d["message"]
     assert d["next_steps"] == ["check_host"]
     # Unknown free text stays visible as technical detail.
@@ -109,7 +179,7 @@ def test_enrich_keeps_code_and_extra_keys_and_ignores_plain_details():
     assert error_catalog.enrich("Engine not found") == "Engine not found"
     out = error_catalog.enrich({"code": "VERSION_CONFLICT", "current_version": 3})
     assert out["code"] == "VERSION_CONFLICT" and out["current_version"] == 3
-    assert out["next_steps"] == ["reload"] and "Recarregue" in out["message"]
+    assert out["next_steps"] == ["reload"] and "Reload" in out["message"]
     unknown = {"code": "SOMETHING_ELSE", "message": "x"}
     assert error_catalog.enrich(unknown) == unknown
 
@@ -147,7 +217,7 @@ def test_invoke_reports_adapter_gate_with_host_age(world):  # noqa: F811
     d = exc.value.detail
     assert exc.value.status_code == 422
     assert (d["code"], d["cause"]) == ("INVALID_CONFIGURATION", "HOST_AGENT_NOT_READY")
-    assert "há 12 minutos" in d["message"]
+    assert "12 minutes ago" in d["message"]
     # str() of the gate stays the bare code for callers that match on it.
     with pytest.raises(ValueError, match="^HOST_AGENT_NOT_READY$"):
         refuse()
@@ -357,3 +427,17 @@ def test_host_identity_retries_once_on_a_partial_identities_file(tmp_path, monke
     with pytest.raises(HTTPException) as exc:
         routes.host_identity("host-1", request)
     assert exc.value.detail == {"code": "HOST_IDENTITY_REQUIRED"}
+
+
+def test_the_api_catalog_does_not_shadow_an_engine_or_iam_entry():
+    from shared.catalog_api import API_CATALOG
+
+    assert not set(API_CATALOG) & set(error_catalog._PT)
+
+
+def test_codes_built_with_f_strings_exist():
+    """`validate_name` and `_get_or_create` compose these codes, so the literal scan cannot see them."""
+    for what in ("PROJECT", "FOLDER"):
+        for code in (f"{what}_NAME_EMPTY", f"{what}_NAME_CONTROL_CHARS", f"{what}_CREATE_FAILED"):
+            assert code in error_catalog.CATALOG, code
+            assert code not in PENDING_EN, code

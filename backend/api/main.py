@@ -24,6 +24,8 @@ from api.engine_control_routes import router as engine_control_router, host_rout
 from api.routing_admin_routes import router as routing_admin_router
 from api.projects_api import router as projects_router
 from api.iam_routes import router as iam_router
+from shared.error_catalog import render
+from shared.i18n import LanguageMiddleware, language_headers, negotiate, use_lang
 from api.openapi_docs import API_DESCRIPTION, API_VERSION, OPENAPI_TAGS
 
 # Configure logging
@@ -129,8 +131,10 @@ app.add_middleware(
     # Methods actually exposed by the API (plus the CORS preflight verb).
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     # Headers the frontend / API clients actually send.
-    allow_headers=["Authorization", "Content-Type", "Accept", "X-API-Key", "X-Source-Token"],
+    allow_headers=["Authorization", "Content-Type", "Accept", "Accept-Language", "X-API-Key", "X-Source-Token"],
 )
+# Outermost: sets the request language (Accept-Language) before anything raises.
+app.add_middleware(LanguageMiddleware)
 
 
 # Exception handlers
@@ -154,8 +158,11 @@ async def global_exception_handler(request: Request, exc: Exception):
     """Global exception handler"""
     logger.error(f"Unhandled exception: {exc}", exc_info=True)
 
+    # ServerErrorMiddleware runs outside LanguageMiddleware: negotiate again here.
+    lang = negotiate(request.headers.get("accept-language") if request is not None else None)
     if settings.environment == "production":
-        message = "Internal server error"
+        with use_lang(lang):
+            message = render("INTERNAL_ERROR")
     else:
         message = str(exc)
 
@@ -166,7 +173,8 @@ async def global_exception_handler(request: Request, exc: Exception):
                 "code": "INTERNAL_ERROR",
                 "message": message,
             }
-        }
+        },
+        headers=language_headers(lang),
     )
 
 

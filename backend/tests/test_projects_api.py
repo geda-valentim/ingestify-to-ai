@@ -167,8 +167,8 @@ def test_resolve_project_that_would_be_created(client, db):
 
 
 @pytest.mark.parametrize("name,error", [
-    ("x" * 101, "Nome muito longo (máximo 100 caracteres)"),
-    ("   ", "Nome do projeto vazio"),
+    ("x" * 101, "The name is too long (maximum 100 characters)."),
+    ("   ", "The project name is empty."),
 ])
 def test_resolve_invalid_project_name(client, name, error):
     assert client.get("/projects/resolve", params={"name": name}).json() == {"valid": False, "error": error}
@@ -187,7 +187,7 @@ def test_resolve_folder_of_someone_elses_project_is_404(client, db):
     theirs = project(db, "Do Bob", user_id=BOB)
     response = client.get(f"/projects/{theirs.id}/folders/resolve", params={"name": "x"})
     assert response.status_code == 404
-    assert response.json()["detail"] == "Projeto não encontrado"
+    assert response.json()["detail"] == "Project not found"
     assert client.get("/projects/nope/folders/resolve", params={"name": "x"}).status_code == 404
 
 
@@ -224,7 +224,7 @@ def test_foreign_or_unknown_location_filters_are_404(client, db, world):
     assert client.get("/jobs", params={"project_id": "nope"}).status_code == 404
     response = client.get("/jobs", params={"folder_id": theirs_folder.id})
     assert response.status_code == 404
-    assert response.json()["detail"] == "Pasta não encontrada"
+    assert response.json()["detail"] == "Folder not found"
 
 
 def test_inconsistent_location_filters_are_422(client, world):

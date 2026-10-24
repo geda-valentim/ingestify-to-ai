@@ -28,6 +28,7 @@ A documentação pública distingue **Usar a plataforma**, **Integrar pela API**
 | [features/search.md](features/search.md) | Busca no conteúdo via Elasticsearch (`GET /search`). |
 | [features/vision.md](features/vision.md) | Florence-2: `/images/describe`, `/images/ocr`, `/images/capabilities`. |
 | [features/storage-and-retention.md](features/storage-and-retention.md) | MySQL, Elasticsearch, MinIO, chaves Redis, disco temporário, tarefas agendadas e retenção. |
+| [features/languages.md](features/languages.md) | Idioma das mensagens da API: inglês por padrão, `Accept-Language: pt-BR` sob pedido, `Content-Language` e o que não é traduzido. |
 | [features/monitoring-and-admin.md](features/monitoring-and-admin.md) | `/health`, rotas `/admin/*`, detecção de jobs travados e retry automático. |
 | [features/engines.md](features/engines.md) | **Guia Compute do operador**: execução CPU/GPU, provider × motor, telas admin, diagnóstico, chaves, capacidade/VRAM, deploy Modal, rotas, orçamentos, benchmark e legendas parciais de arquivos. |
 | [features/execution-profiles.md](features/execution-profiles.md) | Biblioteca de perfis versionados, vinculação ao runtime existente e RBAC/ABAC por engine/recurso. Implementado com ativação opt-in; [validação](benchmarks/execution-profiles-validation.md). |
