@@ -479,6 +479,12 @@ class Settings(BaseSettings):
             )
         return device
 
+    @field_validator("whisper_model")
+    @classmethod
+    def _strip_whisper_model(cls, value: str) -> str:
+        # make's `-include .env` keeps the spaces before an inline comment.
+        return value.strip()
+
     @field_validator("whisper_device")
     @classmethod
     def _warn_whisper_device_override(cls, value: str, info: ValidationInfo) -> str:

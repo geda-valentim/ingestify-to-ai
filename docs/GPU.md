@@ -225,7 +225,7 @@ Nothing else in the stack is rebuilt against CUDA.
 ### Level 2 — runtime: device selection and the GPU reservation
 
 The same overlay sets `DEVICE=cuda` on `worker-vision` and `worker` (Docling), cuts `worker` to
-a single process, and runs `worker-audio` with `WHISPER_DEVICE=cuda`, each with a GPU
+a single process, and runs `worker-audio` with `WHISPER_DEVICE=cuda` (unless `.env` sets `WHISPER_DEVICE`, e.g. `cpu` to keep audio off the card), each with a GPU
 reservation.
 
 ### Do it

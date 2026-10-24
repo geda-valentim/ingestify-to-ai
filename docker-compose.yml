@@ -238,6 +238,13 @@ services:
       # therefore cuts this service to ONE process before setting DEVICE=cuda.
       # See docs/GPU.md.
       - DEVICE=${DEVICE:-auto}
+      # Whisper runs here for URL media and in worker-audio (which extends this
+      # service). The .env is not mounted, so pass the choice through: without
+      # it a WHISPER_MODEL=small set for weaker hardware silently stayed turbo.
+      # An empty WHISPER_DEVICE inherits DEVICE (see docs/GPU.md).
+      - WHISPER_MODEL=${WHISPER_MODEL:-turbo}
+      - WHISPER_DEVICE=${WHISPER_DEVICE:-}
+      - WHISPER_COMPUTE_TYPE=${WHISPER_COMPUTE_TYPE:-}
       # Caps docling's intra-op threads so replicas x concurrency stop
       # oversubscribing the host CPU.
       - DOCLING_NUM_THREADS=${DOCLING_NUM_THREADS:-4}

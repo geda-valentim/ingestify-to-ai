@@ -104,12 +104,15 @@ services:
         TORCH_INDEX_URL: https://download.pytorch.org/whl/cu129
     environment:
       # Docling never runs here (process_conversion builds its converter only on
-      # the document branch); only Whisper, and only on the GPU. Explicit
-      # cuda: a container that lost the GPU fails its jobs loudly instead of
-      # crawling on CPU until the time limit.
+      # the document branch); only Whisper. Unset defaults to explicit cuda: a
+      # container that lost the GPU fails its jobs loudly instead of crawling on
+      # CPU until the time limit. WHISPER_DEVICE=cpu in .env keeps audio off the
+      # card (VRAM left to vision/Docling); auto allows the CPU fallback.
+      # An empty compute type derives from the device (float16 on cuda, int8 on
+      # cpu); an explicit float16 left in .env is downgraded to int8 on cpu.
       - DEVICE=cpu
-      - WHISPER_DEVICE=cuda
-      - WHISPER_COMPUTE_TYPE=${WHISPER_COMPUTE_TYPE:-float16}
+      - WHISPER_DEVICE=${WHISPER_DEVICE:-cuda}
+      - WHISPER_COMPUTE_TYPE=${WHISPER_COMPUTE_TYPE:-}
       # The model runs on the GPU, but CTranslate2 still applies the timestamp
       # rules on the host between decode steps; with the default (active) policy
       # the OpenMP pool busy-spins on its barrier in between, ~15% of a core per

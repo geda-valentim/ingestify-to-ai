@@ -83,6 +83,22 @@ def test_explicit_compute_type_is_respected(config, gpus):
     assert device_module.get_whisper_device().compute_type == "int8_float16"
 
 
+@pytest.mark.parametrize("configured", ["float16", "int8_float16", "bfloat16", "int8_bfloat16"])
+def test_float16_compute_type_is_downgraded_on_cpu(config, gpus, configured):
+    config(device="cpu", compute_type=configured)
+    assert device_module.get_whisper_device().compute_type == "int8"
+
+
+def test_int8_compute_type_is_kept_on_cpu(config, gpus):
+    config(device="cpu", compute_type="int8_float32")
+    assert device_module.get_whisper_device().compute_type == "int8_float32"
+
+
+def test_whisper_model_is_stripped():
+    from shared.config import Settings
+    assert Settings(whisper_model="small    ").whisper_model == "small"
+
+
 def test_gpu_failure_switches_to_cpu_for_good(config, gpus):
     set_count, calls = gpus
     set_count(1)
