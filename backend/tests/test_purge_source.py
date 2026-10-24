@@ -267,6 +267,10 @@ def test_multipage_pdf_purge_deletes_the_original_and_the_page_pdfs(worker):
     work_pages = worker.tmp / JOB_ID / "pages"
     work_pages.mkdir(parents=True)
     (work_pages / "page_0001.pdf").write_bytes(b"%PDF")
+    with worker.Session() as db:  # the durable per-page results the merge requires
+        for page in db.query(Page).filter(Page.job_id == JOB_ID):
+            page.markdown_content = f"page {page.page_number}"
+        db.commit()
 
     worker.merge()
 

@@ -237,6 +237,64 @@ def test_a_routed_page_of_a_deleted_job_is_cancelled_at_its_claim(world, pages):
     assert pages.converted == []
 
 
+def supersede(world, number, new_id="newer-attempt"):
+    """A page retry replaced the attempt: the row names another page job id"""
+    with world.Session() as db:
+        page = db.query(Page).filter(Page.job_id == PARENT, Page.page_number == number).one()
+        page.page_job_id = new_id
+        page.status = JobStatus.PENDING
+        db.commit()
+
+
+def test_a_superseded_routed_attempt_settles_its_usage_and_leaves_the_live_row(world, pages, monkeypatch):
+    route(world, "document_conversion", [LOCAL])
+    split(world)
+    world.tick()
+    first = page_runs(world)[0]
+
+    class Converter:  # the retry lands while this attempt converts
+        def convert_to_markdown(self, path, options=None):
+            supersede(world, 1)
+            return {"markdown": "# stale", "metadata": {"words": 1, "pages": 1}}
+
+    monkeypatch.setattr(tasks, "get_converter", lambda *a, **k: Converter())
+
+    assert run_page(first.kwargs)["status"] == "superseded"
+
+    usage = world.usage(first.kwargs["usage_id"])
+    assert usage.status == "settled" and usage.outcome == "cancelled" and usage.counts_toward_attempts is False
+    with world.Session() as db:
+        d = db.query(JobDispatch).filter(JobDispatch.subject_id == first.kwargs["page_job_id"]).one()
+        assert d.state == "done"
+        page = db.query(Page).filter(Page.job_id == PARENT, Page.page_number == 1).one()
+        assert page.status == JobStatus.PENDING and page.page_job_id == "newer-attempt"
+        assert page.markdown_content is None
+    assert pages.merges == []
+
+
+def test_the_ledger_never_touches_the_live_row_of_a_superseded_subject(world, pages):
+    route(world, "document_conversion", [LOCAL], max_attempts=1)
+    split(world)
+    world.tick()
+    first = page_runs(world)[0]
+    supersede(world, 1)
+
+    with world.Session() as db:
+        d = db.query(JobDispatch).filter(JobDispatch.subject_id == first.kwargs["page_job_id"]).one()
+        assert ledger.subject_state(db, "page", d.subject_id, PARENT, 1) == ("closed", None)
+        ledger._job_failed(db, d, "boom", world.now)
+        ledger._job_pending(db, d)
+        db.commit()
+        page = db.query(Page).filter(Page.job_id == PARENT, Page.page_number == 1).one()
+        assert page.status == JobStatus.PENDING and page.error_message is None
+
+    assert run_page(first.kwargs)["status"] == ledger.CANCELLED  # closed at the claim, nothing converted
+    assert pages.converted == []
+    with world.Session() as db:
+        page = db.query(Page).filter(Page.job_id == PARENT, Page.page_number == 1).one()
+        assert page.status == JobStatus.PENDING and page.page_job_id == "newer-attempt"
+
+
 def test_the_page_retry_endpoint_goes_through_the_route(world, monkeypatch, tmp_path):
     route(world, "document_conversion", [LOCAL])
     monkeypatch.setattr(routes, "SessionLocal", world.Session)

@@ -133,10 +133,16 @@ def page_number_of(d: Optional[JobDispatch]) -> Optional[int]:
 
 
 def _page(db: Session, parent_job_id: Optional[str], subject_id: str, page_number: Optional[int]) -> Optional[Page]:
-    """The Page row of a routed page: by number (a retry runs under a new page job id), else by page job id"""
+    """
+    The Page row of a routed page: by number (a retry runs under a new page job id), else by page job id.
+    None for a superseded attempt (the row names another page job id): callers treat it as closed and
+    never touch the live row (no requeue, no failure, no pending).
+    """
     if parent_job_id and page_number is not None:
         page = db.query(Page).filter(Page.job_id == parent_job_id, Page.page_number == page_number).first()
         if page is not None:
+            if page.page_job_id and page.page_job_id != subject_id:
+                return None  # superseded by a page retry: the live attempt's row is not this subject's
             return page
     return db.query(Page).filter(Page.page_job_id == subject_id).first()
 
@@ -391,6 +397,26 @@ def settle_succeeded(usage_id: int, holder: str, *, measured_seconds: Optional[f
         usage = db.get(EngineUsage, usage_id)
         if usage is None or not _settle(db, usage, "succeeded", now, expected=("spawning", "running"), holder=holder,
                                         output_persisted_at=now, measured_seconds=measured_seconds, **values):
+            return False
+        d = dispatch_of(db, usage)
+        if d is not None and d.usage_id == usage.id:
+            cas_dispatch(db, d, ("running",), now, state="done")
+        return True
+
+    return run_txn(session_factory, work)
+
+
+def settle_superseded(usage_id: int, holder: str, *, session_factory=None, now: Optional[datetime] = None) -> bool:
+    """
+    A page attempt finished after a page retry replaced it: it did nothing. The usage settles
+    cancelled (counts=False) and its backlog row is done, never requeued.
+    """
+    now = _now(now)
+
+    def work(db: Session):
+        usage = db.get(EngineUsage, usage_id)
+        if usage is None or not _settle(db, usage, "cancelled", now, counts=False, expected=("spawning", "running"),
+                                        holder=holder):
             return False
         d = dispatch_of(db, usage)
         if d is not None and d.usage_id == usage.id:
