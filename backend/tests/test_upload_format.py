@@ -163,7 +163,6 @@ def test_image_routes_keep_their_envelope_for_invalid_tags(env, monkeypatch):
 
 
 def test_health_reports_the_api_version(monkeypatch):
-    import asyncio
     from types import SimpleNamespace
 
     from api import routes
@@ -173,4 +172,15 @@ def test_health_reports_the_api_version(monkeypatch):
     monkeypatch.setattr(routes, "get_es_client", lambda: SimpleNamespace(health_check=lambda: True))
     from workers.celery_app import celery_app
     monkeypatch.setattr(celery_app.control, "inspect", lambda: SimpleNamespace(stats=lambda: {"w1": {}}))
-    assert asyncio.run(routes.health_check()).version == API_VERSION
+    assert routes.health_check().version == API_VERSION
+
+
+def test_routes_that_inspect_celery_never_block_the_event_loop():
+    # celery inspect() is a blocking broadcast; inside an async def it stalls every
+    # request on the loop, live WebSockets included (LIVE_BACKPRESSURE after ~2 s).
+    import inspect
+
+    from api import admin_routes, routes
+
+    for route in (routes.health_check, admin_routes.monitoring_health):
+        assert not inspect.iscoroutinefunction(route), route.__name__
