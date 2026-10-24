@@ -47,7 +47,9 @@ from fastapi.routing import APIRoute, APIWebSocketRoute
 # 1.11.0: bilingual API, part 4 (admin, engines, routing, IAM, access): their text refusals
 # become {"code", "message", "next_steps"} objects in the requested language, every engine,
 # IAM and root message has an English text, and the admin UI asks for pt-BR.
-API_VERSION = "1.11.0"
+# 1.11.1: fix only. /health and /admin/health/monitoring stop freezing the API event loop
+# (they ran a blocking Celery inspect inside async def), which dropped live sessions.
+API_VERSION = "1.11.1"
 
 API_DESCRIPTION = """
 API assíncrona que converte documentos (PDF, DOCX, HTML, PPTX, XLSX...) em Markdown,

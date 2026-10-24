@@ -29,6 +29,7 @@ from datetime import datetime, timedelta, timezone
 import logging
 
 from shared.schemas import (
+    DoclingPresetName,
     ConvertRequest,
     JobCreatedResponse,
     JobStatusResponse,
@@ -248,7 +249,7 @@ async def upload_and_convert(
     file: UploadFile = File(..., description="Arquivo para conversão (PDF, DOCX, HTML, etc.)"),
     name: Optional[str] = Form(None, description="Nome de identificação (opcional, padrão: nome do arquivo)"),
     tags: Optional[str] = Form(None, description=TAGS_FORM_DESCRIPTION),
-    docling_preset: Optional[str] = Form(
+    docling_preset: Optional[DoclingPresetName] = Form(
         "fast",
         description="Quality/speed preset for PDF conversion: 'fast' (~35s/MB, text-only), 'balanced' (~70-105s/MB, with images), 'quality' (~350s/MB, with OCR)"
     ),
@@ -1132,7 +1133,7 @@ async def convert_document(
         description="Nome de identificação opcional (padrão: nome do arquivo ou URL)"
     ),
     tags: Optional[str] = Form(None, description=TAGS_FORM_DESCRIPTION),
-    docling_preset: Optional[Literal["fast", "balanced", "quality"]] = Form(
+    docling_preset: Optional[DoclingPresetName] = Form(
         None,
         description="Preset do Docling para PDF: 'fast' (só texto, sem OCR), 'balanced' (com imagens), "
                     "'quality' (com OCR, para PDFs escaneados). Omitido: padrões do servidor (DOCLING_ENABLE_*)",
@@ -3303,8 +3304,11 @@ async def get_page_pdf(
 
 
 @router.get("/health", summary="Verificar saúde da API", response_model=HealthCheckResponse)
-async def health_check():
+def health_check():
     """Health check endpoint"""
+    # Sync on purpose: the Celery inspect below blocks for ~1-2 s, and FastAPI runs a
+    # plain def in its threadpool. As async def it froze the event loop on every
+    # container healthcheck and dropped live sessions with LIVE_BACKPRESSURE.
     redis_client = get_redis_client()
     es_client = get_es_client()
 

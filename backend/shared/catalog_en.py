@@ -27,6 +27,15 @@ EN = {
         "the same file again will not help. Regenerate the PDF (for example with \"print to "
         "PDF\") and upload the new version."
     ),
+    "AUDIO_DURATION_LIMIT_EXCEEDED": (
+        "The decoded audio is longer than the {max_minutes}-minute limit, so the transcription was "
+        "refused. Duration is measured on the decoded samples, not on the file's metadata. "
+        "Split the audio into shorter parts and upload each one."
+    ),
+    "AUDIO_SAMPLE_RATE_UNSUPPORTED": (
+        "The audio's sample rate is too low (under 8 kHz) to be transcribed. Export the audio "
+        "again with a rate of at least 8 kHz and upload the new version."
+    ),
     "FIGURES_FAILED": (
         "The conversion finished, but the figure description/OCR step (describe_images / "
         "ocr_images) could not be completed after the automatic retries. Upload the file "

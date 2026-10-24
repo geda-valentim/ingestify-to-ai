@@ -240,6 +240,16 @@ class DoclingConverter:
 _converter: DoclingConverter = None
 
 
+# preset -> (ocr, images, table structure); the names are shared.schemas.DOCLING_PRESETS.
+# The API refuses any other name; one that still arrives (a job queued before the check)
+# gets the server defaults below.
+_PRESET_FLAGS = {
+    "fast": (False, False, True),
+    "balanced": (False, True, True),
+    "quality": (True, True, True),
+}
+
+
 def get_converter(preset: str = None, picture_images: bool = False) -> DoclingConverter:
     """
     Get or create converter instance with settings from config or preset
@@ -258,18 +268,9 @@ def get_converter(preset: str = None, picture_images: bool = False) -> DoclingCo
     settings = get_settings()
 
     # Determine settings based on preset or config
-    if preset == "fast":
-        enable_ocr = False
-        enable_images = False
-        enable_table_structure = True
-    elif preset == "balanced":
-        enable_ocr = False
-        enable_images = True
-        enable_table_structure = True
-    elif preset == "quality":
-        enable_ocr = True
-        enable_images = True
-        enable_table_structure = True
+    flags = _PRESET_FLAGS.get(preset)
+    if flags is not None:
+        enable_ocr, enable_images, enable_table_structure = flags
     else:
         # Use config defaults
         enable_ocr = settings.docling_enable_ocr

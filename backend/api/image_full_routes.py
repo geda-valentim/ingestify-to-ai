@@ -118,6 +118,8 @@ def submit(request, http_request, image_bytes, filename, current_user, db, tags,
         raise _error(422, exc.code, text=str(exc)) from exc  # rendered in the request language
     except ValueError as exc:
         raise _error(422, 'DATALAKE_DESTINATION_REJECTED') from exc
+    except Exception as exc:
+        raise _error(502, 'DATALAKE_DESTINATION_UNREACHABLE') from exc
     location = _location_step(resolve_upload_location, db, current_user, plan, http_request.url.path)
     job_id = str(uuid4())
     storage = get_minio_client()

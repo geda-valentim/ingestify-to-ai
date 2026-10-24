@@ -35,7 +35,7 @@ Os dois endpoints exigem autenticação (`Authorization: Bearer <jwt>` **ou**
 | `folder` / `folder_id` | não | nenhuma | Nome (criado se não existir) ou ID de pasta do projeto; não envie ambos. Pastas têm um nível e o nome não aceita `/`. |
 | `name` | não | nome do arquivo | Nome amigável do job. |
 | `tags` | não | — | Tags separadas por vírgula (ver [tags.md](tags.md)). |
-| `docling_preset` | não | `fast` | `fast`, `balanced` ou `quality` (tabela abaixo). Qualquer outro valor cai nos defaults do `config.py`. |
+| `docling_preset` | não | `fast` | `fast`, `balanced` ou `quality` (tabela abaixo). Qualquer outro valor é recusado com `422` (`VALIDATION_ERROR`, antes de gravar o arquivo); campo vazio vale o padrão. |
 | `purge_source` | não | `false` | `true` apaga os arquivos de origem (o enviado e os PDFs por página) quando o job termina — `completed`, ou `failed`/`partial` depois das tentativas automáticas (ver [Guardar ou apagar o original](#guardar-ou-apagar-o-arquivo-original-purge_source)). |
 
 ```bash
@@ -66,8 +66,9 @@ curl -X POST http://localhost:8000/convert \
 
 Diferenças em relação ao `/upload` (comportamento atual, não necessariamente desejado):
 
-- `/convert` **não aceita `docling_preset`**: envia `options={}` ao worker, então vale a
-  configuração `DOCLING_*` do ambiente.
+- `/convert` aceita `docling_preset` (`fast`, `balanced`, `quality`; outro valor é `422`),
+  mas, **sem** o campo, não aplica `fast`: vale a configuração `DOCLING_*` do ambiente.
+  O `/upload` sem o campo usa `fast`.
 - Os dois endpoints excluem jobs `FAILED` da deduplicação; reenviar o arquivo de um job
   falho cria outro job (a regra compartilhada está em `api/projects_api.py`).
 
@@ -81,14 +82,14 @@ e **no mesmo projeto**, a resposta devolve o `job_id` existente (`duplicate: tru
 cria uma conversão independente.
 
 - **Operação.** A chave inclui o que muda o resultado: numa conversão, o `docling_preset`
-  (`/convert` não tem preset: usa os defaults); numa transcrição, o perfil de
+  (sem `docling_preset` no `/convert`, valem os defaults `DOCLING_*`); numa transcrição, o perfil de
   processamento. O mesmo arquivo com outro preset é outro job. Jobs de imagem
   (`/images/describe`, `/images/ocr`, `/images/analyze`, rostos) nunca são devolvidos
   pela deduplicação de documentos, mesmo com os mesmos bytes. A chave fica na coluna
   `jobs.operation_key` (nunca na configuração solicitada); um job criado antes dela
   responde a qualquer conversão do mesmo arquivo, como antes.
 - **`/upload` e `/convert` não deduplicam entre si.** O `/upload` sem `docling_preset`
-  usa o preset `fast`; o `/convert` não aceita preset (chave "sem preset", defaults
+  usa o preset `fast`; o `/convert` sem preset usa a chave "sem preset" (defaults
   `DOCLING_*`). São operações diferentes: o mesmo arquivo enviado a um e depois ao outro
   cria **dois jobs**. Só reenvios ao mesmo endpoint (com o mesmo preset) devolvem o job
   existente.
@@ -435,7 +436,7 @@ Definidos em `get_converter()` ([converter.py](../../backend/workers/converter.p
 | `fast` (padrão do `/upload`) | não | não | sim | PDFs digitais, só texto |
 | `balanced` | não | sim | sim | PDFs com figuras |
 | `quality` | sim | sim | sim | Documentos escaneados (bem mais lento) |
-| *(nenhum / inválido)* | `DOCLING_ENABLE_OCR` | `DOCLING_ENABLE_IMAGES` | `DOCLING_ENABLE_TABLE_STRUCTURE` | `/convert` e chamadas sem preset |
+| *(nenhum)* | `DOCLING_ENABLE_OCR` | `DOCLING_ENABLE_IMAGES` | `DOCLING_ENABLE_TABLE_STRUCTURE` | `/convert` e chamadas sem preset |
 
 O preset é repassado do job MAIN para o split e para cada página.
 

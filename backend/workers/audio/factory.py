@@ -119,7 +119,8 @@ def _create_faster_whisper_transcriber(settings) -> AudioTranscriber:
         lambda d: FasterWhisperTranscriber(
             model_size=settings.whisper_model,
             device=d.device,
-            compute_type=d.compute_type
+            compute_type=d.compute_type,
+            max_audio_seconds=settings.max_audio_duration_seconds,
         )
     )
 
@@ -141,7 +142,8 @@ def _create_openai_whisper_transcriber(settings) -> AudioTranscriber:
     return _create_on_best_device(
         lambda d: OpenAIWhisperTranscriber(
             model_size=settings.whisper_model,
-            device=d.device
+            device=d.device,
+            max_audio_seconds=settings.max_audio_duration_seconds,
         )
     )
 
