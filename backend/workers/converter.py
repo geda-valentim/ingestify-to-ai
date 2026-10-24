@@ -23,6 +23,7 @@ class DoclingConverter:
                 enable_images says) at CONVERSION_IMAGES_SCALE. Only this flag changes
                 the scale, so image_mode=none costs and converts exactly as before.
         """
+        self.import_error = None
         try:
             from docling.document_converter import DocumentConverter, PdfFormatOption, InputFormat
             from docling.datamodel.pipeline_options import PdfPipelineOptions
@@ -87,6 +88,7 @@ class DoclingConverter:
         except ImportError as e:
             logger.error(f"Failed to import Docling: {e}")
             self.converter = None
+            self.import_error = str(e)
 
     @staticmethod
     def _apply_accelerator_options(pipeline_options) -> None:
@@ -187,54 +189,24 @@ class DoclingConverter:
         doc_format = self.detect_format(file_path)
         logger.info(f"Converting {doc_format} file: {file_path.name}")
 
+        # Never answer with placeholder content: without Docling the job fails (and retries as any failure)
+        if self.converter is None:
+            raise RuntimeError(f"Docling is not available in this worker: {self.import_error}")
+
         # Get file size
         file_size = file_path.stat().st_size
 
         try:
-            if self.converter is None:
-                # Fallback: return mock conversion for testing
-                logger.warning("Docling not available, using MOCK conversion")
-                import hashlib
-                file_hash = hashlib.md5(str(file_path).encode()).hexdigest()[:8]
-
-                markdown_content = f"""# Converted Document: {file_path.name}
-
-This is a **MOCK conversion** for testing purposes (Docling not available).
-
-## Document Information
-
-- **File**: {file_path.name}
-- **Format**: {doc_format.upper()}
-- **Size**: {file_size / 1024:.2f} KB
-- **Hash**: `{file_hash}`
-
-## Content
-
-Lorem ipsum dolor sit amet, consectetur adipiscing elit. This is placeholder
-text representing the extracted content from the document.
-
-### Section 1
-
-Sample content that would be extracted from the real document.
-
-### Section 2
-
-More sample content demonstrating the conversion output.
-
-**Note**: This is a mock conversion. In production, real content will be
-extracted using Docling.
-"""
+            # Use Docling for conversion
+            result = self.converter.convert(str(file_path))
+            referenced = assets is not None and options.get("image_mode") == "referenced"
+            if referenced or figures is not None:
+                from workers.image_assets import extract_pictures
+                markdown_content = extract_pictures(result.document, assets if referenced else None, figures)
             else:
-                # Use Docling for conversion
-                result = self.converter.convert(str(file_path))
-                referenced = assets is not None and options.get("image_mode") == "referenced"
-                if referenced or figures is not None:
-                    from workers.image_assets import extract_pictures
-                    markdown_content = extract_pictures(result.document, assets if referenced else None, figures)
-                else:
-                    markdown_content = result.document.export_to_markdown()
+                markdown_content = result.document.export_to_markdown()
 
-                logger.info(f"Conversion successful: {len(markdown_content)} characters")
+            logger.info(f"Conversion successful: {len(markdown_content)} characters")
 
             # Extract metadata
             metadata = {

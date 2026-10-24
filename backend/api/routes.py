@@ -45,7 +45,7 @@ from shared.schemas import (
     SourceDeletedResponse,
 )
 from shared.redis_client import get_redis_client
-from shared.elasticsearch_client import get_es_client
+from shared.elasticsearch_client import get_es_client, SearchUnavailable
 from shared.minio_client import get_minio_client
 from shared.transcripts import TRANSCRIPT_CONTENT_TYPES, TRANSCRIPT_FORMATS, transcript_object_name
 from shared.database import SessionLocal, get_db
@@ -2936,7 +2936,8 @@ async def list_jobs(
     return {"total": total, "limit": limit, "offset": offset, "jobs": jobs, "counts": counts}
 
 
-@router.get("/search", summary="Buscar jobs por conteúdo")
+@router.get("/search", summary="Buscar jobs por conteúdo",
+            responses={503: {"description": "Elasticsearch indisponível: `{\"detail\": {\"code\": \"SEARCH_UNAVAILABLE\", \"message\"}}`."}})
 async def search_jobs(
     query: str,
     limit: int = 10,
@@ -2957,7 +2958,13 @@ async def search_jobs(
     - `/search?query=relatório financeiro` - Busca jobs contendo "relatório financeiro"
     - `/search?query=invoice&limit=20` - Busca jobs contendo "invoice", até 20 resultados
     """
-    es_client = get_es_client()
+    unavailable = _coded(503, "SEARCH_UNAVAILABLE", "A busca está indisponível no momento. Tente novamente em instantes.")
+    try:
+        es_client = get_es_client()
+    except Exception as e:
+        # The client creates its indices on first use: Elasticsearch down fails here
+        logger.error(f"Search backend unavailable: {e}", exc_info=True)
+        raise unavailable
 
     # Validate limit
     if limit > 100:
@@ -3011,6 +3018,8 @@ async def search_jobs(
             "results": formatted_results,
         }
 
+    except SearchUnavailable:
+        raise unavailable
     except Exception as e:
         logger.error(f"Error searching jobs: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Erro ao buscar jobs")

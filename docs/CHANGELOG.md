@@ -2,6 +2,15 @@
 
 > **Registro histórico (2025-10).** Não é mantido; para mudanças posteriores use `git log`. Observação: `workers/tasks_old.py`, citado abaixo, não existe (há um `workers/tasks.py.backup`). Exceção: mudanças de comportamento intencionais que uma spec manda registrar aqui entram na seção abaixo.
 
+## 2026-10: Sem sucesso silencioso (API 1.6.1)
+
+- `GET /search` responde `503` com `{"detail": {"code": "SEARCH_UNAVAILABLE", "message"}}`
+  quando o Elasticsearch falha. Antes respondia `200` com `results: []`, indistinguível de
+  "nenhum documento encontrado".
+- Worker sem Docling instalado **falha** a conversão (`Docling is not available in this
+  worker: <erro de import>`; o job vai a `failed` pelo caminho normal, com as retentativas
+  de sempre). Antes o job era marcado `completed` com um Markdown de exemplo (Lorem ipsum).
+
 ## 2026-10: Disponibilidade da transcrição ao vivo (API 1.6.0)
 
 - `GET /transcribe/live/sessions/availability` diz, sem reservar vaga, se uma sessão

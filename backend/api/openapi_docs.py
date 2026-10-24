@@ -24,7 +24,10 @@ from fastapi.routing import APIRoute, APIWebSocketRoute
 # `detail` as the list and gains a top-level `code` (FILE_MISSING / VALIDATION_ERROR).
 # 1.6.0: GET /transcribe/live/sessions/availability (would a live session be admitted
 # now, without reserving), and the live 503s gain a `message`; backward compatible.
-API_VERSION = "1.6.0"
+# 1.6.1: GET /search answers 503 SEARCH_UNAVAILABLE when Elasticsearch fails (it used to
+# answer 200 with no results), and a worker without Docling fails the job (it used to
+# complete it with placeholder Markdown).
+API_VERSION = "1.6.1"
 
 API_DESCRIPTION = """
 API assíncrona que converte documentos (PDF, DOCX, HTML, PPTX, XLSX...) em Markdown,
