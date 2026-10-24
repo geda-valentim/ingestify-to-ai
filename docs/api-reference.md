@@ -576,7 +576,7 @@ Content-Type: `multipart/form-data`. Esquema: [Body_upload_and_convert_upload_po
 
 | Campo | Obrigatório | Tipo | Padrões/limites | Descrição |
 | --- | --- | --- | --- | --- |
-| `file` | sim | string |  | Arquivo para conversão (PDF, DOCX, HTML, etc.) |
+| `file` | sim | string (binary) |  | Arquivo para conversão (PDF, DOCX, HTML, etc.) |
 | `name` | não | string / null |  | Nome de identificação (opcional, padrão: nome do arquivo) |
 | `tags` | não | string / null |  | Tags separadas por vírgula (ex.: 'cliente-x, reunião'). Viram minúsculas; até 20 tags de até 50 caracteres. Enviar um arquivo repetido adiciona as tags ao job existente. |
 | `docling_preset` | não | string / null | default="fast" | Quality/speed preset for PDF conversion: 'fast' (~35s/MB, text-only), 'balanced' (~70-105s/MB, with images), 'quality' (~350s/MB, with OCR) |
@@ -709,7 +709,7 @@ Content-Type: `multipart/form-data`. Esquema: [Body_transcribe_audio_transcribe_
 
 | Campo | Obrigatório | Tipo | Padrões/limites | Descrição |
 | --- | --- | --- | --- | --- |
-| `file` | sim | string |  | Arquivo de áudio (MP3, WAV, M4A, FLAC, OGG...) ou vídeo (MP4, MKV, MOV, WEBM, AVI...) |
+| `file` | sim | string (binary) |  | Arquivo de áudio (MP3, WAV, M4A, FLAC, OGG...) ou vídeo (MP4, MKV, MOV, WEBM, AVI...) |
 | `name` | não | string / null |  | Nome de identificação (opcional, padrão: nome do arquivo) |
 | `tags` | não | string / null |  | Tags separadas por vírgula (ex.: 'cliente-x, reunião'). Viram minúsculas; até 20 tags de até 50 caracteres. Enviar um arquivo repetido adiciona as tags ao job existente. |
 | `language` | não | string / null |  | Código do idioma (ex: 'en', 'pt'). Auto-detectar se não fornecido |
@@ -822,7 +822,7 @@ Content-Type: `multipart/form-data`. Esquema: [Body_convert_document_convert_pos
 | --- | --- | --- | --- | --- |
 | `source_type` | sim | string |  | Tipo de fonte: 'file' (upload), 'url' (URL pública), 'gdrive' (Google Drive), 'dropbox' (Dropbox) |
 | `source` | não | string / null |  | URL, file_id (Google Drive) ou path (Dropbox). Deixe vazio para upload de arquivo |
-| `file` | não | string / null |  | Arquivo para upload direto (use quando source_type='file') |
+| `file` | não | string (binary) / null |  | Arquivo para upload direto (use quando source_type='file') |
 | `name` | não | string / null |  | Nome de identificação opcional (padrão: nome do arquivo ou URL) |
 | `tags` | não | string / null |  | Tags separadas por vírgula (ex.: 'cliente-x, reunião'). Viram minúsculas; até 20 tags de até 50 caracteres. Enviar um arquivo repetido adiciona as tags ao job existente. |
 | `docling_preset` | não | string / null |  | Preset do Docling para PDF: 'fast' (só texto, sem OCR), 'balanced' (com imagens), 'quality' (com OCR, para PDFs escaneados). Omitido: padrões do servidor (DOCLING_ENABLE_*) |
@@ -1469,7 +1469,7 @@ Content-Type: `multipart/form-data`. Esquema: [Body_upload_images_faces_upload_p
 
 | Campo | Obrigatório | Tipo | Padrões/limites | Descrição |
 | --- | --- | --- | --- | --- |
-| `file` | sim | string |  |  |
+| `file` | sim | string (binary) |  |  |
 | `face_options` | não | string / null |  |  |
 | `wait` | não | boolean | default=false |  |
 | `project` | não | string / null |  |  |
@@ -1634,7 +1634,7 @@ Content-Type: `multipart/form-data`. Esquema: [Body_analyze_image_upload_images_
 | `mode` | não | string | default="single"; enum=["single", "full"] |  |
 | `full_options` | não | string / null |  | JSON ImageFullOptions para mode=full |
 | `datalake` | não | string / null |  | JSON Destination opcional para mode=full |
-| `file` | sim | string |  | Imagem PNG, JPEG, WEBP, BMP, GIF ou TIFF |
+| `file` | sim | string (binary) |  | Imagem PNG, JPEG, WEBP, BMP, GIF ou TIFF |
 | `task` | não | string | default="<MORE_DETAILED_CAPTION>"; enum=["<CAPTION>", "<DETAILED_CAPTION>", "<MORE_DETAILED_CAPTION>", "<OCR>", "<OCR_WITH_REGION>", "<OD>", "<DENSE_REGION_CAPTION>", "<REGION_PROPOSAL>", "<CAPTION_TO_PHRASE_GROUNDING>", "<REFERRING_EXPRESSION_SEGMENTATION>", "<REGION_TO_SEGMENTATION>", "<OPEN_VOCABULARY_DETECTION>", "<REGION_TO_CATEGORY>", "<REGION_TO_DESCRIPTION>", "<REGION_TO_OCR>"] |  |
 | `text_input` | não | string / null |  |  |
 | `region` | não | string / null |  | Array JSON [x_min,y_min,x_max,y_max], normalizado entre 0 e 1. |
@@ -1677,7 +1677,7 @@ Content-Type: `multipart/form-data`. Esquema: [Body_describe_image_upload_images
 
 | Campo | Obrigatório | Tipo | Padrões/limites | Descrição |
 | --- | --- | --- | --- | --- |
-| `file` | sim | string |  | Imagem (PNG, JPEG, WEBP, BMP, GIF, TIFF) |
+| `file` | sim | string (binary) |  | Imagem (PNG, JPEG, WEBP, BMP, GIF, TIFF) |
 | `task` | não | string | default="<MORE_DETAILED_CAPTION>" | <MORE_DETAILED_CAPTION>, <DETAILED_CAPTION> ou <CAPTION> |
 | `tags` | não | string / null |  | Tags separadas por vírgula (ex.: 'cliente-x, reunião'). Viram minúsculas; até 20 tags de até 50 caracteres. Enviar um arquivo repetido adiciona as tags ao job existente. |
 | `purge_source` | não | boolean | default=false | Se true, apaga todas as cópias guardadas da imagem original enviada quando o job termina: `completed`, ou `failed`/`partial`/`cancelled` (as rotas de imagem não têm retry automático). Apaga a cópia local de processamento, o original e a cópia normalizada (prévia em tamanho real) da análise completa/facial no armazenamento, e a imagem embutida no resultado guardado (`image.image_base64` do resultado fica null). O resultado da inferência (descrição, OCR, regiões, rostos, markdown) fica. GET /jobs/{job_id} informa `source_available` e `source_deleted_at`. Padrão false (mantém). Para apagar depois: DELETE /jobs/{job_id}/source. A resposta síncrona ainda ecoa `image_base64` no topo: vem dos bytes desta requisição, não de uma cópia guardada. |
@@ -1752,7 +1752,7 @@ Content-Type: `multipart/form-data`. Esquema: [Body_ocr_image_upload_images_ocr_
 
 | Campo | Obrigatório | Tipo | Padrões/limites | Descrição |
 | --- | --- | --- | --- | --- |
-| `file` | sim | string |  | Imagem (PNG, JPEG, WEBP, BMP, GIF, TIFF) |
+| `file` | sim | string (binary) |  | Imagem (PNG, JPEG, WEBP, BMP, GIF, TIFF) |
 | `tags` | não | string / null |  | Tags separadas por vírgula (ex.: 'cliente-x, reunião'). Viram minúsculas; até 20 tags de até 50 caracteres. Enviar um arquivo repetido adiciona as tags ao job existente. |
 | `purge_source` | não | boolean | default=false | Se true, apaga todas as cópias guardadas da imagem original enviada quando o job termina: `completed`, ou `failed`/`partial`/`cancelled` (as rotas de imagem não têm retry automático). Apaga a cópia local de processamento, o original e a cópia normalizada (prévia em tamanho real) da análise completa/facial no armazenamento, e a imagem embutida no resultado guardado (`image.image_base64` do resultado fica null). O resultado da inferência (descrição, OCR, regiões, rostos, markdown) fica. GET /jobs/{job_id} informa `source_available` e `source_deleted_at`. Padrão false (mantém). Para apagar depois: DELETE /jobs/{job_id}/source. A resposta síncrona ainda ecoa `image_base64` no topo: vem dos bytes desta requisição, não de uma cópia guardada. |
 | `output_format` | não | string | default="json"; enum=["json", "markdown"] | Formato da resposta e padrão de `GET /jobs/{job_id}/result`: `json` (padrão, o corpo de sempre) ou `markdown` (o mesmo resultado renderizado como `text/markdown; charset=utf-8`, sem `image_base64`). Vale para a resposta síncrona de sucesso (200); 202 (enfileirado), 504 e erros continuam JSON. Fica gravado no job: `GET /jobs/{job_id}/result` sem `?format=` usa este formato, e `?format=json` ou `?format=markdown` escolhe na leitura. |
@@ -4978,7 +4978,7 @@ Esquema JSON completo:
 | `mode` | não | string | default="single"; enum=["single", "full"] |  |
 | `full_options` | não | string / null |  | JSON ImageFullOptions para mode=full |
 | `datalake` | não | string / null |  | JSON Destination opcional para mode=full |
-| `file` | sim | string |  | Imagem PNG, JPEG, WEBP, BMP, GIF ou TIFF |
+| `file` | sim | string (binary) |  | Imagem PNG, JPEG, WEBP, BMP, GIF ou TIFF |
 | `task` | não | string | default="<MORE_DETAILED_CAPTION>"; enum=["<CAPTION>", "<DETAILED_CAPTION>", "<MORE_DETAILED_CAPTION>", "<OCR>", "<OCR_WITH_REGION>", "<OD>", "<DENSE_REGION_CAPTION>", "<REGION_PROPOSAL>", "<CAPTION_TO_PHRASE_GROUNDING>", "<REFERRING_EXPRESSION_SEGMENTATION>", "<REGION_TO_SEGMENTATION>", "<OPEN_VOCABULARY_DETECTION>", "<REGION_TO_CATEGORY>", "<REGION_TO_DESCRIPTION>", "<REGION_TO_OCR>"] |  |
 | `text_input` | não | string / null |  |  |
 | `region` | não | string / null |  | Array JSON [x_min,y_min,x_max,y_max], normalizado entre 0 e 1. |
@@ -5193,7 +5193,7 @@ Esquema JSON completo:
 | --- | --- | --- | --- | --- |
 | `source_type` | sim | string |  | Tipo de fonte: 'file' (upload), 'url' (URL pública), 'gdrive' (Google Drive), 'dropbox' (Dropbox) |
 | `source` | não | string / null |  | URL, file_id (Google Drive) ou path (Dropbox). Deixe vazio para upload de arquivo |
-| `file` | não | string / null |  | Arquivo para upload direto (use quando source_type='file') |
+| `file` | não | string (binary) / null |  | Arquivo para upload direto (use quando source_type='file') |
 | `name` | não | string / null |  | Nome de identificação opcional (padrão: nome do arquivo ou URL) |
 | `tags` | não | string / null |  | Tags separadas por vírgula (ex.: 'cliente-x, reunião'). Viram minúsculas; até 20 tags de até 50 caracteres. Enviar um arquivo repetido adiciona as tags ao job existente. |
 | `docling_preset` | não | string / null |  | Preset do Docling para PDF: 'fast' (só texto, sem OCR), 'balanced' (com imagens), 'quality' (com OCR, para PDFs escaneados). Omitido: padrões do servidor (DOCLING_ENABLE_*) |
@@ -5459,7 +5459,7 @@ Esquema JSON completo:
 
 | Campo | Obrigatório | Tipo | Padrões/limites | Descrição |
 | --- | --- | --- | --- | --- |
-| `file` | sim | string |  | Imagem (PNG, JPEG, WEBP, BMP, GIF, TIFF) |
+| `file` | sim | string (binary) |  | Imagem (PNG, JPEG, WEBP, BMP, GIF, TIFF) |
 | `task` | não | string | default="<MORE_DETAILED_CAPTION>" | <MORE_DETAILED_CAPTION>, <DETAILED_CAPTION> ou <CAPTION> |
 | `tags` | não | string / null |  | Tags separadas por vírgula (ex.: 'cliente-x, reunião'). Viram minúsculas; até 20 tags de até 50 caracteres. Enviar um arquivo repetido adiciona as tags ao job existente. |
 | `purge_source` | não | boolean | default=false | Se true, apaga todas as cópias guardadas da imagem original enviada quando o job termina: `completed`, ou `failed`/`partial`/`cancelled` (as rotas de imagem não têm retry automático). Apaga a cópia local de processamento, o original e a cópia normalizada (prévia em tamanho real) da análise completa/facial no armazenamento, e a imagem embutida no resultado guardado (`image.image_base64` do resultado fica null). O resultado da inferência (descrição, OCR, regiões, rostos, markdown) fica. GET /jobs/{job_id} informa `source_available` e `source_deleted_at`. Padrão false (mantém). Para apagar depois: DELETE /jobs/{job_id}/source. A resposta síncrona ainda ecoa `image_base64` no topo: vem dos bytes desta requisição, não de uma cópia guardada. |
@@ -5609,7 +5609,7 @@ Esquema JSON completo:
 
 | Campo | Obrigatório | Tipo | Padrões/limites | Descrição |
 | --- | --- | --- | --- | --- |
-| `file` | sim | string |  | Imagem (PNG, JPEG, WEBP, BMP, GIF, TIFF) |
+| `file` | sim | string (binary) |  | Imagem (PNG, JPEG, WEBP, BMP, GIF, TIFF) |
 | `tags` | não | string / null |  | Tags separadas por vírgula (ex.: 'cliente-x, reunião'). Viram minúsculas; até 20 tags de até 50 caracteres. Enviar um arquivo repetido adiciona as tags ao job existente. |
 | `purge_source` | não | boolean | default=false | Se true, apaga todas as cópias guardadas da imagem original enviada quando o job termina: `completed`, ou `failed`/`partial`/`cancelled` (as rotas de imagem não têm retry automático). Apaga a cópia local de processamento, o original e a cópia normalizada (prévia em tamanho real) da análise completa/facial no armazenamento, e a imagem embutida no resultado guardado (`image.image_base64` do resultado fica null). O resultado da inferência (descrição, OCR, regiões, rostos, markdown) fica. GET /jobs/{job_id} informa `source_available` e `source_deleted_at`. Padrão false (mantém). Para apagar depois: DELETE /jobs/{job_id}/source. A resposta síncrona ainda ecoa `image_base64` no topo: vem dos bytes desta requisição, não de uma cópia guardada. |
 | `output_format` | não | string | default="json"; enum=["json", "markdown"] | Formato da resposta e padrão de `GET /jobs/{job_id}/result`: `json` (padrão, o corpo de sempre) ou `markdown` (o mesmo resultado renderizado como `text/markdown; charset=utf-8`, sem `image_base64`). Vale para a resposta síncrona de sucesso (200); 202 (enfileirado), 504 e erros continuam JSON. Fica gravado no job: `GET /jobs/{job_id}/result` sem `?format=` usa este formato, e `?format=json` ou `?format=markdown` escolhe na leitura. |
@@ -5720,7 +5720,7 @@ Esquema JSON completo:
 
 | Campo | Obrigatório | Tipo | Padrões/limites | Descrição |
 | --- | --- | --- | --- | --- |
-| `file` | sim | string |  | Arquivo de áudio (MP3, WAV, M4A, FLAC, OGG...) ou vídeo (MP4, MKV, MOV, WEBM, AVI...) |
+| `file` | sim | string (binary) |  | Arquivo de áudio (MP3, WAV, M4A, FLAC, OGG...) ou vídeo (MP4, MKV, MOV, WEBM, AVI...) |
 | `name` | não | string / null |  | Nome de identificação (opcional, padrão: nome do arquivo) |
 | `tags` | não | string / null |  | Tags separadas por vírgula (ex.: 'cliente-x, reunião'). Viram minúsculas; até 20 tags de até 50 caracteres. Enviar um arquivo repetido adiciona as tags ao job existente. |
 | `language` | não | string / null |  | Código do idioma (ex: 'en', 'pt'). Auto-detectar se não fornecido |
@@ -5921,7 +5921,7 @@ Esquema JSON completo:
 
 | Campo | Obrigatório | Tipo | Padrões/limites | Descrição |
 | --- | --- | --- | --- | --- |
-| `file` | sim | string |  | Arquivo para conversão (PDF, DOCX, HTML, etc.) |
+| `file` | sim | string (binary) |  | Arquivo para conversão (PDF, DOCX, HTML, etc.) |
 | `name` | não | string / null |  | Nome de identificação (opcional, padrão: nome do arquivo) |
 | `tags` | não | string / null |  | Tags separadas por vírgula (ex.: 'cliente-x, reunião'). Viram minúsculas; até 20 tags de até 50 caracteres. Enviar um arquivo repetido adiciona as tags ao job existente. |
 | `docling_preset` | não | string / null | default="fast" | Quality/speed preset for PDF conversion: 'fast' (~35s/MB, text-only), 'balanced' (~70-105s/MB, with images), 'quality' (~350s/MB, with OCR) |
@@ -6159,7 +6159,7 @@ Esquema JSON completo:
 
 | Campo | Obrigatório | Tipo | Padrões/limites | Descrição |
 | --- | --- | --- | --- | --- |
-| `file` | sim | string |  |  |
+| `file` | sim | string (binary) |  |  |
 | `face_options` | não | string / null |  |  |
 | `wait` | não | boolean | default=false |  |
 | `project` | não | string / null |  |  |

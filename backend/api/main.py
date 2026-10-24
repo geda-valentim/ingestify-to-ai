@@ -6,6 +6,7 @@ from fastapi.responses import JSONResponse
 from fastapi.security import HTTPBearer, APIKeyHeader
 from datetime import datetime
 import logging
+from contextlib import asynccontextmanager
 
 from shared.config import get_settings
 from shared.schemas import ErrorResponse
@@ -53,6 +54,7 @@ app = FastAPI(
     openapi_tags=OPENAPI_TAGS,
     docs_url="/docs",
     redoc_url="/redoc",
+    strict_content_type=False,  # keep accepting JSON bodies sent without a Content-Type (FastAPI 0.104 behaviour)
     swagger_ui_parameters={
         "persistAuthorization": True,  # Mantém token entre reloads
     }
@@ -212,8 +214,7 @@ def init_database_on_boot() -> None:
             raise
 
 
-# Startup/Shutdown events
-@app.on_event("startup")
+# Startup/Shutdown hooks, wired through `lifespan` at the end of this module
 async def startup_event():
     """Initialize services on startup"""
     logger.info("Starting Ingestify API...")
@@ -330,7 +331,6 @@ async def _engines_watchdog():
             logger.warning(f"[ENGINES] Watchdog round failed: {e}")
 
 
-@app.on_event("shutdown")
 async def shutdown_event():
     """Cleanup on shutdown"""
     logger.info("Shutting down Ingestify API...")
@@ -386,7 +386,6 @@ if __name__ == "__main__":
     )
 
 
-@app.on_event("startup")
 async def start_live_sweeper():
     if settings.live_transcription_enabled:
         import asyncio
@@ -394,7 +393,6 @@ async def start_live_sweeper():
         app.state.live_sweeper = asyncio.create_task(sweeper_loop())
 
 
-@app.on_event("shutdown")
 async def stop_live_sweeper():
     from contextlib import suppress
     import asyncio
@@ -403,3 +401,24 @@ async def stop_live_sweeper():
         task.cancel()
         with suppress(asyncio.CancelledError):
             await task
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    """Startup in order (core services, then live sweeper); shutdown in reverse.
+
+    A startup failure (e.g. an insecure JWT secret) propagates and aborts the boot;
+    whatever already started is still shut down.
+    """
+    await startup_event()
+    try:
+        await start_live_sweeper()
+        try:
+            yield
+        finally:
+            await stop_live_sweeper()
+    finally:
+        await shutdown_event()
+
+
+app.router.lifespan_context = lifespan
