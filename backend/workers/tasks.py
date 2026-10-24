@@ -1641,6 +1641,27 @@ def process_page(
 # MERGE JOB - Combina resultados das páginas
 # ============================================
 
+class MergeIncomplete(RuntimeError):
+    """A page of the document has no result left anywhere: never merge it as COMPLETED."""
+
+
+def _durable_page_markdown(job_id: str) -> dict:
+    """What MySQL holds per page of a job: COMPLETED rows' markdown by page number, every
+    page number the job owes, and page_job_id -> page number."""
+    out = {"markdown": {}, "numbers": set(), "by_job_id": {}}
+    db = SessionLocal()
+    try:
+        for page in db.query(Page).filter(Page.job_id == job_id).all():
+            out["numbers"].add(page.page_number)
+            if page.page_job_id:
+                out["by_job_id"][page.page_job_id] = page.page_number
+            if page.status == JobStatus.COMPLETED and page.markdown_content is not None:
+                out["markdown"][page.page_number] = page.markdown_content
+    finally:
+        db.close()
+    return out
+
+
 @celery_app.task(bind=True, max_retries=2, name="workers.tasks.merge_pages_task")
 def merge_pages_task(
     self,
@@ -1675,17 +1696,42 @@ def merge_pages_task(
 
         logger.info(f"[MERGE JOB {merge_job_id}] Merging {total_pages} pages")
 
-        # Collect all page results in order
+        # Collect all page results in order. Redis is a TTL cache: a result that expired
+        # while the job waited is rebuilt from the durable page rows (MySQL), and a page
+        # that cannot be recovered fails the merge instead of publishing a partial document.
         page_results = []
         page_figures = {}
         total_words = 0
+        durable = _durable_page_markdown(parent_job_id)
+        from workers import figure_tasks
+
+        # A recovered page only has its markdown: the assets / figure entries lived in the
+        # cached result, so a job that needs them cannot be rebuilt from the rows.
+        rebuildable = not (
+            conversion_assets.wants_assets(conversion_assets.durable_options(parent_job_id, SessionLocal))
+            or figure_tasks.wanted(parent_job_id))
+        seen_numbers = set()
+        missing = []
+
+        def recover(page_num):
+            markdown = durable["markdown"].get(page_num)
+            if not rebuildable or markdown is None:
+                return False
+            logger.warning(f"[MERGE JOB {merge_job_id}] Page {page_num}: cached result expired, "
+                           f"rebuilt from the durable page row")
+            page_results.append((page_num, markdown, [], None))
+            seen_numbers.add(page_num)
+            return len(markdown.split())
 
         for page_job_id in page_job_ids:
             page_status = redis_client.get_job_status(page_job_id)
-            if not page_status:
+            page_num = (page_status or {}).get("page_number")
+            if page_num is None:
+                page_num = durable["by_job_id"].get(page_job_id)
+            if page_num is None:
+                missing.append(page_job_id)
                 continue
 
-            page_num = page_status.get("page_number")
             page_result = redis_client.get_job_result(page_job_id)
 
             if page_result:
@@ -1696,6 +1742,28 @@ def merge_pages_task(
                 if "_figures" in page_result:
                     page_figures[page_num] = page_result.get("_figures") or []
                 total_words += page_result.get("metadata", {}).get("words", 0)
+                seen_numbers.add(page_num)
+            else:
+                words = recover(page_num)
+                if words is False:
+                    missing.append(page_num)
+                else:
+                    total_words += words
+
+        # Pages the cached child list no longer knows (expired) are still owed
+        for page_num in sorted(durable["numbers"] - seen_numbers):
+            words = recover(page_num)
+            if words is False:
+                missing.append(page_num)
+            else:
+                total_words += words
+
+        missing = [m for m in missing if m not in seen_numbers]
+        if missing:
+            raise MergeIncomplete(
+                f"{len(missing)} page(s) have no recoverable result (cache expired and no "
+                f"durable copy usable): {sorted(map(str, set(missing)))}")
+        total_pages = len(page_results)
 
         # Sort by page number
         page_results.sort(key=lambda x: x[0])
@@ -1733,8 +1801,6 @@ def merge_pages_task(
         if assets_manifest is not None:
             merged_result["assets"] = conversion_assets.public_assets(assets_manifest["assets"])
             merged_result["assets_skipped"] = assets_manifest["skipped"]
-
-        from workers import figure_tasks
 
         if page_figures and figure_tasks.wanted(parent_job_id):
             # describe_images / ocr_images: the figures of every page, in page order; the
