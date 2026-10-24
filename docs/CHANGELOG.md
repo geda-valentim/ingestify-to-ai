@@ -16,7 +16,8 @@
   nas partes seguintes e seguem em português até lá.
 - Sessões ao vivo: os 503 de `POST /transcribe/live/sessions` e o `message` de
   `GET /transcribe/live/sessions/availability` (1.6.0) seguem o idioma pedido; `Retry-After`
-  continua. `GET /search` 503 (`SEARCH_UNAVAILABLE`, 1.6.1) também.
+  continua. `GET /search` 503 (`SEARCH_UNAVAILABLE`, 1.6.1) e o 422 `INVALID_CALLBACK_URL` (1.7.0)
+  também.
 - Mensagens de erro de job gravadas pelos workers (`error`) passam a sair em inglês; as já
   gravadas continuam como estão. Mensagens do OpenAPI, validação do FastAPI e descrições de
   figuras não são traduzidas.

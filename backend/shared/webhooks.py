@@ -61,7 +61,15 @@ _PUBLIC_STATE_KEYS = ("status", "attempts", "last_http_status", "last_error",
 
 
 class InvalidCallbackUrl(ValueError):
-    """A `callback_url` the platform will not deliver to (the API answers 422 INVALID_CALLBACK_URL)"""
+    """A `callback_url` the platform will not deliver to (the API answers 422 INVALID_CALLBACK_URL).
+
+    `reason` is a catalog entry (CALLBACK_URL_*); the message is rendered in the request language."""
+
+    def __init__(self, reason: str, **params):
+        from shared.error_catalog import render
+
+        self.reason = reason
+        super().__init__(render(reason, **params))
 
 
 # ---------------------------------------------------------------------------
@@ -83,23 +91,23 @@ def validate_callback_url(url: str) -> str:
     """
     url = (url or "").strip()
     if not url:
-        raise InvalidCallbackUrl("callback_url is empty")
+        raise InvalidCallbackUrl("CALLBACK_URL_EMPTY")
     if len(url) > MAX_CALLBACK_URL_LENGTH:
-        raise InvalidCallbackUrl(f"callback_url is longer than {MAX_CALLBACK_URL_LENGTH} characters")
+        raise InvalidCallbackUrl("CALLBACK_URL_TOO_LONG", max=MAX_CALLBACK_URL_LENGTH)
     try:
         parts = urlsplit(url)
         port = parts.port
     except ValueError:
-        raise InvalidCallbackUrl("callback_url is not a valid URL")
+        raise InvalidCallbackUrl("CALLBACK_URL_INVALID")
 
     allowed = ("https", "http") if get_settings().webhook_allow_http else ("https",)
     if parts.scheme.lower() not in allowed:
-        raise InvalidCallbackUrl("callback_url must use https")
+        raise InvalidCallbackUrl("CALLBACK_URL_SCHEME")
     host = (parts.hostname or "").rstrip(".").lower()
     if not host:
-        raise InvalidCallbackUrl("callback_url has no host")
+        raise InvalidCallbackUrl("CALLBACK_URL_NO_HOST")
     if parts.username is not None or parts.password is not None:
-        raise InvalidCallbackUrl("callback_url must not contain credentials")
+        raise InvalidCallbackUrl("CALLBACK_URL_CREDENTIALS")
 
     try:
         literal = ipaddress.ip_address(host)
@@ -108,10 +116,10 @@ def validate_callback_url(url: str) -> str:
     if literal is not None:
         from workers.sources import _is_public_ip
         if not _is_public_ip(literal):
-            raise InvalidCallbackUrl("callback_url must not point to a private or reserved address")
+            raise InvalidCallbackUrl("CALLBACK_URL_PRIVATE_ADDRESS")
     else:
         if "." not in host or host == "localhost" or host.endswith(_INTERNAL_SUFFIXES):
-            raise InvalidCallbackUrl("callback_url must point to a public host name")
+            raise InvalidCallbackUrl("CALLBACK_URL_NOT_PUBLIC_HOST")
 
     netloc = f"[{host}]" if ":" in host else host
     if port is not None:

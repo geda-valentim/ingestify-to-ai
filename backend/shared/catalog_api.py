@@ -240,6 +240,51 @@ API_CATALOG = {
         },
         ["fix_input"],
     ),
+    # --- completion webhooks (callback_url) ------------------------------------------
+    "CALLBACK_URL_EMPTY": (
+        {"en": "callback_url is empty.", "pt": "callback_url está vazio."},
+        ["fix_input"],
+    ),
+    "CALLBACK_URL_TOO_LONG": (
+        {
+            "en": "callback_url is longer than {max} characters.",
+            "pt": "callback_url tem mais de {max} caracteres.",
+        },
+        ["fix_input"],
+    ),
+    "CALLBACK_URL_INVALID": (
+        {"en": "callback_url is not a valid URL.", "pt": "callback_url não é uma URL válida."},
+        ["fix_input"],
+    ),
+    "CALLBACK_URL_SCHEME": (
+        {"en": "callback_url must use https.", "pt": "callback_url deve usar https."},
+        ["fix_input"],
+    ),
+    "CALLBACK_URL_NO_HOST": (
+        {"en": "callback_url has no host.", "pt": "callback_url não tem host."},
+        ["fix_input"],
+    ),
+    "CALLBACK_URL_CREDENTIALS": (
+        {
+            "en": "callback_url must not contain credentials.",
+            "pt": "callback_url não pode conter credenciais.",
+        },
+        ["fix_input"],
+    ),
+    "CALLBACK_URL_PRIVATE_ADDRESS": (
+        {
+            "en": "callback_url must not point to a private or reserved address.",
+            "pt": "callback_url não pode apontar para um endereço privado ou reservado.",
+        },
+        ["fix_input"],
+    ),
+    "CALLBACK_URL_NOT_PUBLIC_HOST": (
+        {
+            "en": "callback_url must point to a public host name.",
+            "pt": "callback_url deve apontar para um nome de host público.",
+        },
+        ["fix_input"],
+    ),
     # --- tags --------------------------------------------------------------------
     "TAG_TOO_LONG": (
         {

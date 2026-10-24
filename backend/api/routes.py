@@ -192,7 +192,7 @@ def _checked_callback_url(callback_url) -> Optional[str]:
     try:
         return webhooks.validate_callback_url(callback_url)
     except webhooks.InvalidCallbackUrl as e:
-        raise _coded(422, "INVALID_CALLBACK_URL", str(e)) from None
+        raise HTTPException(status_code=422, detail={"code": "INVALID_CALLBACK_URL", "message": str(e)}) from None
 
 
 def _duplicate_response(db: Session, existing_job: Job, upload_location, message: str,
