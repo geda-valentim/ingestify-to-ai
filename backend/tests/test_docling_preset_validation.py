@@ -44,6 +44,7 @@ def test_unknown_preset_is_422_and_leaves_nothing(untouched, endpoint, preset):
     assert untouched.db.query(Job).count() == 0
     assert untouched.enqueued == []
     assert untouched.uploads == []
+    assert [p for p in untouched.tmp.rglob("*") if p.is_file()] == []
 
 
 @pytest.mark.parametrize("endpoint", ["/upload", "/convert"])
@@ -61,3 +62,13 @@ def test_each_valid_preset_is_accepted(untouched, endpoint, preset):
     response = _post(untouched, endpoint, preset)
     assert response.status_code == 200, response.text
     assert untouched.enqueued[-1]["options"]["docling_preset"] == preset
+    assert untouched.uploads
+
+
+def test_empty_preset_means_omitted(untouched):
+    upload = _post(untouched, "/upload", "")
+    assert upload.status_code == 200, upload.text
+    assert untouched.enqueued[-1]["options"]["docling_preset"] == "fast"
+    convert = _post(untouched, "/convert", "")
+    assert convert.status_code == 200, convert.text
+    assert "docling_preset" not in (untouched.enqueued[-1].get("options") or {})

@@ -2,7 +2,7 @@ from pydantic import model_validator
 from typing import Annotated
 from shared.vision_capabilities import VisionTask, VISION_TASKS, task_catalog
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from typing import Optional, Literal, List, Any, Dict
+from typing import Optional, Literal, List, Any, Dict, get_args
 from datetime import datetime
 from uuid import UUID
 from enum import Enum
@@ -44,7 +44,8 @@ class DoclingPreset(str, Enum):
 # The single list of preset names: the routes validate against it (Form params) and the
 # worker's get_converter reads its flags from the same names.
 DOCLING_PRESETS = tuple(preset.value for preset in DoclingPreset)
-DoclingPresetName = Literal[DOCLING_PRESETS]  # == Literal["fast", "balanced", "quality"]
+DoclingPresetName = Literal["fast", "balanced", "quality"]  # a literal list: static checkers reject a variable
+assert get_args(DoclingPresetName) == DOCLING_PRESETS, "DoclingPresetName out of sync with DoclingPreset"
 
 
 class ConversionOptions(BaseModel):
