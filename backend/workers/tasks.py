@@ -16,12 +16,13 @@ from uuid import uuid4
 import json
 import logging
 import asyncio
+import contextlib
 import shutil
 import time
 
 from workers.celery_app import celery_app
 from workers.converter import get_converter
-from workers.sources import get_source_handler
+from workers.sources import SourceFileTooLarge, get_source_handler
 from shared.redis_client import get_redis_client
 from shared.elasticsearch_client import get_es_client
 from shared.minio_client import get_minio_client
@@ -885,6 +886,32 @@ def process_conversion(
             self, countdown=60 * (2 ** self.request.retries),
             settle=(lambda error: _record_main_failure(job_id, redis_client, error, retrying=False))
             if retrying else None)
+
+    except SourceFileTooLarge as exc:
+        # Permanent: the provider file is above MAX_FILE_SIZE_MB, a retry downloads the same bytes
+        logger.warning(f"[MAIN JOB {job_id}] {exc}")
+        from shared import error_catalog
+
+        error_msg = error_catalog.render("FILE_TOO_LARGE", max_size_mb=exc.max_mb)
+        strict = _strict_audio_task(options)
+        try:
+            if strict:
+                if not _fail_transcription_attempt(job_id, options, redis_client, error_msg, retry=False):
+                    return {"job_id": job_id, "status": "discarded"}
+            else:
+                _record_main_failure(job_id, redis_client, error_msg, retrying=False)
+        except BaseException:
+            # A status write that fails must not leave the download or the provider token behind
+            if not strict:
+                shutil.rmtree(Path(settings.temp_storage_path) / job_id, ignore_errors=True)
+            with contextlib.suppress(Exception):
+                redis_client.delete_source_token(job_id)
+            raise
+        redis_client.delete_source_token(job_id)
+        if not strict:
+            # The strict audio path leaves the job directory alone: a successor attempt may share it
+            shutil.rmtree(Path(settings.temp_storage_path) / job_id, ignore_errors=True)
+        return {"job_id": job_id, "status": "failed", "error": error_msg}
 
     except Exception as exc:
         if _is_duration_limit(exc):

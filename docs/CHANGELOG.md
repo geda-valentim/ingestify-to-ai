@@ -2,6 +2,14 @@
 
 > **Registro histórico (2025-10).** Não é mantido; para mudanças posteriores use `git log`. Observação: `workers/tasks_old.py`, citado abaixo, não existe (há um `workers/tasks.py.backup`). Exceção: mudanças de comportamento intencionais que uma spec manda registrar aqui entram na seção abaixo.
 
+## 2026-10: health check não congela mais a API (API 1.11.1)
+
+- Correção, sem mudança de contrato. `GET /health` e `GET /admin/health/monitoring` eram
+  `async def`, mas consultam os workers Celery com uma chamada bloqueante de 1–2 s. A cada
+  healthcheck do container a API inteira parava; uma transcrição ao vivo em andamento
+  recebia o áudio represado de uma vez e caía com `LIVE_BACKPRESSURE` ou `LIVE_FRAME_RATE`.
+  Os dois endpoints passam a rodar fora do event loop.
+
 ## 2026-10: API bilíngue, inglês por padrão — parte 4 (API 1.11.0)
 
 - Última parte: administração (`/admin/*`), engines, roteamento, controle de engines, perfis

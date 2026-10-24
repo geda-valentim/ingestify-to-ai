@@ -481,3 +481,34 @@ def test_the_provider_token_goes_out_of_band_and_is_dropped_after_the_download(w
         tasks.process_conversion.run(**kwargs)
     assert seen["token2"] == "sl.provider"
     assert world.redis.get_source_token(job_id) is None
+
+
+def test_a_provider_file_over_the_limit_fails_once_without_retry_and_cleans_up(world, convert, monkeypatch, tmp_path):
+    from workers.sources import SourceFileTooLarge
+
+    response = convert("dropbox", "/docs/a.pdf", authorization="Bearer eyJ.user.jwt", source_token="sl.provider")
+    [kwargs] = convert.enqueued
+    job_id = str(response.job_id)
+    monkeypatch.setattr(tasks.settings, "temp_storage_path", str(tmp_path))
+
+    class Huge:
+        async def download(self, source, temp_path, auth_token=None):
+            (temp_path / "partial.bin").write_bytes(b"x")
+            raise SourceFileTooLarge(1)
+
+    def no_retry(**kw):
+        raise AssertionError("a file over the limit must not be retried")
+
+    monkeypatch.setattr(tasks, "get_source_handler", lambda source_type: Huge())
+    monkeypatch.setattr(tasks, "get_es_client", lambda: SimpleNamespace())
+    monkeypatch.setattr(tasks.process_conversion, "retry", no_retry)
+
+    result = tasks.process_conversion.run(**kwargs)
+
+    assert result["status"] == "failed"
+    assert result["error"] == "The file is too large. Maximum size: 1 MB."
+    with world.Session() as db:
+        job = db.get(Job, job_id)
+        assert job.status == JobStatus.FAILED and job.error_message == result["error"]
+    assert world.redis.get_source_token(job_id) is None
+    assert not (tmp_path / job_id).exists()
