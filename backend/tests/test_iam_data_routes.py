@@ -21,6 +21,7 @@ from api import apikey_routes, deps, image_routes, live_routes, projects_api, ro
 from shared.auth import get_current_active_user
 from shared.config import get_settings
 from shared.database import Base, get_db
+from shared.i18n import LanguageMiddleware
 from shared.models import APIKey, Folder, Job, JobStatus, LiveSession, Page, Project, User
 from shared.tags import set_job_tags
 
@@ -104,6 +105,7 @@ def client(db, fake_redis, monkeypatch, mode, no_shadow_noise):
     app.include_router(routes.router)
     app.include_router(live_routes.router)
     app.include_router(image_routes.router)
+    app.add_middleware(LanguageMiddleware)
     app.dependency_overrides[get_db] = lambda: db
     app.dependency_overrides[get_current_active_user] = lambda: db.get(User, app.state.user)
     tc = TestClient(app)
@@ -136,7 +138,7 @@ def test_api_key_patch_and_delete_are_owner_only(client, db):
     assert r.status_code == 200 and r.json()["project"]["id"] == "proj-a"
     # Someone else's project is the project 404, as before.
     r = client(ALICE).patch(f"/api-keys/{KEY_A}", json={"project_id": "proj-b"})
-    assert _detail(r) == (404, deps.PROJECT_NOT_FOUND_DETAIL)
+    assert _detail(r) == (404, deps.project_not_found_detail())
     assert client(ALICE).delete(f"/api-keys/{KEY_A}").status_code == 204
     db.expire_all()
     assert db.get(APIKey, KEY_A) is None and db.get(APIKey, KEY_B) is not None
@@ -163,12 +165,18 @@ def test_api_key_create_is_open_to_every_active_user(client):
     ("put", "/jobs/job-a/tags", {"tags": ["y"]}),
     ("delete", "/jobs/job-a", None),
 ])
-def test_job_routes_are_owner_only_with_the_legacy_404(client, method, path, body):
+@pytest.mark.parametrize("lang", [None, "pt-BR"])
+def test_job_routes_are_owner_only_with_the_legacy_404(client, method, path, body, lang):
+    kwargs = {"json": body} if body is not None else {}
+    kwargs["headers"] = {"Accept-Language": lang} if lang else {}
+    expected = "Job não encontrado" if lang else "Job not found"
     for uid in (BOB, ROOT):
-        r = getattr(client(uid), method)(path, **({"json": body} if body is not None else {}))
-        assert _detail(r) == (404, deps.JOB_NOT_FOUND_DETAIL), (uid, path)
-    r = getattr(client(ALICE), method)(path.replace("job-a", "missing"), **({"json": body} if body is not None else {}))
+        r = getattr(client(uid), method)(path, **kwargs)
+        assert _detail(r) == (404, expected), (uid, path)
+    r = getattr(client(ALICE), method)(path.replace("job-a", "missing"), **kwargs)
+    # Non-disclosure: a missing job answers with the very same body as someone else's.
     assert r.status_code == 404
+    assert r.json() == getattr(client(BOB), method)(path, **kwargs).json()
 
 
 def test_owner_reads_and_tags_the_job(client, db):
@@ -176,17 +184,17 @@ def test_owner_reads_and_tags_the_job(client, db):
     r = client(ALICE).put("/jobs/job-a/tags", json={"tags": ["Novo"]})
     assert r.status_code == 200 and r.json()["tags"] == ["novo"]
     # A child job has no row to tag: still the legacy 404 after authorizing.
-    assert _detail(client(ALICE).put("/jobs/job-a-p1/tags", json={"tags": []})) == (404, "Job não encontrado")
+    assert _detail(client(ALICE).put("/jobs/job-a-p1/tags", json={"tags": []})) == (404, deps.job_not_found_detail())
 
 
 def test_page_retry_shares_one_authorization_with_its_page(client):
     # Someone else's page: 404 from the job authorization, never a page leak.
     for uid in (BOB, ROOT):
-        assert _detail(client(uid).post("/jobs/job-a/pages/1/retry")) == (404, deps.JOB_NOT_FOUND_DETAIL)
+        assert _detail(client(uid).post("/jobs/job-a/pages/1/retry")) == (404, deps.job_not_found_detail())
     # The owner gets past the authorization: the page is completed, so the route
     # itself answers (not the job 404, not a 401/403).
     r = client(ALICE).post("/jobs/job-a/pages/1/retry")
-    assert r.status_code not in (401, 403) and _detail(r) != (404, deps.JOB_NOT_FOUND_DETAIL), r.text
+    assert r.status_code not in (401, 403) and _detail(r) != (404, deps.job_not_found_detail()), r.text
 
 
 # -- self-service `require(...)` ---------------------------------------------------------
@@ -218,7 +226,7 @@ def test_folder_resolve_is_owner_only(client):
     assert r.status_code == 200 and r.json()["match"]["id"] == "fold-a"
     for uid in (BOB, ROOT):
         r = client(uid).get("/projects/proj-a/folders/resolve", params={"name": "pasta"})
-        assert _detail(r) == (404, deps.PROJECT_NOT_FOUND_DETAIL)
+        assert _detail(r) == (404, deps.project_not_found_detail())
 
 
 # -- live sessions -------------------------------------------------------------------
@@ -232,10 +240,10 @@ def test_live_session_status_and_cancel_are_owner_only(client, monkeypatch):
     monkeypatch.setattr(live_routes, "terminate", lambda job_id, *a, **k: terminated.append(job_id))
     assert client(ALICE).get("/transcribe/live/sessions/job-a").json()["state"] == "completed"
     for uid in (BOB, ROOT):
-        assert _detail(client(uid).get("/transcribe/live/sessions/job-a")) == (404, deps.JOB_NOT_FOUND_DETAIL)
-        assert _detail(client(uid).delete("/transcribe/live/sessions/job-a")) == (404, deps.JOB_NOT_FOUND_DETAIL)
+        assert _detail(client(uid).get("/transcribe/live/sessions/job-a")) == (404, deps.job_not_found_detail())
+        assert _detail(client(uid).delete("/transcribe/live/sessions/job-a")) == (404, deps.job_not_found_detail())
     # A job of the owner without a live session is the live 404, as before.
-    assert _detail(client(BOB).get("/transcribe/live/sessions/job-b")) == (404, "Sessão não encontrada")
+    assert _detail(client(BOB).get("/transcribe/live/sessions/job-b")) == (404, "Session not found")
     # The owner gets past the authorization on cancel too (the session is already done).
     assert terminated == []
     r = client(ALICE).delete("/transcribe/live/sessions/job-a")

@@ -32,7 +32,7 @@ ALICE, BOB, ROOT = "user-alice", "user-bob", "user-root"
 MODES = ("off", "shadow", "enforce")
 CREDS = {"access_key": "test-key", "secret_key": "test-secret"}
 NOT_FOUND_DL = (404, "Conexão não encontrada")
-NOT_FOUND_JOB = (404, deps.JOB_NOT_FOUND_DETAIL)
+NOT_FOUND_JOB = (404, deps.job_not_found_detail())
 NOT_FOUND_RUN = (404, "Full Analysis não encontrada")
 # A request is a session or an API key; the key acts as its owner in this slice.
 CREDENTIALS = ({}, {"x-api-key": "k"})

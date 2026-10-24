@@ -34,6 +34,8 @@ from sqlalchemy.exc import IntegrityError, InterfaceError, OperationalError
 from sqlalchemy.orm import Session
 
 from shared.config import get_settings
+from shared.error_catalog import render
+from shared.i18n import api_error
 
 logger = logging.getLogger(__name__)
 
@@ -47,11 +49,19 @@ _COMBINING_LO, _COMBINING_HI = "̀", "ͯ"
 _WHITESPACE = re.compile(r"\s+")
 _CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 
-DB_UNAVAILABLE_DETAIL = "Banco indisponível; tente de novo em instantes"
+def db_unavailable_detail() -> str:
+    return render("DATABASE_UNAVAILABLE")
 
 
 class InvalidNameError(ValueError):
-    """The project/folder name cannot be accepted; the message is safe to show the caller."""
+    """The project/folder name cannot be accepted; the message is safe to show the caller.
+
+    `code` is the catalog entry; the message is rendered in the request language when
+    the error is raised."""
+
+    def __init__(self, code: str, **params):
+        self.code = code
+        super().__init__(render(code, **params))
 
 
 # ---------------------------------------------------------------------------
@@ -92,21 +102,19 @@ def validate_name(raw: Optional[str], kind: str = "project") -> Tuple[str, str]:
     Raises:
         InvalidNameError: empty, too long, control characters, or '/' in a folder name.
     """
-    label = "do projeto" if kind == "project" else "da pasta"
+    what = "PROJECT" if kind == "project" else "FOLDER"
     display = clean_display_name(raw or "")
     if not display:
-        raise InvalidNameError(f"Nome {label} vazio")
+        raise InvalidNameError(f"{what}_NAME_EMPTY")
     if _CONTROL.search(display):
-        raise InvalidNameError(f"Nome {label} contém caracteres de controle")
+        raise InvalidNameError(f"{what}_NAME_CONTROL_CHARS")
     if kind == "folder" and "/" in display:
-        raise InvalidNameError("Nome da pasta não pode conter '/'")
+        raise InvalidNameError("FOLDER_NAME_SLASH")
     if len(display) > MAX_NAME_LENGTH:
-        raise InvalidNameError(f"Nome muito longo (máximo {MAX_NAME_LENGTH} caracteres)")
+        raise InvalidNameError("NAME_TOO_LONG", max=MAX_NAME_LENGTH)
     key = name_key(display)
     if len(key) > MAX_KEY_LENGTH:
-        raise InvalidNameError(
-            f"Nome muito longo depois de normalizado (máximo {MAX_KEY_LENGTH} caracteres)"
-        )
+        raise InvalidNameError("NAME_KEY_TOO_LONG", max=MAX_KEY_LENGTH)
     return display, key
 
 
@@ -134,8 +142,7 @@ def _enforce_project_limit(db: Session, user_id: str) -> None:
         return
     count = db.query(func.count(Project.id)).filter(Project.user_id == user_id).scalar() or 0
     if count >= limit:
-        raise HTTPException(status_code=422, detail={
-            "code": "PROJECT_LIMIT", "message": f"Limite de {limit} projetos atingido"})
+        raise api_error(422, "PROJECT_LIMIT", limit=limit)
 
 
 def _enforce_folder_limit(db: Session, project_id: str) -> None:
@@ -146,8 +153,7 @@ def _enforce_folder_limit(db: Session, project_id: str) -> None:
         return
     count = db.query(func.count(Folder.id)).filter(Folder.project_id == project_id).scalar() or 0
     if count >= limit:
-        raise HTTPException(status_code=422, detail={
-            "code": "FOLDER_LIMIT", "message": f"Limite de {limit} pastas atingido neste projeto"})
+        raise api_error(422, "FOLDER_LIMIT", limit=limit)
 
 
 # ---------------------------------------------------------------------------
@@ -184,9 +190,8 @@ def _get_or_create(db: Session, find, enforce_limit, build, what: str):
     except (OperationalError, InterfaceError) as e:  # database down, connection lost, lock timeout
         db.rollback()
         logger.error(f"get_or_create_{what}: {e}")
-        raise HTTPException(status_code=503, detail=DB_UNAVAILABLE_DETAIL)
-    label = "o projeto" if what == "project" else "a pasta"
-    raise HTTPException(status_code=503, detail=f"Não foi possível criar {label} agora; tente de novo")
+        raise HTTPException(status_code=503, detail=db_unavailable_detail())
+    raise HTTPException(status_code=503, detail=render(f"{what.upper()}_CREATE_FAILED"))
 
 
 def get_or_create_project(db: Session, user_id: str, raw: str, origin: str = "request"):

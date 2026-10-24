@@ -24,7 +24,7 @@ from sqlalchemy.pool import StaticPool
 
 import workers.celery_app  # noqa: F401  (import order used by the worker; avoids a circular import)
 from api import image_routes, routes
-from api.projects_api import PROJECT_REQUIRED_DETAIL
+from api.projects_api import project_required_detail
 from shared import projects as projects_module
 from shared.auth import create_access_token, hash_api_key
 from shared.database import Base, get_db
@@ -195,7 +195,7 @@ def files_on_disk(env):
 def test_jwt_without_project_is_422_and_nothing_is_written(env, endpoint):
     response = post(env, endpoint)
     assert response.status_code == 422
-    assert message(response) == PROJECT_REQUIRED_DETAIL
+    assert message(response) == project_required_detail()
     assert env.db.query(Job).count() == 0
     assert env.db.query(Project).count() == 0
     assert files_on_disk(env) == []
@@ -203,15 +203,15 @@ def test_jwt_without_project_is_422_and_nothing_is_written(env, endpoint):
 
 
 def test_required_message_has_the_curl_example():
-    assert "-F \"project=Aulas\"" in PROJECT_REQUIRED_DETAIL
-    assert "vincule a API key a um projeto em /api-keys" in PROJECT_REQUIRED_DETAIL
+    assert "-F \"project=Lectures\"" in project_required_detail()
+    assert "bind the API key to a project at /api-keys" in project_required_detail()
 
 
 @pytest.mark.parametrize("endpoint", ENDPOINTS)
 def test_empty_field_counts_as_absent(env, endpoint):
     response = post(env, endpoint, {"project": "  ", "project_id": ""})
     assert response.status_code == 422
-    assert message(response) == PROJECT_REQUIRED_DETAIL
+    assert message(response) == project_required_detail()
 
 
 @pytest.mark.parametrize("endpoint", ENDPOINTS)
@@ -246,7 +246,7 @@ def test_jwt_and_key_together_is_a_jwt_request(env, endpoint):
 
     response = post(env, endpoint, headers={**jwt(), **api_key(INBOX_KEY_PLAIN)})
     assert response.status_code == 422
-    assert message(response) == PROJECT_REQUIRED_DETAIL
+    assert message(response) == project_required_detail()
 
 
 @pytest.mark.parametrize("endpoint", ENDPOINTS)
@@ -254,7 +254,7 @@ def test_unbound_key_without_project_is_422(env, endpoint):
     add_key(env.db, UNBOUND_KEY_PLAIN)
     response = post(env, endpoint, headers=api_key(UNBOUND_KEY_PLAIN))
     assert response.status_code == 422
-    assert message(response) == PROJECT_REQUIRED_DETAIL
+    assert message(response) == project_required_detail()
 
 
 def test_key_bound_to_a_vanished_project_is_422(env):
@@ -265,7 +265,7 @@ def test_key_bound_to_a_vanished_project_is_422(env):
 
     response = post(env, "/transcribe", headers=api_key(INBOX_KEY_PLAIN))
     assert response.status_code == 422
-    assert "projeto vinculado a esta API key não existe mais" in message(response)
+    assert "bound to this API key no longer exists" in message(response)
 
 
 def test_key_bound_to_someone_elses_project_is_not_used(env):
@@ -316,7 +316,7 @@ def test_foreign_or_unknown_project_id_is_the_same_404(env, endpoint):
     foreign = post(env, endpoint, {"project_id": theirs.id})
     unknown = post(env, endpoint, {"project_id": "00000000-0000-4000-8000-000000000000"})
     assert foreign.status_code == unknown.status_code == 404
-    assert message(foreign) == message(unknown) == "Projeto não encontrado"
+    assert message(foreign) == message(unknown) == "Project not found"
     assert env.db.query(Job).count() == 0
     assert files_on_disk(env) == []
 
@@ -327,7 +327,7 @@ def test_foreign_folder_id_is_404(env, endpoint):
     theirs = add_folder(env.db, add_project(env.db, BOB, "Do Bob"), "Pasta do Bob")
     response = post(env, endpoint, {"project_id": mine.id, "folder_id": theirs.id})
     assert response.status_code == 404
-    assert message(response) == "Pasta não encontrada"
+    assert message(response) == "Folder not found"
 
 
 @pytest.mark.parametrize("endpoint", ENDPOINTS)
@@ -362,7 +362,7 @@ def test_project_limit_is_422(env, monkeypatch):
     assert post(env, "/upload", {"project": "Um"}).status_code == 200
     response = post(env, "/upload", {"project": "Dois"})
     assert response.status_code == 422
-    assert message(response) == "Limite de 1 projetos atingido"
+    assert message(response) == "The limit of 1 projects has been reached."
     assert response.json()["detail"]["code"] == "PROJECT_LIMIT"
     assert not [p for p in files_on_disk(env) if ".staging" in str(p)]  # staged upload removed
 
@@ -374,13 +374,13 @@ def test_folder_limit_is_422_folder_limit(env, monkeypatch, endpoint, code_key):
     response = post(env, endpoint, {"project": "P", "folder": "link-2"})
     assert response.status_code == 422
     assert response.json()["detail"][code_key] == "FOLDER_LIMIT"
-    assert message(response) == "Limite de 1 pastas atingido neste projeto"
+    assert message(response) == "The limit of 1 folders in this project has been reached."
     assert env.db.query(Folder).count() == 1
 
 
 def test_upload_location_422_carries_its_code(env):
     response = post(env, "/upload")
-    assert response.json()["detail"] == {"code": "PROJECT_REQUIRED", "message": PROJECT_REQUIRED_DETAIL}
+    assert response.json()["detail"] == {"code": "PROJECT_REQUIRED", "message": project_required_detail()}
 
 
 def test_fallback_project_valve(env, monkeypatch, caplog):

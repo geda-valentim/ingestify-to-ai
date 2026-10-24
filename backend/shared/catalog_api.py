@@ -22,6 +22,13 @@ API_CATALOG = {
         },
         ["retry"],
     ),
+    "SEARCH_UNAVAILABLE": (
+        {
+            "en": "Search is unavailable right now. Try again in a moment.",
+            "pt": "A busca está indisponível no momento. Tente novamente em instantes.",
+        },
+        ["retry"],
+    ),
     "JOB_CREATE_FAILED": (
         {"en": "The job could not be created.", "pt": "Erro ao criar job"},
         ["retry"],

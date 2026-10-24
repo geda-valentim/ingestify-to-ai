@@ -39,8 +39,6 @@ from sqlalchemy.exc import InterfaceError, OperationalError
 from sqlalchemy.orm import Session
 
 from api.deps import (
-    FOLDER_NOT_FOUND_DETAIL,
-    PROJECT_NOT_FOUND_DETAIL,
     LocationError,
     owned_folder_or_404,
     owned_project_or_404,
@@ -48,9 +46,9 @@ from api.deps import (
 from api.iam_deps import Scope, authorized, visible
 from shared.config import get_settings
 from shared.database import get_db
+from shared.error_catalog import render
 from shared.models import APIKey, Folder, Job, JobStatus as DBJobStatus, Project, User
 from shared.projects import (
-    DB_UNAVAILABLE_DETAIL,
     InvalidNameError,
     find_folder,
     find_project,
@@ -63,18 +61,9 @@ from shared.schemas import ProjectRef, UploadFolderInfo, UploadProjectInfo
 
 logger = logging.getLogger(__name__)
 
-PROJECT_REQUIRED_DETAIL = (
-    "Informe o projeto do upload: campo 'project' (nome; é criado se não existir) ou "
-    "'project_id'. Exemplo: curl -H \"X-API-Key: ...\" -F \"file=@arquivo.mp3\" "
-    "-F \"project=Aulas\" .../transcribe\n"
-    "Para não precisar enviar o projeto, vincule a API key a um projeto em /api-keys."
-)
-KEY_PROJECT_GONE_DETAIL = (
-    "O projeto vinculado a esta API key não existe mais. Informe o campo 'project' "
-    "(nome; é criado se não existir) ou 'project_id', ou vincule a key a outro projeto em /api-keys."
-)
-FOLDER_NOT_IN_PROJECT_DETAIL = "A pasta não pertence ao projeto informado"
-PROJECT_ARCHIVED_DETAIL = "Projeto arquivado"
+def project_required_detail() -> str:
+    return render("PROJECT_REQUIRED")
+
 
 PROJECT_FORM_DESCRIPTION = (
     "Nome do projeto (obrigatório, a menos que a API key esteja vinculada a um projeto). "
@@ -131,9 +120,9 @@ def parse_location_or_422(fields: LocationFields) -> ParsedLocation:
     folder_id = _blank_to_none(fields.folder_id)
 
     if project and project_id:
-        raise LocationError(422, "INVALID_LOCATION", "Envie 'project' ou 'project_id', não os dois")
+        raise LocationError(422, "INVALID_LOCATION", render("LOCATION_PROJECT_AND_ID"))
     if folder and folder_id:
-        raise LocationError(422, "INVALID_LOCATION", "Envie 'folder' ou 'folder_id', não os dois")
+        raise LocationError(422, "INVALID_LOCATION", render("LOCATION_FOLDER_AND_ID"))
     try:
         project_name = validate_name(project, "project")[0] if project else None
         folder_name = validate_name(folder, "folder")[0] if folder else None
@@ -185,7 +174,7 @@ def plan_upload_location(db: Session, user: User, api_key, parsed: ParsedLocatio
         elif api_key is not None and api_key.project_id:
             project = bound_project(db, api_key, user)
             if project is None:
-                raise LocationError(422, "PROJECT_REQUIRED", KEY_PROJECT_GONE_DETAIL)
+                raise LocationError(422, "PROJECT_REQUIRED", render("KEY_PROJECT_GONE"))
             plan = UploadPlan(parsed, "api_key", project=project)
         elif get_settings().upload_fallback_project.strip():
             name = get_settings().upload_fallback_project
@@ -193,24 +182,24 @@ def plan_upload_location(db: Session, user: User, api_key, parsed: ParsedLocatio
                 key = validate_name(name)[1]
             except InvalidNameError as e:
                 logger.error(f"UPLOAD_FALLBACK_PROJECT is invalid ({e}); answering 422")
-                raise LocationError(422, "PROJECT_REQUIRED", PROJECT_REQUIRED_DETAIL)
+                raise LocationError(422, "PROJECT_REQUIRED")
             plan = UploadPlan(parsed, "fallback", project=find_project(db, user.id, key), fallback_name=name)
         else:
-            raise LocationError(422, "PROJECT_REQUIRED", PROJECT_REQUIRED_DETAIL)
+            raise LocationError(422, "PROJECT_REQUIRED")
 
         if plan.project is not None and plan.project.archived_at is not None:
-            raise LocationError(422, "PROJECT_ARCHIVED", PROJECT_ARCHIVED_DETAIL)
+            raise LocationError(422, "PROJECT_ARCHIVED")
 
         if parsed.folder_id:
             folder = owned_folder_or_404(db, parsed.folder_id, user)
             if plan.project is None or folder.project_id != plan.project.id:
-                raise LocationError(422, "INVALID_LOCATION", FOLDER_NOT_IN_PROJECT_DETAIL)
+                raise LocationError(422, "INVALID_LOCATION", render("FOLDER_NOT_IN_PROJECT"))
             plan.folder = folder
         return plan
     except (OperationalError, InterfaceError) as e:
         db.rollback()
         logger.error(f"plan_upload_location: {e}")
-        raise LocationError(503, "DATABASE_UNAVAILABLE", DB_UNAVAILABLE_DETAIL)
+        raise LocationError(503, "DATABASE_UNAVAILABLE")
 
 
 def prepare_upload_location(db: Session, user: User, request, fields: LocationFields) -> UploadPlan:
@@ -281,11 +270,11 @@ def resolve_upload_location(db: Session, user: User, plan: UploadPlan, path: str
                 f"'{project.name}' ({project.id})"
             )
         if project.archived_at is not None:
-            raise LocationError(422, "PROJECT_ARCHIVED", PROJECT_ARCHIVED_DETAIL)
+            raise LocationError(422, "PROJECT_ARCHIVED")
 
         folder, folder_created = plan.folder, False
         if folder is not None and folder.project_id != project.id:
-            raise LocationError(422, "INVALID_LOCATION", FOLDER_NOT_IN_PROJECT_DETAIL)
+            raise LocationError(422, "INVALID_LOCATION", render("FOLDER_NOT_IN_PROJECT"))
         if folder is None and plan.parsed.folder_name:
             folder, folder_created = get_or_create_folder(db, project, plan.parsed.folder_name, origin=via)
     except InvalidNameError as e:
@@ -293,7 +282,7 @@ def resolve_upload_location(db: Session, user: User, plan: UploadPlan, path: str
     except (OperationalError, InterfaceError) as e:
         db.rollback()
         logger.error(f"resolve_upload_location: {e}")
-        raise LocationError(503, "DATABASE_UNAVAILABLE", DB_UNAVAILABLE_DETAIL)
+        raise LocationError(503, "DATABASE_UNAVAILABLE")
 
     return UploadLocation(project=project, folder=folder, project_created=project_created,
                           folder_created=folder_created, source=via)

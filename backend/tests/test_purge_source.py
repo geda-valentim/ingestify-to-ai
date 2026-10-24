@@ -309,7 +309,7 @@ def test_all_pages_settled_with_failures_make_the_job_partial_and_purge(worker):
     assert job.status == JobStatus.PARTIAL
     assert (job.pages_completed, job.pages_failed) == (2, 1)
     assert job.completed_at is not None
-    assert "1 de 3 páginas falharam" in job.error_message
+    assert "1 of 3 pages failed" in job.error_message
     # purge_source: settled for good (no retry left) -> source files deleted
     assert ("ingestify-uploads", PDF_PATH) in worker.minio.deleted
     assert ("ingestify-pages", f"pages/{JOB_ID}/") in worker.minio.deleted
@@ -534,7 +534,7 @@ def test_delete_source_while_processing_is_409(api, status):
     assert r.status_code == 409
     detail = r.json()["detail"]
     assert detail["code"] == "JOB_STILL_PROCESSING"
-    assert "processamento" in detail["message"]
+    assert "processing" in detail["message"]
     assert api.minio.deleted == []
 
 
@@ -576,7 +576,7 @@ def test_delete_source_also_deletes_the_page_pdfs_and_page_pdf_answers_410(api):
     assert gone.status_code == 410
     detail = gone.json()["detail"]
     assert detail["code"] == "SOURCE_PURGED"
-    assert "apagados em" in detail["message"] and "UTC" in detail["message"]
+    assert "deleted on" in detail["message"] and "UTC" in detail["message"]
     assert detail["source_deleted_at"]
 
 
@@ -616,7 +616,7 @@ def test_page_retry_without_a_source_is_409_and_changes_nothing(api, retry_enque
 
     assert r.status_code == 409, r.text
     assert r.json()["detail"]["code"] == "SOURCE_NOT_AVAILABLE"
-    assert "apagado" in r.json()["detail"]["message"]
+    assert "deleted" in r.json()["detail"]["message"]
     api.db.expire_all()
     page = api.db.query(Page).filter(Page.job_id == JOB_ID, Page.page_number == 2).one()
     assert (page.status, page.retry_count) == (JobStatus.FAILED, 0)
@@ -887,7 +887,7 @@ def test_split_exhausted_fails_the_main_job_and_purges(worker, splitting, monkey
         splitting.split(retries=tasks.split_pdf_task.max_retries)
     job = worker.job()
     assert job.status == JobStatus.FAILED and job.completed_at is not None
-    assert "dividir o PDF" in job.error_message and "corrupt xref" in job.error_message
+    assert "split into pages" in job.error_message and "corrupt xref" in job.error_message
     assert fake_redis.get_job_status(JOB_ID)["status"] == "failed"
     assert worker.minio.deleted == [("ingestify-uploads", PDF_PATH)]
     # no longer 409 forever: the source is gone, the job is settled
@@ -1217,7 +1217,7 @@ def test_unscheduled_retry_fails_the_main_job_and_purges(worker, monkeypatch, fa
 
     job = worker.job()
     assert job.status == JobStatus.FAILED and job.completed_at is not None
-    assert "não pôde ser agendada" in job.error_message
+    assert "could not be scheduled" in job.error_message
     assert fake_redis.get_job_status(JOB_ID)["status"] == "failed"
     assert worker.minio.deleted == [("ingestify-uploads", UPLOAD_PATH)]
 

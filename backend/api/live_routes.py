@@ -10,6 +10,7 @@ from typing import Literal, Optional
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy.orm import Session
+from shared.error_catalog import CATALOG, render
 from shared.config import get_settings
 from shared.database import get_db, SessionLocal
 from shared.models import Job, JobStatus, LiveSession, User
@@ -67,24 +68,17 @@ def get_store():
 
 def live_owned(job_id, owned_job, db):
     if owned_job is None or owned_job.id != job_id or not available(db):
-        raise HTTPException(404, detail='Sessão não encontrada')
+        raise HTTPException(404, detail=render('LIVE_SESSION_NOT_FOUND'))
     live = db.get(LiveSession, job_id)
     if live is None:
-        raise HTTPException(404, detail='Sessão não encontrada')
+        raise HTTPException(404, detail=render('LIVE_SESSION_NOT_FOUND'))
     return live
 
 
-UNAVAILABLE_MESSAGES = {
-    'LIVE_DISABLED': 'A transcrição ao vivo está desligada neste servidor.',
-    'LIVE_NOT_READY': 'O serviço de transcrição ao vivo não está disponível agora. Tente de novo em instantes.',
-    'LIVE_CAPACITY_FULL': 'Todas as vagas de transcrição ao vivo estão em uso. Tente de novo em instantes.',
-    'LIVE_DIARIZATION_NOT_READY': 'A identificação de falantes ao vivo não está disponível agora.',
-}
-
-
 def unavailable(code):
-    raise HTTPException(503, detail={'code': code, 'message': UNAVAILABLE_MESSAGES.get(code, UNAVAILABLE_MESSAGES['LIVE_NOT_READY'])},
-                        headers={'Retry-After': '5'})
+    # An unknown code keeps its code but says the generic "not ready" text.
+    message = render(code if code in CATALOG else 'LIVE_NOT_READY')
+    raise HTTPException(503, detail={'code': code, 'message': message}, headers={'Retry-After': '5'})
 
 
 def availability_inputs(db):
@@ -138,7 +132,7 @@ def session_availability(response: Response, user: User = Depends(require('live.
 
     def state(protocol):
         code = availability_code(store, protocol, common)
-        return {'available': code is None, 'code': code, 'message': UNAVAILABLE_MESSAGES.get(code)}
+        return {'available': code is None, 'code': code, 'message': render(code) if code else None}
 
     return {**state(1), 'diarization': state(2)}
 

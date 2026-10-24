@@ -47,7 +47,12 @@ function getAuthToken(): string | null {
  * instead of leaving each page to spin or show a raw error.
  */
 export async function apiFetch(input: string, init?: RequestInit): Promise<Response> {
-  const response = await fetch(input, init);
+  // The UI is English-only: pin the API's language instead of letting the browser's
+  // Accept-Language pick Portuguese messages inside an English screen. Replace "en"
+  // with the UI locale when the app gets one (P-13).
+  const headers = new Headers(init?.headers);
+  if (!headers.has("Accept-Language")) headers.set("Accept-Language", "en");
+  const response = await fetch(input, { ...init, headers });
   if (response.status === 401 && new Headers(init?.headers).has("Authorization")) {
     expireSession();
   }
@@ -765,7 +770,8 @@ async function adminGet<T>(path: string): Promise<T> {
   const response = await apiFetch(`${API_URL}${path}`, { headers: getHeaders(true) });
   if (!response.ok) {
     const body = await response.json().catch(() => null);
-    const detail = typeof body?.detail === "string" ? body.detail : response.statusText;
+    const text = typeof body?.detail === "string" ? body.detail : body?.detail?.message;
+    const detail = typeof text === "string" && text ? text : response.statusText;
     // ApiError keeps the HTTP status: the admin pages tell 403 and 404 apart
     throw new ApiError(response.status, body, detail || `Request failed (${response.status})`);
   }

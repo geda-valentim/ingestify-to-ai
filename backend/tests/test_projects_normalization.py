@@ -88,7 +88,7 @@ def test_valid_name_returns_display_and_key():
 
 @pytest.mark.parametrize("raw", ["", "   ", None, "\t\n"])
 def test_empty_is_rejected(raw):
-    with pytest.raises(InvalidNameError, match="vazio"):
+    with pytest.raises(InvalidNameError, match="empty"):
         validate_name(raw)
 
 
@@ -108,7 +108,7 @@ def test_too_long_key_is_rejected():
 
 @pytest.mark.parametrize("raw", ["a\x00b", "a\x07b", "a\x1bb", "a\x7fb"])
 def test_control_characters_are_rejected(raw):
-    with pytest.raises(InvalidNameError, match="controle"):
+    with pytest.raises(InvalidNameError, match="control"):
         validate_name(raw)
 
 

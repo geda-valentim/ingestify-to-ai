@@ -151,6 +151,11 @@ e e-mail da mesma conta compartilham o contador de falhas. Se o Redis cair, o li
 | `ENVIRONMENT` | `production` (o `docker-compose.yml` base define `development`; o `.prod.yml` volta a `production`) | Em `production`, erros 500 não expõem a mensagem da exceção e falhas de MySQL/Redis no startup derrubam a API. |
 | `AUTH_ENABLED` | `true` | **Sem efeito**: declarada, não lida por nenhum código. Não existe modo sem autenticação. |
 
+## Idioma das mensagens
+
+O texto de `message` segue `Accept-Language` (inglês por padrão, `pt-BR` sob pedido); o
+`code` não muda. Ver [languages.md](languages.md).
+
 ## Limites e lacunas conhecidas
 
 - Um usuário desativado (`is_active=false`) recebe `400 Inactive user`, não `401/403`.

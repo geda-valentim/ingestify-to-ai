@@ -44,6 +44,7 @@ from shared.schemas import (
     PartialTranscriptResponse,
     SourceDeletedResponse,
 )
+from shared.i18n import api_error
 from shared.redis_client import get_redis_client
 from shared.elasticsearch_client import get_es_client, SearchUnavailable
 from shared.minio_client import get_minio_client
@@ -500,7 +501,7 @@ async def upload_and_convert(
             logger.error(f"Error creating job in MySQL: {e}", exc_info=True)
             db.rollback()
             _discard_uncommitted_job(redis_client, current_user.id, str(job_id))
-            raise _coded(503, "DATABASE_UNAVAILABLE", "Banco de dados indisponível; tente de novo") from None
+            raise _coded(503, "DATABASE_UNAVAILABLE") from None
 
         logger.info(f"MAIN JOB created: {job_id} | user: {current_user.username} | source_type: file")
 
@@ -563,7 +564,7 @@ async def upload_and_convert(
                 db.commit()
             except Exception:
                 db.rollback()
-            raise _coded(503, "QUEUE_UNAVAILABLE", "Sistema de processamento indisponível")
+            raise _coded(503, "QUEUE_UNAVAILABLE")
         except Exception as e:
             logger.error(f"Error enqueueing job {job_id}: {e}", exc_info=True)
             redis_client.set_job_status(
@@ -580,7 +581,7 @@ async def upload_and_convert(
                 db.commit()
             except Exception:
                 db.rollback()
-            raise _coded(500, "JOB_CREATE_FAILED", "Erro ao criar job")
+            raise _coded(500, "JOB_CREATE_FAILED")
 
         return JobCreatedResponse(
             job_id=job_id,
@@ -688,9 +689,11 @@ def _move_upload_to_job_dir(staging_path: Path, job_id, filename: str) -> Path:
     return temp_file_path
 
 
-def _coded(status_code: int, code: str, message: str) -> HTTPException:
-    """A refusal of the job-creating routes: `{"detail": {"code", "message"}}` (the code is for clients)."""
-    return HTTPException(status_code=status_code, detail={"code": code, "message": message})
+def _coded(status_code: int, code: str, **params) -> HTTPException:
+    """A refusal of the job-creating routes: `{"detail": {"code", "message"}}`.
+
+    The code is for clients; the message is the catalog text in the request language."""
+    return api_error(status_code, code, **params)
 
 
 async def _stream_upload_to_file(file: UploadFile, destination: Path, max_size_mb: int) -> Tuple[int, str]:
@@ -709,11 +712,11 @@ async def _stream_upload_to_file(file: UploadFile, destination: Path, max_size_m
             while chunk := await file.read(UPLOAD_CHUNK_SIZE):
                 size += len(chunk)
                 if size > max_bytes:
-                    raise _coded(413, "FILE_TOO_LARGE", f"Arquivo muito grande. Máximo: {max_size_mb}MB")
+                    raise _coded(413, "FILE_TOO_LARGE", max_size_mb=max_size_mb)
                 hasher.update(chunk)
                 out.write(chunk)
         if size == 0:
-            raise _coded(400, "FILE_EMPTY", "Arquivo enviado está vazio")
+            raise _coded(400, "FILE_EMPTY")
     except BaseException:
         destination.unlink(missing_ok=True)
         raise
@@ -753,8 +756,7 @@ def _ensure_document_format(path: Path, filename: str) -> None:
     else:
         valid = head.startswith(signatures)
     if not valid:
-        raise _coded(422, "INVALID_FILE_FORMAT",
-                     f"O conteúdo do arquivo não é {ext[1:].upper()} (assinatura ausente no início do arquivo)")
+        raise _coded(422, "INVALID_FILE_FORMAT", kind=ext[1:].upper())
 
 
 @router.post("/transcribe", response_model=JobCreatedResponse, summary="Transcrever áudio ou vídeo (STT, legendas VTT/SRT)", responses=job_creation_responses("transcribe"))
@@ -874,7 +876,7 @@ async def transcribe_audio(
     """
     # Check if audio transcription is enabled
     if not settings.enable_audio_transcription:
-        raise _coded(503, "TRANSCRIPTION_DISABLED", "Audio transcription is currently disabled")
+        raise _coded(503, "TRANSCRIPTION_DISABLED")
 
     tag_list = parse_tags_or_422(tags)
     callback_url = _checked_callback_url(callback_url)
@@ -884,8 +886,8 @@ async def transcribe_audio(
 
     output_format = (output_format or "markdown").lower()
     if output_format not in TRANSCRIPT_OUTPUT_FORMATS:
-        raise _coded(422, "INVALID_OUTPUT_FORMAT",
-                     f"output_format inválido: {output_format}. Use: {', '.join(TRANSCRIPT_OUTPUT_FORMATS)}")
+        raise _coded(422, "INVALID_OUTPUT_FORMAT", output_format=output_format,
+                     allowed=", ".join(TRANSCRIPT_OUTPUT_FORMATS))
 
     # Validate media type (audio or video), by MIME type or extension
     mime_type = file.content_type or "application/octet-stream"
@@ -897,10 +899,7 @@ async def transcribe_audio(
     is_audio = mime_type in AUDIO_MIME_TYPES or file_ext in AUDIO_EXTENSIONS
 
     if not is_video and not is_audio:
-        raise _coded(422, "UNSUPPORTED_MEDIA_FORMAT",
-                     f"Formato não suportado. MIME type: {mime_type}, Extensão: {file_ext}. "
-                     f"Áudio: MP3, WAV, M4A, FLAC, OGG, OPUS, WEBM, WMA, AAC. "
-                     f"Vídeo: MP4, M4V, MKV, MOV, AVI, WEBM, WMV, FLV, MPEG, TS, 3GP")
+        raise _coded(422, "UNSUPPORTED_MEDIA_FORMAT", mime_type=mime_type, extension=file_ext)
 
     media_kind = "video" if is_video else "audio"
     options, transcription_profile, transcription_profile_hash = transcription_admission(
@@ -995,7 +994,7 @@ async def transcribe_audio(
             logger.error(f"Error creating audio job in MySQL: {e}", exc_info=True)
             db.rollback()
             _discard_uncommitted_job(redis_client, current_user.id, str(job_id))
-            raise _coded(503, "DATABASE_UNAVAILABLE", "Banco de dados indisponível; tente de novo") from None
+            raise _coded(503, "DATABASE_UNAVAILABLE") from None
 
         logger.info(f"AUDIO TRANSCRIPTION JOB created: {job_id} | user: {current_user.username}")
 
@@ -1074,7 +1073,7 @@ async def transcribe_audio(
                 db.commit()
             except Exception:
                 db.rollback()
-            raise _coded(503, "QUEUE_UNAVAILABLE", "Sistema de processamento indisponível")
+            raise _coded(503, "QUEUE_UNAVAILABLE")
         except Exception as e:
             logger.error(f"Error enqueueing audio job {job_id}: {e}", exc_info=True)
             redis_client.set_job_status(
@@ -1091,7 +1090,7 @@ async def transcribe_audio(
                 db.commit()
             except Exception:
                 db.rollback()
-            raise _coded(500, "JOB_CREATE_FAILED", "Erro ao criar job de transcrição")
+            raise _coded(500, "JOB_CREATE_FAILED")
 
         return JobCreatedResponse(
             job_id=job_id,
@@ -1231,11 +1230,11 @@ async def convert_document(
 
     # Validate source_type
     if source_type not in ["file", "url", "gdrive", "dropbox"]:
-        raise _coded(400, "INVALID_SOURCE_TYPE", f"source_type inválido: {source_type}. Use: file, url, gdrive ou dropbox")
+        raise _coded(400, "INVALID_SOURCE_TYPE", source_type=source_type)
 
     # Validate file upload
     if source_type == "file" and not file:
-        raise _coded(400, "FILE_REQUIRED", "Arquivo é obrigatório para source_type=file")
+        raise _coded(400, "FILE_REQUIRED")
 
     # For uploads the worker reads the file saved by the API. Never forward a
     # client-supplied `source`, otherwise it is used as a path on the worker.
@@ -1244,7 +1243,7 @@ async def convert_document(
 
     # Validate source for non-file types
     if source_type != "file" and not source:
-        raise _coded(400, "SOURCE_REQUIRED", f"source é obrigatório para source_type={source_type}")
+        raise _coded(400, "SOURCE_REQUIRED", source_type=source_type)
 
     tag_list = parse_tags_or_422(tags)
     callback_url = _checked_callback_url(callback_url)
@@ -1266,7 +1265,7 @@ async def convert_document(
     # The provider's own token, in its own header (S-01: the Ingestify JWT in
     # Authorization authenticates here and is never forwarded anywhere)
     if source_type in ["gdrive", "dropbox"] and not source_token:
-        raise _coded(400, "SOURCE_TOKEN_REQUIRED", "O header X-Source-Token (token do provedor) é obrigatório para esta fonte")
+        raise _coded(400, "SOURCE_TOKEN_REQUIRED")
 
     # Where the job goes, decided before anything is written (422/404 here leave no file behind)
     plan = prepare_upload_location(db, current_user, request, location)
@@ -1382,7 +1381,7 @@ async def convert_document(
             logger.error(f"Error creating job in MySQL: {e}", exc_info=True)
             db.rollback()
             _discard_uncommitted_job(redis_client, current_user.id, str(job_id))
-            raise _coded(503, "DATABASE_UNAVAILABLE", "Banco de dados indisponível; tente de novo") from None
+            raise _coded(503, "DATABASE_UNAVAILABLE") from None
 
         logger.info(f"MAIN JOB created: {job_id} | user: {current_user.username} | source_type: {source_type}")
 
@@ -1463,7 +1462,7 @@ async def convert_document(
                 db.commit()
             except Exception:
                 db.rollback()
-            raise _coded(503, "QUEUE_UNAVAILABLE", "Sistema de processamento indisponível")
+            raise _coded(503, "QUEUE_UNAVAILABLE")
         except Exception as e:
             logger.error(f"Error enqueueing job {job_id}: {e}", exc_info=True)
             redis_client.set_job_status(
@@ -1480,7 +1479,7 @@ async def convert_document(
                 db.commit()
             except Exception:
                 db.rollback()
-            raise _coded(500, "JOB_CREATE_FAILED", "Erro ao criar job")
+            raise _coded(500, "JOB_CREATE_FAILED")
 
         return JobCreatedResponse(
             job_id=job_id,
@@ -2998,7 +2997,7 @@ async def search_jobs(
     - `/search?query=relatório financeiro` - Busca jobs contendo "relatório financeiro"
     - `/search?query=invoice&limit=20` - Busca jobs contendo "invoice", até 20 resultados
     """
-    unavailable = _coded(503, "SEARCH_UNAVAILABLE", "A busca está indisponível no momento. Tente novamente em instantes.")
+    unavailable = _coded(503, "SEARCH_UNAVAILABLE")
     try:
         es_client = get_es_client()
     except Exception as e:

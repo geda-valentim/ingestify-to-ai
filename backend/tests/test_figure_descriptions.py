@@ -635,7 +635,7 @@ def test_only_a_lost_pending_result_fails_the_job(stage):
     stage.minio.objects.pop((stage.minio.bucket_results, fd.pending_object(JOB_ID)))
     assert stage.finalize()["status"] == "failed"
     job = stage.job()
-    assert job.status == JobStatus.FAILED and "figuras" in job.error_message
+    assert job.status == JobStatus.FAILED and "figure" in job.error_message
 
 
 def test_post_completion_steps_are_retried_without_refinalizing(stage, monkeypatch):

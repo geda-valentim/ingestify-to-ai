@@ -42,16 +42,29 @@ from sqlalchemy.orm import Session
 
 from shared.auth import get_current_active_user
 from shared.database import get_db
+from shared.error_catalog import render
 from shared.iam import ownership
 from shared.models import APIKey, Folder, Job, Page, Project, User
 
 logger = logging.getLogger(__name__)
 
 # Mensagem única para "não existe" e "não é seu": evita enumeração de recursos.
-JOB_NOT_FOUND_DETAIL = "Job não encontrado"
-PROJECT_NOT_FOUND_DETAIL = "Projeto não encontrado"
-FOLDER_NOT_FOUND_DETAIL = "Pasta não encontrada"
-API_KEY_NOT_FOUND_DETAIL = "API key not found"
+# Funções (não constantes): o texto segue o idioma da requisição (P-13), e o caminho
+# "não existe" e o "não é seu" chamam a mesma função, então o corpo é idêntico.
+def job_not_found_detail() -> str:
+    return render("JOB_NOT_FOUND")
+
+
+def project_not_found_detail() -> str:
+    return render("PROJECT_NOT_FOUND_404")
+
+
+def folder_not_found_detail() -> str:
+    return render("FOLDER_NOT_FOUND_404")
+
+
+def api_key_not_found_detail() -> str:
+    return render("API_KEY_NOT_FOUND")
 
 
 class LocationError(HTTPException):
@@ -64,11 +77,15 @@ class LocationError(HTTPException):
     texto; 404 e 503 seguem em texto, iguais ao 404 de job (não revelam o que existe).
     """
 
-    def __init__(self, status_code: int, error_code: str, detail: str):
-        body = {"code": error_code, "message": detail} if status_code == 422 else detail
+    def __init__(self, status_code: int, error_code: str, message: Optional[str] = None, **params):
+        """`message` is text already in the request language (e.g. `str(InvalidNameError)`);
+        without it the text of `error_code` is rendered from the catalog with `params`."""
+        if message is None:
+            message = render(error_code, **params)
+        body = {"code": error_code, "message": message} if status_code == 422 else message
         super().__init__(status_code=status_code, detail=body)
         self.error_code = error_code
-        self.message = detail
+        self.message = message
 
 # Profundidade máxima ao subir a hierarquia MAIN -> SPLIT/PAGE/MERGE.
 MAX_PARENT_CHAIN_DEPTH = ownership.MAX_PARENT_CHAIN_DEPTH
@@ -127,7 +144,7 @@ def resolve_owned_job(db: Session, job_id: str, user: User) -> Optional[Job]:
     """
     access = job_access(db, job_id, user.id)
     if not access.allowed:
-        raise HTTPException(status_code=404, detail=JOB_NOT_FOUND_DETAIL)
+        raise HTTPException(status_code=404, detail=job_not_found_detail())
     return access.job
 
 
@@ -179,7 +196,7 @@ def owned_project_or_404(db: Session, project_id: Optional[str], user: User) -> 
     """O projeto, se for do usuário; 404 igual para inexistente e alheio."""
     project = db.get(Project, str(project_id)) if project_id else None
     if not ownership.owns(project, user.id):
-        raise LocationError(404, "PROJECT_NOT_FOUND", PROJECT_NOT_FOUND_DETAIL)
+        raise LocationError(404, "PROJECT_NOT_FOUND", project_not_found_detail())
     return project
 
 
@@ -187,7 +204,7 @@ def owned_folder_or_404(db: Session, folder_id: Optional[str], user: User) -> Fo
     """A pasta, se for do usuário; 404 igual para inexistente e alheia."""
     folder = db.get(Folder, str(folder_id)) if folder_id else None
     if not ownership.owns(folder, user.id):
-        raise LocationError(404, "FOLDER_NOT_FOUND", FOLDER_NOT_FOUND_DETAIL)
+        raise LocationError(404, "FOLDER_NOT_FOUND", folder_not_found_detail())
     return folder
 
 
@@ -217,5 +234,5 @@ def owned_api_key_or_404(db: Session, key_id, user: User) -> APIKey:
     """A key, se for do usuário; 404 igual para inexistente e alheia."""
     key = db.get(APIKey, str(key_id)) if key_id else None
     if not ownership.owns(key, user.id):
-        raise HTTPException(status_code=404, detail=API_KEY_NOT_FOUND_DETAIL)
+        raise HTTPException(status_code=404, detail=api_key_not_found_detail())
     return key
