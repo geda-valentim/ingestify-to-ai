@@ -70,6 +70,7 @@ _OPTIONS = {
     "max_speakers": (int,),
     "transcriber_provider": (str,),
     "transcription_profile": (dict,),
+    "max_audio_seconds": (int,),
 }
 
 INPUT_REJECTED_PREFIX = "INPUT_REJECTED:"
@@ -128,6 +129,8 @@ def clean_options(options: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         _text(clean["language"], "language", 16)
     if "temperature" in clean:
         _number(clean["temperature"], "temperature", 0, 1)
+    if "max_audio_seconds" in clean:
+        _number(clean["max_audio_seconds"], "max_audio_seconds", 1, 86400)
     if "beam_size" in clean:
         _number(clean["beam_size"], "beam_size", 1, 10)
     for name in ('min_speakers', 'max_speakers'):

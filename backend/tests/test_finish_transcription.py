@@ -176,3 +176,71 @@ def test_without_timestamps_the_markdown_is_the_plain_text(world):
 def test_the_old_helper_names_still_work():
     assert tasks._store_transcript_outputs is pipeline.store_transcript_outputs
     assert tasks._purge_audio_source is pipeline.purge_audio_source
+
+
+# --- Audio refused for its length: failed for good, never retried -------------
+
+
+def _refuse_audio(monkeypatch, exc):
+    import workers.audio as audio_pkg
+
+    def refuse(*args, **kwargs):
+        raise exc
+
+    monkeypatch.setattr(audio_pkg, "transcribe_with_gpu_fallback", refuse)
+
+    def no_retry(*args, **kwargs):
+        pytest.fail("a refused audio must not be retried")
+
+    monkeypatch.setattr(tasks.process_conversion, "retry", no_retry)
+    monkeypatch.setattr(tasks, "_retry_or_settle", no_retry)
+
+
+@pytest.mark.parametrize("options", [{}, {"transcriber_provider": "whisperx"}], ids=["non-strict", "strict"])
+def test_an_audio_over_the_limit_fails_the_job_without_a_retry(world, monkeypatch, options):
+    from workers.engines.whisper_core import AudioDurationExceeded
+
+    _refuse_audio(monkeypatch, AudioDurationExceeded(1800))
+    monkeypatch.setattr(pipeline, "begin_transcription_attempt", lambda *a, **k: None)
+
+    world.run(**options)
+
+    with world.Session() as db:
+        job = db.query(Job).filter(Job.id == JOB_ID).first()
+        assert job.status == JobStatus.FAILED
+        assert "30-minute limit" in job.error_message  # the limit of the exception, in minutes
+
+
+def test_the_routed_path_settles_a_duration_refusal_terminal(monkeypatch, tmp_path):
+    from shared.engines import ledger
+    from workers.engines import local
+    from workers.engines.whisper_core import AudioDurationExceeded
+
+    monkeypatch.setattr(ledger, "claim", lambda *a, **k: (ledger.CLAIMED, None))
+    monkeypatch.setattr(local, "UsageHeartbeat",
+                        lambda *a, **k: SimpleNamespace(start=lambda: SimpleNamespace(stop=lambda: None), stop=lambda: None))
+    monkeypatch.setattr(tasks, "get_redis_client", lambda: MagicMock())
+    monkeypatch.setattr(tasks, "get_es_client", lambda: MagicMock())
+    monkeypatch.setattr(tasks, "_set_processing", lambda *a, **k: None)
+    monkeypatch.setattr(tasks, "_resolve_uploaded_file", lambda *a, **k: tmp_path / "a.mp3")
+
+    def refuse(*args, **kwargs):
+        raise AudioDurationExceeded(3600)
+
+    monkeypatch.setattr(tasks, "_transcribe_audio", refuse)
+    settled = {}
+
+    def settle_failed(usage_id, holder, **kwargs):
+        settled.update(kwargs)
+        return True, None
+
+    monkeypatch.setattr(ledger, "settle_failed", settle_failed)
+    monkeypatch.setattr(ledger, "apply_job_change", lambda *a, **k: None)
+    from shared.engines import dispatch
+    monkeypatch.setattr(dispatch, "kick", lambda *a, **k: None)
+
+    tasks._run_routed_transcription(JOB_ID, "x", {}, 7)
+
+    assert settled["error_code"] == "AUDIO_DURATION_LIMIT_EXCEEDED"
+    assert settled["counts"] is False and settled["terminal"] is True
+    assert "60-minute limit" in settled["detail"]
