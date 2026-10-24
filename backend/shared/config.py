@@ -222,7 +222,7 @@ class Settings(BaseSettings):
     vision_full_task_timeout_seconds: int = 900
     datalake_encryption_key: str = ""
     # Hard cap on one S3/MinIO XML or error response buffered by the API (user-supplied endpoints).
-    datalake_max_response_bytes: int = Field(default=4 * 1024 * 1024, ge=1024)
+    datalake_max_response_bytes: int = Field(default=8 * 1024 * 1024, ge=1024)
 
     vision_task_timeout_seconds: int = 120
     vision_max_new_tokens: int = 1024

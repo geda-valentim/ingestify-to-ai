@@ -40,25 +40,35 @@ class ResponseTooLarge(Exception):
 class BoundedPoolManager(urllib3.PoolManager):
     """minio loads each XML/error response whole before parsing it, and the read
     timeout does not bound volume. Every response it would buffer (preload, or a
-    non-2xx body) is read here in chunks, post-decoding, and refused past the cap.
-    Successful streamed bodies (get_object) pass through; the download bounds them."""
+    non-2xx body) is read here in chunks and refused past the cap. Successful
+    streamed bodies (get_object) pass through; the download bounds them.
+
+    urllib3 itself drains redirect bodies and honors Retry-After before we see a
+    response, both unbounded, so redirects and status retries are switched off:
+    every response, whatever its status, reaches this override first."""
 
     def __init__(self, *args, max_response_bytes=None, **kwargs):
+        kwargs.setdefault("retries", urllib3.Retry(total=1, redirect=False,
+            respect_retry_after_header=False, raise_on_status=False))
         super().__init__(*args, **kwargs)
         self.max_response_bytes = max_response_bytes or get_settings().datalake_max_response_bytes
 
     def urlopen(self, method, url, redirect=True, **kw):
         preload = kw.pop("preload_content", True)
-        response = super().urlopen(method, url, redirect=redirect, preload_content=False, **kw)
+        response = super().urlopen(method, url, redirect=False, preload_content=False, **kw)
         if not preload and response.status in (200, 204, 206):
             return response
         cap = self.max_response_bytes
         try:
-            declared = response.headers.get("Content-Length")
-            if declared and declared.isdigit() and int(declared) > cap:
-                raise ResponseTooLarge()
+            if method != "HEAD" and response.status not in (204, 304):
+                # S3 XML is never legitimately compressed: no decoder, no zip bombs.
+                if response.headers.get("Content-Encoding", "identity").strip().lower() not in ("", "identity"):
+                    raise ResponseTooLarge()
+                declared = response.headers.get("Content-Length")
+                if declared and declared.isdigit() and int(declared) > cap:
+                    raise ResponseTooLarge()
             body, size = [], 0
-            for chunk in response.stream(64 * 1024, decode_content=True):
+            for chunk in response.stream(64 * 1024, decode_content=False):
                 size += len(chunk)
                 if size > cap:
                     raise ResponseTooLarge()
@@ -80,7 +90,7 @@ class S3Adapter(StorageAdapter):
         self.client = client or Minio(parsed.netloc, access_key=credentials["access_key"],
             secret_key=credentials["secret_key"], session_token=credentials.get("session_token") or None,
             region=config.get("region") or None, secure=parsed.scheme == "https",
-            http_client=BoundedPoolManager(timeout=urllib3.Timeout(connect=5, read=30), retries=1))
+            http_client=BoundedPoolManager(timeout=urllib3.Timeout(connect=5, read=30)))
 
     def buckets(self):
         return [b.name for b in self.client.list_buckets()]
