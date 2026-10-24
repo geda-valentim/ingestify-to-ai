@@ -96,7 +96,7 @@ class FasterWhisperTranscriber(AudioTranscriber):
 
             return result
 
-        except whisper_core.AudioDurationExceeded:
+        except (whisper_core.AudioDurationExceeded, whisper_core.AudioSampleRateUnsupported):
             raise  # a coded rejection of the input, not a transcription failure
         except Exception as e:
             logger.error(f"Transcription failed: {e}", exc_info=True)
@@ -110,7 +110,7 @@ class FasterWhisperTranscriber(AudioTranscriber):
 
         try:
             # Transcribe only first 30 seconds for language detection
-            audio = whisper_core.load_bounded_audio(audio_path, self.max_audio_seconds)
+            audio = whisper_core.load_bounded_audio(audio_path, 30, truncate=True)
             segments, info = self.model.transcribe(
                 audio,
                 language=None,  # Auto-detect
@@ -132,7 +132,7 @@ class FasterWhisperTranscriber(AudioTranscriber):
             return language
 
         except Exception as e:
-            if isinstance(e, whisper_core.AudioDurationExceeded):
+            if isinstance(e, (whisper_core.AudioDurationExceeded, whisper_core.AudioSampleRateUnsupported)):
                 raise
             logger.error(f"Language detection failed: {e}", exc_info=True)
             raise Exception(f"Failed to detect language: {str(e)}") from e

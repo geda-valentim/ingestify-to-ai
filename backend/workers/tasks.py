@@ -102,11 +102,11 @@ def _will_retry(task) -> bool:
     return (request.retries or 0) < (task.max_retries or 0)
 
 
-def _catalog_error(code: str, technical) -> str:
+def _catalog_error(code: str, technical, **context) -> str:
     """A job error message from shared.error_catalog, with the technical cause after it."""
     from shared import error_catalog
 
-    message = error_catalog.describe(code)[0]
+    message = error_catalog.describe(code, **context)[0]
     return f"{message} ({technical})" if technical else message
 
 
@@ -554,8 +554,8 @@ def _run_routed_transcription(job_id: str, source: str, options: dict, usage_id:
         logger.error(f"[MAIN JOB {job_id}] Routed transcription failed: {exc}", exc_info=True)
         if _is_duration_limit(exc):
             # The backlog must not place the same file again: fail the job for good
-            _, change = ledger.settle_failed(usage_id, holder, error_code="AUDIO_DURATION_LIMIT_EXCEEDED",
-                                             detail=_catalog_error("AUDIO_DURATION_LIMIT_EXCEEDED", None),
+            _, change = ledger.settle_failed(usage_id, holder, error_code=exc.code,
+                                             detail=_audio_refusal_message(exc),
                                              counts=False, terminal=True, session_factory=SessionLocal)
         else:
             _, change = ledger.settle_failed(usage_id, holder, error_code="INTERNAL", detail=str(exc),
@@ -578,9 +578,18 @@ def _run_routed_transcription(job_id: str, source: str, options: dict, usage_id:
     return {"job_id": job_id, "status": "completed"}
 
 
+_AUDIO_REFUSALS = ("AUDIO_DURATION_LIMIT_EXCEEDED", "AUDIO_SAMPLE_RATE_UNSUPPORTED")
+
+
 def _is_duration_limit(exc: BaseException) -> bool:
-    """The decoded audio is over the duration limit: the input's fault, retrying cannot help"""
-    return getattr(exc, "code", None) == "AUDIO_DURATION_LIMIT_EXCEEDED"
+    """The audio itself is refused (too long, rate too low): the input's fault, retrying cannot help"""
+    return getattr(exc, "code", None) in _AUDIO_REFUSALS
+
+
+def _audio_refusal_message(exc: BaseException) -> str:
+    """The catalog message of an audio refusal, with the limit in minutes when it is the duration"""
+    maximum = getattr(exc, "maximum_seconds", None) or settings.max_audio_duration_seconds
+    return _catalog_error(exc.code, None, max_minutes=f"{maximum / 60:g}")
 
 
 def _strict_audio_task(options):
@@ -880,7 +889,7 @@ def process_conversion(
     except Exception as exc:
         if _is_duration_limit(exc):
             # Coded rejection, never retried: the same file is as long the next time
-            error_msg = _catalog_error("AUDIO_DURATION_LIMIT_EXCEEDED", None)
+            error_msg = _audio_refusal_message(exc)
             logger.warning(f"[MAIN JOB {job_id}] {exc}")
             if _strict_audio_task(options):
                 changed = _fail_transcription_attempt(job_id, options, redis_client, error_msg, retry=False)

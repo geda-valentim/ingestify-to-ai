@@ -136,7 +136,7 @@ def handle(request_raw: Any, *, model, state, container_id: str, call_id: Option
         except Exception as exc:
             if type(exc).__name__ == "TranscriptionCancelled":
                 raise Cancelled(f"CANCELLED: {exc}") from None
-            if type(exc).__name__ == "AudioDurationExceeded":
+            if getattr(exc, "code", None) in ("AUDIO_DURATION_LIMIT_EXCEEDED", "AUDIO_SAMPLE_RATE_UNSUPPORTED"):
                 raise protocol.InputRejected(str(exc)) from None
             if _is_media_error(exc):
                 raise protocol.InputRejected(f"the media could not be decoded ({type(exc).__name__})") from None

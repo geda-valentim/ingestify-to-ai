@@ -162,7 +162,7 @@ class OpenAIWhisperTranscriber(AudioTranscriber):
 
             return transcription_result
 
-        except whisper_core.AudioDurationExceeded:
+        except (whisper_core.AudioDurationExceeded, whisper_core.AudioSampleRateUnsupported):
             raise  # a coded rejection of the input, not a transcription failure
         except Exception as e:
             logger.error(f"Transcription failed: {e}", exc_info=True)
@@ -178,7 +178,7 @@ class OpenAIWhisperTranscriber(AudioTranscriber):
             import whisper
 
             # Load audio and detect language
-            audio = whisper_core.load_bounded_audio(audio_path, self.max_audio_seconds)
+            audio = whisper_core.load_bounded_audio(audio_path, 30, truncate=True)
 
             # Pad or trim to 30 seconds for detection
             audio = whisper.pad_or_trim(audio)
@@ -197,7 +197,7 @@ class OpenAIWhisperTranscriber(AudioTranscriber):
 
             return detected_language
 
-        except whisper_core.AudioDurationExceeded:
+        except (whisper_core.AudioDurationExceeded, whisper_core.AudioSampleRateUnsupported):
             raise
         except Exception as e:
             logger.error(f"Language detection failed: {e}", exc_info=True)

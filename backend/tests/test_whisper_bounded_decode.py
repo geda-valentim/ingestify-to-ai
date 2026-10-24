@@ -145,4 +145,100 @@ def test_the_job_task_does_not_retry_a_duration_refusal():
     from workers import tasks
 
     assert tasks._is_duration_limit(whisper_core.AudioDurationExceeded(5))
+    assert tasks._is_duration_limit(whisper_core.AudioSampleRateUnsupported(1000))
     assert not tasks._is_duration_limit(RuntimeError("boom"))
+
+
+def _write_frames(path: Path, rate: int, frame_samples: int, frames: int) -> Path:
+    """A mono FLAC with explicit big frames (the decoder returns them one block at a time)"""
+    with av.open(str(path), "w") as out:
+        stream = out.add_stream("flac", rate=rate)
+        stream.layout = "mono"
+        for i in range(frames):
+            chunk = np.zeros((1, frame_samples), dtype=np.int16)
+            frame = av.AudioFrame.from_ndarray(chunk, format="s16p", layout="mono")
+            frame.sample_rate = rate
+            frame.pts = i * frame_samples
+            for packet in stream.encode(frame):
+                out.mux(packet)
+        for packet in stream.encode(None):
+            out.mux(packet)
+    return path
+
+
+def _spy(monkeypatch, seen):
+    class Spy(_CountingResampler):
+        def resample(self, frame):
+            seen.append(None if frame is None else frame.samples)
+            return super().resample(frame)
+
+    monkeypatch.setattr(av.audio.resampler, "AudioResampler", Spy)
+
+
+def test_an_oversized_frame_is_refused_before_it_is_resampled(monkeypatch):
+    # One decoded frame of 1M samples at 8 kHz would resample to 2M samples (limit: 1 s + 1 s).
+    # The encoders re-block files, so the frame comes from a stand-in container.
+    class Container:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def decode(self, audio=0):
+            yield SimpleNamespace(sample_rate=8000, samples=2 ** 20)
+
+    seen = []
+    _spy(monkeypatch, seen)
+    monkeypatch.setattr(av, "open", lambda *a, **k: Container())
+    with pytest.raises(whisper_core.AudioDurationExceeded):
+        whisper_core.load_bounded_audio("x.flac", 1)
+    assert seen == []  # resample() never saw the frame
+
+
+def test_a_very_low_sample_rate_is_refused_before_any_resampling(tmp_path, monkeypatch):
+    path = _write_frames(tmp_path / "slow.flac", 1000, 4096, 2)
+    seen = []
+    _spy(monkeypatch, seen)
+    with pytest.raises(whisper_core.AudioSampleRateUnsupported) as caught:
+        whisper_core.load_bounded_audio(path, 3600)
+    assert caught.value.code == "AUDIO_SAMPLE_RATE_UNSUPPORTED"
+    assert seen == []
+
+
+def test_truncate_cuts_at_the_limit_without_raising(tmp_path):
+    path = _write(tmp_path / "long.flac", 10.0, "flac")
+    audio = whisper_core.load_bounded_audio(path, 2, truncate=True)
+    assert len(audio) == 2 * whisper_core.SAMPLE_RATE
+    assert audio.dtype == np.float32
+
+
+def test_the_catalog_message_names_the_limit_in_minutes():
+    from shared import error_catalog
+
+    for lang in ("en", "pt"):
+        text = error_catalog.render("AUDIO_DURATION_LIMIT_EXCEEDED", lang=lang, max_minutes="60")
+        assert "60" in text and "{" not in text
+        assert error_catalog.render("AUDIO_SAMPLE_RATE_UNSUPPORTED", lang=lang) != "AUDIO_SAMPLE_RATE_UNSUPPORTED"
+
+
+def test_the_modal_request_carries_the_limit():
+    from workers.engines.modal_apps import protocol
+
+    assert protocol.clean_options({"max_audio_seconds": 1800})["max_audio_seconds"] == 1800
+    with pytest.raises(protocol.ProtocolError):
+        protocol.clean_options({"max_audio_seconds": 0})
+
+
+def test_the_runner_turns_a_whisperx_duration_error_into_a_rejected_input():
+    from workers.engines.modal_apps import protocol, runner
+    from workers.engines.whisperx_core import WhisperXError
+
+    def boom(*args, **kwargs):
+        raise WhisperXError("AUDIO_DURATION_LIMIT_EXCEEDED", maximum_seconds=10)
+
+    request = protocol.build_request(attempt_key="k", media=b"x", suffix=".wav", options={},
+                                     deadline_unix=2 ** 31, max_media_bytes=1024, live=False)
+    with pytest.raises(protocol.InputRejected):
+        runner.handle(request, model=object(), state=None, container_id="c", call_id=None,
+                      cold_start_seconds=0, gpu="", fingerprint="", transcribe=boom, clock=lambda: 0)

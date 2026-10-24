@@ -95,9 +95,14 @@ _PT = {
         ["fix_input"],
     ),
     "AUDIO_DURATION_LIMIT_EXCEEDED": (
-        "O áudio decodificado é mais longo que o limite de duração permitido, então a "
+        "O áudio decodificado é mais longo que o limite de {max_minutes} minutos, então a "
         "transcrição foi recusada. A duração é medida nas amostras decodificadas, não nos "
         "metadados do arquivo. Divida o áudio em partes menores e envie cada uma.",
+        ["fix_input"],
+    ),
+    "AUDIO_SAMPLE_RATE_UNSUPPORTED": (
+        "A taxa de amostragem do áudio é baixa demais (menos de 8 kHz) para ser transcrita. "
+        "Exporte o áudio de novo com uma taxa de pelo menos 8 kHz e envie a nova versão.",
         ["fix_input"],
     ),
     "FIGURES_FAILED": (
