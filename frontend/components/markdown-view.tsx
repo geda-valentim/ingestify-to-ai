@@ -1,6 +1,6 @@
 "use client";
 
-import type { ImgHTMLAttributes } from "react";
+import { memo, type ImgHTMLAttributes } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { parseAssetPath, useAssetUrl } from "@/hooks/use-asset-url";
@@ -40,7 +40,14 @@ function MarkdownImage({ src, alt, ...rest }: ImgHTMLAttributes<HTMLImageElement
  * The project has no @tailwindcss/typography, so each element is styled here.
  * Raw HTML in the source is not rendered: converted documents are untrusted.
  */
-export function MarkdownView({ content, className }: { content: string; className?: string }) {
+const REMARK_PLUGINS = [remarkGfm];
+
+// Module-level so ReactMarkdown sees the same `components` on every render
+const MARKDOWN_COMPONENTS = {
+  img: ({ node: _node, ...props }: ImgHTMLAttributes<HTMLImageElement> & { node?: unknown }) => <MarkdownImage {...props} />,
+};
+
+export const MarkdownView = memo(function MarkdownView({ content, className }: { content: string; className?: string }) {
   return (
     <div
       className={cn(
@@ -64,9 +71,9 @@ export function MarkdownView({ content, className }: { content: string; classNam
         className
       )}
     >
-      <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ img: ({ node: _node, ...props }) => <MarkdownImage {...props} /> }}>
+      <ReactMarkdown remarkPlugins={REMARK_PLUGINS} components={MARKDOWN_COMPONENTS}>
         {content}
       </ReactMarkdown>
     </div>
   );
-}
+});
