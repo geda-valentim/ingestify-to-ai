@@ -5,7 +5,7 @@ import os
 import secrets
 import time
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import suppress
+from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from shared.config import get_settings
@@ -15,7 +15,7 @@ from shared.live.store import LiveStore
 from workers.live.decoder import OnlineWhisper, WhisperXOnlineASR
 from workers.live.diarizer import DiartProcess, DiarizationBuffer, run_diarization
 
-app = FastAPI(docs_url=None, redoc_url=None)
+app = FastAPI(docs_url=None, redoc_url=None)  # lifespan is attached after startup/shutdown are defined
 settings = get_settings()
 model = None
 compute_type = None
@@ -133,7 +133,6 @@ async def warm_diarizers():
         await asyncio.sleep(5)
 
 
-@app.on_event('startup')
 async def startup():
     global heartbeat_task, cold_start_seconds, diarizer_task
     started = time.monotonic()
@@ -143,7 +142,6 @@ async def startup():
     diarizer_task = asyncio.create_task(warm_diarizers())
 
 
-@app.on_event('shutdown')
 async def shutdown():
     if heartbeat_task:
         heartbeat_task.cancel()
@@ -156,6 +154,18 @@ async def shutdown():
     await asyncio.gather(*(p.close() for p in diarizers))
     get_store().redis.delete(get_store().worker_key)
     executor.shutdown(wait=False, cancel_futures=True)
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    await startup()
+    try:
+        yield
+    finally:
+        await shutdown()
+
+
+app.router.lifespan_context = lifespan
 
 
 @app.get('/health')
