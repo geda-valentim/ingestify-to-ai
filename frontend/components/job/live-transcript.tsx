@@ -7,6 +7,7 @@ import { ArrowDown } from "lucide-react";
 import { jobsApi } from "@/lib/api";
 import { cn, formatDuration } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { EMPTY_PARTIAL, mergePartial, type PartialState } from "@/lib/partial-transcript";
 import type { JobStatusResponse, TranscriptSegment } from "@/types/api";
 
 const POLL_MS = 3000;
@@ -29,41 +30,45 @@ export function useLiveTranscript(
 
   useEffect(() => {
     if (!active) return;
-    let since = 0;
+    let state: PartialState = EMPTY_PARTIAL;
     let first = true;
-    let cancelled = false;
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
 
+    // One request at a time: the next poll is scheduled only after the previous
+    // one settled, so responses can never overlap or arrive out of order
     const poll = async () => {
       try {
-        const data = await jobsApi.getPartialTranscript(jobId, since);
-        if (cancelled) return;
-        if (data.next < since) {
+        const since = state.cursor;
+        const data = await jobsApi.getPartialTranscript(jobId, since, controller.signal);
+        if (controller.signal.aborted) return;
+        const { state: next, reset } = mergePartial(state, since, data);
+        if (reset) {
           // The transcription restarted (e.g. GPU failed, retrying on CPU): start over
-          since = 0;
+          state = next;
+          first = true;
           setSegments([]);
           setPreloaded(0);
-          return;
-        }
-        if (first) {
-          first = false;
-          setPreloaded(data.segments.length);
-        }
-        since = data.next;
-        if (data.segments.length > 0) {
-          setSegments((prev) => [...prev, ...data.segments]);
+        } else if (next !== state) {
+          if (first) {
+            first = false;
+            setPreloaded(data.segments.length);
+          }
+          state = next;
+          setSegments(next.segments);
         }
       } catch {
         // Live text is a nicety: keep polling, the final result still arrives
       }
+      if (!controller.signal.aborted) timer = setTimeout(poll, POLL_MS);
     };
 
     setSegments([]);
     setPreloaded(0);
     poll();
-    const timer = setInterval(poll, POLL_MS);
     return () => {
-      cancelled = true;
-      clearInterval(timer);
+      controller.abort();
+      if (timer) clearTimeout(timer);
     };
   }, [jobId, active]);
 
