@@ -1,8 +1,12 @@
 import os
-from functools import lru_cache
+import threading
+import time
+from collections import OrderedDict
 from pathlib import Path
 from typing import Dict, Any
 import logging
+
+from shared import docling_coldstart
 
 logger = logging.getLogger(__name__)
 
@@ -277,6 +281,7 @@ def get_converter(preset: str = None, picture_images: bool = False) -> DoclingCo
         enable_images = settings.docling_enable_images
         enable_table_structure = settings.docling_enable_table_structure
 
+    docling_coldstart.record_conversion_request()
     if picture_images:
         return _cached_converter(enable_ocr, enable_table_structure, enable_images, True)
     return _cached_converter(enable_ocr, enable_table_structure, enable_images)
@@ -284,13 +289,49 @@ def get_converter(preset: str = None, picture_images: bool = False) -> DoclingCo
 
 # One converter per option set and process: building one loads docling's layout
 # and table models (onto the GPU when DEVICE=cuda), so a fresh instance per task
-# reloaded the weights for every page. Two slots cover a preset plus the default
-# without letting every combination pile up in VRAM. picture_images
+# reloaded the weights for every page. DOCLING_CONVERTER_CACHE_SIZE slots (default
+# 3) cover the presets clients actually alternate between without letting every
+# combination pile up in VRAM; a smaller size shows up as `evicted` cold starts
+# (docling.cold_start log line, GET /admin/docling/cold-starts). picture_images
 # (image_mode=referenced) is part of the key: its crops use another images_scale.
-@lru_cache(maxsize=2)
+_converters: "OrderedDict[tuple, DoclingConverter]" = OrderedDict()
+_converters_lock = threading.Lock()
+_build_tracker = docling_coldstart.BuildTracker()
+
+
 def _cached_converter(enable_ocr: bool, enable_table_structure: bool, enable_images: bool,
                       picture_images: bool = False) -> DoclingConverter:
-    options = dict(enable_ocr=enable_ocr, enable_table_structure=enable_table_structure, enable_images=enable_images)
-    if picture_images:
-        options["picture_images"] = True
-    return DoclingConverter(**options)
+    from shared.config import get_settings
+
+    key = (enable_ocr, enable_table_structure, enable_images, picture_images)
+    size = max(1, get_settings().docling_converter_cache_size)
+    # The lock is held across the build on purpose: it serializes builds, so two threads
+    # never load two converters' weights into VRAM at once (readiness probes included).
+    with _converters_lock:
+        hit = _converters.get(key)
+        if hit is not None:
+            _converters.move_to_end(key)
+            return hit
+        reason = _build_tracker.peek(key)
+        options = dict(enable_ocr=enable_ocr, enable_table_structure=enable_table_structure,
+                       enable_images=enable_images)
+        if picture_images:
+            options["picture_images"] = True
+        started = time.monotonic()
+        converter = DoclingConverter(**options)
+        seconds = time.monotonic() - started
+        _build_tracker.commit(key)  # only after a successful build
+        _converters[key] = converter
+        while len(_converters) > size:
+            _converters.popitem(last=False)
+    docling_coldstart.record_cold_start(reason, seconds, size)
+    return converter
+
+
+def _clear_converters() -> None:
+    with _converters_lock:
+        _converters.clear()
+    _build_tracker.reset()
+
+
+_cached_converter.cache_clear = _clear_converters

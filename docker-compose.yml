@@ -112,6 +112,7 @@ services:
       - SQL_ECHO=${SQL_ECHO:-false}  # true = log every SQL statement (debug only)
       - JWT_SECRET_KEY=${JWT_SECRET_KEY:-}
       - LOG_LEVEL=INFO
+      - DOCLING_COLD_START_WARN_PER_HOUR=${DOCLING_COLD_START_WARN_PER_HOUR:-6}
       - MAX_FILE_SIZE_MB=50
       - CONVERSION_TIMEOUT_SECONDS=600
       - TEMP_STORAGE_PATH=/tmp/ingestify
@@ -257,6 +258,8 @@ services:
       # Caps docling's intra-op threads so replicas x concurrency stop
       # oversubscribing the host CPU.
       - DOCLING_NUM_THREADS=${DOCLING_NUM_THREADS:-4}
+      - DOCLING_CONVERTER_CACHE_SIZE=${DOCLING_CONVERTER_CACHE_SIZE:-3}
+      - DOCLING_COLD_START_WARN_PER_HOUR=${DOCLING_COLD_START_WARN_PER_HOUR:-6}
       # Shared HuggingFace cache, so a re-route of a vision task to this queue
       # never re-downloads the weights.
       - HF_HOME=/models/huggingface
@@ -516,6 +519,7 @@ services:
       - ENVIRONMENT=development
       - SQL_ECHO=${SQL_ECHO:-false}  # true = log every SQL statement (debug only)
       - LOG_LEVEL=INFO
+      - DOCLING_COLD_START_WARN_PER_HOUR=${DOCLING_COLD_START_WARN_PER_HOUR:-6}
       - DATABASE_URL=${DATABASE_URL:-mysql+pymysql://root:root@host.docker.internal:3306/ingestify}
       - ELASTICSEARCH_URL=${ELASTICSEARCH_URL:-http://${ELASTICSEARCH_HOST:-elasticsearch}:9200}
       - ELASTICSEARCH_HOST=${ELASTICSEARCH_HOST:-elasticsearch}

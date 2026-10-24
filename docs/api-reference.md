@@ -2,7 +2,7 @@
 
 Gerado do OpenAPI da aplicação por `scripts/generate_api_docs.py`. Não edite este arquivo à mão.
 
-API `1.12.0`: **141 operações HTTP** e **1 WebSocket(s)**.
+API `1.12.0`: **142 operações HTTP** e **1 WebSocket(s)**.
 
 Base pública de desenvolvimento: `https://dev.ingestify.ai/api`. Os caminhos abaixo são relativos à base.
 
@@ -39,6 +39,7 @@ Guias de imagem: [PT](https://dev.ingestify.ai/pt/docs/images) / [EN](https://de
 | POST | `/admin/cleanup` | Administrador (JWT ou API key) | Limpar jobs antigos |
 | GET | `/admin/health/monitoring` | Administrador (JWT ou API key) | Saúde do monitoramento |
 | GET | `/admin/broker/unacked` | Administrador (JWT ou API key) | Listar mensagens não confirmadas do broker |
+| GET | `/admin/docling/cold-starts` | Administrador (JWT ou API key) | Cold starts do Docling por hora e por worker |
 | POST | `/admin/broker/unacked/{delivery_tag}/requeue` | Administrador (JWT ou API key) | Reenfileirar mensagem órfã do broker |
 | GET | `/images/faces/capabilities` | JWT ou API key | Modelos, parâmetros e prontidão da análise facial |
 | POST | `/images/faces` | JWT ou API key | Detectar rostos e expressões (JSON base64) |
@@ -2718,6 +2719,28 @@ Respostas declaradas:
 | Status | Content-Type | Esquema | Descrição |
 | --- | --- | --- | --- |
 | 200 | application/json | object | Successful Response |
+
+### GET /admin/docling/cold-starts
+
+Cold starts do Docling por hora e por worker
+
+Autorização: **Administrador (JWT ou API key)**. Operation ID: `docling_cold_starts_admin_docling_cold_starts_get`.
+
+Últimas 24 h (UTC), uma linha por hora e por worker: quantas vezes o conversor do
+Docling foi construído (cada vez custa ~10 s carregando pesos), por motivo
+(`process_start` = primeiro conversor do processo, `new_options` = combinação nova de
+opções, `evicted` = combinação expulsa do cache LRU), segundos totais, processos
+filhos iniciados/encerrados (reciclagem por --max-memory-per-child), maior RSS atual visto
+no encerramento (`rss_kb_max`, KB), maior pico de RSS (`peak_rss_kb`, KB: o valor que o
+billiard compara com --max-memory-per-child) e `cold_starts_per_100_conversions` (conversões = pedidos de
+conversor, um por página). Os contadores são cache Redis com TTL de 48 h: horas sem
+dados não aparecem. `warn_per_hour` é o limiar do WARNING do monitoramento.
+
+Respostas declaradas:
+
+| Status | Content-Type | Esquema | Descrição |
+| --- | --- | --- | --- |
+| 200 | application/json | [DoclingColdStartsResponse](#model-doclingcoldstartsresponse) | Successful Response |
 
 ### POST /admin/broker/unacked/{delivery_tag}/requeue
 
@@ -8054,6 +8077,188 @@ Esquema JSON completo:
     "provider"
   ],
   "title": "DiscoverConnection"
+}
+```
+
+<a id="model-doclingcoldstartreasons"></a>
+
+### DoclingColdStartReasons
+
+| Campo | Obrigatório | Tipo | Padrões/limites | Descrição |
+| --- | --- | --- | --- | --- |
+| `process_start` | sim | integer |  |  |
+| `new_options` | sim | integer |  |  |
+| `evicted` | sim | integer |  |  |
+
+Esquema JSON completo:
+
+```json
+{
+  "properties": {
+    "process_start": {
+      "type": "integer",
+      "title": "Process Start"
+    },
+    "new_options": {
+      "type": "integer",
+      "title": "New Options"
+    },
+    "evicted": {
+      "type": "integer",
+      "title": "Evicted"
+    }
+  },
+  "type": "object",
+  "required": [
+    "process_start",
+    "new_options",
+    "evicted"
+  ],
+  "title": "DoclingColdStartReasons"
+}
+```
+
+<a id="model-doclingcoldstartrow"></a>
+
+### DoclingColdStartRow
+
+| Campo | Obrigatório | Tipo | Padrões/limites | Descrição |
+| --- | --- | --- | --- | --- |
+| `hour` | sim | string |  |  |
+| `worker` | sim | string |  |  |
+| `cold_starts` | sim | integer |  |  |
+| `by_reason` | sim | [DoclingColdStartReasons](#model-doclingcoldstartreasons) |  |  |
+| `seconds_total` | sim | number |  |  |
+| `processes_started` | sim | integer |  |  |
+| `processes_stopped` | sim | integer |  |  |
+| `rss_kb_max` | não | integer / null |  |  |
+| `peak_rss_kb` | não | integer / null |  |  |
+| `conversions` | sim | integer |  |  |
+| `cold_starts_per_100_conversions` | não | number / null |  |  |
+
+Esquema JSON completo:
+
+```json
+{
+  "properties": {
+    "hour": {
+      "type": "string",
+      "title": "Hour"
+    },
+    "worker": {
+      "type": "string",
+      "title": "Worker"
+    },
+    "cold_starts": {
+      "type": "integer",
+      "title": "Cold Starts"
+    },
+    "by_reason": {
+      "$ref": "#/components/schemas/DoclingColdStartReasons"
+    },
+    "seconds_total": {
+      "type": "number",
+      "title": "Seconds Total"
+    },
+    "processes_started": {
+      "type": "integer",
+      "title": "Processes Started"
+    },
+    "processes_stopped": {
+      "type": "integer",
+      "title": "Processes Stopped"
+    },
+    "rss_kb_max": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Rss Kb Max"
+    },
+    "peak_rss_kb": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Peak Rss Kb"
+    },
+    "conversions": {
+      "type": "integer",
+      "title": "Conversions"
+    },
+    "cold_starts_per_100_conversions": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Cold Starts Per 100 Conversions"
+    }
+  },
+  "type": "object",
+  "required": [
+    "hour",
+    "worker",
+    "cold_starts",
+    "by_reason",
+    "seconds_total",
+    "processes_started",
+    "processes_stopped",
+    "conversions"
+  ],
+  "title": "DoclingColdStartRow"
+}
+```
+
+<a id="model-doclingcoldstartsresponse"></a>
+
+### DoclingColdStartsResponse
+
+| Campo | Obrigatório | Tipo | Padrões/limites | Descrição |
+| --- | --- | --- | --- | --- |
+| `hours` | sim | integer |  |  |
+| `warn_per_hour` | sim | integer |  |  |
+| `rows` | sim | array de [DoclingColdStartRow](#model-doclingcoldstartrow) |  |  |
+
+Esquema JSON completo:
+
+```json
+{
+  "properties": {
+    "hours": {
+      "type": "integer",
+      "title": "Hours"
+    },
+    "warn_per_hour": {
+      "type": "integer",
+      "title": "Warn Per Hour"
+    },
+    "rows": {
+      "items": {
+        "$ref": "#/components/schemas/DoclingColdStartRow"
+      },
+      "type": "array",
+      "title": "Rows"
+    }
+  },
+  "type": "object",
+  "required": [
+    "hours",
+    "warn_per_hour",
+    "rows"
+  ],
+  "title": "DoclingColdStartsResponse"
 }
 ```
 

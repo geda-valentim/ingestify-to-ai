@@ -163,6 +163,7 @@ READS = [
     ("GET", "/admin/jobs/stuck"),
     ("GET", "/admin/health/monitoring"),
     ("GET", "/admin/broker/unacked"),
+    ("GET", "/admin/docling/cold-starts"),
     ("GET", "/admin/routing"),
     ("GET", "/admin/engines/status"),
 ]

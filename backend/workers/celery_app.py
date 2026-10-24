@@ -78,6 +78,11 @@ if settings.monitoring_enabled:
             'schedule': crontab(minute=f'*/{settings.monitoring_check_interval_minutes}'),
             'options': {'expires': settings.monitoring_check_interval_minutes * 60}
         },
+        'check-docling-cold-starts': {
+            'task': 'workers.monitoring.check_docling_cold_starts',
+            'schedule': crontab(minute=f'*/{settings.monitoring_check_interval_minutes}'),
+            'options': {'expires': settings.monitoring_check_interval_minutes * 60}
+        },
         'health-check': {
             'task': 'workers.monitoring.health_check',
             'schedule': crontab(minute='*/1'),  # Every minute (verify beat is running)
@@ -212,6 +217,25 @@ if settings.engines_remote_beat:
 if settings.monitoring_enabled:
     import workers.monitoring  # noqa: F401
 
+
+
+from celery.signals import worker_process_init, worker_process_shutdown  # noqa: E402
+
+
+@worker_process_init.connect(weak=False)
+def count_pool_process_start(**_):
+    """Pool child started: with --max-memory-per-child each one is a docling cold start."""
+    from shared import docling_coldstart
+
+    docling_coldstart.record_process_start()  # swallows Redis failures
+
+
+@worker_process_shutdown.connect(weak=False)
+def count_pool_process_shutdown(**_):
+    """Pool child exiting (recycled or stopped): count it and keep its RSS."""
+    from shared import docling_coldstart
+
+    docling_coldstart.record_process_shutdown()
 
 # Durable image/facial batches and storage delivery.
 import workers.image_full_tasks  # noqa: E402,F401
