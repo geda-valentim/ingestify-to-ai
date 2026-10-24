@@ -32,6 +32,20 @@ from datetime import datetime, timezone  # noqa: E402
 from unittest.mock import AsyncMock, MagicMock  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def _docling_telemetry_fake_redis(monkeypatch):
+    """Docling cold-start telemetry never reaches a real Redis from a unit test."""
+    import fakeredis
+    from shared import docling_coldstart
+
+    client = fakeredis.FakeRedis(decode_responses=True)
+    client.flushall()
+    monkeypatch.setattr(docling_coldstart, "_redis", lambda: client)
+    monkeypatch.setattr(docling_coldstart, "_redis_read", lambda: client)
+    yield client
+    client.flushall()
+
+
 @pytest.fixture
 def fake_redis():
     """An in-memory Redis, wired through the real RedisClient."""

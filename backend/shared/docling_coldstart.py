@@ -18,7 +18,8 @@ Fields:
     seconds:{reason}       summed build seconds (float)
     processes_started      pool children started (worker_process_init)
     processes_stopped      pool children that exited (worker_process_shutdown)
-    rss_kb_max             highest RSS seen at a child's shutdown, in KB
+    rss_kb_max             highest current RSS seen at a child's shutdown, in KB
+    peak_rss_kb            highest peak RSS (ru_maxrss, what --max-memory-per-child compares), KB
     conversions            get_converter() calls = converter requests (one per page job)
 """
 
@@ -51,7 +52,38 @@ def key_for(bucket: str, host: str) -> str:
     return f"{KEY_PREFIX}:{bucket}:{host}"
 
 
+# Telemetry must never hold a conversion (or a pool child's start/exit) hostage to a
+# hung Redis: its own client, with a short connect/socket timeout (the shared client
+# waits up to 5 s per command). redis-py pools are fork-safe, but the cached client is
+# keyed by PID anyway so a child never reuses its parent's sockets.
+TELEMETRY_TIMEOUT_SECONDS = 0.5
+_telemetry_client = None
+_telemetry_client_pid = None
+
+
 def _redis():
+    """Short-timeout client for the writers (conversion path, pool signals)."""
+    global _telemetry_client, _telemetry_client_pid
+    if _telemetry_client is None or _telemetry_client_pid != os.getpid():
+        import redis
+        from shared.config import get_settings
+
+        settings = get_settings()
+        _telemetry_client = redis.Redis(
+            host=settings.redis_host,
+            port=settings.redis_port,
+            db=settings.redis_db,
+            password=settings.redis_password if settings.redis_password else None,
+            decode_responses=True,
+            socket_connect_timeout=TELEMETRY_TIMEOUT_SECONDS,
+            socket_timeout=TELEMETRY_TIMEOUT_SECONDS,
+        )
+        _telemetry_client_pid = os.getpid()
+    return _telemetry_client
+
+
+def _redis_read():
+    """Regular client for the readers (admin endpoint, monitoring task): they scan."""
     from shared.redis_client import get_redis_client
 
     return get_redis_client().client
@@ -125,17 +157,35 @@ def current_rss_kb() -> Optional[int]:
         return None
 
 
+def peak_rss_kb() -> Optional[int]:
+    """Peak RSS of this process, in KB on Linux: what billiard compares with
+    --max-memory-per-child (not the current RSS)."""
+    try:
+        import resource
+
+        return int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
+    except Exception:
+        return None
+
+
 def record_process_shutdown() -> None:
     rss = current_rss_kb()
+    peak = peak_rss_kb()
     ops: List[tuple] = [("i", "processes_stopped", 1)]
     if rss is not None:
         ops.append(("max", "rss_kb_max", rss))
-        logger.info(f"docling.process_shutdown pid={os.getpid()} hostname={hostname()} rss_kb={rss}")
+    if peak is not None:
+        ops.append(("max", "peak_rss_kb", peak))
+    logger.info(f"docling.process_shutdown pid={os.getpid()} hostname={hostname()} rss_kb={rss} peak_rss_kb={peak}")
     _safe(ops)
 
 
 class BuildTracker:
-    """Why is this converter being built? State is per PID (a forked child starts clean)."""
+    """Why is this converter being built? State is per PID (a forked child starts clean).
+
+    `peek` names the reason without recording anything; `commit` marks the key as built
+    and is called only after the build succeeded, so a build that raises (CUDA OOM, say)
+    does not turn its retry into a bogus `evicted`/`new_options`."""
 
     def __init__(self) -> None:
         self.reset()
@@ -145,18 +195,16 @@ class BuildTracker:
         self._built_any = False
         self._seen: set = set()
 
-    def classify(self, key) -> str:
+    def peek(self, key) -> str:
         if self._pid != os.getpid():
             self.reset()
         if not self._built_any:
-            reason = "process_start"
-        elif key in self._seen:
-            reason = "evicted"
-        else:
-            reason = "new_options"
+            return "process_start"
+        return "evicted" if key in self._seen else "new_options"
+
+    def commit(self, key) -> None:
         self._built_any = True
         self._seen.add(key)
-        return reason
 
 
 def _num(value: Any) -> float:
@@ -168,18 +216,24 @@ def _num(value: Any) -> float:
 
 def read_hours(hours: int = 24, now: Optional[datetime] = None, client=None) -> List[Dict[str, Any]]:
     """Buckets of the last `hours` UTC hours (oldest first), one entry per worker."""
-    client = client or _redis()
+    client = client or _redis_read()
     now = now or datetime.now(timezone.utc)
+    wanted = [hour_bucket(now - timedelta(hours=back)) for back in range(hours - 1, -1, -1)]
+    by_bucket: Dict[str, set] = {b: set() for b in wanted}
+    for key in client.scan_iter(match=f"{KEY_PREFIX}:*", count=1000):
+        parts = key.split(":", 3)
+        if len(parts) == 4 and parts[2] in by_bucket:
+            by_bucket[parts[2]].add(key)
+
     rows: List[Dict[str, Any]] = []
-    for back in range(hours - 1, -1, -1):
-        bucket = hour_bucket(now - timedelta(hours=back))
+    for bucket in wanted:
         start = datetime.strptime(bucket, "%Y%m%d%H").replace(tzinfo=timezone.utc)
-        for key in sorted(client.scan_iter(match=f"{KEY_PREFIX}:{bucket}:*", count=200)):
+        for key in sorted(by_bucket[bucket]):
             data = client.hgetall(key)
             by_reason = {r: int(_num(data.get(f"cold:{r}"))) for r in REASONS}
             total = sum(by_reason.values())
             conversions = int(_num(data.get("conversions")))
-            rss = data.get("rss_kb_max")
+            rss, peak = data.get("rss_kb_max"), data.get("peak_rss_kb")
             rows.append({
                 "hour": start.isoformat(),
                 "worker": key.split(":", 3)[3],
@@ -189,6 +243,7 @@ def read_hours(hours: int = 24, now: Optional[datetime] = None, client=None) -> 
                 "processes_started": int(_num(data.get("processes_started"))),
                 "processes_stopped": int(_num(data.get("processes_stopped"))),
                 "rss_kb_max": int(_num(rss)) if rss is not None else None,
+                "peak_rss_kb": int(_num(peak)) if peak is not None else None,
                 "conversions": conversions,
                 "cold_starts_per_100_conversions": round(100 * total / conversions, 2) if conversions else None,
             })

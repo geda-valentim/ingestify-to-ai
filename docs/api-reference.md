@@ -2730,8 +2730,9 @@ Autorização: **Administrador (JWT ou API key)**. Operation ID: `docling_cold_s
 Docling foi construído (cada vez custa ~10 s carregando pesos), por motivo
 (`process_start` = primeiro conversor do processo, `new_options` = combinação nova de
 opções, `evicted` = combinação expulsa do cache LRU), segundos totais, processos
-filhos iniciados/encerrados (reciclagem por --max-memory-per-child), maior RSS visto
-no encerramento (KB) e `cold_starts_per_100_conversions` (conversões = pedidos de
+filhos iniciados/encerrados (reciclagem por --max-memory-per-child), maior RSS atual visto
+no encerramento (`rss_kb_max`, KB), maior pico de RSS (`peak_rss_kb`, KB: o valor que o
+billiard compara com --max-memory-per-child) e `cold_starts_per_100_conversions` (conversões = pedidos de
 conversor, um por página). Os contadores são cache Redis com TTL de 48 h: horas sem
 dados não aparecem. `warn_per_hour` é o limiar do WARNING do monitoramento.
 
@@ -8131,6 +8132,7 @@ Esquema JSON completo:
 | `processes_started` | sim | integer |  |  |
 | `processes_stopped` | sim | integer |  |  |
 | `rss_kb_max` | não | integer / null |  |  |
+| `peak_rss_kb` | não | integer / null |  |  |
 | `conversions` | sim | integer |  |  |
 | `cold_starts_per_100_conversions` | não | number / null |  |  |
 
@@ -8176,6 +8178,17 @@ Esquema JSON completo:
         }
       ],
       "title": "Rss Kb Max"
+    },
+    "peak_rss_kb": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Peak Rss Kb"
     },
     "conversions": {
       "type": "integer",

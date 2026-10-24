@@ -93,6 +93,7 @@ PLATFORM_ROUTES = {
     "POST /admin/cleanup": ("platform.jobs.cleanup", False),
     "GET /admin/health/monitoring": ("platform.monitoring.read", False),
     "GET /admin/broker/unacked": ("platform.monitoring.read", False),
+    "GET /admin/docling/cold-starts": ("platform.monitoring.read", False),
     "POST /admin/broker/unacked/{delivery_tag}/requeue": ("platform.broker.requeue", False),
     "GET /admin/routing": ("platform.routing.read", False),
     "GET /admin/engines/status": ("platform.routing.read", False),

@@ -53,6 +53,7 @@ estas rotas. Não há UI no frontend para as rotas abaixo.
 | `POST /admin/cleanup` (`platform.jobs.cleanup`) | Executa `cleanup_old_jobs` na hora. |
 | `GET /admin/health/monitoring` (`platform.monitoring.read`) | Tasks agendadas e registradas no Celery. |
 | `GET /admin/broker/unacked` (`platform.monitoring.read`) | Mensagens que o broker guarda como entregues e não confirmadas, mais o resultado da última checagem de órfãs. |
+| `GET /admin/docling/cold-starts` (`platform.monitoring.read`) | Últimas 24 h (UTC) por hora e por worker: cold starts do Docling por motivo (`process_start`, `new_options`, `evicted`), segundos, processos filhos iniciados/encerrados, RSS e cold starts por 100 conversões. Contadores em Redis com TTL de 48 h; o WARNING de `check_docling_cold_starts` usa `DOCLING_COLD_START_WARN_PER_HOUR`. Ver `docs/GPU.md`. |
 | `POST /admin/broker/unacked/{delivery_tag}/requeue` (`platform.broker.requeue`) | Devolve uma mensagem órfã para o início da fila dela. `409` se a última checagem não a marcou como órfã ou se algum worker a está segurando agora. |
 
 ```bash

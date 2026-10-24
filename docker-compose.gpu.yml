@@ -84,10 +84,10 @@ services:
     # single CUDA context: do NOT raise it, add replicas instead.
     # --max-memory-per-child recycles the pool child when its RSS passes the limit
     # (KB): docling leaks, and the child reached 5-6 GB in two days against the
-    # container's mem_limit of 6g. But an IDLE child already holds ~2.5 GB (CUDA
+    # a 6 GB container limit (set by the deploy, not by this repo). But an IDLE child already holds ~2.5 GB (CUDA
     # context + layout/table weights), so a limit near that recycles it every ~2
     # pages and each new child pays a ~10 s cold start. 5000000 KB leaves ~2.5 GB of
-    # headroom before recycling and stays under the 6g cap. Watch the cost with
+    # headroom before recycling and if the deploy sets a mem_limit, keep this value below it. Watch the cost with
     # GET /admin/docling/cold-starts. See docs/GPU.md.
     command: celery -A workers.celery_app worker --loglevel=info --concurrency=1 --max-memory-per-child=${DOCLING_MAX_MEMORY_PER_CHILD_KB:-5000000} -Q ingestify -n ingestify-worker@%h
     deploy:

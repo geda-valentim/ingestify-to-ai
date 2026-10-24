@@ -307,6 +307,7 @@ job:{job_id}:transcript:partial  # LIST of {start,end,text} segments of a runnin
 job:{job_id}:source_token     # Drive/Dropbox provider token handed to the worker out of band (S-01; 6h TTL; deleted after download)
 user:{user_id}:jobs          # SET of that user's job IDs (30d TTL)
 monitoring:broker_unacked    # Last orphaned-broker-message check, for /admin/broker/unacked (1h TTL)
+docling:coldstart:{YYYYMMDDHH}:{hostname} # HASH per UTC hour and worker: cold:{reason}, seconds:{reason}, processes_started/stopped, rss_kb_max, conversions (48h TTL; observability only, may be absent)
 job:{job_id}:assets:slots     # HASH slot -> bytes: per-job image-asset budget shared by a split PDF's pages (24h TTL; fast path, the merge is the authority)
 job:{job_id}:assets:bytes     # Bytes reserved in that budget (24h TTL)
 assets:expiry:lock            # One asset-expiry sweep per minute across processes (60s TTL)
@@ -315,7 +316,6 @@ job:{job_id}:figures:total    # Unique figures sent to vision (24h TTL)
 job:{job_id}:figures:finalizing # One describe-stage finalize at a time (600s TTL)
 job:{job_id}:figures:stage    # Work list + options of the describe stage (24h TTL; rebuilt from figures/{id}/pending.json)
 job:{job_id}:figures:sent     # HASH sha256 -> dispatch time: the in-flight window (24h TTL)
-docling:coldstart:{YYYYMMDDHH}:{hostname} # HASH per UTC hour and worker: cold:{reason}, seconds:{reason}, processes_started/stopped, rss_kb_max, conversions (48h TTL; observability only, may be absent)
 job:{job_id}:figures:backoff / :tick # Dispatch retries while the vision route is full
 job:{job_id}:figures:slots / :bytes # Document-wide cap on a split PDF's temporary figure PNGs (24h TTL)
 ```

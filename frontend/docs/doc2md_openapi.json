@@ -696,7 +696,7 @@
           "Admin & Monitoring"
         ],
         "summary": "Cold starts do Docling por hora e por worker",
-        "description": "Últimas 24 h (UTC), uma linha por hora e por worker: quantas vezes o conversor do\nDocling foi construído (cada vez custa ~10 s carregando pesos), por motivo\n(`process_start` = primeiro conversor do processo, `new_options` = combinação nova de\nopções, `evicted` = combinação expulsa do cache LRU), segundos totais, processos\nfilhos iniciados/encerrados (reciclagem por --max-memory-per-child), maior RSS visto\nno encerramento (KB) e `cold_starts_per_100_conversions` (conversões = pedidos de\nconversor, um por página). Os contadores são cache Redis com TTL de 48 h: horas sem\ndados não aparecem. `warn_per_hour` é o limiar do WARNING do monitoramento.",
+        "description": "Últimas 24 h (UTC), uma linha por hora e por worker: quantas vezes o conversor do\nDocling foi construído (cada vez custa ~10 s carregando pesos), por motivo\n(`process_start` = primeiro conversor do processo, `new_options` = combinação nova de\nopções, `evicted` = combinação expulsa do cache LRU), segundos totais, processos\nfilhos iniciados/encerrados (reciclagem por --max-memory-per-child), maior RSS atual visto\nno encerramento (`rss_kb_max`, KB), maior pico de RSS (`peak_rss_kb`, KB: o valor que o\nbilliard compara com --max-memory-per-child) e `cold_starts_per_100_conversions` (conversões = pedidos de\nconversor, um por página). Os contadores são cache Redis com TTL de 48 h: horas sem\ndados não aparecem. `warn_per_hour` é o limiar do WARNING do monitoramento.",
         "operationId": "docling_cold_starts_admin_docling_cold_starts_get",
         "responses": {
           "200": {
@@ -10541,6 +10541,17 @@
               }
             ],
             "title": "Rss Kb Max"
+          },
+          "peak_rss_kb": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Peak Rss Kb"
           },
           "conversions": {
             "type": "integer",

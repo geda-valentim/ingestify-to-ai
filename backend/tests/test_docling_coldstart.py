@@ -21,6 +21,7 @@ from workers.converter import get_converter
 def redis_client(monkeypatch):
     client = fakeredis.FakeRedis(decode_responses=True)
     monkeypatch.setattr(cs, "_redis", lambda: client)
+    monkeypatch.setattr(cs, "_redis_read", lambda: client)
     return client
 
 
@@ -86,6 +87,7 @@ def test_redis_down_never_breaks_a_conversion(monkeypatch):
 
 def test_process_counters_and_rss(redis_client, monkeypatch):
     monkeypatch.setattr(cs, "current_rss_kb", lambda: 2_450_000)
+    monkeypatch.setattr(cs, "peak_rss_kb", lambda: 2_600_000)
     cs.record_process_start()
     cs.record_process_start()
     cs.record_process_shutdown()
@@ -93,6 +95,7 @@ def test_process_counters_and_rss(redis_client, monkeypatch):
     assert redis_client.hget(key, "processes_started") == "2"
     assert redis_client.hget(key, "processes_stopped") == "1"
     assert redis_client.hget(key, "rss_kb_max") == "2450000"
+    assert redis_client.hget(key, "peak_rss_kb") == "2600000"
 
 
 def test_read_hours_aggregates_per_hour_and_worker(redis_client):
@@ -137,5 +140,30 @@ def test_threshold_warning(redis_client, monkeypatch, caplog):
 
 
 def test_threshold_check_survives_redis_down(monkeypatch):
-    monkeypatch.setattr(cs, "_redis", MagicMock(side_effect=ConnectionError("down")))
+    monkeypatch.setattr(cs, "_redis_read", MagicMock(side_effect=ConnectionError("down")))
     assert monitoring.check_docling_cold_starts() == {"checked": 0, "warned": []}
+
+
+def test_a_failed_build_does_not_count_as_seen(redis_client, monkeypatch):
+    calls = {"n": 0}
+
+    class Flaky:
+        def __init__(self, **options):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise RuntimeError("CUDA out of memory")
+
+    monkeypatch.setattr(converter_module, "DoclingConverter", Flaky)
+    with pytest.raises(RuntimeError):
+        get_converter("fast")
+    get_converter("fast")  # the retry is still the process's first build
+    assert _reasons(redis_client)[0] == {"process_start": 1, "new_options": 0, "evicted": 0}
+
+
+def test_telemetry_client_has_short_timeouts(monkeypatch):
+    monkeypatch.undo()  # use the real factory, not the conftest fake
+    cs._telemetry_client = None
+    client = cs._redis()
+    kwargs = client.connection_pool.connection_kwargs
+    assert kwargs["socket_timeout"] == kwargs["socket_connect_timeout"] == 0.5
+    cs._telemetry_client = None

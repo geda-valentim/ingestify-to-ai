@@ -305,12 +305,14 @@ def _cached_converter(enable_ocr: bool, enable_table_structure: bool, enable_ima
 
     key = (enable_ocr, enable_table_structure, enable_images, picture_images)
     size = max(1, get_settings().docling_converter_cache_size)
+    # The lock is held across the build on purpose: it serializes builds, so two threads
+    # never load two converters' weights into VRAM at once (readiness probes included).
     with _converters_lock:
         hit = _converters.get(key)
         if hit is not None:
             _converters.move_to_end(key)
             return hit
-        reason = _build_tracker.classify(key)
+        reason = _build_tracker.peek(key)
         options = dict(enable_ocr=enable_ocr, enable_table_structure=enable_table_structure,
                        enable_images=enable_images)
         if picture_images:
@@ -318,6 +320,7 @@ def _cached_converter(enable_ocr: bool, enable_table_structure: bool, enable_ima
         started = time.monotonic()
         converter = DoclingConverter(**options)
         seconds = time.monotonic() - started
+        _build_tracker.commit(key)  # only after a successful build
         _converters[key] = converter
         while len(_converters) > size:
             _converters.popitem(last=False)

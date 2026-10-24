@@ -413,6 +413,7 @@ class DoclingColdStartRow(BaseModel):
     processes_started: int
     processes_stopped: int
     rss_kb_max: Optional[int] = None
+    peak_rss_kb: Optional[int] = None
     conversions: int
     cold_starts_per_100_conversions: Optional[float] = None
 
@@ -434,8 +435,9 @@ async def docling_cold_starts(admin_user=Depends(require("platform.monitoring.re
     Docling foi construído (cada vez custa ~10 s carregando pesos), por motivo
     (`process_start` = primeiro conversor do processo, `new_options` = combinação nova de
     opções, `evicted` = combinação expulsa do cache LRU), segundos totais, processos
-    filhos iniciados/encerrados (reciclagem por --max-memory-per-child), maior RSS visto
-    no encerramento (KB) e `cold_starts_per_100_conversions` (conversões = pedidos de
+    filhos iniciados/encerrados (reciclagem por --max-memory-per-child), maior RSS atual visto
+    no encerramento (`rss_kb_max`, KB), maior pico de RSS (`peak_rss_kb`, KB: o valor que o
+    billiard compara com --max-memory-per-child) e `cold_starts_per_100_conversions` (conversões = pedidos de
     conversor, um por página). Os contadores são cache Redis com TTL de 48 h: horas sem
     dados não aparecem. `warn_per_hour` é o limiar do WARNING do monitoramento.
     """

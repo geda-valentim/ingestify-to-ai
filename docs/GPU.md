@@ -58,7 +58,7 @@ Two settings decide how often it happens:
 
 | Variable | Default | Effect |
 |---|---|---|
-| `DOCLING_MAX_MEMORY_PER_CHILD_KB` | `5000000` | `--max-memory-per-child` of the GPU `worker` (compose variable, GPU overlay only). Docling leaks (5-6 GB in 2 days; container `mem_limit` 6g), but an idle child is already ~2.5 GB, so a limit near that recycles the child every ~2 pages. |
+| `DOCLING_MAX_MEMORY_PER_CHILD_KB` | `5000000` | `--max-memory-per-child` of the GPU `worker` (compose variable, GPU overlay only). Docling leaks (5-6 GB in 2 days), but an idle child is already ~2.5 GB, so a limit near that recycles the child every ~2 pages. |
 | `DOCLING_CONVERTER_CACHE_SIZE` | `3` | Converters resident per process. Clients alternating more option sets than this evict each other (`evicted` cold starts). |
 | `DOCLING_COLD_START_WARN_PER_HOUR` | `6` | `workers.monitoring.check_docling_cold_starts` logs a WARNING when one worker passes it in a UTC hour. |
 
@@ -66,10 +66,17 @@ Each build logs `docling.cold_start reason=<process_start|new_options|evicted> s
 hostname=... cache_size=...` and feeds hourly per-worker counters in Redis (48 h TTL).
 `GET /admin/docling/cold-starts` returns the last 24 h by hour and worker: cold starts by
 reason, seconds, pool processes started/stopped, peak RSS at shutdown and cold starts per 100
-conversions. Many `process_start` = recycling (raise the memory limit, within `mem_limit`);
+conversions. Many `process_start` = recycling (raise the memory limit; if the deploy defines a `mem_limit`, keep it below that);
 many `evicted` = raise the cache size. The CPU `worker` in `docker-compose.yml` keeps the
 image default (no memory limit): it has no leak measurement and no CUDA context, so a
 recycle limit there would add cold starts without a measured benefit.
+
+`peak_rss_kb` (ru_maxrss at the child's exit) is the value billiard compares with
+`--max-memory-per-child`; `rss_kb_max` is the current RSS at that moment. A child killed by
+SIGKILL/OOM records neither. The telemetry uses its own Redis client with a 0.5 s timeout, so a
+hung Redis cannot stall a conversion or a child's start/exit. The check
+(`check_docling_cold_starts`) runs on the default queue, so under load a run can expire
+(`expires` = the check interval) and be skipped, and it looks only at the current UTC hour.
 
 To scale documents, add replicas and budget ~1–1.5 GB of VRAM each against `nvidia-smi`;
 never raise `--concurrency`.
