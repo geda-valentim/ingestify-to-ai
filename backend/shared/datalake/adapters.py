@@ -8,6 +8,7 @@ from urllib.parse import urlparse
 import urllib3
 from minio import Minio
 
+from shared.config import get_settings
 from shared.datalake.errors import DatalakeError
 from shared.datalake.secrets import unseal
 
@@ -32,6 +33,45 @@ class StorageAdapter(ABC):
     def download(self, bucket: str, key: str, path: str, max_bytes: int): ...
 
 
+class ResponseTooLarge(Exception):
+    """A remote S3 endpoint answered with more bytes than we agree to buffer."""
+
+
+class BoundedPoolManager(urllib3.PoolManager):
+    """minio loads each XML/error response whole before parsing it, and the read
+    timeout does not bound volume. Every response it would buffer (preload, or a
+    non-2xx body) is read here in chunks, post-decoding, and refused past the cap.
+    Successful streamed bodies (get_object) pass through; the download bounds them."""
+
+    def __init__(self, *args, max_response_bytes=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.max_response_bytes = max_response_bytes or get_settings().datalake_max_response_bytes
+
+    def urlopen(self, method, url, redirect=True, **kw):
+        preload = kw.pop("preload_content", True)
+        response = super().urlopen(method, url, redirect=redirect, preload_content=False, **kw)
+        if not preload and response.status in (200, 204, 206):
+            return response
+        cap = self.max_response_bytes
+        try:
+            declared = response.headers.get("Content-Length")
+            if declared and declared.isdigit() and int(declared) > cap:
+                raise ResponseTooLarge()
+            body, size = [], 0
+            for chunk in response.stream(64 * 1024, decode_content=True):
+                size += len(chunk)
+                if size > cap:
+                    raise ResponseTooLarge()
+                body.append(chunk)
+        except BaseException:
+            response.close()
+            response.release_conn()
+            raise
+        response.release_conn()
+        return urllib3.HTTPResponse(body=b"".join(body), headers=response.headers, status=response.status,
+            version=response.version, reason=response.reason, request_url=url, preload_content=False)
+
+
 class S3Adapter(StorageAdapter):
     def __init__(self, config, credentials, client=None):
         endpoint = config.get("endpoint") or "https://s3.amazonaws.com"
@@ -40,7 +80,7 @@ class S3Adapter(StorageAdapter):
         self.client = client or Minio(parsed.netloc, access_key=credentials["access_key"],
             secret_key=credentials["secret_key"], session_token=credentials.get("session_token") or None,
             region=config.get("region") or None, secure=parsed.scheme == "https",
-            http_client=urllib3.PoolManager(timeout=urllib3.Timeout(connect=5, read=30), retries=1))
+            http_client=BoundedPoolManager(timeout=urllib3.Timeout(connect=5, read=30), retries=1))
 
     def buckets(self):
         return [b.name for b in self.client.list_buckets()]
