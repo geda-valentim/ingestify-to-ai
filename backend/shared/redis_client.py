@@ -338,6 +338,9 @@ class RedisClient:
                         return True
                     except redis.WatchError:
                         continue
+                logger.warning("Page job swap %s -> %s on parent job %s gave up after repeated "
+                               "concurrent writes; readers rebuild from MySQL", old_job_id, new_job_id,
+                               parent_job_id)
         except Exception as e:
             logger.error("Failed to swap page job %s for %s on parent job %s: %s",
                          old_job_id, new_job_id, parent_job_id, e)

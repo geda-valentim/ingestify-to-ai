@@ -31,7 +31,7 @@ from fastapi.testclient import TestClient
 from api import webhook_routes
 from shared import webhooks
 from shared.database import get_db
-from shared.models import Job, JobStatus, User
+from shared.models import Job, JobStatus, Page, User
 from workers import sources, tasks, webhook_tasks
 from workers.figure_tasks import STAGE_DESCRIBING
 
@@ -291,6 +291,9 @@ def test_split_pdf_sends_one_event_after_the_merge_and_none_for_its_children(wor
         for number in (1, 2):  # the page jobs settle on their own rows, never MAIN
             db.get(Job, JOB_ID).pages_completed = number
             db.commit()
+        for page in db.query(Page).filter(Page.job_id == JOB_ID):  # the durable results the merge requires
+            page.markdown_content = f"page {page.page_number}"
+        db.commit()
     assert queued == []
 
     worker.merge()
