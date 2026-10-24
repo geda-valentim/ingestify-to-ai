@@ -1,4 +1,5 @@
 import { useAuthStore } from "@/lib/store/auth";
+import { effectiveDoclingPreset } from "@/lib/document-preset";
 import { expireSession } from "@/lib/session";
 import type {
   SourceDeletedResponse,
@@ -102,11 +103,11 @@ function appendLocation(formData: FormData, location: UploadLocation) {
 
 /**
  * The PDF/document options of a conversion (preset, image_mode, page_images,
- * describe_images, ocr_images), only when not the default: an untouched form
- * sends the same request as before.
+ * describe_images, ocr_images). The preset is always sent (explicit "fast" too);
+ * the other options only when not the default.
  */
 function appendImageOptions(formData: FormData, options: DocumentImageOptions) {
-  if (options.docling_preset) formData.append("docling_preset", options.docling_preset);
+  formData.append("docling_preset", effectiveDoclingPreset(options.docling_preset));
   if (options.image_mode === "referenced") formData.append("image_mode", "referenced");
   if (options.page_images) formData.append("page_images", "true");
   if (options.describe_images) formData.append("describe_images", "true");

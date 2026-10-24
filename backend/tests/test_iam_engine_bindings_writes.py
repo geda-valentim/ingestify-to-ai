@@ -444,3 +444,20 @@ def test_compose_passes_iam_mode_wherever_engine_access_enabled_goes():
         "api", "worker", "worker-audio", "worker-vision", "worker-remote", "worker-dispatch",
         "worker-control", "worker-control-watchdog", "beat",
     } <= seen
+
+
+def test_vision_queue_consumer_and_producers_follow_vision_queue():
+    """worker-vision's -Q and every producer read the same VISION_QUEUE (a fixed
+    -Q left tasks unconsumed and /images/* timing out when it was changed)."""
+    yaml = pytest.importorskip("yaml")
+    seen = set()
+    for path in _compose_files():
+        services = (yaml.safe_load(path.read_text()) or {}).get("services") or {}
+        for name, service in services.items():
+            command = service.get("command")
+            command = " ".join(command) if isinstance(command, list) else str(command or "")
+            if "ingestify-vision" in command and " -Q " in f" {command} ":
+                assert "${VISION_QUEUE" in command, f"{path.name}: {name} fixes the vision queue"
+            if "VISION_QUEUE" in _environment(service):
+                seen.add(name)
+    assert {"api", "worker", "worker-vision", "worker-remote", "beat"} <= seen
