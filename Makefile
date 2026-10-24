@@ -203,52 +203,17 @@ build: ## Build all services without starting (CPU-only, no CUDA wheels)
 rebuild: ## Rebuild and restart all services
 	@./scripts/dev/rebuild.sh
 
-# Services that bind-mount backend/: a restart loads the pulled code.
-# worker-live bakes the code into its image and needs a rebuild instead.
-CODE_SERVICES := api beat worker worker-audio worker-control worker-control-watchdog worker-dispatch worker-remote worker-vision
-# This Makefile exports host defaults (REDIS_HOST ?= localhost, ...) for the check-* targets.
-# Compose must never see them: a recreated container would point at localhost instead of
-# the redis/elasticsearch/minio services. Compose reads .env itself.
-DEPLOY_COMPOSE := env -u REDIS_HOST -u REDIS_PORT -u MYSQL_HOST -u MYSQL_PORT -u ELASTICSEARCH_HOST -u ELASTICSEARCH_PORT -u MINIO_HOST -u MINIO_PORT docker compose
-
-deploy: ## Pull main, restart the backend services and rebuild the frontend
-	@if [ "$$(git branch --show-current)" != "main" ]; then \
-		echo "$(RED)✗ deploy runs from main (current: $$(git branch --show-current))$(NC)"; exit 1; \
-	fi
-	@echo "$(CYAN)⬇️  Pulling main...$(NC)"
-	@git rev-parse HEAD > .deploy-previous-head
-	@git pull --ff-only
-	@# New Python dependencies or Dockerfiles need new images; plain code only needs a restart.
-	@if git diff --name-only "$$(cat .deploy-previous-head)" HEAD | grep -qE '^(backend/requirements[^/]*\.txt|docker/Dockerfile\.(api|worker|audio|vision|remote)[^/]*)$$'; then \
-		echo "$(YELLOW)🔨 Dependencies changed: rebuilding backend images...$(NC)"; \
-		scale=""; for s in $(CODE_SERVICES); do \
-			scale="$$scale --scale $$s=$$($(DEPLOY_COMPOSE) ps -q $$s | wc -l)"; \
-		done; \
-		echo "   keeping the running replica counts:$$scale"; \
-		DOCKER_BUILDKIT=1 $(DEPLOY_COMPOSE) build $(CODE_SERVICES) && \
-		$(DEPLOY_COMPOSE) up -d --no-deps $$scale $(CODE_SERVICES); \
-	else \
-		echo "$(YELLOW)🔄 Restarting backend services...$(NC)"; \
-		$(DEPLOY_COMPOSE) restart $(CODE_SERVICES); \
-	fi
-	@# worker-live bakes backend/shared and backend/workers into its image (no bind mount).
-	@if git diff --name-only "$$(cat .deploy-previous-head)" HEAD | grep -qE '^(backend/(shared|workers)/|backend/requirements[^/]*\.txt|docker/Dockerfile\.worker)'; then \
-		echo "$(YELLOW)🔨 Live worker changed: rebuilding worker-live...$(NC)"; \
-		$(DEPLOY_COMPOSE) build worker-live && $(DEPLOY_COMPOSE) up -d --no-deps worker-live; \
-	fi
-	@rm -f .deploy-previous-head
-	@echo "$(YELLOW)🔨 Rebuilding the frontend...$(NC)"
-	@$(DEPLOY_COMPOSE) build frontend
-	@$(DEPLOY_COMPOSE) up -d --no-deps frontend
-	@# The API must answer 200 "healthy"; anything else fails the deploy and prints the body.
-	@url="http://$$($(DEPLOY_COMPOSE) port api 8000 | sed 's/^0\.0\.0\.0/localhost/')/health"; \
-	for i in $$(seq 1 20); do \
-		body=$$(curl -s -w ' HTTP %{http_code}' "$$url"); \
-		case "$$body" in *'"status":"healthy"'*'HTTP 200') echo "$(GREEN)✓ $$body$(NC)"; break;; esac; \
-		[ $$i -eq 20 ] && { echo "$(RED)✗ API not healthy: $$body$(NC)"; exit 1; }; \
-		sleep 3; \
-	done
-	@echo "$(GREEN)✅ Deployed $$(git rev-parse --short HEAD)$(NC)"
+# Production deploy lives in scripts/deploy.sh (see its header for the flow). It runs under
+# `env -i`: this Makefile exports .env plus host defaults (REDIS_HOST ?= localhost, ...) for
+# the check-* targets, and a compose run that inherited them recreated containers pointing at
+# localhost. Compose reads .env itself. DRY_RUN=1 / FORCE_REBUILD=1 are passed through.
+deploy: ## Pull main and deploy only what changed (scripts/deploy.sh; DRY_RUN=1 to preview)
+	@set -- PATH="$$PATH" HOME="$$HOME"; \
+	for v in DOCKER_HOST DOCKER_CONFIG DOCKER_CONTEXT DRY_RUN FORCE_REBUILD; do \
+		eval "val=\$${$$v-}"; \
+		if [ -n "$$val" ]; then set -- "$$@" "$$v=$$val"; fi; \
+	done; \
+	exec env -i "$$@" bash scripts/deploy.sh
 
 # ======================================
 # GPU COMMANDS (opt-in - see docs/GPU.md)

@@ -560,7 +560,7 @@ one minor per PR:
 
 - PRs that ship in the same deploy share **one** version; a multi-PR feature is one version, not one per slice.
 - The coordinator sets the version and writes the CHANGELOG at merge time. Implementer subagents never touch `API_VERSION` or `docs/CHANGELOG.md` (parallel PRs conflict there).
-- The release commit also updates the pins: `tests/test_vision_markdown.py` (`info.version`), `frontend/docs/doc2md_openapi.json` and the header of `docs/api-reference.md` (regenerate with `scripts/generate_api_docs.py` when the schema changed).
+- The release commit also updates the pins: `backend/tests/test_vision_markdown.py` (`info.version`), `frontend/docs/doc2md_openapi.json` and the header of `docs/api-reference.md` (regenerate with `scripts/generate_api_docs.py` when the schema changed).
 - CHANGELOG entry (pt-BR, newest first): `## AAAA-MM: <título> (API x.y.z)`, then what changed for the client, any behaviour change and its migration (old text → new `code`), rollout notes (migrations, image rebuilds, Modal redeploy).
 - Never renumber a version that was already deployed.
 
