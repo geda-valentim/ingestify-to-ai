@@ -556,3 +556,34 @@ def health_check():
         "status": "healthy",
         "timestamp": datetime.utcnow().isoformat()
     }
+
+
+@celery_app.task(name="workers.monitoring.check_docling_cold_starts")
+def check_docling_cold_starts():
+    """
+    WARNING when a worker built more docling converters in the current UTC hour than
+    DOCLING_COLD_START_WARN_PER_HOUR: each build is ~10 s of weight loading, so a high
+    count means the process is being recycled (--max-memory-per-child) or the converter
+    cache is too small for the option sets clients alternate between
+    (DOCLING_CONVERTER_CACHE_SIZE). Log only; Redis trouble just skips the check.
+    """
+    from shared import docling_coldstart
+
+    try:
+        rows = docling_coldstart.read_hours(hours=1)
+    except Exception as e:
+        logger.warning(f"[MONITORING] Could not read docling cold-start counters: {e!r}")
+        return {"checked": 0, "warned": []}
+
+    limit = settings.docling_cold_start_warn_per_hour
+    warned = []
+    for row in rows:
+        if row["cold_starts"] > limit:
+            warned.append(row["worker"])
+            logger.warning(
+                f"[MONITORING] Docling cold starts high: worker={row['worker']} "
+                f"cold_starts={row['cold_starts']} (limit {limit}/h) by_reason={row['by_reason']} "
+                f"seconds={row['seconds_total']} processes_started={row['processes_started']}; "
+                f"check --max-memory-per-child and DOCLING_CONVERTER_CACHE_SIZE"
+            )
+    return {"checked": len(rows), "warned": warned}

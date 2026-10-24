@@ -46,10 +46,30 @@ weights — a near-certain out-of-memory on a consumer GPU, presenting as a gene
 `Failed to convert document`. That is why the base file never asks for a GPU and the overlay
 cuts the worker to one process before switching it to `cuda`.
 
-Each process keeps one converter per option set (`workers/converter.py`, at most two resident),
+Each process keeps one converter per option set (`workers/converter.py`, at most `DOCLING_CONVERTER_CACHE_SIZE` resident, default 3),
 so the weights load once per process rather than once per page. Measured on a 15-page edital
 (RTX 5060 Ti): **5.6 s** per conversion on the GPU against ~50 s on CPU, identical Markdown,
 **~0.9 GB** of VRAM. The first conversion in a process also pays ~15 s of model loading.
+
+#### Cold starts and process recycling
+
+Every converter build is a cold start (~10 s: CUDA init plus layout/table weights).
+Two settings decide how often it happens:
+
+| Variable | Default | Effect |
+|---|---|---|
+| `DOCLING_MAX_MEMORY_PER_CHILD_KB` | `5000000` | `--max-memory-per-child` of the GPU `worker` (compose variable, GPU overlay only). Docling leaks (5-6 GB in 2 days; container `mem_limit` 6g), but an idle child is already ~2.5 GB, so a limit near that recycles the child every ~2 pages. |
+| `DOCLING_CONVERTER_CACHE_SIZE` | `3` | Converters resident per process. Clients alternating more option sets than this evict each other (`evicted` cold starts). |
+| `DOCLING_COLD_START_WARN_PER_HOUR` | `6` | `workers.monitoring.check_docling_cold_starts` logs a WARNING when one worker passes it in a UTC hour. |
+
+Each build logs `docling.cold_start reason=<process_start|new_options|evicted> seconds=... pid=...
+hostname=... cache_size=...` and feeds hourly per-worker counters in Redis (48 h TTL).
+`GET /admin/docling/cold-starts` returns the last 24 h by hour and worker: cold starts by
+reason, seconds, pool processes started/stopped, peak RSS at shutdown and cold starts per 100
+conversions. Many `process_start` = recycling (raise the memory limit, within `mem_limit`);
+many `evicted` = raise the cache size. The CPU `worker` in `docker-compose.yml` keeps the
+image default (no memory limit): it has no leak measurement and no CUDA context, so a
+recycle limit there would add cold starts without a measured benefit.
 
 To scale documents, add replicas and budget ~1–1.5 GB of VRAM each against `nvidia-smi`;
 never raise `--concurrency`.

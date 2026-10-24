@@ -90,6 +90,13 @@ class Settings(BaseSettings):
     # Docling Performance Settings
     docling_enable_ocr: bool = False  # Disable for digital PDFs (10x faster)
     docling_enable_table_structure: bool = True  # Disable if no tables needed
+    # Converters kept resident per worker process (key: ocr/table/images/picture_images).
+    # Each holds layout+table weights (VRAM on the GPU worker); too few and clients that
+    # alternate options evict each other and pay a cold start (~10 s) every time.
+    docling_converter_cache_size: int = 3
+    # check_docling_cold_starts logs a WARNING when one worker passes this many converter
+    # builds in a UTC hour (recycling via --max-memory-per-child or cache thrash).
+    docling_cold_start_warn_per_hour: int = 6
     docling_enable_images: bool = False  # Disable image extraction for speed (text-only conversion)
     docling_use_v2_backend: bool = True  # Use beta backend (10x faster)
     # Passed explicitly into docling's AcceleratorOptions(num_threads=...).

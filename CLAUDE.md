@@ -315,6 +315,7 @@ job:{job_id}:figures:total    # Unique figures sent to vision (24h TTL)
 job:{job_id}:figures:finalizing # One describe-stage finalize at a time (600s TTL)
 job:{job_id}:figures:stage    # Work list + options of the describe stage (24h TTL; rebuilt from figures/{id}/pending.json)
 job:{job_id}:figures:sent     # HASH sha256 -> dispatch time: the in-flight window (24h TTL)
+docling:coldstart:{YYYYMMDDHH}:{hostname} # HASH per UTC hour and worker: cold:{reason}, seconds:{reason}, processes_started/stopped, rss_kb_max, conversions (48h TTL; observability only, may be absent)
 job:{job_id}:figures:backoff / :tick # Dispatch retries while the vision route is full
 job:{job_id}:figures:slots / :bytes # Document-wide cap on a split PDF's temporary figure PNGs (24h TTL)
 ```

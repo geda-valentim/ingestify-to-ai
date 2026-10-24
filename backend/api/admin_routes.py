@@ -9,7 +9,8 @@ These endpoints provide system administrators with tools to:
 """
 
 from fastapi import APIRouter, HTTPException, Depends
-from typing import List, Dict, Any
+from pydantic import BaseModel
+from typing import List, Dict, Any, Optional
 from datetime import datetime
 import json
 import logging
@@ -395,6 +396,60 @@ async def list_broker_unacked(admin_user=Depends(require("platform.monitoring.re
         "unacked": [m.to_dict() for m in messages],
         "last_check": json.loads(report) if report else None,
     }
+
+
+class DoclingColdStartReasons(BaseModel):
+    process_start: int
+    new_options: int
+    evicted: int
+
+
+class DoclingColdStartRow(BaseModel):
+    hour: str
+    worker: str
+    cold_starts: int
+    by_reason: DoclingColdStartReasons
+    seconds_total: float
+    processes_started: int
+    processes_stopped: int
+    rss_kb_max: Optional[int] = None
+    conversions: int
+    cold_starts_per_100_conversions: Optional[float] = None
+
+
+class DoclingColdStartsResponse(BaseModel):
+    hours: int
+    warn_per_hour: int
+    rows: List[DoclingColdStartRow]
+
+
+@router.get(
+    "/docling/cold-starts",
+    summary="Cold starts do Docling por hora e por worker",
+    response_model=DoclingColdStartsResponse,
+)
+async def docling_cold_starts(admin_user=Depends(require("platform.monitoring.read"))) -> DoclingColdStartsResponse:
+    """
+    Últimas 24 h (UTC), uma linha por hora e por worker: quantas vezes o conversor do
+    Docling foi construído (cada vez custa ~10 s carregando pesos), por motivo
+    (`process_start` = primeiro conversor do processo, `new_options` = combinação nova de
+    opções, `evicted` = combinação expulsa do cache LRU), segundos totais, processos
+    filhos iniciados/encerrados (reciclagem por --max-memory-per-child), maior RSS visto
+    no encerramento (KB) e `cold_starts_per_100_conversions` (conversões = pedidos de
+    conversor, um por página). Os contadores são cache Redis com TTL de 48 h: horas sem
+    dados não aparecem. `warn_per_hour` é o limiar do WARNING do monitoramento.
+    """
+    from starlette.concurrency import run_in_threadpool
+    from shared import docling_coldstart
+
+    try:
+        rows = await run_in_threadpool(lambda: docling_coldstart.read_hours(24))
+    except Exception as e:
+        logger.error(f"Error reading docling cold-start counters: {e}")
+        raise refusal(500, "HEALTH_CHECK_FAILED")
+    return DoclingColdStartsResponse(
+        hours=24, warn_per_hour=settings.docling_cold_start_warn_per_hour, rows=rows
+    )
 
 
 @router.post("/broker/unacked/{delivery_tag}/requeue", summary="Reenfileirar mensagem órfã do broker")

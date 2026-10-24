@@ -63,7 +63,9 @@ def test_presets_resolving_to_the_same_options_share_a_converter(built, monkeypa
     assert len(built) == 1
 
 
-def test_at_most_two_option_sets_stay_resident(built):
+def test_at_most_cache_size_option_sets_stay_resident(built, monkeypatch):
+    monkeypatch.setenv("DOCLING_CONVERTER_CACHE_SIZE", "2")
+    get_settings.cache_clear()
     fast = get_converter("fast")
     get_converter("balanced")
     get_converter("quality")  # evicts the least recently used: fast

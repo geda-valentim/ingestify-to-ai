@@ -690,6 +690,37 @@
         "x-access": "admin"
       }
     },
+    "/admin/docling/cold-starts": {
+      "get": {
+        "tags": [
+          "Admin & Monitoring"
+        ],
+        "summary": "Cold starts do Docling por hora e por worker",
+        "description": "Últimas 24 h (UTC), uma linha por hora e por worker: quantas vezes o conversor do\nDocling foi construído (cada vez custa ~10 s carregando pesos), por motivo\n(`process_start` = primeiro conversor do processo, `new_options` = combinação nova de\nopções, `evicted` = combinação expulsa do cache LRU), segundos totais, processos\nfilhos iniciados/encerrados (reciclagem por --max-memory-per-child), maior RSS visto\nno encerramento (KB) e `cold_starts_per_100_conversions` (conversões = pedidos de\nconversor, um por página). Os contadores são cache Redis com TTL de 48 h: horas sem\ndados não aparecem. `warn_per_hour` é o limiar do WARNING do monitoramento.",
+        "operationId": "docling_cold_starts_admin_docling_cold_starts_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DoclingColdStartsResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "x-access": "admin"
+      }
+    },
     "/admin/broker/unacked/{delivery_tag}/requeue": {
       "post": {
         "tags": [
@@ -10447,6 +10478,124 @@
           "provider"
         ],
         "title": "DiscoverConnection"
+      },
+      "DoclingColdStartReasons": {
+        "properties": {
+          "process_start": {
+            "type": "integer",
+            "title": "Process Start"
+          },
+          "new_options": {
+            "type": "integer",
+            "title": "New Options"
+          },
+          "evicted": {
+            "type": "integer",
+            "title": "Evicted"
+          }
+        },
+        "type": "object",
+        "required": [
+          "process_start",
+          "new_options",
+          "evicted"
+        ],
+        "title": "DoclingColdStartReasons"
+      },
+      "DoclingColdStartRow": {
+        "properties": {
+          "hour": {
+            "type": "string",
+            "title": "Hour"
+          },
+          "worker": {
+            "type": "string",
+            "title": "Worker"
+          },
+          "cold_starts": {
+            "type": "integer",
+            "title": "Cold Starts"
+          },
+          "by_reason": {
+            "$ref": "#/components/schemas/DoclingColdStartReasons"
+          },
+          "seconds_total": {
+            "type": "number",
+            "title": "Seconds Total"
+          },
+          "processes_started": {
+            "type": "integer",
+            "title": "Processes Started"
+          },
+          "processes_stopped": {
+            "type": "integer",
+            "title": "Processes Stopped"
+          },
+          "rss_kb_max": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rss Kb Max"
+          },
+          "conversions": {
+            "type": "integer",
+            "title": "Conversions"
+          },
+          "cold_starts_per_100_conversions": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cold Starts Per 100 Conversions"
+          }
+        },
+        "type": "object",
+        "required": [
+          "hour",
+          "worker",
+          "cold_starts",
+          "by_reason",
+          "seconds_total",
+          "processes_started",
+          "processes_stopped",
+          "conversions"
+        ],
+        "title": "DoclingColdStartRow"
+      },
+      "DoclingColdStartsResponse": {
+        "properties": {
+          "hours": {
+            "type": "integer",
+            "title": "Hours"
+          },
+          "warn_per_hour": {
+            "type": "integer",
+            "title": "Warn Per Hour"
+          },
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/DoclingColdStartRow"
+            },
+            "type": "array",
+            "title": "Rows"
+          }
+        },
+        "type": "object",
+        "required": [
+          "hours",
+          "warn_per_hour",
+          "rows"
+        ],
+        "title": "DoclingColdStartsResponse"
       },
       "DocumentMetadata": {
         "properties": {
