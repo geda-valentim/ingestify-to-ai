@@ -16,6 +16,7 @@ from uuid import uuid4
 import json
 import logging
 import asyncio
+import contextlib
 import shutil
 import time
 
@@ -880,10 +881,11 @@ def process_conversion(
             else:
                 _record_main_failure(job_id, redis_client, error_msg, retrying=False)
         except BaseException:
-            # A status write that fails must not leave the provider token or the download behind
-            redis_client.delete_source_token(job_id)
+            # A status write that fails must not leave the download or the provider token behind
             if not strict:
                 shutil.rmtree(Path(settings.temp_storage_path) / job_id, ignore_errors=True)
+            with contextlib.suppress(Exception):
+                redis_client.delete_source_token(job_id)
             raise
         redis_client.delete_source_token(job_id)
         if not strict:
