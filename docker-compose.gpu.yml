@@ -109,7 +109,7 @@ services:
       # CPU until the time limit. WHISPER_DEVICE=cpu in .env keeps audio off the
       # card (VRAM left to vision/Docling); auto allows the CPU fallback.
       # An empty compute type derives from the device (float16 on cuda, int8 on
-      # cpu), so choosing cpu does not drag float16 onto the CPU.
+      # cpu); an explicit float16 left in .env is downgraded to int8 on cpu.
       - DEVICE=cpu
       - WHISPER_DEVICE=${WHISPER_DEVICE:-cuda}
       - WHISPER_COMPUTE_TYPE=${WHISPER_COMPUTE_TYPE:-}

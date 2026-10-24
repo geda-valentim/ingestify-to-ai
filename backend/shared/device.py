@@ -406,6 +406,17 @@ def resolve_whisper_compute_type(device: str) -> str:
 
     configured = (get_settings().whisper_compute_type or "").strip()
     if configured and configured.lower() != "auto":
+        # CTranslate2 rejects float16/bfloat16 on CPU outright, and that error
+        # is not a GPU error, so no fallback would save the job: a float16 kept
+        # in .env from GPU days would fail every transcription after
+        # WHISPER_DEVICE=cpu.
+        if not device.startswith(CUDA) and "float16" in configured.lower():
+            logger.warning(
+                "WHISPER_COMPUTE_TYPE=%s is not supported on %s; using int8",
+                configured,
+                device,
+            )
+            return "int8"
         return configured
 
     return "float16" if device.startswith(CUDA) else "int8"

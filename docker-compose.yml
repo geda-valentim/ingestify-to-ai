@@ -244,6 +244,7 @@ services:
       # An empty WHISPER_DEVICE inherits DEVICE (see docs/GPU.md).
       - WHISPER_MODEL=${WHISPER_MODEL:-turbo}
       - WHISPER_DEVICE=${WHISPER_DEVICE:-}
+      - WHISPER_COMPUTE_TYPE=${WHISPER_COMPUTE_TYPE:-}
       # Caps docling's intra-op threads so replicas x concurrency stop
       # oversubscribing the host CPU.
       - DOCLING_NUM_THREADS=${DOCLING_NUM_THREADS:-4}
