@@ -259,6 +259,7 @@ services:
       # oversubscribing the host CPU.
       - DOCLING_NUM_THREADS=${DOCLING_NUM_THREADS:-4}
       - DOCLING_CONVERTER_CACHE_SIZE=${DOCLING_CONVERTER_CACHE_SIZE:-3}
+      - DOCLING_INIT_PIPELINE=${DOCLING_INIT_PIPELINE:-false}
       - DOCLING_COLD_START_WARN_PER_HOUR=${DOCLING_COLD_START_WARN_PER_HOUR:-6}
       # Shared HuggingFace cache, so a re-route of a vision task to this queue
       # never re-downloads the weights.

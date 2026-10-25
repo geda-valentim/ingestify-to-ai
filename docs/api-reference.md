@@ -2744,7 +2744,9 @@ em `convert_seconds_*`; `conversions_first_process` é a primeira do processo fi
 limit rígido ou `docker kill`), notados pelo próximo filho a nascer; o OOM se separa pelo
 `cgroup_oom_kill` (valor absoluto do contador do cgroup: compare hora com hora), e
 `cgroup_memory_peak_kb`/`cgroup_memory_max_kb` mostram o pico e o teto do cgroup. Os contadores são cache Redis com TTL de 48 h: horas sem
-dados não aparecem. `warn_per_hour` é o limiar do WARNING do monitoramento.
+dados não aparecem. Com `DOCLING_INIT_PIPELINE=true` o build já carrega os pesos: `seconds_total`
+passa a incluí-los (`wrapper_seconds_total` + `pipeline_init_seconds_total`, com `pipeline_init_ok|failed|unavailable`)
+e `convert_seconds_first` deve cair para perto do aquecido. `warn_per_hour` é o limiar do WARNING do monitoramento.
 
 Respostas declaradas:
 
@@ -8151,6 +8153,11 @@ Esquema JSON completo:
 | `conversions_failed` | não | integer | default=0 |  |
 | `convert_seconds_first` | não | number | default=0.0 |  |
 | `convert_seconds_warm` | não | number | default=0.0 |  |
+| `wrapper_seconds_total` | não | number | default=0.0 |  |
+| `pipeline_init_seconds_total` | não | number | default=0.0 |  |
+| `pipeline_init_ok` | não | integer | default=0 |  |
+| `pipeline_init_failed` | não | integer | default=0 |  |
+| `pipeline_init_unavailable` | não | integer | default=0 |  |
 | `pages_ok` | não | integer | default=0 |  |
 | `pages_failed` | não | integer | default=0 |  |
 | `docling_version` | não | string / null |  |  |
@@ -8265,6 +8272,31 @@ Esquema JSON completo:
       "type": "number",
       "title": "Convert Seconds Warm",
       "default": 0.0
+    },
+    "wrapper_seconds_total": {
+      "type": "number",
+      "title": "Wrapper Seconds Total",
+      "default": 0.0
+    },
+    "pipeline_init_seconds_total": {
+      "type": "number",
+      "title": "Pipeline Init Seconds Total",
+      "default": 0.0
+    },
+    "pipeline_init_ok": {
+      "type": "integer",
+      "title": "Pipeline Init Ok",
+      "default": 0
+    },
+    "pipeline_init_failed": {
+      "type": "integer",
+      "title": "Pipeline Init Failed",
+      "default": 0
+    },
+    "pipeline_init_unavailable": {
+      "type": "integer",
+      "title": "Pipeline Init Unavailable",
+      "default": 0
     },
     "pages_ok": {
       "type": "integer",

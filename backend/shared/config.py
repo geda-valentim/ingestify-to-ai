@@ -97,6 +97,10 @@ class Settings(BaseSettings):
     # check_docling_cold_starts logs a WARNING when one worker passes this many converter
     # builds in a UTC hour (recycling via --max-memory-per-child or cache thrash).
     docling_cold_start_warn_per_hour: int = 6
+    # Spec 0022 S1 item 1: load the PDF pipeline weights when the converter is built (a cold
+    # start then costs the full ~10 s up front) instead of inside the first convert(). Off by
+    # default; rollback is DOCLING_INIT_PIPELINE=false.
+    docling_init_pipeline: bool = False
     docling_enable_images: bool = False  # Disable image extraction for speed (text-only conversion)
     docling_use_v2_backend: bool = True  # Use beta backend (10x faster)
     # Passed explicitly into docling's AcceleratorOptions(num_threads=...).
