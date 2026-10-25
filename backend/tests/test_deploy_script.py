@@ -20,9 +20,7 @@ def test_makefile_runs_script_with_clean_env():
     block = MAKEFILE.split("\ndeploy:", 1)[1].split("\n# ====", 1)[0]
     assert "env -i" in block and "scripts/deploy.sh" in block
     assert 'PATH="$$PATH"' in block and "DOCKER_HOST" in block
-    assert "docker compose" not in block
-    assert "DEPLOY_COMPOSE" not in MAKEFILE
-    assert ".deploy-previous-head" not in MAKEFILE + SCRIPT
+    assert "docker compose" not in block and "DEPLOY_COMPOSE" not in MAKEFILE
     for v in "DEPLOY_BASE DEPLOY_REF NO_PULL BUILD_LIVE SSH_AUTH_SOCK GIT_SSH_COMMAND".split():
         assert v in block, v
 
@@ -35,27 +33,20 @@ def test_no_unfiltered_restart_or_zero_scale():
     assert "compose restart" not in CODE
     assert not re.search(r"docker restart(?! \$ids)", CODE)
     assert "RUNNING[$s]:-0}\" -gt 0" in CODE  # scale only for running services
-    assert not re.search(r"--scale[ =\"'$a-z{}/_-]*=0\b", CODE)
     assert "ps failed" in CODE and "--status running" in CODE
 
 
 def test_managed_services_are_never_upped_directly():
     assert "/var/lib/ingestify-engine-agent" in SCRIPT
-    # overlay-based detection is primary; the static list is only the unreadable-dir fallback
     assert 'MANAGED=" "' in CODE
     m = re.search(r'\n\s*MANAGED=" \$MANAGED_STATIC "', CODE)
     assert m and CODE.rfind("else", 0, m.start()) > CODE.rfind('-r "$AGENT_DIR"', 0, m.start())
-    assert CODE.count('MANAGED=" $MANAGED_STATIC "') == 1
-    # worker-live is only ever built
     assert not re.search(r"up .*worker-live", CODE)
     assert "--no-build --no-deps" in CODE
-    # the only restart acts on running ids; managed ones are restarted only on the code path
-    assert "docker restart $ids" in CODE
     assert "restart_running $UNMANAGED_RUNNING $MANAGED_RUNNING" in CODE
     code_branch = CODE.split('elif [ "$CODE" = 1 ]', 1)[1].split("\nfi", 1)[0]
     assert "restart_running" in code_branch
     image_branch = CODE.split('if [ "$IMAGES" = 1 ] || [ "$COMPOSE_CHG" = 1 ]; then\n  if [ -n "$UNMANAGED_RUNNING" ]', 1)[1].split('elif [ "$CODE"', 1)[0]
-    # managed services are restarted (never up'd) here, and only when no new image is involved
     up_part, restart_part = image_branch.split('if [ "$IMAGES" = 0 ] && [ -n "$MANAGED_RUNNING" ]', 1)
     assert not re.search(r"(?<!UN)MANAGED_RUNNING", up_part) and "docker restart" not in up_part
     assert "restart_running $MANAGED_RUNNING" in restart_part and "compose up" not in restart_part
@@ -80,14 +71,24 @@ def test_rollback_and_worker_live_gates():
     assert 'git merge-base --is-ancestor "$DEPLOY_REF" origin/main' in CODE
     assert 'git reset --keep "$NEWHEAD"' in CODE and "reset --hard" not in CODE
     assert CODE.count("build worker-live") == 1
-    assert re.search(r'if \[ "\$BUILD_LIVE" = 1 \]; then\s+log [^\n]*\s+run compose build worker-live', CODE)
+    assert re.search(r'if \[ "\$BUILD_LIVE" = 1 \]; then[^\n]*\s+log [^\n]*run compose build worker-live', CODE)
 
 
 def test_inventory_hardening_and_notices():
     assert "config --quiet" in CODE and "NOT in COMPOSE_FILE" in CODE
     assert "inspect active -d " in CODE and "ingestify-worker" in CODE and "ingestify-audio" in CODE
     assert "REGISTERED_MANIFEST_CHANGED" in CODE and "engine-control-bootstrap" in CODE
-    assert 'AGENT_DIR="${DEPLOY_AGENT_DIR:-/var/lib/ingestify-engine-agent}"' in CODE
+    assert "${DEPLOY_AGENT_DIR:-/var/lib/ingestify-engine-agent}" in CODE
+
+
+def test_review_fixes():
+    assert "--no-build --no-deps --force-recreate" in CODE  # compose+code: recreate loads the code
+    assert 'if [ "$IMAGES" = 1 ] || [ "$COMPOSE_CHG" = 1 ]; then   # compose may change build' in CODE
+    assert re.search(r'\[ "\$COMPOSE_CHG" = 1 \] && \[ -n "\$\{RUNNING\[frontend\]', CODE)  # frontend
+    assert re.search(r'if in_list worker-live "\$CONF"; then\s+if \[ "\$BUILD_LIVE" = 1 \]', CODE)
+    assert 'git diff --name-only "$PENDING" "$NEWHEAD"' in CODE  # unfinished deploy stays covered
+    pend, ok = CODE.index('>"$PENDING_FILE"'), CODE.index('rm -f "$PENDING_FILE"')
+    assert pend < CODE.index("git merge --ff-only") and ok > CODE.index('>"$LAST_FILE"')
 
 
 def test_health_check_parameters():

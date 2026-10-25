@@ -67,6 +67,12 @@ if [ -s "$LAST_FILE" ]; then
   git cat-file -e "${LAST_OK}^{commit}" 2>/dev/null || { warn "$LAST_FILE points to an unknown commit"; LAST_OK=""; }
 fi
 OLD_HEAD="$(git rev-parse HEAD)"
+PENDING_FILE="$(git rev-parse --git-path deploy-pending)"   # HEAD before the first unfinished deploy
+PENDING=""
+if [ -s "$PENDING_FILE" ]; then
+  PENDING="$(tr -d '[:space:]' <"$PENDING_FILE")"
+  git cat-file -e "${PENDING}^{commit}" 2>/dev/null || { warn "$PENDING_FILE points to an unknown commit; ignoring"; PENDING=""; }
+fi
 
 # P1: the detection base is fixed BEFORE any git change; without one the deploy aborts.
 UNKNOWN_BASE=0
@@ -110,9 +116,10 @@ fi
 EXPECTED="$(git show "$NEWHEAD:backend/api/openapi_docs.py" | sed -n 's/^API_VERSION = "\([^"]*\)".*/\1/p' || true)"
 [ -n "$EXPECTED" ] || die "cannot read API_VERSION from backend/api/openapi_docs.py at ${NEWHEAD:0:7}"
 
-# Marker->target plus previous HEAD->target: a failed earlier HEAD is always covered again,
-# including a rollback to the last good commit (marker->target would be empty).
-CHANGED="$( { git diff --name-only "$BASE" "$NEWHEAD"; git diff --name-only "$OLD_HEAD" "$NEWHEAD"; } | sort -u)"
+# Marker, current HEAD and the pending (unfinished deploy) HEAD, each ->target: a failed deploy
+# or rollback is covered again on retry, even when marker->target is empty.
+CHANGED="$( { git diff --name-only "$BASE" "$NEWHEAD"; git diff --name-only "$OLD_HEAD" "$NEWHEAD"
+  [ -z "$PENDING" ] || git diff --name-only "$PENDING" "$NEWHEAD"; } | sort -u)"
 match() { grep -qE "$1" <<<"$CHANGED"; }
 
 IMAGES=0; CODE=0; COMPOSE_CHG=0; FRONT=0; LIVE=0
@@ -123,6 +130,7 @@ if [ "$FORCE_REBUILD" = 1 ]; then IMAGES=1; CODE=1; FRONT=1; LIVE=1; fi
 log "Target ${NEWHEAD:0:7} (API $EXPECTED); changes since ${BASE:0:7}: images=$IMAGES code=$CODE compose=$COMPOSE_CHG frontend=$FRONT live=$LIVE"
 # ---------------------------------------------------------------- pull
 STAGE="pull"
+[ "$DRY_RUN" = 1 ] || [ -s "$PENDING_FILE" ] || printf '%s\n' "$OLD_HEAD" >"$PENDING_FILE"
 if [ -n "$DEPLOY_REF" ]; then
   log "Rolling back to ${DEPLOY_REF:0:7} (reset --keep refuses to drop local changes)"; run git reset --keep "$NEWHEAD"
 elif [ "$NO_PULL" = 1 ]; then
@@ -156,8 +164,7 @@ else
   warn "$AGENT_DIR not readable: falling back to the static managed list ($MANAGED_STATIC)"
 fi
 
-declare -A RUNNING=()   # service -> running container count (> 0 only)
-declare -A IDS=()       # service -> running container ids
+declare -A RUNNING=() IDS=()   # service -> running count (> 0 only) / running container ids
 for s in $CODE_SERVICES worker-live frontend; do
   in_list "$s" "$CONF" || continue
   ids="$(compose ps --status running -q "$s")" || die "docker compose ps failed for $s; aborting (never guess replica counts)"
@@ -166,9 +173,7 @@ for s in $CODE_SERVICES worker-live frontend; do
 done
 
 is_managed() { in_list "$1" "$MANAGED"; }
-UNMANAGED_RUNNING=""   # running, not managed: safe to recreate/restart
-MANAGED_RUNNING=""     # running, managed: restart only (never up)
-MANAGED_TOUCHED=""     # managed: needs a re-apply when image/compose change
+UNMANAGED_RUNNING=""; MANAGED_RUNNING=""; MANAGED_TOUCHED=""   # recreate-safe / restart-only / needs re-apply
 for s in $CODE_SERVICES; do
   in_list "$s" "$CONF" || continue
   if is_managed "$s"; then
@@ -210,7 +215,7 @@ restart_running() {   # restart (not recreate) running containers: overlay kept
 # ---------------------------------------------------------------- backend images
 STAGE="backend"
 if [ "$IMAGES" = 1 ] || [ "$COMPOSE_CHG" = 1 ]; then active_tasks_warning; fi
-if [ "$IMAGES" = 1 ]; then
+if [ "$IMAGES" = 1 ] || [ "$COMPOSE_CHG" = 1 ]; then   # compose may change build inputs (args, Dockerfile)
   BUILD=""
   for s in $CODE_SERVICES; do in_list "$s" "$CONF" && BUILD="$BUILD $s"; done
   log "Image inputs changed: building$BUILD (managed ones are only built)"
@@ -219,11 +224,11 @@ if [ "$IMAGES" = 1 ]; then
 fi
 if [ "$IMAGES" = 1 ] || [ "$COMPOSE_CHG" = 1 ]; then
   if [ -n "$UNMANAGED_RUNNING" ]; then
-    mapfile -t SC < <(scale_args $UNMANAGED_RUNNING)
-    [ -n "${SC[0]:-}" ] || SC=()
+    mapfile -t SC < <(scale_args $UNMANAGED_RUNNING); [ -n "${SC[0]:-}" ] || SC=()
     log "Recreating running unmanaged services:$UNMANAGED_RUNNING ${SC[*]:-}"
     # shellcheck disable=SC2086
-    run compose up -d --no-build --no-deps "${SC[@]}" $UNMANAGED_RUNNING
+    # --force-recreate: with equal config/image a plain `up` keeps the container and the new code unloaded
+    run compose up -d --no-build --no-deps --force-recreate "${SC[@]}" $UNMANAGED_RUNNING
   fi
   if [ "$IMAGES" = 0 ] && [ -n "$MANAGED_RUNNING" ]; then
     restart_running $MANAGED_RUNNING   # compose-only: no new image, a restart loads the code
@@ -235,20 +240,17 @@ fi
 # ---------------------------------------------------------------- worker-live
 STAGE="worker-live"
 LIVE_BUILT=0
-if [ "$LIVE" = 1 ] && in_list worker-live "$CONF"; then
-  if [ "$BUILD_LIVE" = 1 ]; then
-    log "worker-live bakes the code: building its image (never up'd here)"
-    run compose build worker-live
-    LIVE_BUILT=1
-  else
+if in_list worker-live "$CONF"; then
+  if [ "$BUILD_LIVE" = 1 ]; then   # explicit request, independent of detection
+    log "worker-live bakes the code: building its image (never up'd here)"; run compose build worker-live; LIVE_BUILT=1
+  elif [ "$LIVE" = 1 ]; then
     warn "worker-live inputs changed: its image is stale. Run with BUILD_LIVE=1, then apply_profile."
   fi
 fi
 # ---------------------------------------------------------------- frontend
 STAGE="frontend"
-if [ "$FRONT" = 1 ] && in_list frontend "$CONF"; then
-  log "Rebuilding the frontend"
-  run compose build frontend
+if in_list frontend "$CONF" && { [ "$FRONT" = 1 ] || { [ "$COMPOSE_CHG" = 1 ] && [ -n "${RUNNING[frontend]:-}" ]; }; }; then
+  [ "$FRONT" = 0 ] || { log "Rebuilding the frontend"; run compose build frontend; }
   if [ -n "${RUNNING[frontend]:-}" ]; then
     run compose up -d --no-build --no-deps frontend
   else
@@ -276,17 +278,13 @@ fi
 # ---------------------------------------------------------------- health
 STAGE="health"
 if [ "$DRY_RUN" = 1 ]; then
-  log "[dry-run] skipping health check and marker"
-  STAGE="done"
-  exit 0
+  log "[dry-run] skipping health check and marker"; STAGE="done"; exit 0
 fi
-hp="$(compose port api 8000 || true)"
-port="${hp##*:}"
+hp="$(compose port api 8000 || true)"; port="${hp##*:}"
 case "$port" in ''|*[!0-9]*) die "api does not publish 8000 (compose port: '${hp}')";; esac
 url="http://127.0.0.1:${port}/health"
 log "Waiting for $url"
-body=""
-ok=0
+body=""; ok=0
 for i in $(seq 1 40); do
   body="$(curl -s -m 5 -w ' HTTP %{http_code}' "$url" || true)"
   if [[ $body == *'"status":"healthy"'* && $body == *"\"version\":\"$EXPECTED\""* && $body == *'HTTP 200' ]]; then ok=1; break; fi
@@ -302,4 +300,5 @@ echo "OK $body"
 
 STAGE="marker"
 git rev-parse HEAD >"$LAST_FILE"
+rm -f "$PENDING_FILE"
 STAGE="done"; log "Deployed $(git rev-parse --short HEAD) (marker: $LAST_FILE)"
