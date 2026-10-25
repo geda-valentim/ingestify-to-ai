@@ -345,21 +345,36 @@ def record_process_start() -> None:
     seen: Dict[str, Any] = {}
 
     def work(client) -> None:
+        import redis
+
         key = _children_key()
         mine = _proc_start_time(me)
-        # our own pid too: a restarted container (same hostname) can hand us the pid of a dead child
-        gone = [
-            pid for pid, started in client.hgetall(key).items()
-            if (pid != str(me) or mine is not None) and (mine if pid == str(me) else _proc_start_time(pid)) != started
-        ]
-        pipe = client.pipeline()
-        for pid in gone:
-            pipe.hdel(key, pid)
-        # only the HDEL that removed the entry counts: two children starting together do not both claim it
-        removed = [pid for pid, n in zip(gone, pipe.execute() if gone else []) if n]
-        if mine is not None:
-            client.hset(key, str(me), mine)
-        client.expire(key, COLDSTART_TTL_SECONDS)
+        removed: List[str] = []
+        # Optimistic transaction: the registry is read, the stale entries are deleted and ours is
+        # written (with its TTL) in one MULTI, and it is retried if another child touched it in
+        # between. So a stale entry is claimed by exactly one child, and a live entry another child
+        # just wrote is never deleted by a reader that saw the old state.
+        for _ in range(3):
+            with client.pipeline() as pipe:
+                try:
+                    pipe.watch(key)
+                    # our own pid too: a restarted container (same hostname) can hand us a dead child's pid
+                    gone = [
+                        pid for pid, started in pipe.hgetall(key).items()
+                        if (pid != str(me) or mine is not None)
+                        and (mine if pid == str(me) else _proc_start_time(pid)) != started
+                    ]
+                    pipe.multi()
+                    for pid in gone:
+                        pipe.hdel(key, pid)
+                    if mine is not None:
+                        pipe.hset(key, str(me), mine)
+                    pipe.expire(key, COLDSTART_TTL_SECONDS)
+                    pipe.execute()
+                    removed = gone
+                    break
+                except redis.WatchError:
+                    continue
         seen["removed"] = removed
         ops: List[tuple] = [("i", "processes_started", 1)]
         if removed:

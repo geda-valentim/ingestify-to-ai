@@ -108,20 +108,46 @@ def test_reused_pid_counts(_docling_telemetry_fake_redis, sibling):
     assert _hash(_docling_telemetry_fake_redis)["processes_vanished"] == "1"
 
 
-def test_only_the_hdel_that_removed_counts(_docling_telemetry_fake_redis, monkeypatch):
-    """Another child deletes the entry between our HGETALL and our HDEL."""
+def test_concurrent_children_claim_a_stale_entry_once(_docling_telemetry_fake_redis, monkeypatch, sibling):
+    """A reads the stale entry; B then claims it and registers; A must not delete B's live entry
+    nor count the same child again."""
     client = _docling_telemetry_fake_redis
     client.hset(cs._children_key(), "999999", "123")
-    real = client.hgetall
+    real_pipeline = client.pipeline
+    state = {"armed": True}
 
-    def racing(key):
-        data = real(key)
-        client.hdel(key, "999999")
-        return data
+    class Spy:
+        def __init__(self, pipe):
+            self._pipe = pipe
 
-    monkeypatch.setattr(client, "hgetall", racing)
+        def __enter__(self):
+            self._pipe.__enter__()
+            return self
+
+        def __exit__(self, *exc):
+            return self._pipe.__exit__(*exc)
+
+        def __getattr__(self, name):
+            return getattr(self._pipe, name)
+
+        def hgetall(self, key):
+            data = self._pipe.hgetall(key)
+            if state["armed"]:
+                state["armed"] = False
+                with monkeypatch.context() as m:
+                    m.setattr(cs.os, "getpid", lambda: sibling)
+                    cs.record_process_start()  # child B runs completely
+            return data
+
+    monkeypatch.setattr(client, "pipeline", lambda *a, **k: Spy(real_pipeline(*a, **k)))
+    cs.record_process_start()  # child A
+    assert _hash(client)["processes_vanished"] == "1"
+    assert set(_registry(client)) == {str(os.getpid()), str(sibling)}
+
+
+def test_registry_always_has_a_ttl(_docling_telemetry_fake_redis):
     cs.record_process_start()
-    assert "processes_vanished" not in _hash(client)
+    assert 0 < _docling_telemetry_fake_redis.ttl(cs._children_key()) <= cs.COLDSTART_TTL_SECONDS
 
 
 def test_clean_shutdown_clears_registry(_docling_telemetry_fake_redis):
