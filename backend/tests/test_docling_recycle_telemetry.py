@@ -83,6 +83,17 @@ def test_dead_pid_counts_once_and_is_removed(_docling_telemetry_fake_redis, capl
     assert _hash(_docling_telemetry_fake_redis)["processes_vanished"] == "1"
 
 
+def test_own_pid_with_old_starttime_counts(_docling_telemetry_fake_redis):
+    """Same hostname and pid after a container restart: the old entry is a vanished child."""
+    me = str(os.getpid())
+    _docling_telemetry_fake_redis.hset(cs._children_key(), me, "-1")
+    cs.record_process_start()
+    assert _hash(_docling_telemetry_fake_redis)["processes_vanished"] == "1"
+    assert _registry(_docling_telemetry_fake_redis)[me] == cs._proc_start_time(os.getpid())
+    cs.record_process_start()  # same process again: not vanished
+    assert _hash(_docling_telemetry_fake_redis)["processes_vanished"] == "1"
+
+
 def test_live_sibling_is_not_counted(_docling_telemetry_fake_redis, sibling):
     _docling_telemetry_fake_redis.hset(cs._children_key(), str(sibling), cs._proc_start_time(sibling))
     cs.record_process_start()

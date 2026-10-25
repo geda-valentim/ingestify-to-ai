@@ -346,16 +346,17 @@ def record_process_start() -> None:
 
     def work(client) -> None:
         key = _children_key()
+        mine = _proc_start_time(me)
+        # our own pid too: a restarted container (same hostname) can hand us the pid of a dead child
         gone = [
             pid for pid, started in client.hgetall(key).items()
-            if pid != str(me) and _proc_start_time(pid) != started
+            if (pid != str(me) or mine is not None) and (mine if pid == str(me) else _proc_start_time(pid)) != started
         ]
         pipe = client.pipeline()
         for pid in gone:
             pipe.hdel(key, pid)
         # only the HDEL that removed the entry counts: two children starting together do not both claim it
         removed = [pid for pid, n in zip(gone, pipe.execute() if gone else []) if n]
-        mine = _proc_start_time(me)
         if mine is not None:
             client.hset(key, str(me), mine)
         client.expire(key, COLDSTART_TTL_SECONDS)
