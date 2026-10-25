@@ -425,6 +425,18 @@ class DoclingColdStartRow(BaseModel):
     pages_ok: int = 0
     pages_failed: int = 0
     docling_version: Optional[str] = None
+    recycle_memory_limit: int = 0
+    recycle_max_tasks: int = 0
+    recycle_shutdown: int = 0
+    recycle_unknown: int = 0
+    processes_vanished: int = 0
+    last_exitcode: Optional[int] = None
+    max_memory_per_child_kb: Optional[int] = None
+    max_tasks_per_child: Optional[int] = None
+    peak_rss_pct_of_limit: Optional[float] = None
+    cgroup_oom_kill: Optional[int] = None
+    cgroup_memory_peak_kb: Optional[int] = None
+    cgroup_memory_max_kb: Optional[int] = None
 
 
 class DoclingColdStartsResponse(BaseModel):
@@ -451,7 +463,13 @@ async def docling_cold_starts(admin_user=Depends(require("platform.monitoring.re
     convert() (a primeira de cada conversor no processo carrega os pesos) com os segundos
     em `convert_seconds_*`; `conversions_first_process` é a primeira do processo filho e
     `conversions_failed` as que falharam; `pages_ok`/`pages_failed` contam páginas e
-    `docling_version` é a versão instalada. Os contadores são cache Redis com TTL de 48 h: horas sem
+    `docling_version` é a versão instalada. `recycle_memory_limit`/`recycle_max_tasks`/`recycle_shutdown`/`recycle_unknown` dizem por que os filhos saíram
+    (`memory_limit` = pico de RSS acima do limite, `max_tasks`, `shutdown`, `unknown`), com
+    `last_exitcode`, os limites do pool e `peak_rss_pct_of_limit` (pico / limite, em %).
+    `processes_vanished` conta os filhos que sumiram sem shutdown (SIGKILL: OOM do cgroup, time
+    limit rígido ou `docker kill`), notados pelo próximo filho a nascer; o OOM se separa pelo
+    `cgroup_oom_kill` (valor absoluto do contador do cgroup: compare hora com hora), e
+    `cgroup_memory_peak_kb`/`cgroup_memory_max_kb` mostram o pico e o teto do cgroup. Os contadores são cache Redis com TTL de 48 h: horas sem
     dados não aparecem. `warn_per_hour` é o limiar do WARNING do monitoramento.
     """
     from starlette.concurrency import run_in_threadpool

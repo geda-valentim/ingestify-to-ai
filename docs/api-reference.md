@@ -2737,7 +2737,13 @@ conversor, um por página). `conversions_first`/`conversions_warm` contam as cha
 convert() (a primeira de cada conversor no processo carrega os pesos) com os segundos
 em `convert_seconds_*`; `conversions_first_process` é a primeira do processo filho e
 `conversions_failed` as que falharam; `pages_ok`/`pages_failed` contam páginas e
-`docling_version` é a versão instalada. Os contadores são cache Redis com TTL de 48 h: horas sem
+`docling_version` é a versão instalada. `recycle_memory_limit`/`recycle_max_tasks`/`recycle_shutdown`/`recycle_unknown` dizem por que os filhos saíram
+(`memory_limit` = pico de RSS acima do limite, `max_tasks`, `shutdown`, `unknown`), com
+`last_exitcode`, os limites do pool e `peak_rss_pct_of_limit` (pico / limite, em %).
+`processes_vanished` conta os filhos que sumiram sem shutdown (SIGKILL: OOM do cgroup, time
+limit rígido ou `docker kill`), notados pelo próximo filho a nascer; o OOM se separa pelo
+`cgroup_oom_kill` (valor absoluto do contador do cgroup: compare hora com hora), e
+`cgroup_memory_peak_kb`/`cgroup_memory_max_kb` mostram o pico e o teto do cgroup. Os contadores são cache Redis com TTL de 48 h: horas sem
 dados não aparecem. `warn_per_hour` é o limiar do WARNING do monitoramento.
 
 Respostas declaradas:
@@ -8148,6 +8154,18 @@ Esquema JSON completo:
 | `pages_ok` | não | integer | default=0 |  |
 | `pages_failed` | não | integer | default=0 |  |
 | `docling_version` | não | string / null |  |  |
+| `recycle_memory_limit` | não | integer | default=0 |  |
+| `recycle_max_tasks` | não | integer | default=0 |  |
+| `recycle_shutdown` | não | integer | default=0 |  |
+| `recycle_unknown` | não | integer | default=0 |  |
+| `processes_vanished` | não | integer | default=0 |  |
+| `last_exitcode` | não | integer / null |  |  |
+| `max_memory_per_child_kb` | não | integer / null |  |  |
+| `max_tasks_per_child` | não | integer / null |  |  |
+| `peak_rss_pct_of_limit` | não | number / null |  |  |
+| `cgroup_oom_kill` | não | integer / null |  |  |
+| `cgroup_memory_peak_kb` | não | integer / null |  |  |
+| `cgroup_memory_max_kb` | não | integer / null |  |  |
 
 Esquema JSON completo:
 
@@ -8268,6 +8286,108 @@ Esquema JSON completo:
         }
       ],
       "title": "Docling Version"
+    },
+    "recycle_memory_limit": {
+      "type": "integer",
+      "title": "Recycle Memory Limit",
+      "default": 0
+    },
+    "recycle_max_tasks": {
+      "type": "integer",
+      "title": "Recycle Max Tasks",
+      "default": 0
+    },
+    "recycle_shutdown": {
+      "type": "integer",
+      "title": "Recycle Shutdown",
+      "default": 0
+    },
+    "recycle_unknown": {
+      "type": "integer",
+      "title": "Recycle Unknown",
+      "default": 0
+    },
+    "processes_vanished": {
+      "type": "integer",
+      "title": "Processes Vanished",
+      "default": 0
+    },
+    "last_exitcode": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Last Exitcode"
+    },
+    "max_memory_per_child_kb": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Max Memory Per Child Kb"
+    },
+    "max_tasks_per_child": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Max Tasks Per Child"
+    },
+    "peak_rss_pct_of_limit": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Peak Rss Pct Of Limit"
+    },
+    "cgroup_oom_kill": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Cgroup Oom Kill"
+    },
+    "cgroup_memory_peak_kb": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Cgroup Memory Peak Kb"
+    },
+    "cgroup_memory_max_kb": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Cgroup Memory Max Kb"
     }
   },
   "type": "object",
