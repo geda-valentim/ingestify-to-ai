@@ -265,6 +265,15 @@ class Settings(BaseSettings):
     monitoring_unacked_grace_seconds: int = 600
     temp_files_retention_hours: int = 72  # Delete leftover local files (failed jobs, aborted uploads) after X hours
 
+    # Admission (document_conversion only; spec 0022). None = unlimited. Parse-only: nothing
+    # reads these yet. admission_global_slots: unlimited disables the global limit, its floor
+    # of 1 and the capacity reading; what a finite value means is decided by the change that
+    # wires admission.
+    admission_max_pages_per_pdf: Optional[int] = None
+    admission_max_pages_per_client: Optional[int] = None
+    admission_max_waiting_per_client: Optional[int] = None
+    admission_global_slots: Optional[int] = None
+
     # Google Drive (optional)
     google_drive_credentials_path: str = "/secrets/gdrive.json"
 
@@ -583,6 +592,17 @@ class Settings(BaseSettings):
             )
         return self
 
+    @field_validator(
+        "admission_max_pages_per_pdf",
+        "admission_max_pages_per_client",
+        "admission_max_waiting_per_client",
+        "admission_global_slots",
+        mode="before",
+    )
+    @classmethod
+    def _admission_limit(cls, value):
+        return _parse_admission_limit(value)
+
     @field_validator("docling_window_time_limit_seconds", mode="before")
     @classmethod
     def _empty_window_time_limit_is_unset(cls, value):
@@ -669,6 +689,36 @@ class Settings(BaseSettings):
             for origin in self.cors_allowed_origins.split(",")
             if origin.strip()
         ]
+
+
+def _parse_admission_limit(value):
+    """None, '', 'unlimited' and -1 mean no limit; a positive integer is the limit."""
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        raise ValueError("must be a positive number, or empty/'unlimited' for no limit")
+    if isinstance(value, str):
+        text = value.strip()
+        if text == "" or text.lower() == "unlimited":
+            return None
+        try:
+            number = int(text)
+        except ValueError:
+            raise ValueError("must be a positive number, or empty/'unlimited' for no limit") from None
+    elif isinstance(value, int):
+        number = value
+    else:
+        raise ValueError("must be a positive number, or empty/'unlimited' for no limit")
+    if number == -1:
+        return None
+    if number == 0:
+        raise ValueError(
+            "0 is not allowed (it would block everything): leave empty or 'unlimited' "
+            "for no limit, or a positive number"
+        )
+    if number < 0:
+        raise ValueError("must be a positive number, or empty/'unlimited'/-1 for no limit")
+    return number
 
 
 def _format_settings_error(exc: ValidationError) -> str:
