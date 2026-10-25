@@ -305,6 +305,16 @@ Two clients (users A and B) upload a PDF corpus and poll `/jobs/{id}`; results g
 users), `BENCH_ADMIN_API_KEY` (optional, cold starts), `BENCH_CORPUS_DIR`. Alternate configurations A B A B A B (3+ runs, one `--label` each), set `MONITORING_AUTO_RETRY_ENABLED=false`
 (`partial` is final after `--partial-grace` s unchanged), `--inflight` is 1. Cleanup is manual, from `job_ids` in `manifest.json` or `submitted.jsonl`.
 
+### bench_host_sampler.py (spec 0022 S1)
+
+Run beside the load script on the worker host; it samples the worker's cgroup v2 (`cpu.stat`, `memory.*`, `io.stat`)
+into `host.csv`, `memory.peak` before/after into `host_peak.csv`, and `nvidia-smi` into `gpu.csv` when present.
+
+```bash
+python scripts/bench_host_sampler.py --cgroup /sys/fs/cgroup/system.slice/docker-<id>.scope \
+  --out /data/ingestify-to-ai/benchmarks/runs/<run_dir> --interval 1   # stop with Ctrl-C/SIGTERM or --duration S
+```
+
 ## 📖 Related Documentation
 
 - **[../docs/ARCHITECTURE_JOBS.md](../docs/ARCHITECTURE_JOBS.md)** - Job hierarchy architecture
