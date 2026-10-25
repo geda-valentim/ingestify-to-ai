@@ -59,7 +59,7 @@ def test_no_marker_aborts_before_any_git_change():
 
 
 def test_rollback_and_worker_live_gates():
-    assert 'git merge-base --is-ancestor "$DEPLOY_REF" origin/main' in CODE and 'is-ancestor HEAD "$NEWHEAD"' in CODE
+    assert 'git merge-base --is-ancestor "$DEPLOY_REF" origin/main' in CODE and 'is-ancestor HEAD "$NEWHEAD"' in CODE and "git diff --name-only" not in CODE
     assert 'git reset --keep "$NEWHEAD"' in CODE and "reset --hard" not in CODE
     assert CODE.count("build worker-live") == 1
     assert re.search(r'if \[ "\$BUILD_LIVE" = 1 \]; then[^\n]*\s+log [^\n]*run compose build worker-live', CODE)

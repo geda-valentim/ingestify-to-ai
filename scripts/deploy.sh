@@ -104,8 +104,8 @@ else
   fi
 fi
 NEWHEAD="$UPSTREAM"
-mapfile -t INCOMING < <(git diff --name-only HEAD "$NEWHEAD")
-mapfile -t LOCAL < <(git diff --name-only HEAD)
+mapfile -t INCOMING < <(git diff --no-renames --name-only HEAD "$NEWHEAD")
+mapfile -t LOCAL < <(git diff --no-renames --name-only HEAD)
 if [ "${#LOCAL[@]}" -gt 0 ]; then
   CLASH="$(comm -12 <(printf '%s\n' "${INCOMING[@]}" | sort -u) <(printf '%s\n' "${LOCAL[@]}" | sort -u) || true)"
   [ -z "$CLASH" ] || die "local changes in tracked files that the pull would touch; commit/stash them first:
@@ -117,8 +117,8 @@ EXPECTED="$(git show "$NEWHEAD:backend/api/openapi_docs.py" | sed -n 's/^API_VER
 
 # Marker, current HEAD and the pending (unfinished deploy) HEAD, each ->target: a failed deploy
 # or rollback is covered again on retry, even when marker->target is empty.
-CHANGED="$( { git diff --name-only "$BASE" "$NEWHEAD"; git diff --name-only "$OLD_HEAD" "$NEWHEAD"
-  for c in "${PENDING[@]}"; do git diff --name-only "$c" "$NEWHEAD"; done; } | sort -u)"
+CHANGED="$( { git diff --no-renames --name-only "$BASE" "$NEWHEAD"; git diff --no-renames --name-only "$OLD_HEAD" "$NEWHEAD"
+  for c in "${PENDING[@]}"; do git diff --no-renames --name-only "$c" "$NEWHEAD"; done; } | sort -u)"
 match() { grep -qE "$1" <<<"$CHANGED"; }
 
 IMAGES=0; CODE=0; COMPOSE_CHG=0; FRONT=0; LIVE=0
@@ -276,7 +276,7 @@ if [ -n "${NOTICE// /}" ]; then
       echo "  (docs/runbooks/engine-control-bootstrap.md, 'Re-registrar o host'), THEN run apply_profile."
     fi
     if [ "$IMAGES" = 1 ] || [ "$LIVE_BUILT" = 1 ]; then
-      echo "  New image: run apply_profile (images pinned by sha256 need a new profile/digest)."
+      echo "  New image: re-register the host with the new image digest (same runbook), THEN apply_profile."
     fi
     echo "  Services stopped on purpose stay stopped."
   } >&2
