@@ -66,7 +66,7 @@ class DoclingConverter:
             # value here makes the decision ours and visible; note that a
             # pydantic-settings init kwarg outranks the environment, so
             # DOCLING_DEVICE is ignored from now on in favour of DEVICE.
-            self._apply_accelerator_options(pipeline_options)
+            self.accelerator = self._apply_accelerator_options(pipeline_options)
 
             # Use optimized PDF backend if available
             if backend:
@@ -95,7 +95,7 @@ class DoclingConverter:
             self.import_error = str(e)
 
     @staticmethod
-    def _apply_accelerator_options(pipeline_options) -> None:
+    def _apply_accelerator_options(pipeline_options) -> str:
         """
         Set pipeline_options.accelerator_options from DEVICE / DOCLING_NUM_THREADS.
 
@@ -130,12 +130,14 @@ class DoclingConverter:
             logger.info(
                 "Docling accelerator: device=%s num_threads=%s", device, num_threads
             )
+            return f"{device}/{num_threads}"
         except Exception as e:
             logger.warning(
                 "Could not set docling accelerator options (%s); "
                 "docling will use its own device default",
                 e,
             )
+            return "default"
 
     def detect_format(self, file_path: Path) -> str:
         """Detect document format from file extension"""
@@ -166,6 +168,7 @@ class DoclingConverter:
         options: Dict[str, Any] = None,
         assets=None,
         figures=None,
+        probe: bool = False,
     ) -> Dict[str, Any]:
         """
         Convert document to markdown
@@ -178,6 +181,7 @@ class DoclingConverter:
             figures: A workers.image_assets.FigureCollector when the job asked for
                 describe_images / ocr_images (the result then carries `figures`,
                 the entries the describe stage works from)
+            probe: a readiness probe, not a job: telemetry logs it but counts nothing
 
         Returns:
             Dictionary with markdown content and metadata (and `assets` /
@@ -202,7 +206,13 @@ class DoclingConverter:
 
         try:
             # Use Docling for conversion
-            result = self.converter.convert(str(file_path))
+            started = time.monotonic()
+            try:
+                result = self.converter.convert(str(file_path))
+            except Exception:
+                docling_coldstart.record_conversion(self, time.monotonic() - started, None, doc_format, probe)
+                raise
+            docling_coldstart.record_conversion(self, time.monotonic() - started, result, doc_format, probe)
             referenced = assets is not None and options.get("image_mode") == "referenced"
             if referenced or figures is not None:
                 from workers.image_assets import extract_pictures
@@ -321,6 +331,7 @@ def _cached_converter(enable_ocr: bool, enable_table_structure: bool, enable_ima
         converter = DoclingConverter(**options)
         seconds = time.monotonic() - started
         _build_tracker.commit(key)  # only after a successful build
+        docling_coldstart.label_converter(converter, key, reason)
         _converters[key] = converter
         while len(_converters) > size:
             _converters.popitem(last=False)

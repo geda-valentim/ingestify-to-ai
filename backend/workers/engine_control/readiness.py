@@ -82,7 +82,7 @@ def ensure():
             with tempfile.TemporaryDirectory() as tmp:
                 p = Path(tmp) / "probe.pdf"
                 p.write_bytes(pdf_fixture())
-                result = get_converter().convert_to_markdown(p, {})
+                result = get_converter().convert_to_markdown(p, {}, probe=True)
                 if not result:
                     raise RuntimeError("Document probe failed")
             base["device"] = resolve_docling_device()

@@ -21,8 +21,18 @@ Fields:
     rss_kb_max             highest current RSS seen at a child's shutdown, in KB
     peak_rss_kb            highest peak RSS (ru_maxrss, what --max-memory-per-child compares), KB
     conversions            get_converter() calls = converter requests (one per page job)
+    conv:first|conv:warm   convert() calls, split by the converter's first call in this process
+                           (weights load inside it) vs later ones; failed calls included. Differs
+                           from `conversions` when convert() never runs (missing file, no Docling)
+    conv_seconds:first|warm  summed convert() seconds of those calls (the export to markdown is out)
+    conv:first_process     convert() calls that were the first of the whole pool child
+    conv:failed            convert() calls that raised
+    pages_ok|pages_failed  pages converted / not converted (PARTIAL_SUCCESS counts the pages whose
+                           backend failed to open; a document_timeout partial would show 0 failed)
+    docling_version        installed docling, written by the last writer
 """
 
+import functools
 import logging
 import os
 import socket
@@ -101,7 +111,7 @@ def _warn_throttled(message: str, exc: Exception) -> None:
 
 def _write(client, field_ops: List[tuple]) -> None:
     """field_ops: ("i", field, int) -> HINCRBY, ("f", field, float) -> HINCRBYFLOAT,
-    ("max", field, int) -> keep the larger value (shutdown only, so not atomic)."""
+    ("set", field, value) -> HSET, ("max", field, int) -> keep the larger value (shutdown only, so not atomic)."""
     key = key_for(hour_bucket(), hostname())
     pipe = client.pipeline()
     for kind, field, value in field_ops:
@@ -109,6 +119,8 @@ def _write(client, field_ops: List[tuple]) -> None:
             pipe.hincrby(key, field, value)
         elif kind == "f":
             pipe.hincrbyfloat(key, field, value)
+        elif kind == "set":
+            pipe.hset(key, field, value)
     pipe.expire(key, COLDSTART_TTL_SECONDS)
     pipe.execute()
     for kind, field, value in field_ops:
@@ -118,10 +130,23 @@ def _write(client, field_ops: List[tuple]) -> None:
                 client.hset(key, field, value)
 
 
+# Circuit breaker: after a failed write the writers skip Redis for this long, so a hung
+# Redis costs one 0.5 s timeout per window instead of one or two per page. Per PID.
+_BREAKER_SECONDS = 30.0
+_skip_until = 0.0
+_skip_pid = None
+
+
 def _safe(field_ops: List[tuple]) -> None:
+    global _skip_until, _skip_pid
+    if _skip_pid != os.getpid():
+        _skip_until, _skip_pid = 0.0, os.getpid()
+    if time.monotonic() < _skip_until:
+        return
     try:
         _write(_redis(), field_ops)
     except Exception as exc:  # never break a conversion over telemetry
+        _skip_until = time.monotonic() + _BREAKER_SECONDS
         _warn_throttled("docling coldstart telemetry not recorded", exc)
 
 
@@ -135,6 +160,83 @@ def record_cold_start(reason: str, seconds: float, cache_size: int) -> None:
 
 def record_conversion_request() -> None:
     _safe([("i", "conversions", 1)])
+
+
+@functools.lru_cache(maxsize=1)
+def docling_version() -> str:
+    try:
+        from importlib.metadata import version
+
+        return version("docling")
+    except Exception:
+        return "unknown"
+
+
+def label_converter(converter, key: tuple, reason: str) -> None:
+    """Hang cheap labels on a converter at build time, so the hot path computes none."""
+    try:
+        ocr, tables, images, pictures = (int(bool(v)) for v in (tuple(key) + (False,) * 4)[:4])
+        converter.telemetry = {"key": f"ocr{ocr}-tab{tables}-img{images}-pic{pictures}", "build_reason": reason}
+    except Exception:  # an object that takes no attributes just reports key=uncached
+        pass
+
+
+_process_converted_pid = None
+
+
+def _value(obj: Any) -> Any:
+    return getattr(obj, "value", obj)
+
+
+def record_conversion(conv, seconds: float, result, fmt: str, probe: bool = False) -> None:
+    """One docling.conversion log line and the hourly counters for one convert() call.
+
+    `result` is the docling ConversionResult, or None when convert() raised (a PDF that
+    reaches convert() is one page: the split comes first). Never raises. With `probe`
+    only the log line is emitted; the first-call flags still flip, they are physical."""
+    global _process_converted_pid
+    try:
+        pid = os.getpid()
+        first_key = getattr(conv, "_converted_pid", None) != pid
+        first_process = _process_converted_pid != pid
+        conv._converted_pid = _process_converted_pid = pid
+        labels = getattr(conv, "telemetry", None) or {"key": "uncached", "build_reason": "none"}
+
+        if result is None:
+            outcome, pages, ok, failed = "failed", 1, 0, 1
+        else:
+            status = str(_value(getattr(result, "status", None)))
+            pages = int(getattr(getattr(result, "input", None), "page_count", 0) or 1)
+            bad = 0
+            if status == "partial_success":
+                bad = min(pages, sum(
+                    1 for e in (getattr(result, "errors", None) or [])
+                    if _value(getattr(e, "component_type", None)) == "document_backend"
+                ))
+            outcome = "partial" if status == "partial_success" else "ok"
+            ok, failed = pages - bad, bad
+        version = docling_version()
+        logger.info(
+            f"docling.conversion result={outcome} first_process={str(first_process).lower()} "
+            f"first_key={str(first_key).lower()} build_reason={labels['build_reason']} "
+            f"seconds={seconds:.2f} pages={'unknown' if result is None else pages} pages_ok={ok} "
+            f"pages_failed={failed} key={labels['key']} accelerator={getattr(conv, 'accelerator', 'default')} "
+            f"docling={version} format={fmt} probe={str(probe).lower()} pid={pid} hostname={hostname()}"
+        )
+        if probe:
+            return
+        warmth = "first" if first_key else "warm"
+        ops: List[tuple] = [
+            ("i", f"conv:{warmth}", 1), ("f", f"conv_seconds:{warmth}", float(seconds)),
+            ("i", "pages_ok", ok), ("i", "pages_failed", failed), ("set", "docling_version", version),
+        ]
+        if first_process:
+            ops.append(("i", "conv:first_process", 1))
+        if result is None:
+            ops.append(("i", "conv:failed", 1))
+        _safe(ops)
+    except Exception as exc:
+        _warn_throttled("docling conversion telemetry not recorded", exc)
 
 
 def record_process_start() -> None:
@@ -246,5 +348,14 @@ def read_hours(hours: int = 24, now: Optional[datetime] = None, client=None) -> 
                 "peak_rss_kb": int(_num(peak)) if peak is not None else None,
                 "conversions": conversions,
                 "cold_starts_per_100_conversions": round(100 * total / conversions, 2) if conversions else None,
+                "conversions_first": int(_num(data.get("conv:first"))),
+                "conversions_warm": int(_num(data.get("conv:warm"))),
+                "conversions_first_process": int(_num(data.get("conv:first_process"))),
+                "conversions_failed": int(_num(data.get("conv:failed"))),
+                "convert_seconds_first": round(_num(data.get("conv_seconds:first")), 2),
+                "convert_seconds_warm": round(_num(data.get("conv_seconds:warm")), 2),
+                "pages_ok": int(_num(data.get("pages_ok"))),
+                "pages_failed": int(_num(data.get("pages_failed"))),
+                "docling_version": data.get("docling_version"),
             })
     return rows
