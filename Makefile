@@ -1,4 +1,4 @@
-.PHONY: help ensure-jwt-secret start stop restart logs status clean infra-start infra-stop infra-status ps build rebuild dev prod scale test check-services check-redis check-mysql check-elasticsearch check-minio smart-start validate gpu gpu-build gpu-check vision-download faces-download logs-vision shell-vision
+.PHONY: help ensure-jwt-secret start stop restart logs status clean infra-start infra-stop infra-status ps build rebuild deploy dev prod scale test check-services check-redis check-mysql check-elasticsearch check-minio smart-start validate gpu gpu-build gpu-check vision-download faces-download logs-vision shell-vision
 
 # Default target
 .DEFAULT_GOAL := help
@@ -202,6 +202,19 @@ build: ## Build all services without starting (CPU-only, no CUDA wheels)
 
 rebuild: ## Rebuild and restart all services
 	@./scripts/dev/rebuild.sh
+
+# Production deploy: scripts/deploy.sh (flags: docs/runbooks/deploy.md) under `env -i`, so make's
+# exported .env/REDIS_HOST=localhost can't leak into recreated containers. HOME keeps ~/.ssh;
+# the origin is SSH, hence SSH_AUTH_SOCK / GIT_SSH_COMMAND are passed through too.
+deploy: ## Pull main and deploy only what changed (scripts/deploy.sh; DRY_RUN=1 to preview)
+	@set -- PATH="$$PATH" HOME="$$HOME"; \
+	for v in DOCKER_HOST DOCKER_CONFIG DOCKER_CONTEXT DRY_RUN FORCE_REBUILD \
+	         DEPLOY_BASE DEPLOY_REF NO_PULL BUILD_LIVE SSH_AUTH_SOCK GIT_SSH_COMMAND \
+	         DEPLOY_AGENT_DIR DEPLOY_ENGINE_HOST_CONFIG DOCKER_TLS_VERIFY DOCKER_TLS DOCKER_CERT_PATH; do \
+		eval "val=\$${$$v-}"; \
+		if [ -n "$$val" ]; then set -- "$$@" "$$v=$$val"; fi; \
+	done; \
+	exec env -i "$$@" bash scripts/deploy.sh
 
 # ======================================
 # GPU COMMANDS (opt-in - see docs/GPU.md)
