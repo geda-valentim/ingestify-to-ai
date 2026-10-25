@@ -348,6 +348,16 @@ def _cached_converter(enable_ocr: bool, enable_table_structure: bool, enable_ima
                        enable_images=enable_images)
         if picture_images:
             options["picture_images"] = True
+        # Evict before building: the new pipeline must never be resident next to the LRU victim
+        # (two sets of weights at once = CUDA OOM / cgroup kill, notably with cache size 1).
+        # `reason` was read above from the tracker, which keeps its own history.
+        evicted = False
+        while len(_converters) >= size:
+            _converters.popitem(last=False)
+            evicted = True
+        if evicted:
+            import gc
+            gc.collect()
         started = time.monotonic()
         converter = DoclingConverter(**options)
         wrapper = time.monotonic() - started
@@ -356,8 +366,6 @@ def _cached_converter(enable_ocr: bool, enable_table_structure: bool, enable_ima
         _build_tracker.commit(key)  # only after a successful build
         docling_coldstart.label_converter(converter, key, reason)
         _converters[key] = converter
-        while len(_converters) > size:
-            _converters.popitem(last=False)
     docling_coldstart.record_cold_start(reason, seconds, size, wrapper_seconds=wrapper,
                                         pipeline_init_seconds=init_s, pipeline_init=init_status)
     return converter

@@ -97,6 +97,22 @@ def test_init_failure_keeps_the_converter(fake_docling, _docling_telemetry_fake_
     assert converter_module._build_tracker.peek(("x",)) == "new_options"  # the build was committed
 
 
+def test_victim_is_evicted_before_the_new_pipeline_loads(fake_docling, monkeypatch):
+    monkeypatch.setenv("DOCLING_CONVERTER_CACHE_SIZE", "1")
+    _on(monkeypatch)
+    resident = []
+
+    class Spy(FakeDocling):
+        def initialize_pipeline(self, fmt):
+            resident.append(len(converter_module._converters))
+
+    fake_docling.inner = Spy
+    get_converter("fast")
+    get_converter("quality")
+    assert resident == [0, 0]
+    assert len(converter_module._converters) == 1
+
+
 def test_soft_time_limit_propagates_and_caches_nothing(fake_docling, monkeypatch):
     from celery.exceptions import SoftTimeLimitExceeded
     _on(monkeypatch)
