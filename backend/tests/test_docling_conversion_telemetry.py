@@ -170,3 +170,19 @@ def test_hot_path_is_one_pipeline_no_reads(pdf, _docling_telemetry_fake_redis, m
         monkeypatch.setattr(client, name, lambda *a, **k: seen.append("read"))
     conv.convert_to_markdown(pdf)
     assert seen == ["pipeline"]
+
+
+def test_readiness_probe_conversion_is_not_counted(_docling_telemetry_fake_redis, monkeypatch, tmp_path, caplog):
+    from workers.engine_control import readiness
+
+    monkeypatch.setenv("INGESTIFY_RUNTIME_REVISION", "r1")
+    monkeypatch.setenv("INGESTIFY_RUNTIME_FEATURE", "document_conversion")
+    monkeypatch.setenv("INGESTIFY_MODEL_PROFILE", "p")
+    monkeypatch.setattr(readiness, "ROOT", tmp_path)
+    monkeypatch.setattr(readiness, "_ready", None)
+    monkeypatch.setattr("shared.device.resolve_docling_device", lambda: "cpu")
+    _docling_telemetry_fake_redis.flushall()
+    with caplog.at_level(logging.INFO):
+        assert readiness.ensure()["ready"]
+    assert not [k for k in _hash(_docling_telemetry_fake_redis) if k.startswith(("conv:", "pages"))]
+    assert "probe=true" in caplog.text
