@@ -105,6 +105,11 @@ class Settings(BaseSettings):
     # collision is benign: both objects resolve to the same number. Exists so
     # 5 worker replicas x concurrency 2 stop oversubscribing the CPU.
     docling_num_threads: int = 4
+    # Pages per conversion window (spec 0022). 1 = today's behaviour. Inert: nothing reads
+    # it yet; only the visibility-timeout check below accounts for it.
+    docling_page_window: int = Field(default=1, ge=1, le=8)
+    # Explicit time limit (s) of one window; empty = CONVERSION_TIMEOUT_SECONDS x window.
+    docling_window_time_limit_seconds: Optional[int] = None
 
     # Image assets of a document conversion (image_mode=referenced / page_images=true
     # on /upload and /convert; shared/conversion_assets.py). Not DOCLING_-prefixed on
@@ -578,6 +583,27 @@ class Settings(BaseSettings):
             )
         return self
 
+    @field_validator("docling_window_time_limit_seconds", mode="before")
+    @classmethod
+    def _empty_window_time_limit_is_unset(cls, value):
+        if value is None or (isinstance(value, str) and not value.strip()):
+            return None
+        return value
+
+    @field_validator("docling_window_time_limit_seconds")
+    @classmethod
+    def _window_time_limit_must_be_positive(cls, value: Optional[int]) -> Optional[int]:
+        if value is not None and value <= 0:
+            raise ValueError("must be a positive number of seconds, or empty")
+        return value
+
+    @property
+    def docling_window_time_limit(self) -> int:
+        """Time limit of one conversion window: the explicit value, or timeout x window."""
+        if self.docling_window_time_limit_seconds is not None:
+            return self.docling_window_time_limit_seconds
+        return self.conversion_timeout_seconds * self.docling_page_window
+
     @model_validator(mode="after")
     def _visibility_timeout_must_outlast_tasks(self) -> "Settings":
         # Otherwise a task still inside its time limit is redelivered to a second
@@ -599,6 +625,14 @@ class Settings(BaseSettings):
                 f"CELERY_VISIBILITY_TIMEOUT_SECONDS ({self.celery_visibility_timeout_seconds}) must be "
                 f"greater than CONVERSION_TIMEOUT_SECONDS ({self.conversion_timeout_seconds}), or a task "
                 "still running would be handed to a second worker. Raise it on every service."
+            )
+        if self.celery_visibility_timeout_seconds <= self.docling_window_time_limit:
+            raise ValueError(
+                f"CELERY_VISIBILITY_TIMEOUT_SECONDS ({self.celery_visibility_timeout_seconds}) must be "
+                f"greater than the conversion window time limit ({self.docling_window_time_limit}s = "
+                "DOCLING_WINDOW_TIME_LIMIT_SECONDS, or CONVERSION_TIMEOUT_SECONDS x DOCLING_PAGE_WINDOW), "
+                "or a window still running would be handed to a second worker. Set it the same on "
+                "every service."
             )
         return self
 
