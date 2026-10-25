@@ -3,7 +3,6 @@ import re
 from pathlib import Path
 
 import pytest
-
 ROOT = Path(__file__).resolve().parents[2]
 if not (ROOT / "scripts" / "deploy.sh").exists() or not (ROOT / "Makefile").exists():
     pytest.skip("repo root (scripts/, Makefile) not mounted", allow_module_level=True)
@@ -21,7 +20,7 @@ def test_makefile_runs_script_with_clean_env():
     assert "env -i" in block and "scripts/deploy.sh" in block
     assert 'PATH="$$PATH"' in block and "DOCKER_HOST" in block
     assert "docker compose" not in block and "DEPLOY_COMPOSE" not in MAKEFILE
-    assert all(v in block for v in "DEPLOY_BASE DEPLOY_REF NO_PULL BUILD_LIVE SSH_AUTH_SOCK GIT_SSH_COMMAND".split())
+    assert all(v in block for v in "DEPLOY_BASE DEPLOY_REF NO_PULL BUILD_LIVE SSH_AUTH_SOCK GIT_SSH_COMMAND DEPLOY_AGENT_DIR DEPLOY_ENGINE_HOST_CONFIG".split())
 
 
 def test_no_unfiltered_restart_or_zero_scale():
