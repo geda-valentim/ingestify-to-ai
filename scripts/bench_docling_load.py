@@ -3,6 +3,7 @@
 Results go to /data/ingestify-to-ai/benchmarks (customer data). API keys: env only.
 """
 import argparse
+import csv
 import hashlib
 import json
 import math
@@ -21,10 +22,12 @@ ALLOWED_ROOT = "/data/ingestify-to-ai/benchmarks"
 ROOT_DEVICE_PATH = "/"
 TERMINAL = {"completed", "failed", "partial", "cancelled"}
 VALID_JOB = {"completed", "partial"}
-JOB_FIELDS = ["client", "seq", "rel_path", "sha256", "job_id", "status", "duplicate", "error",
+CSV_FIELDS = ["client", "seq", "rel_path", "sha256", "job_id", "status", "duplicate", "error",
               "submitted_at", "created_at", "started_at", "completed_at", "observed_terminal_at",
               "total_pages", "pages_ok", "pages_failed", "page_retries", "wait_s",
               "service_s", "total_s", "service_start_source"]
+MAX_FIELDS = {"rss_kb_max", "peak_rss_kb", "last_exitcode"}
+SKIP_FIELDS = {"cold_starts_per_100_conversions"}
 
 class UsageError(Exception): pass
 
@@ -164,7 +167,7 @@ def run_client(client, api, files, args, project, barrier, out, lock):
     for seq, f in enumerate(client_order(files, args.seed, client, args.repetition), 1):  # one job at a time
         if out["stop"].is_set():
             break
-        rec, stop = {k: None for k in JOB_FIELDS}, False
+        rec, stop = {k: None for k in CSV_FIELDS}, False
         rec.update(client=client, seq=seq, rel_path=f["rel_path"], sha256=f["sha256"], duplicate=False,
                    submitted_at=iso(time.time()), page_retries=0, pages_ok=0, pages_failed=0)
         try:
@@ -227,6 +230,27 @@ def emit(rec, out, lock, kind="jsonl"):
         out[kind].write(json.dumps(rec, default=str) + "\n")
         out[kind].flush()
 
+def coldstart_delta(before, after):
+    key = lambda r: (r["hour"], r["worker"])
+    b = {key(r): r for r in (before or {}).get("rows", [])}
+    a = {key(r): r for r in (after or {}).get("rows", [])}
+    delta, absolute, reasons = {}, {}, {}
+    for k, row in a.items():
+        old = b.get(k, {})
+        for name, v in row.items():
+            if name in SKIP_FIELDS or isinstance(v, bool):
+                continue
+            if name in MAX_FIELDS or name.startswith("cgroup_"):
+                if v is not None:
+                    absolute[name] = max(absolute.get(name, v), v) if isinstance(v, (int, float)) else v
+            elif name == "by_reason":
+                for r, n in v.items():
+                    reasons[r] = reasons.get(r, 0) + n - (old.get("by_reason") or {}).get(r, 0)
+            elif isinstance(v, (int, float)):
+                delta[name] = delta.get(name, 0) + v - (old.get(name) or 0)
+    return {"delta": delta, "by_reason": reasons, "absolute_after": absolute,
+            "dropped_keys": sorted("|".join(k) for k in b if k not in a)}
+
 def summarize(records, span):
     good = [r for r in records if r["error"] != "duplicate" and r["status"] != "error"]
     pages = [p for r in good for p in r["pages"]]
@@ -273,6 +297,20 @@ def main(argv=None):
                 "corpus": [{k: f[k] for k in ("rel_path", "size", "sha256")} for f in files],
                 "job_ids": "see submitted.jsonl (journal, written at upload) until the run ends"}
     write_json(os.path.join(run_dir, "manifest.json"), manifest)
+    admin = os.environ.get("BENCH_ADMIN_API_KEY")
+    admin_api = Api(args.api_url, admin, [admin, *keys.values()]) if admin else None
+
+    def coldstarts(name):  # a failed snapshot must never cost the results of the run
+        if not admin_api:
+            return {"skipped": "no admin key"}
+        try:
+            data = admin_api.get_json("/admin/docling/cold-starts", time.time() + 60)
+            write_json(os.path.join(run_dir, f"coldstarts_{name}.json"), data)
+            return data
+        except Exception as e:
+            return {"skipped": f"snapshot {name} failed: {e}"}
+
+    before = coldstarts("before")
     jsonl, journal = (new_file(os.path.join(run_dir, n)) for n in ("jobs.jsonl", "submitted.jsonl"))
     out = {"records": [], "jsonl": jsonl, "journal": journal, "stop": threading.Event()}
     barrier, lock, apis = threading.Barrier(2), threading.Lock(), {c: Api(args.api_url, keys[c], keys.values()) for c in "AB"}
@@ -301,6 +339,18 @@ def main(argv=None):
         recs = [r for r in out["records"] if r["client"] == c]
         summary["by_client"][c] = {"http_retries": apis[c].http_retries} | summarize(recs, max([epoch(r["observed_terminal_at"]) or 0 for r in recs] or [0]) - t_run)
     summary["all"] = summarize(out["records"], t_end - t_run)
+    after = coldstarts("after")
+    if "rows" in before and "rows" in after:
+        summary["coldstarts_delta"] = coldstart_delta(before, after)
+        # every submitted page is one conversion and every page retry another; duplicates convert nothing
+        observed = sum((r["total_pages"] or 1) + r["page_retries"] for r in out["records"] if r["job_id"] and not r["duplicate"])
+        summary["foreign_conversions_estimate"] = summary["coldstarts_delta"]["delta"].get("conversions", 0) - observed
+    else:
+        summary["coldstarts_delta"] = {"skipped": before.get("skipped") or after.get("skipped")}
+    with new_file(os.path.join(run_dir, "jobs.csv"), newline="") as fh:
+        w = csv.DictWriter(fh, CSV_FIELDS, extrasaction="ignore")
+        w.writeheader()
+        w.writerows(out["records"])
     write_json(os.path.join(run_dir, "summary.json"), summary)
     manifest.update(t_end=iso(t_end), job_ids=[r["job_id"] for r in out["records"] if r["job_id"]])
     write_json(os.path.join(run_dir, "manifest.json"), manifest)

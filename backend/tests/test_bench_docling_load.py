@@ -1,4 +1,5 @@
 """Docling load script tests against a fake server only (never a real API)."""
+import csv
 import importlib.util
 import json
 import os
@@ -20,13 +21,13 @@ spec = importlib.util.spec_from_file_location("bench_load", SCRIPT)
 bench = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(bench)
 
-KEYS = {"key-a-secret": "A", "key-b-secret": "B"}
+KEYS = {"key-a-secret": "A", "key-b-secret": "B", "key-admin-secret": "admin"}
 PAGES = [[("processing", 0), ("pending", 0), ("pending", 0)], [("completed", 0), ("processing", 0), ("processing", 0)], [("completed", 0), ("completed", 1), ("failed", 1)]]
 
 now = lambda: datetime.utcnow().isoformat()
 
 class Fake(BaseHTTPRequestHandler):
-    jobs, flags, projects = {}, set(), {}  # flags: dup, flap, stuck, slow, drop
+    jobs, flags, projects, cold = {}, set(), {}, 0  # flags: dup, flap, stuck, slow, drop, cold_fail
 
     log_message = lambda self, *a: None
 
@@ -47,6 +48,10 @@ class Fake(BaseHTTPRequestHandler):
         self.send(200, {"job_id": jid, "status": "queued", "created_at": Fake.jobs[jid]["created"], "duplicate": "dup" in Fake.flags})
 
     def do_GET(self):
+        if self.path == "/admin/docling/cold-starts":
+            Fake.cold += 1
+            row = {"hour": "h", "worker": "w", "conversions": 10 if Fake.cold == 1 else 24, "peak_rss_kb": 100 * Fake.cold, "by_reason": {"process_start": Fake.cold}}
+            return self.send(403, {}) if "cold_fail" in Fake.flags else self.send(200, {"rows": [row]})
         job = Fake.jobs[self.path.rsplit("/", 1)[1]]
         "slow" in Fake.flags and time.sleep(0.3)
         job["polls"] += 1
@@ -65,7 +70,7 @@ class Fake(BaseHTTPRequestHandler):
 
 @pytest.fixture
 def server():
-    Fake.jobs, Fake.flags = {}, set()
+    Fake.jobs, Fake.flags, Fake.cold = {}, set(), 0
     srv = ThreadingHTTPServer(("127.0.0.1", 0), Fake)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     yield f"http://127.0.0.1:{srv.server_address[1]}"
@@ -81,6 +86,7 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr(bench, "ROOT_DEVICE_PATH", "/proc")  # another st_dev, like a mounted /data
     monkeypatch.setenv("BENCH_API_KEY_A", "key-a-secret")
     monkeypatch.setenv("BENCH_API_KEY_B", "key-b-secret")
+    monkeypatch.setenv("BENCH_ADMIN_API_KEY", "key-admin-secret")
     return corpus, root
 
 def argv(url, corpus, root, *extra):
@@ -92,19 +98,24 @@ def run(url, corpus, root, *extra, rc=0):
     (run_dir,) = (root / "runs").iterdir()
     return run_dir, [json.loads(x) for x in (run_dir / "jobs.jsonl").read_text().splitlines()]
 
-def test_percentile():
+def test_percentile_and_coldstart_delta():
     assert bench.percentile([], .5) is None and bench.percentile([4], .99) == 4
     assert bench.percentile([1, 2, 3, 4], .5) == 2.5
+    row = lambda h, conv, rss, r=0: {"hour": h, "worker": "w", "conversions": conv, "peak_rss_kb": rss, "by_reason": {"process_start": r}}
+    d = bench.coldstart_delta({"rows": [row("h1", 10, 500, 1), row("old", 5, 1)]}, {"rows": [row("h1", 14, 300, 3), row("h2", 7, 900, 2)]})
+    assert d["delta"] == {"conversions": 11} and d["by_reason"] == {"process_start": 4}
+    assert d["absolute_after"]["peak_rss_kb"] == 900 and d["dropped_keys"] == ["old|w"]
 
 def test_end_to_end(server, env):
     run_dir, rows = run(server, *env)
-    assert len(rows) == 4
+    assert len(rows) == 4 and next(csv.reader(open(run_dir / "jobs.csv")))[:3] == ["client", "seq", "rel_path"]
     summary = json.loads((run_dir / "summary.json").read_text())
     for c in "AB":
         s = summary["by_client"][c]
         assert (s["n_jobs"], s["valid_pages"], s["page_retries"], s["partial"]) == (2, 3, 2, 1)
         assert s["wait_s"]["p95"] is not None and s["service_s"]["n"] == 2 and s["page_service_s"]["n"] == 2
-    assert summary["all"]["valid_pages_per_min"] > 0
+    assert summary["all"]["valid_pages_per_min"] > 0 and summary["coldstarts_delta"]["delta"]["conversions"] == 14
+    assert summary["foreign_conversions_estimate"] == 2  # 14 - (4 pages + 2 retries) per client
     multi = next(r for r in rows if r["rel_path"] == "b-multi.pdf")
     assert multi["service_start_source"] == "first_page_processing_observed" and len(multi["pages"]) == 3
     manifest = json.loads((run_dir / "manifest.json").read_text())
@@ -117,7 +128,9 @@ def test_end_to_end(server, env):
 def test_duplicate_is_excluded(server, env):
     Fake.flags = {"dup"}
     run_dir, rows = run(server, *env)
-    assert {r["error"] for r in rows} == {"duplicate"} and json.loads((run_dir / "summary.json").read_text())["all"]["n_jobs"] == 0
+    summary = json.loads((run_dir / "summary.json").read_text())
+    assert {r["error"] for r in rows} == {"duplicate"} and summary["all"]["n_jobs"] == 0
+    assert summary["foreign_conversions_estimate"] == 14  # duplicates convert nothing: all 14 are foreign
 
 def test_keys_label_inflight_and_existing_run_dir(server, env, monkeypatch, capsys):
     corpus, root = env
@@ -200,3 +213,9 @@ def test_errors_never_carry_a_key(server, env, monkeypatch):
     run_dir, rows = run(server, *env, rc=1)
     assert {r["error"].startswith("upload: ") for r in rows} == {True}
     assert not any(k in f.read_text() for f in run_dir.iterdir() for k in KEYS)
+
+def test_snapshot_failure_keeps_the_results(server, env):
+    Fake.flags = {"cold_fail"}
+    run_dir, rows = run(server, *env)
+    summary = json.loads((run_dir / "summary.json").read_text())
+    assert len(rows) == 4 and "failed" in summary["coldstarts_delta"]["skipped"] and (run_dir / "jobs.csv").exists()

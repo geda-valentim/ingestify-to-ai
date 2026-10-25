@@ -301,8 +301,8 @@ docker compose logs worker -f
 ## bench_docling_load.py (spec 0022 S1)
 
 Two clients (users A and B) upload a PDF corpus and poll `/jobs/{id}`; results go to `/data/ingestify-to-ai/benchmarks/runs/<UTC>-<label>-r<rep>/`
-(`manifest.json`, `submitted.jsonl`, `jobs.jsonl`, `summary.json`; 0600, never overwritten). Env only: `BENCH_API_KEY_A`, `BENCH_API_KEY_B` (different
-users), `BENCH_CORPUS_DIR`. Alternate configurations A B A B A B (3+ runs, one `--label` each), set `MONITORING_AUTO_RETRY_ENABLED=false`
+(`manifest.json`, `submitted.jsonl`, `jobs.jsonl`, `jobs.csv`, `summary.json`, cold-start snapshots; 0600, never overwritten). Env only: `BENCH_API_KEY_A`, `BENCH_API_KEY_B` (different
+users), `BENCH_ADMIN_API_KEY` (optional, cold starts), `BENCH_CORPUS_DIR`. Alternate configurations A B A B A B (3+ runs, one `--label` each), set `MONITORING_AUTO_RETRY_ENABLED=false`
 (`partial` is final after `--partial-grace` s unchanged), `--inflight` is 1. Cleanup is manual, from `job_ids` in `manifest.json` or `submitted.jsonl`.
 
 ## 📖 Related Documentation
