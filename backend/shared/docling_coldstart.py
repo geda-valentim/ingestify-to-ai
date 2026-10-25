@@ -18,6 +18,17 @@ Fields:
     seconds:{reason}       summed build seconds (float)
     processes_started      pool children started (worker_process_init)
     processes_stopped      pool children that exited (worker_process_shutdown)
+    recycle:{reason}       why a child exited: memory_limit (exitcode 155 and peak RSS above
+                           --max-memory-per-child) | max_tasks (155 otherwise, with a task limit) |
+                           shutdown (exitcode 0 or a signal handler) | unknown (anything else)
+    last_exitcode          exitcode of the last child that exited, as billiard reported it
+    max_memory_per_child_kb|max_tasks_per_child   the limits the worker runs with (0/unset: absent)
+    processes_vanished     children that disappeared without running worker_process_shutdown
+                           (SIGKILL: cgroup OOM, hard time limit, docker kill). Seen by the next child
+                           to start, through the registry below, so counted a few seconds late
+    cgroup_oom_kill        memory.events oom_kill of the container's cgroup, absolute (compare hour
+                           with hour: it resets when the cgroup is recreated)
+    cgroup_memory_peak_kb|cgroup_memory_max_kb   memory.peak (max seen) and memory.max of the cgroup
     rss_kb_max             highest current RSS seen at a child's shutdown, in KB
     peak_rss_kb            highest peak RSS (ru_maxrss, what --max-memory-per-child compares), KB
     conversions            get_converter() calls = converter requests (one per page job)
@@ -30,6 +41,12 @@ Fields:
     pages_ok|pages_failed  pages converted / not converted (PARTIAL_SUCCESS counts the pages whose
                            backend failed to open; a document_timeout partial would show 0 failed)
     docling_version        installed docling, written by the last writer
+
+Child registry (HASH, per worker hostname, same TTL; deliberately outside KEY_PREFIX so the
+reader's scan does not see it):
+    docling:children:{hostname}    pid -> /proc starttime of each live pool child
+A clean shutdown removes its own pid. If Redis was down at that moment the next start counts
+one false "vanished"; the registry is observability, not a source of truth.
 """
 
 import functools
@@ -45,6 +62,16 @@ logger = logging.getLogger(__name__)
 KEY_PREFIX = "docling:coldstart"
 COLDSTART_TTL_SECONDS = 48 * 3600
 REASONS = ("process_start", "new_options", "evicted")
+RECYCLE_REASONS = ("memory_limit", "max_tasks", "shutdown", "unknown")
+CHILDREN_PREFIX = "docling:children"
+CGROUP_ROOT = "/sys/fs/cgroup"
+try:  # billiard returns this exitcode for both --max-memory-per-child and --max-tasks-per-child
+    from billiard.pool import EX_RECYCLE
+except Exception:  # pragma: no cover - billiard is always there under celery
+    EX_RECYCLE = 0x9B
+
+# The pool limits, recorded by the parent (worker_init) before it forks: children inherit them.
+_limits: Dict[str, Optional[int]] = {"max_memory_kb": None, "max_tasks": None}
 
 _WARN_EVERY_SECONDS = 60.0
 _last_warn = 0.0
@@ -109,11 +136,13 @@ def _warn_throttled(message: str, exc: Exception) -> None:
         logger.debug(f"{message}: {exc!r}")
 
 
-def _write(client, field_ops: List[tuple]) -> None:
+def _write(client, field_ops: List[tuple], extra=None) -> None:
     """field_ops: ("i", field, int) -> HINCRBY, ("f", field, float) -> HINCRBYFLOAT,
     ("set", field, value) -> HSET, ("max", field, int) -> keep the larger value (shutdown only, so not atomic)."""
     key = key_for(hour_bucket(), hostname())
     pipe = client.pipeline()
+    if extra is not None:
+        extra(pipe)
     for kind, field, value in field_ops:
         if kind == "i":
             pipe.hincrby(key, field, value)
@@ -137,17 +166,22 @@ _skip_until = 0.0
 _skip_pid = None
 
 
-def _safe(field_ops: List[tuple]) -> None:
+def _guarded(fn) -> None:
+    """Run fn(client) behind the breaker; any failure is swallowed and arms it."""
     global _skip_until, _skip_pid
     if _skip_pid != os.getpid():
         _skip_until, _skip_pid = 0.0, os.getpid()
     if time.monotonic() < _skip_until:
         return
     try:
-        _write(_redis(), field_ops)
+        fn(_redis())
     except Exception as exc:  # never break a conversion over telemetry
         _skip_until = time.monotonic() + _BREAKER_SECONDS
         _warn_throttled("docling coldstart telemetry not recorded", exc)
+
+
+def _safe(field_ops: List[tuple], extra=None) -> None:
+    _guarded(lambda client: _write(client, field_ops, extra))
 
 
 def record_cold_start(reason: str, seconds: float, cache_size: int) -> None:
@@ -239,8 +273,107 @@ def record_conversion(conv, seconds: float, result, fmt: str, probe: bool = Fals
         _warn_throttled("docling conversion telemetry not recorded", exc)
 
 
+def set_recycle_limits(max_memory_kb, max_tasks) -> None:
+    """Remember the pool limits (parent, before the fork). 0, empty or None mean no limit."""
+    for name, value in (("max_memory_kb", max_memory_kb), ("max_tasks", max_tasks)):
+        try:
+            _limits[name] = int(value) or None
+        except (TypeError, ValueError):
+            _limits[name] = None
+
+
+def classify_exit(exitcode, peak_kb, max_memory_kb, max_tasks) -> str:
+    """Why did a pool child exit? billiard returns 155 for a memory and for a task recycle and
+    checks memory first, so a peak above the memory limit settles it."""
+    if exitcode == EX_RECYCLE:
+        if max_memory_kb and peak_kb is not None and peak_kb > max_memory_kb:
+            return "memory_limit"
+        if max_tasks:
+            return "max_tasks"
+        return "unknown"
+    if exitcode == 0 or (isinstance(exitcode, int) and exitcode < 0):
+        return "shutdown"  # sentinel at warm shutdown, or billiard's signal handler (-(256-signum))
+    return "unknown"
+
+
+def _proc_start_time(pid) -> Optional[str]:
+    """Field 22 of /proc/{pid}/stat: tells a live process from a reused pid. Never raises."""
+    try:
+        with open(f"/proc/{pid}/stat") as fh:
+            return fh.read().rsplit(")", 1)[1].split()[19]
+    except Exception:
+        return None
+
+
+def _read_int(path: str) -> Optional[int]:
+    try:
+        with open(path) as fh:
+            raw = fh.read().strip()
+        return int(raw) if raw != "max" else None
+    except Exception:
+        return None
+
+
+def _cgroup_memory() -> Dict[str, int]:
+    """oom_kill, peak and max (KB) of this container's cgroup v2; absent fields are left out."""
+    out: Dict[str, int] = {}
+    try:
+        with open(f"{CGROUP_ROOT}/memory.events") as fh:
+            for line in fh:
+                name, _, value = line.partition(" ")
+                if name == "oom_kill":
+                    out["oom_kill"] = int(value)
+    except Exception:
+        pass
+    for field, name in (("peak_kb", "memory.peak"), ("max_kb", "memory.max")):
+        value = _read_int(f"{CGROUP_ROOT}/{name}")
+        if value is not None:
+            out[field] = value // 1024
+    return out
+
+
+def _children_key() -> str:
+    return f"{CHILDREN_PREFIX}:{hostname()}"
+
+
 def record_process_start() -> None:
-    _safe([("i", "processes_started", 1)])
+    """A pool child started. It also notices the siblings that vanished without a shutdown
+    (SIGKILL never runs worker_process_shutdown): registered pids whose /proc starttime
+    changed. The parent has no public hook for that, but its replacement always comes after."""
+    me = os.getpid()
+    cgroup = _cgroup_memory()
+    seen: Dict[str, Any] = {}
+
+    def work(client) -> None:
+        key = _children_key()
+        gone = [
+            pid for pid, started in client.hgetall(key).items()
+            if pid != str(me) and _proc_start_time(pid) != started
+        ]
+        pipe = client.pipeline()
+        for pid in gone:
+            pipe.hdel(key, pid)
+        # only the HDEL that removed the entry counts: two children starting together do not both claim it
+        removed = [pid for pid, n in zip(gone, pipe.execute() if gone else []) if n]
+        mine = _proc_start_time(me)
+        if mine is not None:
+            client.hset(key, str(me), mine)
+        client.expire(key, COLDSTART_TTL_SECONDS)
+        seen["removed"] = removed
+        ops: List[tuple] = [("i", "processes_started", 1)]
+        if removed:
+            ops.append(("i", "processes_vanished", len(removed)))
+        if "oom_kill" in cgroup:
+            ops.append(("max", "cgroup_oom_kill", cgroup["oom_kill"]))
+        _write(client, ops)
+
+    _guarded(work)
+    removed = seen.get("removed")
+    if removed:
+        logger.warning(
+            f"docling.process_vanished count={len(removed)} pids={','.join(removed)} "
+            f"cgroup_oom_kill={cgroup.get('oom_kill', 'none')} hostname={hostname()}"
+        )
 
 
 def current_rss_kb() -> Optional[int]:
@@ -270,16 +403,37 @@ def peak_rss_kb() -> Optional[int]:
         return None
 
 
-def record_process_shutdown() -> None:
+def record_process_shutdown(exitcode=None) -> None:
     rss = current_rss_kb()
     peak = peak_rss_kb()
+    limit, tasks = _limits["max_memory_kb"], _limits["max_tasks"]
+    reason = classify_exit(exitcode, peak, limit, tasks)
+    cgroup = _cgroup_memory()
     ops: List[tuple] = [("i", "processes_stopped", 1)]
     if rss is not None:
         ops.append(("max", "rss_kb_max", rss))
     if peak is not None:
         ops.append(("max", "peak_rss_kb", peak))
-    logger.info(f"docling.process_shutdown pid={os.getpid()} hostname={hostname()} rss_kb={rss} peak_rss_kb={peak}")
-    _safe(ops)
+    ops.append(("i", f"recycle:{reason}", 1))
+    if exitcode is not None:
+        ops.append(("set", "last_exitcode", exitcode))
+    if limit:
+        ops.append(("set", "max_memory_per_child_kb", limit))
+    if tasks:
+        ops.append(("set", "max_tasks_per_child", tasks))
+    if "peak_kb" in cgroup:
+        ops.append(("max", "cgroup_memory_peak_kb", cgroup["peak_kb"]))
+    if "max_kb" in cgroup:
+        ops.append(("set", "cgroup_memory_max_kb", cgroup["max_kb"]))
+    pct = f"{100 * peak / limit:.1f}" if limit and peak is not None else "none"
+    logger.info(
+        f"docling.process_shutdown pid={os.getpid()} hostname={hostname()} exitcode={exitcode} "
+        f"reason={reason} rss_kb={rss} peak_rss_kb={peak} max_memory_kb={limit or 'none'} "
+        f"peak_pct_of_limit={pct} max_tasks={tasks or 'none'} "
+        f"cgroup_memory_peak_kb={cgroup.get('peak_kb', 'none')} cgroup_oom_kill={cgroup.get('oom_kill', 'none')}"
+    )
+    me = str(os.getpid())
+    _safe(ops, extra=lambda pipe: pipe.hdel(_children_key(), me))
 
 
 class BuildTracker:
@@ -336,6 +490,11 @@ def read_hours(hours: int = 24, now: Optional[datetime] = None, client=None) -> 
             total = sum(by_reason.values())
             conversions = int(_num(data.get("conversions")))
             rss, peak = data.get("rss_kb_max"), data.get("peak_rss_kb")
+
+            def opt(field):
+                return int(_num(data[field])) if data.get(field) is not None else None
+
+            limit = opt("max_memory_per_child_kb")
             rows.append({
                 "hour": start.isoformat(),
                 "worker": key.split(":", 3)[3],
@@ -357,5 +516,14 @@ def read_hours(hours: int = 24, now: Optional[datetime] = None, client=None) -> 
                 "pages_ok": int(_num(data.get("pages_ok"))),
                 "pages_failed": int(_num(data.get("pages_failed"))),
                 "docling_version": data.get("docling_version"),
+                "recycle_by_reason": {r: int(_num(data.get(f"recycle:{r}"))) for r in RECYCLE_REASONS},
+                "processes_vanished": int(_num(data.get("processes_vanished"))),
+                "last_exitcode": opt("last_exitcode"),
+                "max_memory_per_child_kb": limit,
+                "max_tasks_per_child": opt("max_tasks_per_child"),
+                "peak_rss_pct_of_limit": round(100 * int(_num(peak)) / limit, 1) if limit and peak is not None else None,
+                "cgroup_oom_kill": opt("cgroup_oom_kill"),
+                "cgroup_memory_peak_kb": opt("cgroup_memory_peak_kb"),
+                "cgroup_memory_max_kb": opt("cgroup_memory_max_kb"),
             })
     return rows
