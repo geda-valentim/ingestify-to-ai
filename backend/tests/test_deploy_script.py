@@ -49,8 +49,8 @@ def test_detection_is_anchored_on_last_success_marker():
     write = [i for i, l in enumerate(code) if 'git rev-parse HEAD >"$LAST_FILE"' in l]
     health = [i for i, l in enumerate(code) if "curl -s -m 5" in l]
     assert write and health and write[0] > health[0]
-    assert "git diff --name-only \"$BASE\" \"$NEWHEAD\"" in CODE
-    assert "git diff --name-only \"$OLD_HEAD\" \"$NEWHEAD\"" in CODE  # failed HEAD stays covered
+    assert "git diff --no-renames --name-only \"$BASE\" \"$NEWHEAD\"" in CODE
+    assert "git diff --no-renames --name-only \"$OLD_HEAD\" \"$NEWHEAD\"" in CODE  # failed HEAD stays covered
 
 
 def test_no_marker_aborts_before_any_git_change():
@@ -77,7 +77,7 @@ def test_review_fixes():
     assert 'if [ "$IMAGES" = 1 ] || [ "$COMPOSE_CHG" = 1 ]; then   # compose may change build' in CODE
     assert re.search(r'\[ "\$COMPOSE_CHG" = 1 \] && \[ -n "\$\{RUNNING\[frontend\]', CODE)  # frontend
     assert re.search(r'if in_list worker-live "\$CONF"; then\s+if \[ "\$BUILD_LIVE" = 1 \]', CODE)
-    assert 'git diff --name-only "$c" "$NEWHEAD"' in CODE and 'for c in "$OLD_HEAD" "$NEWHEAD"' in CODE
+    assert 'git diff --no-renames --name-only "$c" "$NEWHEAD"' in CODE and 'for c in "$OLD_HEAD" "$NEWHEAD"' in CODE
     assert 'compose build frontend' in CODE and "FRONT\" = 0 ]" not in CODE  # compose change rebuilds it
     pend, ok = CODE.index('>"$PENDING_FILE"'), CODE.index('rm -f "$PENDING_FILE"')
     assert pend < CODE.index("git merge --ff-only") and ok > CODE.index('>"$LAST_FILE"')
