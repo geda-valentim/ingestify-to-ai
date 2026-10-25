@@ -112,6 +112,8 @@ def test_read_hours_aggregates_per_hour_and_worker(redis_client):
     assert w1["by_reason"] == {"process_start": 2, "new_options": 0, "evicted": 1}
     assert w1["cold_starts_per_100_conversions"] == 5.0
     assert rows[0]["cold_starts_per_100_conversions"] is None
+    # a row written before the per-convert() counters existed reads back with defaults
+    assert (rows[0]["conversions_first"], rows[0]["pages_ok"], rows[0]["docling_version"]) == (0, 0, None)
 
 
 def test_admin_endpoint_shape_and_auth(redis_client, monkeypatch):

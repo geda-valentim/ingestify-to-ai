@@ -416,6 +416,15 @@ class DoclingColdStartRow(BaseModel):
     peak_rss_kb: Optional[int] = None
     conversions: int
     cold_starts_per_100_conversions: Optional[float] = None
+    conversions_first: int = 0
+    conversions_warm: int = 0
+    conversions_first_process: int = 0
+    conversions_failed: int = 0
+    convert_seconds_first: float = 0.0
+    convert_seconds_warm: float = 0.0
+    pages_ok: int = 0
+    pages_failed: int = 0
+    docling_version: Optional[str] = None
 
 
 class DoclingColdStartsResponse(BaseModel):
@@ -438,7 +447,11 @@ async def docling_cold_starts(admin_user=Depends(require("platform.monitoring.re
     filhos iniciados/encerrados (reciclagem por --max-memory-per-child), maior RSS atual visto
     no encerramento (`rss_kb_max`, KB), maior pico de RSS (`peak_rss_kb`, KB: o valor que o
     billiard compara com --max-memory-per-child) e `cold_starts_per_100_conversions` (conversões = pedidos de
-    conversor, um por página). Os contadores são cache Redis com TTL de 48 h: horas sem
+    conversor, um por página). `conversions_first`/`conversions_warm` contam as chamadas de
+    convert() (a primeira de cada conversor no processo carrega os pesos) com os segundos
+    em `convert_seconds_*`; `conversions_first_process` é a primeira do processo filho e
+    `conversions_failed` as que falharam; `pages_ok`/`pages_failed` contam páginas e
+    `docling_version` é a versão instalada. Os contadores são cache Redis com TTL de 48 h: horas sem
     dados não aparecem. `warn_per_hour` é o limiar do WARNING do monitoramento.
     """
     from starlette.concurrency import run_in_threadpool

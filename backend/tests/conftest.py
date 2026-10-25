@@ -40,6 +40,8 @@ def _docling_telemetry_fake_redis(monkeypatch):
 
     client = fakeredis.FakeRedis(decode_responses=True)
     client.flushall()
+    monkeypatch.setattr(docling_coldstart, "_skip_until", 0.0)
+    monkeypatch.setattr(docling_coldstart, "_process_converted_pid", None)
     monkeypatch.setattr(docling_coldstart, "_redis", lambda: client)
     monkeypatch.setattr(docling_coldstart, "_redis_read", lambda: client)
     yield client
