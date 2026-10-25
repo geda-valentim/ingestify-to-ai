@@ -237,7 +237,11 @@ sem alterar nada.
 ## O que o deploy não detecta
 
 - Edições em `.env` e em `docker-compose.override.yml` (não rastreados). Depois de editá-los,
-  rode `docker compose up -d --no-build --no-deps <svc>` nos serviços afetados.
+  rode `docker compose up -d --no-build --no-deps <svc>` **só** nos serviços **não gerenciados**
+  afetados. Nunca em gerenciado (ex.: `worker-audio`) nem no `worker-live`: o `up` do compose
+  recria sem o overlay do host agent e perde imagem fixada, GPU e perfil. Para gerenciados
+  (e para o `worker-live`), re-registre o host (`--use-built-image` se a imagem mudou, ver
+  "Serviços gerenciados: re-registrar") e depois rode `apply_profile`.
 - Override fora do `COMPOSE_FILE`: se o arquivo existe e o `.env` define `COMPOSE_FILE` sem
   incluí-lo, o script avisa (`compose ignores it`) e segue. Só avisa, nunca falha.
 - Mudança de overlay feita pelo host agent (perfis aplicados): use o engine control.
