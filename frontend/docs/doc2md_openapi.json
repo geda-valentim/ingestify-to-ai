@@ -696,7 +696,7 @@
           "Admin & Monitoring"
         ],
         "summary": "Cold starts do Docling por hora e por worker",
-        "description": "Últimas 24 h (UTC), uma linha por hora e por worker: quantas vezes o conversor do\nDocling foi construído (cada vez custa ~10 s carregando pesos), por motivo\n(`process_start` = primeiro conversor do processo, `new_options` = combinação nova de\nopções, `evicted` = combinação expulsa do cache LRU), segundos totais, processos\nfilhos iniciados/encerrados (reciclagem por --max-memory-per-child), maior RSS atual visto\nno encerramento (`rss_kb_max`, KB), maior pico de RSS (`peak_rss_kb`, KB: o valor que o\nbilliard compara com --max-memory-per-child) e `cold_starts_per_100_conversions` (conversões = pedidos de\nconversor, um por página). Os contadores são cache Redis com TTL de 48 h: horas sem\ndados não aparecem. `warn_per_hour` é o limiar do WARNING do monitoramento.",
+        "description": "Últimas 24 h (UTC), uma linha por hora e por worker: quantas vezes o conversor do\nDocling foi construído (cada vez custa ~10 s carregando pesos), por motivo\n(`process_start` = primeiro conversor do processo, `new_options` = combinação nova de\nopções, `evicted` = combinação expulsa do cache LRU), segundos totais, processos\nfilhos iniciados/encerrados (reciclagem por --max-memory-per-child), maior RSS atual visto\nno encerramento (`rss_kb_max`, KB), maior pico de RSS (`peak_rss_kb`, KB: o valor que o\nbilliard compara com --max-memory-per-child) e `cold_starts_per_100_conversions` (conversões = pedidos de\nconversor, um por página). `conversions_first`/`conversions_warm` contam as chamadas de\nconvert() (a primeira de cada conversor no processo carrega os pesos) com os segundos\nem `convert_seconds_*`; `conversions_first_process` é a primeira do processo filho e\n`conversions_failed` as que falharam; `pages_ok`/`pages_failed` contam páginas e\n`docling_version` é a versão instalada. Os contadores são cache Redis com TTL de 48 h: horas sem\ndados não aparecem. `warn_per_hour` é o limiar do WARNING do monitoramento.",
         "operationId": "docling_cold_starts_admin_docling_cold_starts_get",
         "responses": {
           "200": {
@@ -10567,6 +10567,57 @@
               }
             ],
             "title": "Cold Starts Per 100 Conversions"
+          },
+          "conversions_first": {
+            "type": "integer",
+            "title": "Conversions First",
+            "default": 0
+          },
+          "conversions_warm": {
+            "type": "integer",
+            "title": "Conversions Warm",
+            "default": 0
+          },
+          "conversions_first_process": {
+            "type": "integer",
+            "title": "Conversions First Process",
+            "default": 0
+          },
+          "conversions_failed": {
+            "type": "integer",
+            "title": "Conversions Failed",
+            "default": 0
+          },
+          "convert_seconds_first": {
+            "type": "number",
+            "title": "Convert Seconds First",
+            "default": 0.0
+          },
+          "convert_seconds_warm": {
+            "type": "number",
+            "title": "Convert Seconds Warm",
+            "default": 0.0
+          },
+          "pages_ok": {
+            "type": "integer",
+            "title": "Pages Ok",
+            "default": 0
+          },
+          "pages_failed": {
+            "type": "integer",
+            "title": "Pages Failed",
+            "default": 0
+          },
+          "docling_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Docling Version"
           }
         },
         "type": "object",

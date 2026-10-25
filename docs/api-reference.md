@@ -2733,7 +2733,11 @@ opções, `evicted` = combinação expulsa do cache LRU), segundos totais, proce
 filhos iniciados/encerrados (reciclagem por --max-memory-per-child), maior RSS atual visto
 no encerramento (`rss_kb_max`, KB), maior pico de RSS (`peak_rss_kb`, KB: o valor que o
 billiard compara com --max-memory-per-child) e `cold_starts_per_100_conversions` (conversões = pedidos de
-conversor, um por página). Os contadores são cache Redis com TTL de 48 h: horas sem
+conversor, um por página). `conversions_first`/`conversions_warm` contam as chamadas de
+convert() (a primeira de cada conversor no processo carrega os pesos) com os segundos
+em `convert_seconds_*`; `conversions_first_process` é a primeira do processo filho e
+`conversions_failed` as que falharam; `pages_ok`/`pages_failed` contam páginas e
+`docling_version` é a versão instalada. Os contadores são cache Redis com TTL de 48 h: horas sem
 dados não aparecem. `warn_per_hour` é o limiar do WARNING do monitoramento.
 
 Respostas declaradas:
@@ -8135,6 +8139,15 @@ Esquema JSON completo:
 | `peak_rss_kb` | não | integer / null |  |  |
 | `conversions` | sim | integer |  |  |
 | `cold_starts_per_100_conversions` | não | number / null |  |  |
+| `conversions_first` | não | integer | default=0 |  |
+| `conversions_warm` | não | integer | default=0 |  |
+| `conversions_first_process` | não | integer | default=0 |  |
+| `conversions_failed` | não | integer | default=0 |  |
+| `convert_seconds_first` | não | number | default=0.0 |  |
+| `convert_seconds_warm` | não | number | default=0.0 |  |
+| `pages_ok` | não | integer | default=0 |  |
+| `pages_failed` | não | integer | default=0 |  |
+| `docling_version` | não | string / null |  |  |
 
 Esquema JSON completo:
 
@@ -8204,6 +8217,57 @@ Esquema JSON completo:
         }
       ],
       "title": "Cold Starts Per 100 Conversions"
+    },
+    "conversions_first": {
+      "type": "integer",
+      "title": "Conversions First",
+      "default": 0
+    },
+    "conversions_warm": {
+      "type": "integer",
+      "title": "Conversions Warm",
+      "default": 0
+    },
+    "conversions_first_process": {
+      "type": "integer",
+      "title": "Conversions First Process",
+      "default": 0
+    },
+    "conversions_failed": {
+      "type": "integer",
+      "title": "Conversions Failed",
+      "default": 0
+    },
+    "convert_seconds_first": {
+      "type": "number",
+      "title": "Convert Seconds First",
+      "default": 0.0
+    },
+    "convert_seconds_warm": {
+      "type": "number",
+      "title": "Convert Seconds Warm",
+      "default": 0.0
+    },
+    "pages_ok": {
+      "type": "integer",
+      "title": "Pages Ok",
+      "default": 0
+    },
+    "pages_failed": {
+      "type": "integer",
+      "title": "Pages Failed",
+      "default": 0
+    },
+    "docling_version": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Docling Version"
     }
   },
   "type": "object",
