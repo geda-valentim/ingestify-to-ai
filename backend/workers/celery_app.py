@@ -219,7 +219,7 @@ if settings.monitoring_enabled:
 
 
 
-from celery.signals import worker_process_init, worker_process_shutdown  # noqa: E402
+from celery.signals import worker_init, worker_process_init, worker_process_shutdown  # noqa: E402
 
 
 @worker_process_init.connect(weak=False)
@@ -230,12 +230,22 @@ def count_pool_process_start(**_):
     docling_coldstart.record_process_start()  # swallows Redis failures
 
 
-@worker_process_shutdown.connect(weak=False)
-def count_pool_process_shutdown(**_):
-    """Pool child exiting (recycled or stopped): count it and keep its RSS."""
+@worker_init.connect(weak=False)
+def keep_pool_recycle_limits(sender=None, **_):
+    """Parent, before the pool forks: children inherit the limits billiard enforces."""
     from shared import docling_coldstart
 
-    docling_coldstart.record_process_shutdown()
+    docling_coldstart.set_recycle_limits(
+        getattr(sender, "max_memory_per_child", None), getattr(sender, "max_tasks_per_child", None)
+    )
+
+
+@worker_process_shutdown.connect(weak=False)
+def count_pool_process_shutdown(pid=None, exitcode=None, **_):
+    """Pool child exiting (recycled or stopped): count it, say why, and keep its RSS."""
+    from shared import docling_coldstart
+
+    docling_coldstart.record_process_shutdown(exitcode)
 
 # Durable image/facial batches and storage delivery.
 import workers.image_full_tasks  # noqa: E402,F401
