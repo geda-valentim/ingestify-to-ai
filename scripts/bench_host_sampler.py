@@ -94,24 +94,32 @@ def run(args):
     t_start = datetime.now(timezone.utc).isoformat()
     proc, gpu_fh = (None, None) if args.no_gpu else start_gpu(run_dir)
     deadline = time.monotonic() + args.duration if args.duration is not None else None
-    with open_new(os.path.join(run_dir, "host.csv")) as fh:
-        wr = csv.writer(fh)
-        wr.writerow(HOST_FIELDS)
-        while not STOP:
-            wr.writerow(sample(args.cgroup))
-            fh.flush()
-            if deadline is not None and time.monotonic() >= deadline:
-                break
-            time.sleep(args.interval)
-    if proc:
-        proc.terminate()
-        proc.wait(timeout=10)
-        gpu_fh.close()
-    with open_new(os.path.join(run_dir, "host_peak.csv")) as fh:
-        wr = csv.writer(fh)
-        wr.writerow(["t_start", "t_end", "memory_peak_before", "memory_peak_after"])
-        wr.writerow([t_start, datetime.now(timezone.utc).isoformat(), peak_before,
-                     num(os.path.join(args.cgroup, "memory.peak"))])
+    try:
+        with open_new(os.path.join(run_dir, "host.csv")) as fh:
+            wr = csv.writer(fh)
+            wr.writerow(HOST_FIELDS)
+            while not STOP:
+                wr.writerow(sample(args.cgroup))
+                fh.flush()
+                if deadline is not None and time.monotonic() >= deadline:
+                    break
+                time.sleep(args.interval)
+    finally:  # nvidia-smi must never outlive the sampler, even if the cgroup vanishes mid-run
+        if proc:
+            proc.terminate()
+            try:
+                proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+            gpu_fh.close()
+        try:
+            peak_after = num(os.path.join(args.cgroup, "memory.peak"))
+        except OSError:
+            peak_after = None
+        with open_new(os.path.join(run_dir, "host_peak.csv")) as fh:
+            wr = csv.writer(fh)
+            wr.writerow(["t_start", "t_end", "memory_peak_before", "memory_peak_after"])
+            wr.writerow([t_start, datetime.now(timezone.utc).isoformat(), peak_before, peak_after])
 
 
 def _stop(*_):

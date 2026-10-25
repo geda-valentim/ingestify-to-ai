@@ -69,3 +69,27 @@ def test_rejects_outside_root_and_bad_cgroup(env, tmp_path):
     cg, root = env
     assert hs.main(["--cgroup", str(cg), "--out", str(tmp_path / "elsewhere"), "--duration", "0"]) == 2
     assert hs.main(["--cgroup", str(tmp_path), "--out", str(root / "r3"), "--duration", "0"]) == 2
+
+
+def test_gpu_process_is_stopped_when_sampling_fails(env, tmp_path, monkeypatch):
+    cg, root = env
+    bindir, pidfile = tmp_path / "bin", tmp_path / "smi.pid"
+    bindir.mkdir()
+    (bindir / "nvidia-smi").write_text(f"#!/bin/sh\necho $$ > {pidfile}\nexec sleep 30\n")
+    (bindir / "nvidia-smi").chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bindir}:/usr/bin:/bin")
+    real, calls = hs.sample, []
+
+    def flaky(cg):  # first sample works, then the cgroup vanishes (leaves time for nvidia-smi to start)
+        if calls:
+            raise OSError("cgroup vanished")
+        calls.append(1)
+        return real(cg)
+
+    monkeypatch.setattr(hs, "sample", flaky)
+    out = root / "run4"
+    with pytest.raises(OSError):
+        hs.main(["--cgroup", str(cg), "--out", str(out), "--interval", "0.5"])
+    with pytest.raises(ProcessLookupError):
+        os.kill(int(pidfile.read_text()), 0)
+    assert (out / "host_peak.csv").exists()
