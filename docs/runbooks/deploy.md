@@ -195,7 +195,18 @@ mudou:
 | `health` | tudo rodou, mas a API está doente ou em outra versão (log do `api`) |
 | `marker` | saudável, sem marcador |
 
-Para repetir, rode `make deploy` de novo. O script se lembra do que ficou pendente:
+Para repetir, rode o mesmo comando de novo. Um `make deploy` sem variáveis faz deploy do
+`origin/main`, então numa retentativa de **rollback** ele poderia reimplantar justamente a
+release que se queria abandonar. Repita **exatamente** as variáveis de alvo do comando
+original, a cada retentativa:
+
+```bash
+make deploy                           # deploy normal (origin/main)
+make deploy DEPLOY_REF=<ref>          # rollback: mesmo <ref> do primeiro comando
+make deploy NO_PULL=1                 # se o original usou NO_PULL=1
+```
+
+O script se lembra do que ficou pendente:
 
 - `deploy-pending` guarda um commit por linha: todo HEAD que um deploy não terminado tocou.
   Cada um entra na detecção (`commit..alvo`), então o que falhou é refeito mesmo que o
@@ -220,19 +231,51 @@ rm -f "$(git rev-parse --git-path deploy-pending)" "$(git rev-parse --git-path d
 Para voltar ao último commit bom, sem pull:
 
 ```bash
-make deploy DEPLOY_REF=<último deploy bom>     # ex.: c5cdcef
+make deploy DEPLOY_REF=<último deploy bom>
 ```
 
 O script valida o commit e o ancestral em `origin/main` e roda `git reset --keep`, que recusa
 se perderia mudança local. Gerenciados e `worker-live` seguem as regras acima: re-registre e
-reaplique o perfil se o aviso pedir. Use `DRY_RUN=1` antes para ver o plano.
+reaplique o perfil se o aviso pedir. Use `DRY_RUN=1` antes para ver o plano. Numa retentativa,
+repita o mesmo `DEPLOY_REF` (ver "Deploy interrompido").
 
-**Re-registro após rollback.** O checkout voltado pode ter um `scripts/register_engine_host.py`
-antigo, sem `--use-built-image` (o de `c5cdcef` não tem). Sem a flag, ele grava a imagem do
-container existente, que um gerenciado não recriado ainda mantém, e não a recém-construída.
-Use o script atual, tirado do commit anterior ao rollback (`HEAD before` na mensagem do
-script, ou `git rev-parse HEAD` antes de rodar o rollback), como cópia ao lado dos
-demais scripts, pois ele importa `engine_host_agent` de lá:
+**Alvo suportado.** `make deploy DEPLOY_REF=...` só vale para alvos que já contêm
+`scripts/deploy.sh`, isto é, o merge do PR #107 (`22dd189`) ou posterior. Confira com
+`git log --oneline -- scripts/deploy.sh` e `git merge-base --is-ancestor 22dd189 <ref>`. Um
+alvo mais antigo remove `scripts/deploy.sh` e o `deploy` do `Makefile` no `reset`, e o script
+não tem como recuperar esse rollback: use o procedimento manual abaixo.
+
+### Rollback manual (alvo sem `scripts/deploy.sh`)
+
+Rode na raiz do checkout. O script não participa, então `deploy-last-success` e
+`deploy-pending` não são atualizados.
+
+1. Registre antes, para cada serviço **não gerenciado em execução**, o número de réplicas
+   (`docker compose ps --status running -q <svc> | wc -l`). Serviço com `n=0` fica parado.
+2. Vá para o commit, sem mover a branch: `git checkout --detach <ref>` (recusa se perderia
+   mudança local).
+3. Reconstrua e recrie **só os não gerenciados em execução**, com o `--scale` registrado
+   (`api` e `beat` sem `--scale`), como em "O que o deploy não detecta":
+
+```bash
+docker compose build <serviços de código>
+docker compose up -d --no-build --no-deps --force-recreate --scale <svc>=<n> <svc>
+```
+
+4. Gerenciados e `worker-live` só recebem `build`, nunca `up`. Re-registre o host com o script
+   atual, como em "Re-registro após rollback", e rode `apply_profile`.
+5. Confira `GET /health`. Para voltar ao fluxo normal: `git checkout main`, e só então
+   `make deploy`.
+
+### Re-registro após rollback
+
+O checkout voltado pode ter um `scripts/register_engine_host.py` antigo, sem
+`--use-built-image` (confira com `grep -c use-built-image scripts/register_engine_host.py`; os
+anteriores a `22dd189` não têm). Sem a flag, ele grava a imagem do container existente, que um
+gerenciado não recriado ainda mantém, e não a recém-construída. Use o script atual, tirado do
+commit anterior ao rollback (`HEAD before` na mensagem do script, ou `git rev-parse HEAD`
+antes de voltar), como cópia ao lado dos demais scripts, pois ele importa `engine_host_agent`
+de lá:
 
 ```bash
 git show <commit anterior ao rollback>:scripts/register_engine_host.py > scripts/register_engine_host_current.py
