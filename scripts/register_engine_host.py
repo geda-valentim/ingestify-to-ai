@@ -107,6 +107,8 @@ def register(args):
         if service not in SERVICES:
             raise ValueError("Unknown worker service")
         image = cfg["services"][service].get("image")
+        if not image and args.use_built_image:
+            image = f"{args.project}-{service}"  # compose's default tag of a built service
         if not image:
             ids = subprocess.check_output(
                 cmd + ["ps", "--all", "--quiet", service], cwd=args.cwd, text=True
@@ -173,6 +175,12 @@ if __name__ == "__main__":
     p.add_argument("--manifest", action="append", required=True)
     p.add_argument("--service", action="append", required=True)
     p.add_argument("--gpu-uuid", action="append", default=[])
+    p.add_argument(
+        "--use-built-image",
+        action="store_true",
+        help="record the freshly built <project>-<service> image, not the one "
+        "of the existing container (use after a deploy that rebuilt the images)",
+    )
     p.add_argument("--output", default="/etc/ingestify/engine-host.json")
     p.add_argument("--identities", default="secrets/engine_host_identities.json")
     p.add_argument(

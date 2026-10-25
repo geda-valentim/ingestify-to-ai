@@ -66,6 +66,7 @@ if [ -s "$LAST_FILE" ]; then
 fi
 OLD_HEAD="$(git rev-parse HEAD)"
 PENDING_FILE="$(git rev-parse --git-path deploy-pending)"   # one commit per line: every HEAD an unfinished deploy touched
+INV_FILE="$(git rev-parse --git-path deploy-pending-inventory)"   # "svc count": running replicas BEFORE the first unfinished deploy
 PENDING=()
 if [ -s "$PENDING_FILE" ]; then
   while read -r c; do
@@ -185,6 +186,16 @@ for s in $CODE_SERVICES; do
   elif [ -n "${RUNNING[$s]:-}" ]; then UNMANAGED_RUNNING="$UNMANAGED_RUNNING $s"; fi
 done
 
+if [ "$DRY_RUN" != 1 ] && [ ! -s "$INV_FILE" ]; then   # first run of this deploy: record the healthy inventory
+  for s in "${!RUNNING[@]}"; do printf '%s %s\n' "$s" "${RUNNING[$s]}"; done >"$INV_FILE"
+fi
+RESTORE=""   # a retry restores what the interrupted run left down/degraded, from the ORIGINAL inventory
+while read -r s n; do
+  [ -n "$s" ] && in_list "$s" "$CONF" && [ "${RUNNING[$s]:-0}" -lt "$n" ] || continue
+  if is_managed "$s"; then warn "$s ran $n replica(s) before the interrupted deploy and is down/degraded: re-apply its profile"; continue; fi
+  RUNNING[$s]="$n"; RESTORE="$RESTORE $s"; in_list "$s" "$UNMANAGED_RUNNING" || UNMANAGED_RUNNING="$UNMANAGED_RUNNING $s"
+done < <(cat "$INV_FILE" 2>/dev/null || true)
+
 active_tasks_warning() {   # best effort, never blocks
   local s id out pfx
   for s in worker worker-audio; do
@@ -240,6 +251,12 @@ elif [ "$CODE" = 1 ] && [ -n "$UNMANAGED_RUNNING$MANAGED_RUNNING" ]; then
   active_tasks_warning
   restart_running $UNMANAGED_RUNNING $MANAGED_RUNNING
 fi
+if [ -n "$RESTORE" ]; then   # no recreate: only starts missing replicas
+  mapfile -t SC < <(scale_args $RESTORE); [ -n "${SC[0]:-}" ] || SC=()
+  log "Restoring services interrupted by an earlier run:$RESTORE ${SC[*]:-}"
+  # shellcheck disable=SC2086
+  run compose up -d --no-build --no-deps "${SC[@]}" $RESTORE
+fi
 # ---------------------------------------------------------------- worker-live
 STAGE="worker-live"
 LIVE_BUILT=0
@@ -273,10 +290,11 @@ if [ -n "${NOTICE// /}" ]; then
     echo "ATTENTION - engine-control-managed services were NOT recreated:${NOTICE}"
     if [ "$COMPOSE_CHG" = 1 ]; then
       echo "  Compose changed: the host agent is now in REGISTERED_MANIFEST_CHANGED. Re-register the host"
-      echo "  (docs/runbooks/engine-control-bootstrap.md, 'Re-registrar o host'), THEN run apply_profile."
+      echo "  (docs/runbooks/engine-control-bootstrap.md, 'Re-registrar o host') WITH --use-built-image, THEN apply_profile."
     fi
     if [ "$IMAGES" = 1 ] || [ "$LIVE_BUILT" = 1 ]; then
-      echo "  New image: re-register the host with the new image digest (same runbook), THEN apply_profile."
+      echo "  New image: re-register with scripts/register_engine_host.py --use-built-image (without it the OLD"
+      echo "  container's image is recorded), THEN apply_profile."
     fi
     echo "  Services stopped on purpose stay stopped."
   } >&2
@@ -306,5 +324,5 @@ echo "OK $body"
 
 STAGE="marker"
 git rev-parse HEAD >"$LAST_FILE"
-rm -f "$PENDING_FILE"
+rm -f "$PENDING_FILE" "$INV_FILE"
 STAGE="done"; log "Deployed $(git rev-parse --short HEAD) (marker: $LAST_FILE)"
