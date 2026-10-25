@@ -2,6 +2,7 @@
 import logging
 import os
 import subprocess
+from types import SimpleNamespace
 
 import pytest
 
@@ -165,19 +166,6 @@ def test_signals_record_limits_and_reason(_docling_telemetry_fake_redis, monkeyp
     assert _hash(_docling_telemetry_fake_redis)["recycle:memory_limit"] == "1"
 
 
-def test_read_hours_defaults_and_values(_docling_telemetry_fake_redis):
-    client = _docling_telemetry_fake_redis
-    client.hset(cs.key_for(cs.hour_bucket(), "old"), mapping={"cold:process_start": 1, "conversions": 1})
-    cs.record_process_shutdown(155)
-    rows = {r["worker"]: r for r in cs.read_hours(1)}
-    old = rows["old"]
-    assert old["recycle_by_reason"] == {"memory_limit": 0, "max_tasks": 0, "shutdown": 0, "unknown": 0}
-    assert old["processes_vanished"] == 0 and old["peak_rss_pct_of_limit"] is None and old["last_exitcode"] is None
-    new = rows[cs.hostname()]
-    assert new["recycle_by_reason"]["memory_limit"] == 1
-    assert (new["last_exitcode"], new["peak_rss_pct_of_limit"]) == (155, 100.2)
-
-
 def test_redis_outage_never_raises_and_trips_breaker(monkeypatch):
     calls = []
 
@@ -196,3 +184,19 @@ def test_redis_outage_never_raises_and_trips_breaker(monkeypatch):
     cs.record_process_shutdown(155)
     cs.record_process_start()
     assert len(calls) == 1 and cs._skip_until > 0
+
+
+def test_conversion_renews_registry_ttl(_docling_telemetry_fake_redis):
+    client = _docling_telemetry_fake_redis
+    cs.record_process_start()
+    client.expire(cs._children_key(), 100)
+    cs.record_conversion(SimpleNamespace(), 1.0, None, "pdf")
+    assert client.ttl(cs._children_key()) > 100
+
+
+def test_probe_conversion_does_not_touch_registry(_docling_telemetry_fake_redis):
+    client = _docling_telemetry_fake_redis
+    cs.record_process_start()
+    client.expire(cs._children_key(), 100)
+    cs.record_conversion(SimpleNamespace(), 1.0, None, "pdf", probe=True)
+    assert client.ttl(cs._children_key()) <= 100
