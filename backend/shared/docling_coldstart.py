@@ -38,6 +38,10 @@ Fields:
     conv_seconds:first|warm  summed convert() seconds of those calls (the export to markdown is out)
     conv:first_process     convert() calls that were the first of the whole pool child
     conv:failed            convert() calls that raised
+    wrapper_seconds:{reason}  build seconds without the pipeline load (== seconds:{reason} when
+                           DOCLING_INIT_PIPELINE is off)
+    pipeline_init_seconds:{reason}  seconds of initialize_pipeline (DOCLING_INIT_PIPELINE on only)
+    pipeline_init:{ok|failed|unavailable}  count of those loads, by outcome (flag on only)
     pages_ok|pages_failed  pages converted / not converted (PARTIAL_SUCCESS counts the pages whose
                            backend failed to open; a document_timeout partial would show 0 failed)
     docling_version        installed docling, written by the last writer
@@ -184,12 +188,25 @@ def _safe(field_ops: List[tuple], extra=None) -> None:
     _guarded(lambda client: _write(client, field_ops, extra))
 
 
-def record_cold_start(reason: str, seconds: float, cache_size: int) -> None:
+def record_cold_start(reason: str, seconds: float, cache_size: int, wrapper_seconds: Optional[float] = None,
+                      pipeline_init_seconds: Optional[float] = None, pipeline_init: str = "off") -> None:
+    """`seconds` is the whole build; with DOCLING_INIT_PIPELINE on it includes the weight load."""
+    def fmt(v):
+        return "none" if v is None else f"{v:.2f}"
+
     logger.info(
-        f"docling.cold_start reason={reason} seconds={seconds:.2f} pid={os.getpid()} "
-        f"hostname={hostname()} cache_size={cache_size}"
+        f"docling.cold_start reason={reason} seconds={seconds:.2f} wrapper_seconds={fmt(wrapper_seconds)} "
+        f"pipeline_init_seconds={fmt(pipeline_init_seconds)} pipeline_init={pipeline_init} "
+        f"pid={os.getpid()} hostname={hostname()} cache_size={cache_size}"
     )
-    _safe([("i", f"cold:{reason}", 1), ("f", f"seconds:{reason}", float(seconds))])
+    ops = [("i", f"cold:{reason}", 1), ("f", f"seconds:{reason}", float(seconds))]
+    if wrapper_seconds is not None:
+        ops.append(("f", f"wrapper_seconds:{reason}", float(wrapper_seconds)))
+    if pipeline_init != "off":
+        ops.append(("i", f"pipeline_init:{pipeline_init}", 1))
+        if pipeline_init_seconds is not None:
+            ops.append(("f", f"pipeline_init_seconds:{reason}", float(pipeline_init_seconds)))
+    _safe(ops)
 
 
 def record_conversion_request() -> None:
@@ -547,6 +564,11 @@ def read_hours(hours: int = 24, now: Optional[datetime] = None, client=None) -> 
                 "conversions_failed": int(_num(data.get("conv:failed"))),
                 "convert_seconds_first": round(_num(data.get("conv_seconds:first")), 2),
                 "convert_seconds_warm": round(_num(data.get("conv_seconds:warm")), 2),
+                "wrapper_seconds_total": round(sum(_num(data.get(f"wrapper_seconds:{r}")) for r in REASONS), 2),
+                "pipeline_init_seconds_total": round(
+                    sum(_num(data.get(f"pipeline_init_seconds:{r}")) for r in REASONS), 2),
+                **{f"pipeline_init_{s}": int(_num(data.get(f"pipeline_init:{s}")))
+                   for s in ("ok", "failed", "unavailable")},
                 "pages_ok": int(_num(data.get("pages_ok"))),
                 "pages_failed": int(_num(data.get("pages_failed"))),
                 "docling_version": data.get("docling_version"),

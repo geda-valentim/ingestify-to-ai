@@ -88,6 +88,7 @@ class DoclingConverter:
                     }
                 )
 
+            self._pdf_format = InputFormat.PDF
             logger.info(f"Docling converter initialized (OCR={enable_ocr}, Tables={enable_table_structure}, Images={enable_images}, Backend={backend_name})")
         except ImportError as e:
             logger.error(f"Failed to import Docling: {e}")
@@ -309,12 +310,32 @@ _converters_lock = threading.Lock()
 _build_tracker = docling_coldstart.BuildTracker()
 
 
+def _init_pipeline(converter):
+    """Load the PDF pipeline weights now. -> (seconds|None, 'ok'|'failed'|'unavailable').
+
+    Never raises (except a soft time limit): on failure the first convert() loads them, as before."""
+    init = getattr(getattr(converter, "converter", None), "initialize_pipeline", None)
+    if init is None:
+        return None, "unavailable"
+    started = time.monotonic()
+    try:
+        init(getattr(converter, "_pdf_format", "pdf"))
+        return time.monotonic() - started, "ok"
+    except Exception as exc:
+        from celery.exceptions import SoftTimeLimitExceeded
+        if isinstance(exc, SoftTimeLimitExceeded):
+            raise
+        logger.warning(f"docling.pipeline_init failed, the first conversion loads the weights: {exc!r}")
+        return time.monotonic() - started, "failed"
+
+
 def _cached_converter(enable_ocr: bool, enable_table_structure: bool, enable_images: bool,
                       picture_images: bool = False) -> DoclingConverter:
     from shared.config import get_settings
 
     key = (enable_ocr, enable_table_structure, enable_images, picture_images)
-    size = max(1, get_settings().docling_converter_cache_size)
+    settings = get_settings()
+    size = max(1, settings.docling_converter_cache_size)
     # The lock is held across the build on purpose: it serializes builds, so two threads
     # never load two converters' weights into VRAM at once (readiness probes included).
     with _converters_lock:
@@ -327,15 +348,26 @@ def _cached_converter(enable_ocr: bool, enable_table_structure: bool, enable_ima
                        enable_images=enable_images)
         if picture_images:
             options["picture_images"] = True
+        # Evict before building: the new pipeline must never be resident next to the LRU victim
+        # (two sets of weights at once = CUDA OOM / cgroup kill, notably with cache size 1).
+        # `reason` was read above from the tracker, which keeps its own history.
+        evicted = False
+        while len(_converters) >= size:
+            _converters.popitem(last=False)
+            evicted = True
+        if evicted:
+            import gc
+            gc.collect()
         started = time.monotonic()
         converter = DoclingConverter(**options)
-        seconds = time.monotonic() - started
+        wrapper = time.monotonic() - started
+        init_s, init_status = _init_pipeline(converter) if settings.docling_init_pipeline else (None, "off")
+        seconds = time.monotonic() - started  # total: wrapper plus the pipeline load when on
         _build_tracker.commit(key)  # only after a successful build
         docling_coldstart.label_converter(converter, key, reason)
         _converters[key] = converter
-        while len(_converters) > size:
-            _converters.popitem(last=False)
-    docling_coldstart.record_cold_start(reason, seconds, size)
+    docling_coldstart.record_cold_start(reason, seconds, size, wrapper_seconds=wrapper,
+                                        pipeline_init_seconds=init_s, pipeline_init=init_status)
     return converter
 
 
