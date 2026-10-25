@@ -1,4 +1,5 @@
 """Why a Docling pool child exited, and the children that vanished without a shutdown."""
+import asyncio
 import logging
 import os
 import subprocess
@@ -7,6 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 import workers.celery_app  # noqa: F401  (connects the pool signals)
+from api import admin_routes
 from celery.signals import worker_init, worker_process_shutdown
 from shared import docling_coldstart as cs
 
@@ -193,6 +195,28 @@ def test_signals_record_limits_and_reason(_docling_telemetry_fake_redis, monkeyp
     assert cs._limits == {"max_memory_kb": 5_000_000, "max_tasks": None}
     worker_process_shutdown.send(sender=None, pid=1, exitcode=155)
     assert _hash(_docling_telemetry_fake_redis)["recycle:memory_limit"] == "1"
+
+
+def test_read_hours_defaults_and_values(_docling_telemetry_fake_redis):
+    client = _docling_telemetry_fake_redis
+    client.hset(cs.key_for(cs.hour_bucket(), "old"), mapping={"cold:process_start": 1, "conversions": 1})
+    cs.record_process_shutdown(155)
+    rows = {r["worker"]: r for r in cs.read_hours(1)}
+    old = rows["old"]
+    assert [old[f"recycle_{r}"] for r in cs.RECYCLE_REASONS] == [0, 0, 0, 0]
+    assert old["processes_vanished"] == 0 and old["peak_rss_pct_of_limit"] is None and old["last_exitcode"] is None
+    new = rows[cs.hostname()]
+    assert new["recycle_memory_limit"] == 1
+    assert (new["last_exitcode"], new["peak_rss_pct_of_limit"]) == (155, 100.2)
+
+
+def test_endpoint_shows_recycle_fields(_docling_telemetry_fake_redis):
+    _docling_telemetry_fake_redis.hset(cs.key_for(cs.hour_bucket(), "old"), mapping={"cold:process_start": 1, "conversions": 1})
+    cs.record_process_shutdown(155)
+    rows = {r["worker"]: r for r in asyncio.run(admin_routes.docling_cold_starts(admin_user=None)).model_dump()["rows"]}
+    old, new = rows["old"], rows[cs.hostname()]
+    assert old["recycle_memory_limit"] == 0 and old["last_exitcode"] is None and old["peak_rss_pct_of_limit"] is None
+    assert (new["recycle_memory_limit"], new["last_exitcode"], new["peak_rss_pct_of_limit"]) == (1, 155, 100.2)
 
 
 def test_redis_outage_never_raises_and_trips_breaker(monkeypatch):

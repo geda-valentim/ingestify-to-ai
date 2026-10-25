@@ -62,6 +62,7 @@ logger = logging.getLogger(__name__)
 KEY_PREFIX = "docling:coldstart"
 COLDSTART_TTL_SECONDS = 48 * 3600
 REASONS = ("process_start", "new_options", "evicted")
+RECYCLE_REASONS = ("memory_limit", "max_tasks", "shutdown", "unknown")
 CHILDREN_PREFIX = "docling:children"
 CGROUP_ROOT = "/sys/fs/cgroup"
 try:  # billiard returns this exitcode for both --max-memory-per-child and --max-tasks-per-child
@@ -523,6 +524,11 @@ def read_hours(hours: int = 24, now: Optional[datetime] = None, client=None) -> 
             total = sum(by_reason.values())
             conversions = int(_num(data.get("conversions")))
             rss, peak = data.get("rss_kb_max"), data.get("peak_rss_kb")
+
+            def opt(field):
+                return int(_num(data[field])) if data.get(field) is not None else None
+
+            limit = opt("max_memory_per_child_kb")
             rows.append({
                 "hour": start.isoformat(),
                 "worker": key.split(":", 3)[3],
@@ -544,5 +550,14 @@ def read_hours(hours: int = 24, now: Optional[datetime] = None, client=None) -> 
                 "pages_ok": int(_num(data.get("pages_ok"))),
                 "pages_failed": int(_num(data.get("pages_failed"))),
                 "docling_version": data.get("docling_version"),
+                **{f"recycle_{r}": int(_num(data.get(f"recycle:{r}"))) for r in RECYCLE_REASONS},
+                "processes_vanished": int(_num(data.get("processes_vanished"))),
+                "last_exitcode": opt("last_exitcode"),
+                "max_memory_per_child_kb": limit,
+                "max_tasks_per_child": opt("max_tasks_per_child"),
+                "peak_rss_pct_of_limit": round(100 * int(_num(peak)) / limit, 1) if limit and peak is not None else None,
+                "cgroup_oom_kill": opt("cgroup_oom_kill"),
+                "cgroup_memory_peak_kb": opt("cgroup_memory_peak_kb"),
+                "cgroup_memory_max_kb": opt("cgroup_memory_max_kb"),
             })
     return rows
