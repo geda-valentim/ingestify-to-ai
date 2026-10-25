@@ -5,7 +5,9 @@ Every 10 s, each local worker announces in Redis which feature lane it serves
 and the GPU it sees: engines:local:{feature}:{hostname}, a hash with a 30 s TTL.
 The admin view compares these with the configured workers ("configured X, alive
 Y") and shows real VRAM use; capacity and routing never depend on them - a
-restarting replica must not make the engine look empty.
+restarting replica must not make the engine look empty. `concurrency` (1 slot =
+1 prefork child) is published for the S3 admission to read later
+(liveness.observed_ready_slots, not called by anything yet).
 
 GPU facts come from `nvidia-smi` (the NVIDIA runtime mounts it into GPU
 containers), so no extra Python dependency is needed; without it the worker
@@ -53,17 +55,19 @@ def detect_gpu() -> Optional[Dict[str, str]]:
     }
 
 
-def heartbeat_fields(features: List[str]) -> Dict[str, str]:
+def heartbeat_fields(features: List[str], concurrency: Optional[int] = None) -> Dict[str, str]:
     gpu = detect_gpu()
     fields = {"device": "cuda" if gpu else "cpu", "updated_at": f"{time.time():.0f}"}
+    if concurrency is not None:
+        fields["concurrency"] = str(concurrency)
     if gpu:
         fields.update(gpu)
     return fields
 
 
-def publish(features: List[str], hostname: str, client=None) -> None:
+def publish(features: List[str], hostname: str, client=None, concurrency: Optional[int] = None) -> None:
     client = client or get_redis_client().client
-    fields = heartbeat_fields(features)
+    fields = heartbeat_fields(features, concurrency)
     pipe = client.pipeline()
     for feature in features:
         key = KEY.format(feature=feature, hostname=hostname)
@@ -72,10 +76,22 @@ def publish(features: List[str], hostname: str, client=None) -> None:
     pipe.execute()
 
 
-def _loop(features: List[str], hostname: str) -> None:
+def _pool_concurrency(sender) -> Optional[int]:
+    """Prefork children of this worker, or None when it cannot be read"""
+    for read in (lambda: sender.controller.concurrency, lambda: sender.pool.num_processes):
+        try:
+            value = int(read())
+            if value > 0:
+                return value
+        except Exception:
+            continue
+    return None
+
+
+def _loop(features: List[str], hostname: str, concurrency: Optional[int] = None) -> None:
     while not _stop.is_set():
         try:
-            publish(features, hostname)
+            publish(features, hostname, concurrency=concurrency)
         except Exception as e:  # a heartbeat must never take the worker down
             logger.warning(f"[ENGINES] Heartbeat for {features} failed: {e}")
         _stop.wait(INTERVAL_SECONDS)
@@ -92,7 +108,8 @@ def _start(sender=None, **kwargs):
     if not features:
         return
     hostname = getattr(sender, "hostname", None) or socket.gethostname()
-    threading.Thread(target=_loop, args=(features, hostname), name="engine-heartbeat", daemon=True).start()
+    concurrency = _pool_concurrency(sender)
+    threading.Thread(target=_loop, args=(features, hostname, concurrency), name="engine-heartbeat", daemon=True).start()
     logger.info(f"[ENGINES] Heartbeat started for {features} as {hostname}")
 
 

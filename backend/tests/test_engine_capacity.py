@@ -257,3 +257,94 @@ def test_heartbeats_expire_and_are_listed_per_worker(monkeypatch):
     assert workers[0]["device"] == "cpu"
     assert 0 < client.ttl(liveness.KEY.format(feature="transcription", hostname="ingestify-audio@a")) <= 30
     assert liveness.alive("vision", client) == []
+
+
+# --- heartbeat concurrency and the (still unused) ready-slots observation -----------------------
+
+
+def test_heartbeat_publishes_concurrency_only_when_known(monkeypatch):
+    client = fakeredis.FakeRedis()
+    monkeypatch.setattr(heartbeat, "detect_gpu", lambda: None)
+    heartbeat.publish(["transcription"], "w@a", client, concurrency=2)
+    heartbeat.publish(["transcription"], "w@b", client)
+    by_host = {w["hostname"]: w for w in liveness.alive("transcription", client)}
+    assert by_host["w@a"]["concurrency"] == "2"
+    assert "concurrency" not in by_host["w@b"]
+
+
+def test_start_passes_pool_concurrency_to_the_loop(monkeypatch):
+    started = {}
+
+    class FakeThread:
+        def __init__(self, target, args, name, daemon):
+            started.update(target=target, args=args)
+
+        def start(self):
+            started["started"] = True
+
+    monkeypatch.setattr(heartbeat.threading, "Thread", FakeThread)
+    sender = SimpleNamespace(task_consumer=SimpleNamespace(queues=[SimpleNamespace(name="ingestify-audio")]),
+                             controller=SimpleNamespace(concurrency=3), hostname="ingestify-audio@a")
+    heartbeat._start(sender=sender)
+    assert started["started"] and started["target"] is heartbeat._loop
+    assert started["args"] == (["transcription"], "ingestify-audio@a", 3)
+
+    assert heartbeat._pool_concurrency(SimpleNamespace(pool=SimpleNamespace(num_processes=4))) == 4
+    assert heartbeat._pool_concurrency(SimpleNamespace()) is None
+
+
+def _beat(client, feature, host, **extra):
+    key = liveness.KEY.format(feature=feature, hostname=host)
+    client.hset(key, mapping={"device": "cpu", **extra})
+    client.expire(key, 30)
+
+
+def test_observed_ready_slots_sums_concurrency_per_feature():
+    liveness.reset_cache()
+    client = fakeredis.FakeRedis()
+    _beat(client, "transcription", "w@a", concurrency="1")
+    _beat(client, "transcription", "w@b", concurrency="2")
+    _beat(client, "vision", "v@a", concurrency="5")
+    assert liveness.observed_ready_slots("transcription", client) == (3, 2, None)
+    assert liveness.observed_ready_slots("vision", client) == (5, 1, None)
+    liveness.reset_cache()
+
+
+def test_observed_ready_slots_degrades_with_a_reason():
+    liveness.reset_cache()
+    client = fakeredis.FakeRedis()
+    assert liveness.observed_ready_slots("transcription", client) == (1, 0, "no_ready_workers")
+    liveness.reset_cache()
+    _beat(client, "transcription", "w@a", concurrency="2")
+    _beat(client, "transcription", "w@old")
+    _beat(client, "transcription", "w@bad", concurrency="x")
+    assert liveness.observed_ready_slots("transcription", client) == (4, 3, "concurrency_unreported")
+    liveness.reset_cache()
+
+    class Broken:
+        def scan_iter(self, **k):
+            raise ConnectionError("down")
+    assert liveness.observed_ready_slots("transcription", Broken()) == (1, 0, "observation_failed")
+    liveness.reset_cache()
+
+
+def test_observed_ready_slots_is_cached_for_ten_seconds():
+    liveness.reset_cache()
+    scans = []
+
+    class Counting(fakeredis.FakeRedis):
+        def scan_iter(self, *a, **k):
+            scans.append(1)
+            return super().scan_iter(*a, **k)
+
+    client = Counting()
+    _beat(client, "transcription", "w@a", concurrency="2")
+    now = [100.0]
+    clock = lambda: now[0]
+    for _ in range(3):
+        assert liveness.observed_ready_slots("transcription", client, clock=clock).slots == 2
+    assert len(scans) == 1
+    now[0] += liveness.READY_CACHE_SECONDS + 1
+    liveness.observed_ready_slots("transcription", client, clock=clock)
+    assert len(scans) == 2
+    liveness.reset_cache()
