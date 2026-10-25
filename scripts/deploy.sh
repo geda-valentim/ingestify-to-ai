@@ -67,11 +67,12 @@ if [ -s "$LAST_FILE" ]; then
   git cat-file -e "${LAST_OK}^{commit}" 2>/dev/null || { warn "$LAST_FILE points to an unknown commit"; LAST_OK=""; }
 fi
 OLD_HEAD="$(git rev-parse HEAD)"
-PENDING_FILE="$(git rev-parse --git-path deploy-pending)"   # HEAD before the first unfinished deploy
-PENDING=""
+PENDING_FILE="$(git rev-parse --git-path deploy-pending)"   # one commit per line: every HEAD an unfinished deploy touched
+PENDING=()
 if [ -s "$PENDING_FILE" ]; then
-  PENDING="$(tr -d '[:space:]' <"$PENDING_FILE")"
-  git cat-file -e "${PENDING}^{commit}" 2>/dev/null || { warn "$PENDING_FILE points to an unknown commit; ignoring"; PENDING=""; }
+  while read -r c; do
+    [ -z "$c" ] || if git cat-file -e "${c}^{commit}" 2>/dev/null; then PENDING+=("$c"); else warn "pending: unknown commit $c; ignoring"; fi
+  done <"$PENDING_FILE"
 fi
 
 # P1: the detection base is fixed BEFORE any git change; without one the deploy aborts.
@@ -119,7 +120,7 @@ EXPECTED="$(git show "$NEWHEAD:backend/api/openapi_docs.py" | sed -n 's/^API_VER
 # Marker, current HEAD and the pending (unfinished deploy) HEAD, each ->target: a failed deploy
 # or rollback is covered again on retry, even when marker->target is empty.
 CHANGED="$( { git diff --name-only "$BASE" "$NEWHEAD"; git diff --name-only "$OLD_HEAD" "$NEWHEAD"
-  [ -z "$PENDING" ] || git diff --name-only "$PENDING" "$NEWHEAD"; } | sort -u)"
+  for c in "${PENDING[@]}"; do git diff --name-only "$c" "$NEWHEAD"; done; } | sort -u)"
 match() { grep -qE "$1" <<<"$CHANGED"; }
 
 IMAGES=0; CODE=0; COMPOSE_CHG=0; FRONT=0; LIVE=0
@@ -130,7 +131,9 @@ if [ "$FORCE_REBUILD" = 1 ]; then IMAGES=1; CODE=1; FRONT=1; LIVE=1; fi
 log "Target ${NEWHEAD:0:7} (API $EXPECTED); changes since ${BASE:0:7}: images=$IMAGES code=$CODE compose=$COMPOSE_CHG frontend=$FRONT live=$LIVE"
 # ---------------------------------------------------------------- pull
 STAGE="pull"
-[ "$DRY_RUN" = 1 ] || [ -s "$PENDING_FILE" ] || printf '%s\n' "$OLD_HEAD" >"$PENDING_FILE"
+for c in "$OLD_HEAD" "$NEWHEAD"; do   # append (no duplicates) before the first state change
+  [ "$DRY_RUN" = 1 ] || grep -qx "$c" "$PENDING_FILE" 2>/dev/null || printf '%s\n' "$c" >>"$PENDING_FILE"
+done
 if [ -n "$DEPLOY_REF" ]; then
   log "Rolling back to ${DEPLOY_REF:0:7} (reset --keep refuses to drop local changes)"; run git reset --keep "$NEWHEAD"
 elif [ "$NO_PULL" = 1 ]; then
@@ -250,7 +253,7 @@ fi
 # ---------------------------------------------------------------- frontend
 STAGE="frontend"
 if in_list frontend "$CONF" && { [ "$FRONT" = 1 ] || { [ "$COMPOSE_CHG" = 1 ] && [ -n "${RUNNING[frontend]:-}" ]; }; }; then
-  [ "$FRONT" = 0 ] || { log "Rebuilding the frontend"; run compose build frontend; }
+  log "Rebuilding the frontend (cached if nothing changed)"; run compose build frontend
   if [ -n "${RUNNING[frontend]:-}" ]; then
     run compose up -d --no-build --no-deps frontend
   else

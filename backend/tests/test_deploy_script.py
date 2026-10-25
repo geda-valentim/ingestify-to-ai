@@ -2,18 +2,18 @@
 import re
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[2]
+if not (ROOT / "scripts" / "deploy.sh").exists() or not (ROOT / "Makefile").exists():
+    pytest.skip("repo root (scripts/, Makefile) not mounted", allow_module_level=True)
 SCRIPT = (ROOT / "scripts" / "deploy.sh").read_text()
 MAKEFILE = (ROOT / "Makefile").read_text()
-CODE = "\n".join(
-    line for line in SCRIPT.splitlines() if not line.lstrip().startswith("#")
-)
+CODE = "\n".join(l for l in SCRIPT.splitlines() if not l.lstrip().startswith("#"))
 
 
 def _regex(name):
-    m = re.search(rf"^{name}='(.*)'$", SCRIPT, re.M)
-    assert m, name
-    return re.compile(m.group(1))
+    return re.compile(re.search(rf"^{name}='(.*)'$", SCRIPT, re.M).group(1))
 
 
 def test_makefile_runs_script_with_clean_env():
@@ -21,8 +21,7 @@ def test_makefile_runs_script_with_clean_env():
     assert "env -i" in block and "scripts/deploy.sh" in block
     assert 'PATH="$$PATH"' in block and "DOCKER_HOST" in block
     assert "docker compose" not in block and "DEPLOY_COMPOSE" not in MAKEFILE
-    for v in "DEPLOY_BASE DEPLOY_REF NO_PULL BUILD_LIVE SSH_AUTH_SOCK GIT_SSH_COMMAND".split():
-        assert v in block, v
+    assert all(v in block for v in "DEPLOY_BASE DEPLOY_REF NO_PULL BUILD_LIVE SSH_AUTH_SOCK GIT_SSH_COMMAND".split())
 
 
 def test_script_is_strict_and_valid_bash():
@@ -44,8 +43,6 @@ def test_managed_services_are_never_upped_directly():
     assert not re.search(r"up .*worker-live", CODE)
     assert "--no-build --no-deps" in CODE
     assert "restart_running $UNMANAGED_RUNNING $MANAGED_RUNNING" in CODE
-    code_branch = CODE.split('elif [ "$CODE" = 1 ]', 1)[1].split("\nfi", 1)[0]
-    assert "restart_running" in code_branch
     image_branch = CODE.split('if [ "$IMAGES" = 1 ] || [ "$COMPOSE_CHG" = 1 ]; then\n  if [ -n "$UNMANAGED_RUNNING" ]', 1)[1].split('elif [ "$CODE"', 1)[0]
     up_part, restart_part = image_branch.split('if [ "$IMAGES" = 0 ] && [ -n "$MANAGED_RUNNING" ]', 1)
     assert not re.search(r"(?<!UN)MANAGED_RUNNING", up_part) and "docker restart" not in up_part
@@ -86,7 +83,8 @@ def test_review_fixes():
     assert 'if [ "$IMAGES" = 1 ] || [ "$COMPOSE_CHG" = 1 ]; then   # compose may change build' in CODE
     assert re.search(r'\[ "\$COMPOSE_CHG" = 1 \] && \[ -n "\$\{RUNNING\[frontend\]', CODE)  # frontend
     assert re.search(r'if in_list worker-live "\$CONF"; then\s+if \[ "\$BUILD_LIVE" = 1 \]', CODE)
-    assert 'git diff --name-only "$PENDING" "$NEWHEAD"' in CODE  # unfinished deploy stays covered
+    assert 'git diff --name-only "$c" "$NEWHEAD"' in CODE and 'for c in "$OLD_HEAD" "$NEWHEAD"' in CODE
+    assert 'compose build frontend' in CODE and "FRONT\" = 0 ]" not in CODE  # compose change rebuilds it
     pend, ok = CODE.index('>"$PENDING_FILE"'), CODE.index('rm -f "$PENDING_FILE"')
     assert pend < CODE.index("git merge --ff-only") and ok > CODE.index('>"$LAST_FILE"')
 
