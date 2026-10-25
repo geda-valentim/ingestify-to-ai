@@ -227,6 +227,23 @@ O script valida o commit e o ancestral em `origin/main` e roda `git reset --keep
 se perderia mudança local. Gerenciados e `worker-live` seguem as regras acima: re-registre e
 reaplique o perfil se o aviso pedir. Use `DRY_RUN=1` antes para ver o plano.
 
+**Re-registro após rollback.** O checkout voltado pode ter um `scripts/register_engine_host.py`
+antigo, sem `--use-built-image` (o de `c5cdcef` não tem). Sem a flag, ele grava a imagem do
+container existente, que um gerenciado não recriado ainda mantém, e não a recém-construída.
+Use o script atual, tirado do commit anterior ao rollback (`HEAD before` na mensagem do
+script, ou `git rev-parse HEAD` antes de rodar o rollback), como cópia ao lado dos
+demais scripts, pois ele importa `engine_host_agent` de lá:
+
+```bash
+git show <commit anterior ao rollback>:scripts/register_engine_host.py > scripts/register_engine_host_current.py
+python3 scripts/register_engine_host_current.py <argumentos originais> --use-built-image
+rm scripts/register_engine_host_current.py
+```
+
+Se o commit anterior também não tiver a flag, use o `main` mais novo. Sem a flag, só vale o
+caminho antigo: ele registra a imagem do container existente (ou a do `image:` do compose),
+então recrie o serviço com o perfil certo antes, e não invente outras opções.
+
 ## SSH
 
 O `origin` de produção é SSH (`git@github.com:...`). O `env -i` apaga o ambiente, então o
@@ -237,11 +254,15 @@ sem alterar nada.
 ## O que o deploy não detecta
 
 - Edições em `.env` e em `docker-compose.override.yml` (não rastreados). Depois de editá-los,
-  rode `docker compose up -d --no-build --no-deps <svc>` **só** nos serviços **não gerenciados**
-  afetados. Nunca em gerenciado (ex.: `worker-audio`) nem no `worker-live`: o `up` do compose
-  recria sem o overlay do host agent e perde imagem fixada, GPU e perfil. Para gerenciados
-  (e para o `worker-live`), re-registre o host (`--use-built-image` se a imagem mudou, ver
-  "Serviços gerenciados: re-registrar") e depois rode `apply_profile`.
+  rode `docker compose up -d --no-build --no-deps --scale <svc>=<n> <svc>` **só** nos serviços
+  **não gerenciados** afetados e **que estão rodando**. Registre `<n>` antes, com
+  `docker compose ps --status running -q <svc> | wc -l`. Sem `--scale`, o compose volta ao
+  número de réplicas configurado (ex.: `worker` declara `deploy.replicas: 1` no overlay GPU, e
+  3 réplicas viram 1). Serviço com `n=0` foi parado de propósito: não suba. `api` e `beat` não
+  recebem `--scale`. Nunca rode isso em gerenciado (ex.: `worker-audio`) nem no `worker-live`:
+  o `up` do compose recria sem o overlay do host agent e perde imagem fixada, GPU e perfil.
+  Para gerenciados (e para o `worker-live`), re-registre o host (`--use-built-image` se a
+  imagem mudou, ver "Serviços gerenciados: re-registrar") e depois rode `apply_profile`.
 - Override fora do `COMPOSE_FILE`: se o arquivo existe e o `.env` define `COMPOSE_FILE` sem
   incluí-lo, o script avisa (`compose ignores it`) e segue. Só avisa, nunca falha.
 - Mudança de overlay feita pelo host agent (perfis aplicados): use o engine control.
