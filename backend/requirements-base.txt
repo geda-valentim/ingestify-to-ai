@@ -3,7 +3,7 @@
 #
 # It names no index and no torch build on purpose, so the CPU and the CUDA sets
 # can both reuse it unchanged. torch is never named here either, but it arrives
-# transitively via docling -> docling-slim[standard] -> torch. Resolved from
+# transitively via docling -> torch. Resolved from
 # plain PyPI that lands on the CUDA build and pulls ~1.66GB of nvidia-* wheels
 # onto a machine that may have no GPU - including, in the current resolution,
 # the `nvidia-cudnn-cu13` tree that breaks ctranslate2 / faster-whisper with
@@ -48,8 +48,13 @@ httpx[socks]>=0.27.0,<0.28
 python-multipart==0.0.31
 python-dotenv==1.0.0
 
-# Docling and dependencies (use latest compatible version)
-docling>=2.0.0,<3.0.0
+# Docling pipeline, pinned to what the production worker image runs (spec 0022 S0).
+# Change these four together and only in a dedicated PR: a rebuild must not swap the
+# conversion pipeline. torch/torchvision are pinned in requirements-cpu.txt / -cuda.txt.
+docling==2.87.0
+docling-core[chunking]==2.104.0
+docling-parse==5.11.0
+docling-ibm-models==3.15.0
 beautifulsoup4>=4.12.3,<5.0.0
 lxml>=5.0.0  # Fast HTML/XML parser for BeautifulSoup
 requests>=2.32.2,<3.0.0
