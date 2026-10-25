@@ -20,7 +20,7 @@ def test_makefile_runs_script_with_clean_env():
     assert "env -i" in block and "scripts/deploy.sh" in block
     assert 'PATH="$$PATH"' in block and "DOCKER_HOST" in block
     assert "docker compose" not in block and "DEPLOY_COMPOSE" not in MAKEFILE
-    assert all(v in block for v in "DEPLOY_BASE DEPLOY_REF NO_PULL BUILD_LIVE SSH_AUTH_SOCK GIT_SSH_COMMAND DEPLOY_AGENT_DIR DEPLOY_ENGINE_HOST_CONFIG".split())
+    assert all(v in block for v in "DEPLOY_BASE DEPLOY_REF NO_PULL BUILD_LIVE SSH_AUTH_SOCK GIT_SSH_COMMAND DEPLOY_AGENT_DIR DEPLOY_ENGINE_HOST_CONFIG DOCKER_TLS_VERIFY DOCKER_CERT_PATH".split())
 
 
 def test_no_unfiltered_restart_or_zero_scale():
@@ -59,7 +59,7 @@ def test_no_marker_aborts_before_any_git_change():
 
 
 def test_rollback_and_worker_live_gates():
-    assert 'git merge-base --is-ancestor "$DEPLOY_REF" origin/main' in CODE
+    assert 'git merge-base --is-ancestor "$DEPLOY_REF" origin/main' in CODE and 'is-ancestor HEAD "$NEWHEAD"' in CODE
     assert 'git reset --keep "$NEWHEAD"' in CODE and "reset --hard" not in CODE
     assert CODE.count("build worker-live") == 1
     assert re.search(r'if \[ "\$BUILD_LIVE" = 1 \]; then[^\n]*\s+log [^\n]*run compose build worker-live', CODE)

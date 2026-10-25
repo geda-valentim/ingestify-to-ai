@@ -210,7 +210,7 @@ deploy: ## Pull main and deploy only what changed (scripts/deploy.sh; DRY_RUN=1 
 	@set -- PATH="$$PATH" HOME="$$HOME"; \
 	for v in DOCKER_HOST DOCKER_CONFIG DOCKER_CONTEXT DRY_RUN FORCE_REBUILD \
 	         DEPLOY_BASE DEPLOY_REF NO_PULL BUILD_LIVE SSH_AUTH_SOCK GIT_SSH_COMMAND \
-	         DEPLOY_AGENT_DIR DEPLOY_ENGINE_HOST_CONFIG; do \
+	         DEPLOY_AGENT_DIR DEPLOY_ENGINE_HOST_CONFIG DOCKER_TLS_VERIFY DOCKER_TLS DOCKER_CERT_PATH; do \
 		eval "val=\$${$$v-}"; \
 		if [ -n "$$val" ]; then set -- "$$@" "$$v=$$val"; fi; \
 	done; \

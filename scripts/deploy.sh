@@ -129,13 +129,13 @@ if [ "$FORCE_REBUILD" = 1 ]; then IMAGES=1; CODE=1; FRONT=1; LIVE=1; fi
 log "Target ${NEWHEAD:0:7} (API $EXPECTED); changes since ${BASE:0:7}: images=$IMAGES code=$CODE compose=$COMPOSE_CHG frontend=$FRONT live=$LIVE"
 # ---------------------------------------------------------------- pull
 STAGE="pull"
+[ -n "$DEPLOY_REF" ] || [ "$NO_PULL" = 1 ] || git merge-base --is-ancestor HEAD "$NEWHEAD" || die "local main is ahead of ${NEWHEAD:0:7}; nothing changed"
 for c in "$OLD_HEAD" "$NEWHEAD"; do   # append (no duplicates) before the first state change
   [ "$DRY_RUN" = 1 ] || grep -qx "$c" "$PENDING_FILE" 2>/dev/null || printf '%s\n' "$c" >>"$PENDING_FILE"
 done
 if [ -n "$DEPLOY_REF" ]; then
   log "Rolling back to ${DEPLOY_REF:0:7} (reset --keep refuses to drop local changes)"; run git reset --keep "$NEWHEAD"
-elif [ "$NO_PULL" = 1 ]; then
-  log "NO_PULL=1: deploying the current HEAD"
+elif [ "$NO_PULL" = 1 ]; then log "NO_PULL=1: deploying the current HEAD"
 else
   log "Fast-forwarding main to ${NEWHEAD:0:7}"; run git merge --ff-only "$NEWHEAD"
 fi
