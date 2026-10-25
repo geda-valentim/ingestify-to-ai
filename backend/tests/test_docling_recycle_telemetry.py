@@ -226,3 +226,49 @@ def test_probe_conversion_does_not_touch_registry(_docling_telemetry_fake_redis)
     client.expire(cs._children_key(), 100)
     cs.record_conversion(SimpleNamespace(), 1.0, None, "pdf", probe=True)
     assert client.ttl(cs._children_key()) <= 100
+
+
+def test_registration_survives_a_lost_cleanup(_docling_telemetry_fake_redis, monkeypatch):
+    """Every WATCH attempt loses: no vanished count, but the child is registered with a TTL."""
+    client = _docling_telemetry_fake_redis
+    client.hset(cs._children_key(), "999999", "123")
+    real_pipeline = client.pipeline
+
+    class Losing:
+        def __init__(self, pipe):
+            self._pipe = pipe
+
+        def __enter__(self):
+            self._pipe.__enter__()
+            return self
+
+        def __exit__(self, *exc):
+            return self._pipe.__exit__(*exc)
+
+        def __getattr__(self, name):
+            return getattr(self._pipe, name)
+
+        def hgetall(self, key):
+            data = self._pipe.hgetall(key)
+            client.hset("docling:children:other", "1", "1")  # not the watched key: harmless
+            client.hset(key, "424242", "1")  # touches the watched key
+            client.hdel(key, "424242")
+            return data
+
+    attempts = []
+    monkeypatch.setattr(client, "pipeline", lambda *a, **k: attempts.append(1) or (
+        Losing(real_pipeline(*a, **k)) if len(attempts) <= 3 else real_pipeline(*a, **k)))
+    cs.record_process_start()
+    data = _hash(client)
+    assert data["processes_started"] == "1" and "processes_vanished" not in data
+    assert str(os.getpid()) in _registry(client)
+    assert client.ttl(cs._children_key()) > 0
+
+
+def test_conversion_recreates_a_missing_registry_entry(_docling_telemetry_fake_redis):
+    client = _docling_telemetry_fake_redis
+    cs.record_process_start()
+    client.delete(cs._children_key())  # idle for 48 h, or evicted
+    cs.record_conversion(SimpleNamespace(), 1.0, None, "pdf")
+    assert _registry(client) == {str(os.getpid()): cs._proc_start_time(os.getpid())}
+    assert client.ttl(cs._children_key()) > 0

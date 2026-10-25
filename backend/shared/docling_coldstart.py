@@ -268,7 +268,7 @@ def record_conversion(conv, seconds: float, result, fmt: str, probe: bool = Fals
         if result is None:
             ops.append(("i", "conv:failed", 1))
         # keep the child registry alive while the worker converts: same pipeline, no round trip
-        _safe(ops, extra=lambda pipe: pipe.expire(_children_key(), COLDSTART_TTL_SECONDS))
+        _safe(ops, extra=_register_self)
     except Exception as exc:
         _warn_throttled("docling conversion telemetry not recorded", exc)
 
@@ -336,6 +336,22 @@ def _children_key() -> str:
     return f"{CHILDREN_PREFIX}:{hostname()}"
 
 
+_own_start: Dict[int, Optional[str]] = {}
+
+
+def _register_self(pipe) -> None:
+    """Queue our registry entry (re-created if the key expired or was evicted) and its TTL on a
+    transactional pipeline: HSET and EXPIRE go together, so the key never lives without a TTL."""
+    pid = os.getpid()
+    if pid not in _own_start:
+        _own_start.clear()
+        _own_start[pid] = _proc_start_time(pid)
+    key, started = _children_key(), _own_start[pid]
+    if started is not None:
+        pipe.hset(key, str(pid), started)
+    pipe.expire(key, COLDSTART_TTL_SECONDS)
+
+
 def record_process_start() -> None:
     """A pool child started. It also notices the siblings that vanished without a shutdown
     (SIGKILL never runs worker_process_shutdown): registered pids whose /proc starttime
@@ -350,9 +366,8 @@ def record_process_start() -> None:
         key = _children_key()
         mine = _proc_start_time(me)
         removed: List[str] = []
-        # Optimistic transaction: the registry is read, the stale entries are deleted and ours is
-        # written (with its TTL) in one MULTI, and it is retried if another child touched it in
-        # between. So a stale entry is claimed by exactly one child, and a live entry another child
+        # Optimistic transaction: the registry is read and the stale entries are deleted in one
+        # MULTI, retried if another child touched it in between. So a stale entry is claimed by exactly one child, and a live entry another child
         # just wrote is never deleted by a reader that saw the old state.
         for _ in range(3):
             with client.pipeline() as pipe:
@@ -367,14 +382,16 @@ def record_process_start() -> None:
                     pipe.multi()
                     for pid in gone:
                         pipe.hdel(key, pid)
-                    if mine is not None:
-                        pipe.hset(key, str(me), mine)
-                    pipe.expire(key, COLDSTART_TTL_SECONDS)
                     pipe.execute()
                     removed = gone
                     break
                 except redis.WatchError:
                     continue
+        # Our own entry never depends on the cleanup above (it can lose every retry when the
+        # pool starts together): only the vanished count is skipped then.
+        with client.pipeline() as pipe:
+            _register_self(pipe)
+            pipe.execute()
         seen["removed"] = removed
         ops: List[tuple] = [("i", "processes_started", 1)]
         if removed:
