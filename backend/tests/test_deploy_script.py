@@ -24,10 +24,6 @@ def test_makefile_runs_script_with_clean_env():
     assert all(v in block for v in "DEPLOY_BASE DEPLOY_REF NO_PULL BUILD_LIVE SSH_AUTH_SOCK GIT_SSH_COMMAND".split())
 
 
-def test_script_is_strict_and_valid_bash():
-    assert "set -euo pipefail" in SCRIPT and SCRIPT.startswith("#!/usr/bin/env bash")
-
-
 def test_no_unfiltered_restart_or_zero_scale():
     assert "compose restart" not in CODE
     assert not re.search(r"docker restart(?! \$ids)", CODE)
@@ -37,11 +33,10 @@ def test_no_unfiltered_restart_or_zero_scale():
 
 def test_managed_services_are_never_upped_directly():
     assert "/var/lib/ingestify-engine-agent" in SCRIPT
-    assert 'MANAGED=" "' in CODE
-    m = re.search(r'\n\s*MANAGED=" \$MANAGED_STATIC "', CODE)
-    assert m and CODE.rfind("else", 0, m.start()) > CODE.rfind('-r "$AGENT_DIR"', 0, m.start())
-    assert not re.search(r"up .*worker-live", CODE)
-    assert "--no-build --no-deps" in CODE
+    assert "MANAGED_STATIC" not in SCRIPT and "DEPLOY_ENGINE_HOST_CONFIG" in CODE
+    assert re.search(r'elif \[ -e "\$AGENT_DIR" \] \|\| \[ -e "\$HOST_CFG" \][^\n]*\n\s*die ', CODE)
+    assert "engine control not installed" in CODE and "is_managed worker-live" in CODE
+    assert not re.search(r"up .*worker-live", CODE) and "--no-build --no-deps" in CODE
     assert "restart_running $UNMANAGED_RUNNING $MANAGED_RUNNING" in CODE
     image_branch = CODE.split('if [ "$IMAGES" = 1 ] || [ "$COMPOSE_CHG" = 1 ]; then\n  if [ -n "$UNMANAGED_RUNNING" ]', 1)[1].split('elif [ "$CODE"', 1)[0]
     up_part, restart_part = image_branch.split('if [ "$IMAGES" = 0 ] && [ -n "$MANAGED_RUNNING" ]', 1)
@@ -60,7 +55,7 @@ def test_detection_is_anchored_on_last_success_marker():
 
 
 def test_no_marker_aborts_before_any_git_change():
-    assert "|| CODE=1" not in CODE and "git pull" not in CODE
+    assert "|| CODE=1" not in CODE and "git pull" not in CODE and "set -euo pipefail" in CODE
     assert CODE.index("no deploy marker") < CODE.index("git fetch") < CODE.index("git merge --ff-only")
 
 
@@ -125,6 +120,8 @@ def test_regex_matches_what_dockerfiles_copy():
             m = re.match(r"COPY\s+(?!--)(.+)\s+\S+\s*$", line)
             if m:
                 copied.update(m.group(1).split())
+    for df in (ROOT / "docker").glob("Dockerfile.*"):   # frontend-only changes must not rebuild the backend
+        assert bool(rx.match(f"docker/{df.name}")) == (df.name != "Dockerfile.frontend"), df.name
     for src in copied:
         if src.startswith("scripts/") and not src.endswith("/"):
             assert rx.match(src), f"{src} is copied into an image but not in IMAGE_RE"

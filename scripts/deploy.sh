@@ -15,13 +15,11 @@ AGENT_DIR="${DEPLOY_AGENT_DIR:-/var/lib/ingestify-engine-agent}"
 
 # Services whose code is bind-mounted from backend/ (a restart loads the pulled code).
 CODE_SERVICES="api beat worker worker-audio worker-control worker-control-watchdog worker-dispatch worker-remote worker-vision"
-# Engine-control-managed services (backend/workers/engine_control/local.py SERVICES).
-MANAGED_STATIC="worker worker-audio worker-vision worker-live"   # fallback only
 # api/beat have container_name and a single replica: never --scale.
 NO_SCALE=" api beat "
 
 # Files really copied into the images (docker/Dockerfile.*).
-IMAGE_RE='^(backend/requirements[^/]*\.(txt|lock)|docker/(Dockerfile\.[^/]+|entrypoint\.sh)|scripts/(make_admin|engines|seed_execution_profiles)\.py)$'
+IMAGE_RE='^(backend/requirements[^/]*\.(txt|lock)|docker/(Dockerfile\.(api|audio|live-whisperx|remote|worker)|entrypoint\.sh)|scripts/(make_admin|engines|seed_execution_profiles)\.py)$'
 CODE_RE='^backend/(api|shared|workers)/'
 COMPOSE_RE='^docker-compose[^/]*\.yml$'
 FRONTEND_RE='^(frontend/|docker/Dockerfile\.frontend$)'
@@ -155,6 +153,7 @@ if [ -f docker-compose.override.yml ] && [ -n "$CF" ]; then
     warn "docker-compose.override.yml exists but is NOT in COMPOSE_FILE: compose ignores it"
 fi
 
+HOST_CFG="${DEPLOY_ENGINE_HOST_CONFIG:-/etc/ingestify/engine-host.json}"
 MANAGED=" "
 if [ -d "$AGENT_DIR" ] && [ -r "$AGENT_DIR" ]; then
   for f in "$AGENT_DIR"/*.json; do
@@ -162,9 +161,10 @@ if [ -d "$AGENT_DIR" ] && [ -r "$AGENT_DIR" ]; then
     b="$(basename "$f" .json)"; b="${b#observe-}"
     [ "$b" = state ] || MANAGED="$MANAGED$b "
   done
+elif [ -e "$AGENT_DIR" ] || [ -e "$HOST_CFG" ]; then   # engine control is installed but its state is unusable
+  die "engine control installed ($HOST_CFG) but $AGENT_DIR is missing/unreadable: cannot tell which services are managed; nothing was touched"
 else
-  MANAGED=" $MANAGED_STATIC "
-  warn "$AGENT_DIR not readable: falling back to the static managed list ($MANAGED_STATIC)"
+  log "engine control not installed: no managed services"
 fi
 
 declare -A RUNNING=() IDS=()   # service -> running count (> 0 only) / running container ids
@@ -264,6 +264,9 @@ fi
 NOTICE=""
 if [ "$IMAGES" = 1 ] || [ "$COMPOSE_CHG" = 1 ]; then NOTICE="$MANAGED_TOUCHED"; fi
 [ "$LIVE_BUILT" = 0 ] || NOTICE="$NOTICE worker-live"
+if [ "$COMPOSE_CHG" = 1 ] && ! in_list worker-live "$NOTICE" && in_list worker-live "$CONF" && is_managed worker-live; then
+  NOTICE="$NOTICE worker-live"   # built only, yet a compose change still needs the re-register
+fi
 if [ -n "${NOTICE// /}" ]; then
   {
     echo
