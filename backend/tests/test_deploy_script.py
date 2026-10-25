@@ -34,6 +34,7 @@ def test_image_regex_excludes_frontend_and_covers_backend_dockerfiles():
 def test_interrupted_deploy_state_is_persisted_and_restored():
     assert 'for c in "$OLD_HEAD" "$NEWHEAD"' in CODE and 'git diff --no-renames --name-only "$c" "$NEWHEAD"' in CODE
     assert '[ ! -s "$INV_FILE" ]' in CODE and "RUNNING[$s]=\"$n\"" in CODE  # original inventory wins on retry
+    assert '[ "$s" = worker-live ] || is_managed "$s"' in CODE and '[ "$COMPOSE_CHG" = 0 ] || LIVE=1' in CODE
     assert CODE.index('>"$LAST_FILE"') < CODE.index('rm -f "$PENDING_FILE" "$INV_FILE"')
 
 

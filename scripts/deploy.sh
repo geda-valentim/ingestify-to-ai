@@ -127,6 +127,7 @@ match "$IMAGE_RE" && IMAGES=1; match "$CODE_RE" && CODE=1; match "$COMPOSE_RE" &
 match "$FRONTEND_RE" && FRONT=1; match "$LIVE_RE" && LIVE=1
 if [ "$FORCE_REBUILD" = 1 ]; then IMAGES=1; CODE=1; FRONT=1; LIVE=1; fi
 [ "$UNKNOWN_BASE" = 0 ] || COMPOSE_CHG=1
+[ "$COMPOSE_CHG" = 0 ] || LIVE=1   # compose may change worker-live build args/Dockerfile: ask for the rebuild
 log "Target ${NEWHEAD:0:7} (API $EXPECTED); changes since ${BASE:0:7}: images=$IMAGES code=$CODE compose=$COMPOSE_CHG frontend=$FRONT live=$LIVE"
 # ---------------------------------------------------------------- pull
 STAGE="pull"
@@ -192,7 +193,9 @@ fi
 RESTORE=""   # a retry restores what the interrupted run left down/degraded, from the ORIGINAL inventory
 while read -r s n; do
   [ -n "$s" ] && in_list "$s" "$CONF" && [ "${RUNNING[$s]:-0}" -lt "$n" ] || continue
-  if is_managed "$s"; then warn "$s ran $n replica(s) before the interrupted deploy and is down/degraded: re-apply its profile"; continue; fi
+  if [ "$s" = worker-live ] || is_managed "$s"; then   # never started here (worker-live: BUILD_LIVE path)
+    warn "$s ran $n replica(s) before the interrupted deploy and is down/degraded: re-apply its profile"; continue
+  fi
   RUNNING[$s]="$n"; RESTORE="$RESTORE $s"; in_list "$s" "$UNMANAGED_RUNNING" || UNMANAGED_RUNNING="$UNMANAGED_RUNNING $s"
 done < <(cat "$INV_FILE" 2>/dev/null || true)
 
@@ -264,7 +267,7 @@ if in_list worker-live "$CONF"; then
   if [ "$BUILD_LIVE" = 1 ]; then   # explicit request, independent of detection
     log "worker-live bakes the code: building its image (never up'd here)"; run compose build worker-live; LIVE_BUILT=1
   elif [ "$LIVE" = 1 ]; then
-    warn "worker-live inputs changed: its image is stale. Run with BUILD_LIVE=1, then apply_profile."
+    warn "worker-live inputs changed: its image is stale. Run with BUILD_LIVE=1 BEFORE re-registering, then apply_profile."
   fi
 fi
 # ---------------------------------------------------------------- frontend
