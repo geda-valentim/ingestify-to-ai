@@ -60,7 +60,11 @@ from fastapi.routing import APIRoute, APIWebSocketRoute
 # honours WHISPER_MODEL/WHISPER_DEVICE; worker-vision follows VISION_QUEUE and gets
 # REDIS_PASSWORD; Elasticsearch credentials reach the services; the upload form always
 # sends the selected docling_preset; the job page shows converted pages while a PDF runs.
-API_VERSION = "1.13.0"
+# 1.14.0: minor (GET /admin/docling/cold-starts rows gain optional conversion, recycle,
+# cgroup and pipeline-init fields; DOCLING_INIT_PIPELINE preloads the PDF pipeline).
+# Otherwise fixes: POST/GET /api-keys answer without the trailing slash (the 307 lost the
+# proxy root_path); the converter cache evicts before building; Docling versions pinned.
+API_VERSION = "1.14.0"
 
 API_DESCRIPTION = """
 API assíncrona que converte documentos (PDF, DOCX, HTML, PPTX, XLSX...) em Markdown,
