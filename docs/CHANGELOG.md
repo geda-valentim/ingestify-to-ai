@@ -2,6 +2,60 @@
 
 > **Registro histórico (2025-10).** Não é mantido; para mudanças posteriores use `git log`. Observação: `workers/tasks_old.py`, citado abaixo, não existe (há um `workers/tasks.py.backup`). Exceção: mudanças de comportamento intencionais que uma spec manda registrar aqui entram na seção abaixo.
 
+## 2026-10: telemetria e reciclagem do Docling, pré-carga do pipeline e /api-keys sem barra (API 1.14.0)
+
+**Por que é minor:** as linhas de `GET /admin/docling/cold-starts` ganham campos opcionais.
+Nenhum campo, código de erro ou endpoint existente muda; o resto são correções e preparação.
+
+**Novo**
+- **Telemetria de conversão do Docling (#102):** as linhas de `GET /admin/docling/cold-starts`
+  trazem `conversions_first`/`conversions_warm`, `conversions_first_process`,
+  `conversions_failed`, `convert_seconds_first`/`convert_seconds_warm`,
+  `pages_ok`/`pages_failed` e `docling_version`. O worker registra uma linha
+  `docling.conversion` por conversão.
+- **Motivo da reciclagem (#108, #109):** o mesmo endpoint diz por que os processos filhos
+  saíram (`recycle_memory_limit`, `recycle_max_tasks`, `recycle_shutdown`, `recycle_unknown`),
+  quantos sumiram sem encerrar (`processes_vanished`, ex.: OOM do cgroup), `last_exitcode`, os
+  limites do pool (`max_memory_per_child_kb`, `max_tasks_per_child`), `peak_rss_pct_of_limit`
+  e a memória do cgroup (`cgroup_oom_kill`, `cgroup_memory_peak_kb`, `cgroup_memory_max_kb`).
+- **Pré-carga do pipeline (#110):** `DOCLING_INIT_PIPELINE=true` carrega os pesos do PDF ao
+  construir o conversor, e a primeira conversão deixa de pagar por isso. Padrão `false`. As
+  linhas ganham `wrapper_seconds_total`, `pipeline_init_seconds_total` e
+  `pipeline_init_ok`/`pipeline_init_failed`/`pipeline_init_unavailable`.
+
+**Correções**
+- **`/api-keys` sem barra final (#115):** `POST` e `GET /api-keys` respondem também sem a
+  barra. Antes, o redirect 307 perdia o prefixo do proxy e o navegador saía da API (405 ao
+  criar uma key, HTML no lugar da lista). O caminho com barra continua valendo.
+- **Memória do cache de conversores (#110):** o conversor mais antigo é descartado antes de
+  construir o novo, então dois conjuntos de pesos nunca ficam carregados ao mesmo tempo.
+- **Versões do Docling fixadas (#100):** docling 2.87.0, docling-core 2.104.0,
+  docling-parse 5.11.0 e docling-ibm-models 3.15.0, as do worker de produção. Um rebuild não
+  troca mais o pipeline de conversão por baixo.
+
+**Preparação (spec 0022, ainda sem efeito)**
+- Variáveis só lidas e validadas, sem nada que as use: `DOCLING_PAGE_WINDOW`,
+  `DOCLING_WINDOW_TIME_LIMIT_SECONDS` (#104), `ADMISSION_MAX_PAGES_PER_PDF`,
+  `ADMISSION_MAX_PAGES_PER_CLIENT`, `ADMISSION_MAX_WAITING_PER_CLIENT` e
+  `ADMISSION_GLOBAL_SLOTS` (#106). **Não defina nenhuma:** `0` num `ADMISSION_*` ou um limite
+  de janela maior que `CELERY_VISIBILITY_TIMEOUT_SECONDS` impedem os serviços de subir. O
+  heartbeat do worker publica a `concurrency` (#105).
+- Operação: `make deploy` (#107, #111; runbook em `docs/runbooks/deploy.md`, #112) e benchmark
+  HTTP do Docling (#114).
+
+**Rollout**
+- **Imagens:** api e worker precisam de rebuild (`requirements-base.txt` mudou); depois,
+  confira que o worker continua no docling 2.87.0. O frontend também (o OpenAPI embutido nas
+  páginas de docs mudou). O `worker-live` não é reconstruído por padrão: use
+  `make deploy BUILD_LIVE=1`, re-registre o host e rode `apply_profile`.
+- **Compose:** o `worker` recebe `DOCLING_INIT_PIPELINE` e precisa ser recriado.
+- **Serviços gerenciados pelo engine control:** re-registre com
+  `register_engine_host.py --use-built-image` e rode `apply_profile`.
+- **Primeiro `make deploy`:** sem o marcador `.git/deploy-last-success`, o script para com
+  `no deploy marker`; passe `DEPLOY_BASE=<commit hoje em produção>` ou `FORCE_REBUILD=1`.
+- **Sem migration.** Nenhuma variável obrigatória nova.
+- **Modal:** nenhum arquivo do fingerprint mudou; não há redeploy.
+
 ## 2026-10: controle de cold start do Docling e correções de configuração (API 1.13.0)
 
 **Por que é minor:** há um endpoint novo de administração, `GET /admin/docling/cold-starts`.
