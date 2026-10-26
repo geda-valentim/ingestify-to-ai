@@ -95,12 +95,7 @@ class Api:
                 break
             box, done = {}, threading.Event()  # the worker writes only to its own box; only this caller records anything
             threading.Thread(target=self._attempt, args=(path, min(60, left), box, done), daemon=True).start()
-            while not done.wait(min(0.2, max(0, deadline - time.time()))):  # short slices: stop and deadline are both noticed promptly
-                if (stop and stop.is_set()) or time.time() >= deadline:
-                    break
-            if not done.is_set():  # a socket timeout alone lets a server that trickles headers or body hold us: abandon the worker
-                r = box.get("r")  # close() waits for the reader's buffer lock, so it never runs in the caller
-                r is None or threading.Thread(target=r.close, daemon=True).start()
+            if not self._wait(done, box, deadline, stop):
                 if stop and stop.is_set():
                     raise InterruptedError("interrupted")
             elif "json" in box:
@@ -126,11 +121,38 @@ class Api:
         finally:
             done.set()
 
-    def upload(self, rec_path, project):
-        r = self.session.post(self.base + "/upload", files={"file": open(rec_path, "rb")},
-                              data={"project": project, "docling_preset": "fast"}, timeout=300)
-        r.raise_for_status()
-        return r.json()
+    def _wait(self, done, box, end, stop):  # True once the worker finished; False when stop or the end time abandoned it
+        while not done.wait(min(0.2, max(0, end - time.time()))):  # short slices: stop and the end time are both noticed promptly
+            if (stop and stop.is_set()) or time.time() >= end:
+                break
+        if done.is_set():
+            return True
+        r = box.get("r")  # a socket timeout alone lets a server that trickles headers or body hold us: abandon the worker
+        r is None or threading.Thread(target=r.close, daemon=True).start()  # close() waits for the reader's lock: never in the caller
+        return False
+
+    def upload(self, rec_path, project, stop=None, budget=300):  # one POST, bounded by stop and a total wall-clock budget
+        box, done = {}, threading.Event()
+        threading.Thread(target=self._post, args=(rec_path, project, budget, box, done), daemon=True).start()
+        if not self._wait(done, box, time.time() + budget, stop):
+            if stop and stop.is_set():
+                raise InterruptedError("interrupted")
+            raise requests.Timeout(f"upload exceeded {budget}s")  # ambiguous: the job may exist, so the client stops
+        if "exc" in box:
+            raise box["exc"]
+        return box["json"]
+
+    def _post(self, rec_path, project, timeout, box, done):
+        try:
+            with open(rec_path, "rb") as fh, self.session.post(self.base + "/upload", files={"file": fh}, stream=True, timeout=timeout,
+                                                               data={"project": project, "docling_preset": "fast"}) as r:
+                box["r"] = r
+                r.raise_for_status()
+                box["json"] = r.json()
+        except Exception as e:
+            box["exc"] = e
+        finally:
+            done.set()
 
 def observe(state, status_json, now):  # page transitions seen at poll time (+-poll interval)
     for page in status_json.get("pages") or []:
@@ -164,14 +186,14 @@ def run_client(client, api, files, args, project, barrier, out, lock):
         rec.update(client=client, seq=seq, rel_path=f["rel_path"], sha256=f["sha256"], duplicate=False,
                    submitted_at=iso(time.time()), page_retries=0, pages_ok=0, pages_failed=0)
         try:
-            created = api.upload(f["path"], project)
+            created = api.upload(f["path"], project, out["stop"])
             rec["job_id"], rec["created_at"] = created["job_id"], created["created_at"]
             if created.get("duplicate"):
                 rec.update(duplicate=True, status="error", error="duplicate")
         except Exception as e:  # upload has no retry: the failure is the job's
-            rec.update(status="error", error=api.redact(f"upload: {e}"))
             # anything but a 4xx answer is ambiguous: the job may exist and still run, so stop this client
             stop = not (isinstance(e, requests.HTTPError) and e.response.status_code < 500)
+            rec.update(status="error", error=api.redact(f"upload: {e}") + (" (job may exist: check the project)" if stop else ""))
         if rec["status"] == "error":
             rec["observed_terminal_at"] = iso(time.time())
             emit(rec, out, lock)
@@ -270,7 +292,11 @@ def main(argv=None):
         try:
             [e.wait(0.5) for e in done.values()]
         except KeyboardInterrupt:  # stop both clients, keep waiting until they really end, exit non-zero
-            out["stop"].set()
+            try:  # a second Ctrl-C must not skip the join and the file close below
+                out["stop"].set()
+                barrier.abort()  # a client still parked at the start line must not wait for a partner that will never come
+            except KeyboardInterrupt:
+                pass
             errors.append(KeyboardInterrupt())
     [t.join() for t in threads]
     threading.excepthook, t_end, _ = old_hook, time.time(), (jsonl.close(), journal.close())
