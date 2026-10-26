@@ -9,7 +9,6 @@ import math
 import os
 import random
 import re
-import socket
 import threading
 import time
 from datetime import datetime, timezone
@@ -84,34 +83,33 @@ class Api:
 
     def get_json(self, path, deadline):  # every wait is bounded by the job deadline
         for attempt in range(3):
-            if deadline - time.time() <= 0:
+            left = deadline - time.time()
+            if left <= 0:
                 break
-            fired = threading.Event()
-            try:
-                with self.session.get(self.base + path, timeout=min(60, deadline - time.time()), stream=True) as r:
-                    dog = threading.Timer(max(0, deadline - time.time()), self._abort, (r, fired))  # a socket timeout alone lets a trickling body hold us
-                    dog.start()
-                    try:
-                        if r.status_code < 500 and r.status_code != 429:
-                            r.raise_for_status()
-                            return r.json()
-                    finally:
-                        dog.cancel()
-            except (requests.ConnectionError, requests.Timeout, requests.exceptions.ChunkedEncodingError, ValueError, AttributeError) as e:
-                if isinstance(e, (ValueError, AttributeError)) and not fired.is_set():
-                    raise  # a bad body is the server's answer; only the watchdog's close() explains these two as a transport failure
+            box, done = {}, threading.Event()  # the worker writes only to its own box; only this caller records anything
+            threading.Thread(target=self._attempt, args=(path, min(60, left), box, done), daemon=True).start()
+            if not done.wait(left):  # a socket timeout alone lets a server that trickles headers or body hold us: abandon the worker
+                r = box.get("r")  # close() waits for the reader's buffer lock, so it never runs in the caller
+                r is None or threading.Thread(target=r.close, daemon=True).start()
+            elif "json" in box:
+                return box["json"]
+            elif box.get("exc") and not isinstance(box["exc"], (requests.ConnectionError, requests.Timeout, requests.exceptions.ChunkedEncodingError)):
+                raise box["exc"]  # a bad body is the server's answer, not a transport failure
             self.http_retries += 1
             time.sleep(max(0, min(0.2 * 2 ** attempt, deadline - time.time())))
         raise RuntimeError(f"GET {path} failed (3 attempts or deadline)")
 
-    @staticmethod
-    def _abort(r, fired):  # shutdown wakes a thread blocked in recv(); close() alone does not
-        fired.set()
+    def _attempt(self, path, timeout, box, done):  # GET + full body read + JSON parse
         try:
-            r.raw._fp.fp.raw._sock.shutdown(socket.SHUT_RDWR)  # http.client response -> BufferedReader -> SocketIO -> socket
-        except (AttributeError, OSError):
-            pass
-        r.close()
+            with self.session.get(self.base + path, timeout=timeout, stream=True) as r:
+                box["r"] = r
+                if r.status_code < 500 and r.status_code != 429:
+                    r.raise_for_status()
+                    box["json"] = r.json()
+        except Exception as e:
+            box["exc"] = e
+        finally:
+            done.set()
 
     def upload(self, rec_path, project):
         r = self.session.post(self.base + "/upload", files={"file": open(rec_path, "rb")},

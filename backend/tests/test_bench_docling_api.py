@@ -32,25 +32,31 @@ def test_order():
     o = lambda c, r: [f["rel_path"] for f in bench.client_order([{"rel_path": str(i)} for i in range(20)], 22, c, r)]
     assert o("A", 1) == o("A", 1) != o("A", 2) and sorted(o("A", 1)) == sorted(o("B", 1))
 
-class Trickle(BaseHTTPRequestHandler):  # a small JSON body (Content-Length) that arrives one byte at a time
+class Trickle(BaseHTTPRequestHandler):  # a small JSON reply that arrives one byte at a time: in the headers or in the body
     log_message = lambda self, *a: None
+    where = "body"
 
-    def do_GET(self):
-        body = b'{"status": "completed"}'
-        self.send_response(200), self.send_header("Content-Length", str(len(body))), self.end_headers()
+    def drip(self, data):
         try:
-            for i in range(len(body)):
-                self.wfile.write(body[i:i + 1]), self.wfile.flush(), time.sleep(0.4)
+            for i in range(len(data)):
+                self.wfile.write(data[i:i + 1]), self.wfile.flush(), time.sleep(0.4)
         except OSError:  # the client gave up
             pass
 
-def test_get_json_never_outlives_the_deadline_on_a_trickling_body():
+    def do_GET(self):
+        body = b'{"status": "completed"}'
+        head = b"HTTP/1.1 200 OK\r\nContent-Length: %d\r\n\r\n" % len(body)
+        self.drip(head + body) if Trickle.where == "head" else (self.wfile.write(head), self.drip(body))
+
+@pytest.mark.parametrize("where", ["head", "body"])
+def test_get_json_never_outlives_the_deadline_on_a_trickling_reply(where):
+    Trickle.where = where
     srv = ThreadingHTTPServer(("127.0.0.1", 0), Trickle)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     api, t0 = bench.Api(f"http://127.0.0.1:{srv.server_address[1]}", "k"), time.time()
     try:
         with pytest.raises(RuntimeError):
-            api.get_json("/j", time.time() + 0.6)  # the whole body would take ~9 s; each read is within the socket timeout
+            api.get_json("/j", time.time() + 0.6)  # the whole reply would take ~15 s; each read is within the socket timeout
         assert time.time() - t0 < 2 and api.http_retries >= 1
     finally:
         srv.shutdown()
