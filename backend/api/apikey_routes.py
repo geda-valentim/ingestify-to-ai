@@ -46,6 +46,10 @@ def _key_info(key: APIKey, project: Optional[Project]) -> APIKeyInfo:
     )
 
 
+# The bare collection path is served as well: redirect_slashes would answer 307 with a
+# Location that drops the proxy root_path. Hidden, so the OpenAPI keeps one operation.
+@router.post("", summary="Criar API key", response_model=APIKeyResponse, status_code=status.HTTP_201_CREATED,
+             include_in_schema=False)
 @router.post("/", summary="Criar API key", response_model=APIKeyResponse, status_code=status.HTTP_201_CREATED)
 async def create_api_key(
     key_data: APIKeyCreate,
@@ -135,6 +139,7 @@ async def create_api_key(
     )
 
 
+@router.get("", summary="Listar API keys", response_model=List[APIKeyInfo], include_in_schema=False)
 @router.get("/", summary="Listar API keys", response_model=List[APIKeyInfo])
 async def list_api_keys(
     scope: Scope = Depends(visible(APIKey, "api_keys.read")),
