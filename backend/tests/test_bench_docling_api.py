@@ -84,15 +84,10 @@ class Stall(BaseHTTPRequestHandler):  # accepts the POST and drips the reply hea
 
     def do_POST(self):
         self.rfile.read(int(self.headers["Content-Length"]))
-        try:
-            for c in b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}":
-                self.wfile.write(bytes([c])), self.wfile.flush(), time.sleep(0.4)
-        except OSError:  # the client gave up
-            pass
+        Trickle.drip(self, b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}")
 
 def test_upload_returns_promptly_when_stop_is_set_during_a_stalled_reply(tmp_path):
-    f = tmp_path / "a.pdf"
-    f.write_bytes(b"%PDF-1.4")
+    (f := tmp_path / "a.pdf").write_bytes(b"%PDF-1.4")
     srv = ThreadingHTTPServer(("127.0.0.1", 0), Stall)
     srv.daemon_threads = True
     threading.Thread(target=srv.serve_forever, daemon=True).start()
@@ -107,7 +102,7 @@ def test_upload_returns_promptly_when_stop_is_set_during_a_stalled_reply(tmp_pat
         t.start(), time.sleep(0.3), stop.set(), t.join(5)  # a call that ignores stop blocks until the reply ends (~13 s)
         assert not t.is_alive() and time.time() - t0 < 2
         assert len(got) == 1 and isinstance(got[0], InterruptedError)
-        t0 = time.time()  # the total budget bounds it as well, with no stop at all
+        t0 = time.time()  # the total budget bounds it as well
         with pytest.raises(bench.requests.Timeout, match="upload exceeded"):
             api.upload(str(f), "p", budget=0.5)
         assert time.time() - t0 < 2
