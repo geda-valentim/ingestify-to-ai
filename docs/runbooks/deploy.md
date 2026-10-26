@@ -264,8 +264,11 @@ docker compose up -d --no-build --no-deps --force-recreate --scale <svc>=<n> <sv
 
 4. Gerenciados e `worker-live` só recebem `build`, nunca `up`. Re-registre o host com o script
    atual, como em "Re-registro após rollback", e rode `apply_profile`.
-5. Confira `GET /health`. Para voltar ao fluxo normal: `git checkout main`, e só então
-   `make deploy`.
+5. Confira `GET /health`. Para voltar ao fluxo normal, use `FORCE_REBUILD=1`:
+   `git checkout main && make deploy FORCE_REBUILD=1`. Sem ele, se `origin/main` não mudou,
+   `deploy-last-success` ainda aponta para `main` e não há commit pendente registrando o
+   rollback: as duas detecções dão diff vazio, o script pula rebuild e restart, e as imagens
+   e o código do rollback continuam rodando. `FORCE_REBUILD=1` reconstrói e recria tudo.
 
 ### Re-registro após rollback
 
