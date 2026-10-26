@@ -73,7 +73,7 @@ def test_get_json_returns_promptly_when_stop_is_set_during_a_stalled_reply():
             got.append(e)
     t, t0 = threading.Thread(target=call), time.time()
     try:
-        t.start(), time.sleep(0.3), stop.set(), t.join(5)  # without the fix the call waits out its 30 s deadline
+        t.start(), time.sleep(0.3), stop.set(), t.join(5)  # a call that ignores stop blocks until the reply ends (~24 s)
         assert not t.is_alive() and time.time() - t0 < 2
         assert len(got) == 1 and isinstance(got[0], InterruptedError)
     finally:
