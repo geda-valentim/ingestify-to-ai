@@ -71,6 +71,18 @@ def client_order(files, seed, client, rep):
     random.Random(f"{seed}|{client}|{rep}").shuffle(order)
     return order
 
+def percentile(values, q):
+    values = sorted(values)
+    if not values:
+        return None
+    lo = int((len(values) - 1) * q)
+    hi = min(lo + 1, len(values) - 1)
+    return values[lo] + (values[hi] - values[lo]) * ((len(values) - 1) * q - lo)
+
+def pcts(values):
+    values = [v for v in values if v is not None]
+    return {"n": len(values), **{k: percentile(values, q) for k, q in (("p50", .5), ("p95", .95), ("p99", .99))}}
+
 def epoch(iso):
     dt = datetime.fromisoformat(str(iso).replace("Z", "+00:00")) if iso else None
     return dt and (dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)).timestamp()
@@ -215,6 +227,18 @@ def emit(rec, out, lock, kind="jsonl"):
         out[kind].write(json.dumps(rec, default=str) + "\n")
         out[kind].flush()
 
+def summarize(records, span):
+    good = [r for r in records if r["error"] != "duplicate" and r["status"] != "error"]
+    pages = [p for r in good for p in r["pages"]]
+    valid = sum(r["pages_ok"] for r in good)
+    return {"n_jobs": len(good), "valid_pages": valid,
+            "valid_pages_per_min": round(valid / span * 60, 3) if span > 0 else None,
+            **{m: pcts([r[m] for r in good]) for m in ("wait_s", "service_s", "total_s")},
+            "page_wait_s": pcts([p["wait_s"] for p in pages]), "page_service_s": pcts([p["service_s"] for p in pages]),
+            "page_retries": sum(r["page_retries"] for r in good),
+            **{k: sum(r["status"] == k for r in good) for k in ("failed", "partial", "timeout")},
+            "errors": sum(r["status"] == "error" for r in records)}
+
 def new_file(path, **kw):
     return os.fdopen(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w", **kw)
 
@@ -272,6 +296,12 @@ def main(argv=None):
     if not any(r["job_id"] for r in out["records"]):  # nothing was benchmarked: never look successful
         print("error: no job was accepted by the API (manifest kept without t_end)", file=sys.stderr)
         return 1
+    summary = {"label": args.label, "phase": args.phase, "repetition": args.repetition, "timing_resolution_s": args.poll_interval, "by_client": {}}
+    for c in "AB":
+        recs = [r for r in out["records"] if r["client"] == c]
+        summary["by_client"][c] = {"http_retries": apis[c].http_retries} | summarize(recs, max([epoch(r["observed_terminal_at"]) or 0 for r in recs] or [0]) - t_run)
+    summary["all"] = summarize(out["records"], t_end - t_run)
+    write_json(os.path.join(run_dir, "summary.json"), summary)
     manifest.update(t_end=iso(t_end), job_ids=[r["job_id"] for r in out["records"] if r["job_id"]])
     write_json(os.path.join(run_dir, "manifest.json"), manifest)
     print(run_dir)

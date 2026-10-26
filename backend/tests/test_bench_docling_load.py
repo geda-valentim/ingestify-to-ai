@@ -92,9 +92,19 @@ def run(url, corpus, root, *extra, rc=0):
     (run_dir,) = (root / "runs").iterdir()
     return run_dir, [json.loads(x) for x in (run_dir / "jobs.jsonl").read_text().splitlines()]
 
+def test_percentile():
+    assert bench.percentile([], .5) is None and bench.percentile([4], .99) == 4
+    assert bench.percentile([1, 2, 3, 4], .5) == 2.5
+
 def test_end_to_end(server, env):
     run_dir, rows = run(server, *env)
     assert len(rows) == 4
+    summary = json.loads((run_dir / "summary.json").read_text())
+    for c in "AB":
+        s = summary["by_client"][c]
+        assert (s["n_jobs"], s["valid_pages"], s["page_retries"], s["partial"]) == (2, 3, 2, 1)
+        assert s["wait_s"]["p95"] is not None and s["service_s"]["n"] == 2 and s["page_service_s"]["n"] == 2
+    assert summary["all"]["valid_pages_per_min"] > 0
     multi = next(r for r in rows if r["rel_path"] == "b-multi.pdf")
     assert multi["service_start_source"] == "first_page_processing_observed" and len(multi["pages"]) == 3
     manifest = json.loads((run_dir / "manifest.json").read_text())
@@ -107,7 +117,7 @@ def test_end_to_end(server, env):
 def test_duplicate_is_excluded(server, env):
     Fake.flags = {"dup"}
     run_dir, rows = run(server, *env)
-    assert {r["error"] for r in rows} == {"duplicate"}
+    assert {r["error"] for r in rows} == {"duplicate"} and json.loads((run_dir / "summary.json").read_text())["all"]["n_jobs"] == 0
 
 def test_keys_label_inflight_and_existing_run_dir(server, env, monkeypatch, capsys):
     corpus, root = env
@@ -157,6 +167,7 @@ def test_dead_client_thread_fails_the_run(server, env, monkeypatch):
     assert bench.main(argv(server, *env)) == 1
     (run_dir,) = (env[1] / "runs").iterdir()
     assert json.loads((run_dir / "manifest.json").read_text())["t_end"] is None  # incomplete run: manifest kept without t_end
+    assert not list((env[1] / "runs").glob("*/summary.json"))  # and no summary
 
 def test_ctrl_c_stops_both_clients_and_keeps_the_journal(server, env):
     Fake.flags = {"stuck"}
