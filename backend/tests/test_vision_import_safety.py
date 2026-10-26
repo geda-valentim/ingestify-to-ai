@@ -96,22 +96,33 @@ def test_the_image_routes_module_imports_without_torch(monkeypatch):
     assert module._validate_image_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 8) == "image/png"
 
 
-def test_importing_the_package_pulls_in_no_heavy_dependency():
-    """Importing is not merely possible - it must also be free."""
+def _forget_heavy_modules(monkeypatch):
+    """Hide already-loaded heavy modules for one test, restoring them afterwards.
+
+    Another test (or Docling) may have imported torch into this process; a plain
+    `del` would leave later tests with a half-forgotten torch.
+    """
     for name in list(sys.modules):
         if name.split(".")[0] in HEAVY_MODULES:
-            del sys.modules[name]
+            monkeypatch.delitem(sys.modules, name)
+
+
+def test_importing_the_package_pulls_in_no_heavy_dependency(monkeypatch):
+    """Importing is not merely possible - it must also be free."""
+    _forget_heavy_modules(monkeypatch)
 
     for module_name in VISION_MODULES:
-        sys.modules.pop(module_name, None)
+        monkeypatch.delitem(sys.modules, module_name, raising=False)
         importlib.import_module(module_name)
 
     leaked = [name for name in HEAVY_MODULES if name in sys.modules]
     assert leaked == [], f"importing the vision package loaded {leaked}"
 
 
-def test_constructing_a_describer_loads_nothing():
+def test_constructing_a_describer_loads_nothing(monkeypatch):
     """Construction stores strings. Weights arrive only when load() is called."""
+    _forget_heavy_modules(monkeypatch)
+
     from workers.vision.florence2_describer import Florence2Describer
 
     describer = Florence2Describer(
