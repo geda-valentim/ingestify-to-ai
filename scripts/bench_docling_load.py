@@ -342,9 +342,13 @@ def main(argv=None):
     after = coldstarts("after")
     if "rows" in before and "rows" in after:
         summary["coldstarts_delta"] = coldstart_delta(before, after)
-        # every submitted page is one conversion and every page retry another; duplicates convert nothing
+        # every submitted page is one conversion and every page retry another; duplicates convert nothing.
+        # Page.retry_count misses Celery autoretries (each calls get_converter() again), so our own autoretries
+        # stay in the remainder: it is an upper bound on foreign conversions, never an exact count.
         observed = sum((r["total_pages"] or 1) + r["page_retries"] for r in out["records"] if r["job_id"] and not r["duplicate"])
         summary["foreign_conversions_estimate"] = summary["coldstarts_delta"]["delta"].get("conversions", 0) - observed
+        summary["foreign_conversions_exact"] = False
+        summary["foreign_conversions_note"] = "upper bound: Celery autoretries of our own pages are not in Page.retry_count and count as foreign"
     else:
         summary["coldstarts_delta"] = {"skipped": before.get("skipped") or after.get("skipped")}
     with new_file(os.path.join(run_dir, "jobs.csv"), newline="") as fh:

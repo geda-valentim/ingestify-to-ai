@@ -93,3 +93,14 @@ def test_gpu_process_is_stopped_when_sampling_fails(env, tmp_path, monkeypatch):
     with pytest.raises(ProcessLookupError):
         os.kill(int(pidfile.read_text()), 0)
     assert (out / "host_peak.csv").exists()
+
+
+def test_missing_memory_peak_is_null_and_sampling_continues(env):  # memory.peak does not exist before Linux 5.19
+    cg, root = env
+    (cg / "memory.peak").unlink()
+    out = root / "run2"
+    assert hs.main(["--cgroup", str(cg), "--out", str(out), "--duration", "0", "--interval", "0.01"]) == 0
+    row = list(csv.DictReader(open(out / "host.csv")))[0]
+    assert row["mem_peak"] == "" and row["mem_current"] == "1000" and row["cpu_usage_usec"] == "500" and row["io_rbytes"] == "11"
+    peaks = list(csv.DictReader(open(out / "host_peak.csv")))[0]
+    assert peaks["memory_peak_before"] == "" and peaks["memory_peak_after"] == ""

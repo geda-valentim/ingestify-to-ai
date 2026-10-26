@@ -116,6 +116,7 @@ def test_end_to_end(server, env):
         assert s["wait_s"]["p95"] is not None and s["service_s"]["n"] == 2 and s["page_service_s"]["n"] == 2
     assert summary["all"]["valid_pages_per_min"] > 0 and summary["coldstarts_delta"]["delta"]["conversions"] == 14
     assert summary["foreign_conversions_estimate"] == 2  # 14 - (4 pages + 2 retries) per client
+    assert summary["foreign_conversions_exact"] is False and "upper bound" in summary["foreign_conversions_note"]
     multi = next(r for r in rows if r["rel_path"] == "b-multi.pdf")
     assert multi["service_start_source"] == "first_page_processing_observed" and len(multi["pages"]) == 3
     manifest = json.loads((run_dir / "manifest.json").read_text())

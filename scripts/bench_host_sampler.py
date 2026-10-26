@@ -34,6 +34,13 @@ def num(path):
         return int(fh.read().strip())
 
 
+def peak(path):  # memory.peak needs Linux 5.19+: a missing file is null, never a failure
+    try:
+        return num(path)
+    except OSError:
+        return None
+
+
 def io_totals(path):
     r = w = 0
     try:
@@ -55,7 +62,7 @@ def sample(cg):
     r, w = io_totals(os.path.join(cg, "io.stat"))
     return [datetime.now(timezone.utc).isoformat(), cpu.get("usage_usec", 0), cpu.get("nr_throttled", 0),
             cpu.get("throttled_usec", 0), num(os.path.join(cg, "memory.current")),
-            num(os.path.join(cg, "memory.peak")), ev.get("oom_kill", 0), r, w]
+            peak(os.path.join(cg, "memory.peak")), ev.get("oom_kill", 0), r, w]
 
 
 def open_new(path, mode="w"):
@@ -90,7 +97,7 @@ def run(args):
     if not os.path.isfile(os.path.join(args.cgroup, "cpu.stat")):
         raise UsageError(f"{args.cgroup} is not a cgroup v2 directory")
     os.makedirs(run_dir, mode=0o700, exist_ok=True)
-    peak_before = num(os.path.join(args.cgroup, "memory.peak"))
+    peak_before = peak(os.path.join(args.cgroup, "memory.peak"))
     t_start = datetime.now(timezone.utc).isoformat()
     proc, gpu_fh = (None, None) if args.no_gpu else start_gpu(run_dir)
     deadline = time.monotonic() + args.duration if args.duration is not None else None
@@ -112,10 +119,7 @@ def run(args):
             except subprocess.TimeoutExpired:
                 proc.kill()
             gpu_fh.close()
-        try:
-            peak_after = num(os.path.join(args.cgroup, "memory.peak"))
-        except OSError:
-            peak_after = None
+        peak_after = peak(os.path.join(args.cgroup, "memory.peak"))
         with open_new(os.path.join(run_dir, "host_peak.csv")) as fh:
             wr = csv.writer(fh)
             wr.writerow(["t_start", "t_end", "memory_peak_before", "memory_peak_after"])
