@@ -177,7 +177,7 @@ def test_project_name_over_the_api_limit_is_refused_before_any_artifact(server, 
 
 def test_failed_poll_keeps_the_last_snapshot(server, env, monkeypatch):
     real, multi = bench.Api.get_json, lambda path: Fake.jobs[path.rsplit("/", 1)[1]]
-    flaky = lambda self, path, dl: 1 / 0 if multi(path)["multi"] and multi(path)["polls"] >= 2 else real(self, path, dl)
+    flaky = lambda self, path, dl, *a: 1 / 0 if multi(path)["multi"] and multi(path)["polls"] >= 2 else real(self, path, dl, *a)
     monkeypatch.setattr(bench.Api, "get_json", flaky)
     rows = [r for r in run(server, *env)[1] if r["rel_path"] == "b-multi.pdf"]
     assert [(r["status"], r["total_pages"], r["pages_failed"]) for r in rows] == [("error", 3, 0)] * 2 and all(r["started_at"] for r in rows)

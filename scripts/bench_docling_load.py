@@ -88,22 +88,30 @@ class Api:
             text = str(text).replace(k, "***")
         return str(text)
 
-    def get_json(self, path, deadline):  # every wait is bounded by the job deadline
+    def get_json(self, path, deadline, stop=None):  # every wait is bounded by the job deadline and, if given, by stop
         for attempt in range(3):
             left = deadline - time.time()
             if left <= 0:
                 break
             box, done = {}, threading.Event()  # the worker writes only to its own box; only this caller records anything
             threading.Thread(target=self._attempt, args=(path, min(60, left), box, done), daemon=True).start()
-            if not done.wait(left):  # a socket timeout alone lets a server that trickles headers or body hold us: abandon the worker
+            while not done.wait(min(0.2, max(0, deadline - time.time()))):  # short slices: stop and deadline are both noticed promptly
+                if (stop and stop.is_set()) or time.time() >= deadline:
+                    break
+            if not done.is_set():  # a socket timeout alone lets a server that trickles headers or body hold us: abandon the worker
                 r = box.get("r")  # close() waits for the reader's buffer lock, so it never runs in the caller
                 r is None or threading.Thread(target=r.close, daemon=True).start()
+                if stop and stop.is_set():
+                    raise InterruptedError("interrupted")
             elif "json" in box:
                 return box["json"]
             elif box.get("exc") and not isinstance(box["exc"], (requests.ConnectionError, requests.Timeout, requests.exceptions.ChunkedEncodingError)):
                 raise box["exc"]  # a bad body is the server's answer, not a transport failure
             self.http_retries += 1
-            time.sleep(max(0, min(0.2 * 2 ** attempt, deadline - time.time())))
+            pause = max(0, min(0.2 * 2 ** attempt, deadline - time.time()))
+            if stop and stop.wait(pause):  # the back-off must not outlast Ctrl-C either
+                raise InterruptedError("interrupted")
+            stop or time.sleep(pause)
         raise RuntimeError(f"GET {path} failed (3 attempts or deadline)")
 
     def _attempt(self, path, timeout, box, done):  # GET + full body read + JSON parse
@@ -178,7 +186,7 @@ def run_client(client, api, files, args, project, barrier, out, lock):
             try:
                 if out["stop"].is_set():
                     raise InterruptedError("interrupted")
-                js, now = api.get_json(f"/jobs/{rec['job_id']}", deadline), time.time()
+                js, now = api.get_json(f"/jobs/{rec['job_id']}", deadline, out["stop"]), time.time()
                 observe(job, js, now)
                 sig = (js["status"], js.get("pages_completed"), js.get("pages_failed"),
                        [(q["status"], q["retry_count"]) for q in js.get("pages") or []])

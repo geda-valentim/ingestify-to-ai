@@ -60,3 +60,21 @@ def test_get_json_never_outlives_the_deadline_on_a_trickling_reply(where):
         assert time.time() - t0 < 2 and api.http_retries >= 1
     finally:
         srv.shutdown()
+
+def test_get_json_returns_promptly_when_stop_is_set_during_a_stalled_reply():
+    Trickle.where = "head"
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), Trickle)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    api, stop, got = bench.Api(f"http://127.0.0.1:{srv.server_address[1]}", "k"), threading.Event(), []
+    def call():
+        try:
+            api.get_json("/j", time.time() + 30, stop)
+        except BaseException as e:
+            got.append(e)
+    t, t0 = threading.Thread(target=call), time.time()
+    try:
+        t.start(), time.sleep(0.3), stop.set(), t.join(5)  # without the fix the call waits out its 30 s deadline
+        assert not t.is_alive() and time.time() - t0 < 2
+        assert len(got) == 1 and isinstance(got[0], InterruptedError)
+    finally:
+        srv.shutdown()
