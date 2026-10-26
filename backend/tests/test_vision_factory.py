@@ -317,21 +317,50 @@ class TestAvailabilityProbe:
     def test_the_stub_is_always_available(self):
         assert get_available_providers()["stub"] == {"available": True, "reason": None}
 
-    def test_missing_dependencies_are_named_with_the_fix(self):
-        """This suite runs with no torch, which is exactly the operator's case."""
+    def test_missing_dependencies_are_named_with_the_fix(self, monkeypatch):
+        """
+        The operator's case: a machine without torch. Simulated, because the
+        test image may well have torch installed (Docling pulls it in).
+        """
+        monkeypatch.setattr(
+            factory.importlib.util, "find_spec", lambda name: None if name == "torch" else object()
+        )
+
         probe = get_available_providers()["florence2"]
 
         assert probe["available"] is False
         assert "torch" in probe["reason"]
+        assert "transformers" not in probe["reason"]
         assert "requirements-vision.txt" in probe["reason"]
 
-    def test_the_probe_imports_nothing_heavy(self, monkeypatch):
+    def test_the_probe_imports_nothing_heavy(self):
+        """
+        Checked in a fresh interpreter: in this process torch may already be
+        loaded by an earlier test (shared.device probes it for real), which
+        would say nothing about the probe itself.
+        """
+        import os
+        import subprocess
         import sys
 
-        get_available_providers()
+        code = (
+            "import sys\n"
+            "from workers.vision.factory import get_available_providers\n"
+            "get_available_providers()\n"
+            "print(sorted(m for m in ('torch', 'transformers', 'PIL') if m in sys.modules))\n"
+        )
+        backend_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        result = subprocess.run(
+            [sys.executable, "-c", code],
+            cwd=backend_root,
+            env=os.environ.copy(),
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
 
-        assert "torch" not in sys.modules
-        assert "transformers" not in sys.modules
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.strip() == "[]"
 
     def test_a_transformers_too_old_for_native_florence2_is_unavailable(self, monkeypatch):
         """
