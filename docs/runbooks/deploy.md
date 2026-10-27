@@ -291,14 +291,21 @@ O checkout voltado pode ter um `scripts/register_engine_host.py` antigo, sem
 anteriores a `22dd189` não têm). Sem a flag, ele grava a imagem do container existente, que um
 gerenciado não recriado ainda mantém, e não a recém-construída. Use o script atual, tirado do
 commit anterior ao rollback (`HEAD before` na mensagem do script, ou `git rev-parse HEAD`
-antes de voltar), como cópia ao lado dos demais scripts, pois ele importa `engine_host_agent`
-de lá:
+antes de voltar). Ele importa `engine_host_services` (que não existe nos checkouts anteriores
+a ele) e `engine_host_agent`: extraia os três juntos, do mesmo commit, num diretório temporário,
+e rode de lá a partir da raiz do checkout, com `--cwd` apontando para ela. Os `--manifest` e o
+`--identities` relativos continuam relativos ao checkout:
 
 ```bash
-git show <commit anterior ao rollback>:scripts/register_engine_host.py > scripts/register_engine_host_current.py
-python3 scripts/register_engine_host_current.py <argumentos originais> --use-built-image
-rm scripts/register_engine_host_current.py
+tmp="$(mktemp -d)"
+git archive <commit anterior ao rollback> scripts/register_engine_host.py \
+  scripts/engine_host_agent.py scripts/engine_host_services.py | tar -x -C "$tmp"
+python3 "$tmp/scripts/register_engine_host.py" --cwd "$PWD" <argumentos originais> --use-built-image
+rm -rf "$tmp"
 ```
+
+Se esse commit for anterior a `d581e28` (sem `engine_host_services.py`), o `git archive`
+falha nesse caminho: tire-o da lista.
 
 Se o commit anterior também não tiver a flag, use o `main` mais novo. Sem a flag, só vale o
 caminho antigo: ele registra a imagem do container existente (ou a do `image:` do compose),

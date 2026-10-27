@@ -9,7 +9,7 @@ import secrets
 import shlex
 import stat
 import subprocess
-from engine_host_agent import SERVICES
+from engine_host_services import SERVICE_PROFILES, SERVICES, profile_args
 
 
 def _write_all(fd, data):
@@ -91,10 +91,9 @@ def _gid(group):
     return grp.getgrnam(group).gr_gid
 
 
-# Services behind a compose profile. COMPOSE_PROFILES (often from .env) may leave the
-# profile off, and then `config` does not render the service; `--profile` replaces
-# COMPOSE_PROFILES, so it is only passed for these services, never for the rest.
-SERVICE_PROFILES = {"worker-live": "live", "worker-dispatch": "engines", "worker-remote": "engines"}
+# COMPOSE_PROFILES (often from .env) may leave a service's profile (SERVICE_PROFILES) off, and
+# then `config` does not render it; `--profile` replaces COMPOSE_PROFILES, so profile_args()
+# is only passed for those services, never for the rest.
 # What the deploy builds, so what --use-built-image may record: the services of the default
 # render (the active COMPOSE_PROFILES) plus these, which it builds with their own profile
 # (worker-live: BUILD_LIVE=1). Keep it in step with scripts/deploy.sh.
@@ -108,15 +107,10 @@ def _compose_env():
     return {k: v for k, v in os.environ.items() if not k.startswith("COMPOSE_")}
 
 
-def _profile_args(service):
-    profile = SERVICE_PROFILES.get(service)
-    return ["--profile", profile] if profile else []
-
-
 def _service_configs(cmd, cwd, services):
     """(rendered config of each of `services`, names in the default render); ValueError if one is missing."""
     rendered = {}
-    for extra in dict.fromkeys([()] + [tuple(_profile_args(s)) for s in services]):
+    for extra in dict.fromkeys([()] + [tuple(profile_args(s)) for s in services]):
         cfg = json.loads(
             subprocess.check_output(
                 cmd + list(extra) + ["config", "--format", "json"], cwd=cwd, env=_compose_env()
@@ -125,7 +119,7 @@ def _service_configs(cmd, cwd, services):
         rendered[extra] = cfg.get("services") or {}
     configs = {}
     for service in services:
-        found = rendered[tuple(_profile_args(service))].get(service)
+        found = rendered[tuple(profile_args(service))].get(service)
         if found is None:
             raise ValueError(
                 f"Service {service} is not declared by the given manifests, or its compose "
@@ -156,7 +150,7 @@ def register(args):
                     f"--use-built-image: the deploy does not build {service}, its compose profile "
                     f"({SERVICE_PROFILES.get(service, '?')}) is not in COMPOSE_PROFILES; add it to "
                     "COMPOSE_PROFILES in .env and run `make deploy FORCE_REBUILD=1` (.env is not "
-                    "tracked: a plain deploy detects no change and builds nothing), or register "
+                    "tracked: a plain deploy may detect no change and build nothing), or register "
                     "without the flag"
                 )
             # Without `build:` in the merged config (e.g. declared only in a local override, or
@@ -169,7 +163,7 @@ def register(args):
             image = image or f"{args.project}-{service}"  # `image:` is the built tag; else compose's default
         if not image:
             ids = subprocess.check_output(
-                cmd + _profile_args(service) + ["ps", "--all", "--quiet", service],
+                cmd + profile_args(service) + ["ps", "--all", "--quiet", service],
                 cwd=args.cwd,
                 env=_compose_env(),
                 text=True,

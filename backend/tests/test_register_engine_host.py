@@ -125,7 +125,7 @@ def test_ps_fallback_targets_the_profile_too(args, monkeypatch):
     register_engine_host.register(args)
 
     ps = {c[-1]: c for c in docker.calls if "ps" in c}
-    assert all("COMPOSE_PROFILES" not in e for e in envs)  # ps runs with the deploy's env too
+    assert all(not any(k.startswith("COMPOSE_") for k in e) for e in envs)  # ps: the deploy's env too
     assert ps["worker-live"][ps["worker-live"].index("ps") - 2:ps["worker-live"].index("ps")] == ["--profile", "live"]
     assert "--profile" not in ps["worker-vision"]  # an unprofiled service keeps the active profiles
 
