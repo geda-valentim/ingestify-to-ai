@@ -23,6 +23,11 @@ que a API ainda está com esse valor; habilitar exige o bootstrap abaixo.
    de uma imagem instalada; serviços parados podem declarar `image` no overlay
    local para que o registro resolva o digest sem iniciá-los. O registro não
    imprime tokens e recusa sobrescrever uma identidade existente.
+   Serviços com profile (`worker-live`: `live`; `worker-dispatch` e `worker-remote`:
+   `engines`) são renderizados com o próprio profile, mesmo que o `COMPOSE_PROFILES`
+   do `.env` não o inclua. Os demais seguem o `COMPOSE_PROFILES`. Com
+   `--use-built-image`, um serviço sem `build:` (por exemplo, um override que só fixa
+   `image:`) é recusado, porque o deploy não construiu imagem para ele.
 4. O arquivo de identidades montado na API contém hashes dos tokens. Ele fica
    sob controle de root, mas precisa ser legível pelo usuário da API. Para a
    imagem padrão, que executa como UID/GID `10001`:

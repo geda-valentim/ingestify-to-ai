@@ -137,8 +137,15 @@ def register(args):
     allowed = {}
     for service in args.service:
         image = configs[service].get("image")
-        if not image and args.use_built_image:
-            image = f"{args.project}-{service}"  # compose's default tag of a built service
+        if args.use_built_image:
+            # Without `build:` (e.g. an override pinning `image:`) `compose build` built nothing,
+            # and the declared image is not the one the deploy just rebuilt.
+            if not configs[service].get("build"):
+                raise ValueError(
+                    f"--use-built-image: service {service} has no build section, so no image "
+                    "was built for it; drop the flag to record its declared image"
+                )
+            image = image or f"{args.project}-{service}"  # `image:` is the built tag; else compose's default
         if not image:
             ids = subprocess.check_output(
                 cmd + _profile_args(service) + ["ps", "--all", "--quiet", service],

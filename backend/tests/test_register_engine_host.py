@@ -18,9 +18,12 @@ sys.path.insert(0, str(SCRIPTS))
 
 import register_engine_host  # noqa: E402
 
-ACTIVE = {"worker": {"image": "ingestify-worker", "command": ["celery", "worker"]}}
-LIVE = {"worker-live": {"command": "python -m workers.live"}}  # built, no `image:`
-ENGINES = {"worker-remote": {"command": ["celery", "remote"]}, "worker-dispatch": {"command": ["celery", "dispatch"]}}
+BUILD = {"context": "/repo"}
+ACTIVE = {"worker": {"build": BUILD, "image": "ingestify-worker", "command": ["celery", "worker"]}}
+LIVE = {"worker-live": {"build": BUILD, "command": "python -m workers.live"}}  # built, no `image:`
+ENGINES = {"worker-remote": {"build": BUILD, "command": ["celery", "remote"]},
+           "worker-dispatch": {"build": BUILD, "command": ["celery", "dispatch"]}}
+PINNED = {"worker-audio": {"image": "ingestify-audio:old", "command": ["celery", "audio"]}}  # override, no build
 
 
 class FakeDocker:
@@ -31,7 +34,7 @@ class FakeDocker:
     def __call__(self, argv, cwd=None, text=False):
         self.calls.append(argv)
         if argv[:2] == ["docker", "compose"] and "config" in argv:
-            services = dict(ACTIVE)
+            services = {**ACTIVE, **PINNED}
             profile = argv[argv.index("config") - 1]
             if self.live_declared and profile == "live":
                 services.update(LIVE)
@@ -109,3 +112,22 @@ def test_ps_fallback_targets_the_profile_too(args, monkeypatch):
 
     ps = [c for c in docker.calls if "ps" in c]
     assert ps and ps[0][ps[0].index("ps") - 2:ps[0].index("ps")] == ["--profile", "live"]
+
+
+def test_use_built_image_refuses_a_service_without_build(args, monkeypatch):
+    # e.g. a local override pins `image:`: the deploy built nothing, the declared image is not new
+    monkeypatch.setattr(register_engine_host.subprocess, "check_output", FakeDocker())
+    args.service = ["worker", "worker-audio"]
+
+    with pytest.raises(ValueError, match="worker-audio has no build section"):
+        register_engine_host.register(args)
+    assert not Path(args.output).exists() and not Path(args.identities).exists()
+
+
+def test_without_use_built_image_the_declared_image_is_recorded(args, monkeypatch):
+    monkeypatch.setattr(register_engine_host.subprocess, "check_output", FakeDocker())
+    args.service, args.use_built_image = ["worker-audio"], False
+
+    register_engine_host.register(args)
+
+    assert json.loads(Path(args.output).read_text())["services"]["worker-audio"]["image"] == "sha256:ingestify-audio:old"
