@@ -1,5 +1,6 @@
 """Retain existing resource ownership when upgrading an early control schema."""
 
+import contextlib
 import os
 from datetime import datetime
 
@@ -85,3 +86,46 @@ def test_upgrade_adds_the_admission_index_to_an_existing_table_and_keeps_tickets
     assert indexes["ix_control_admissions_resource_released"] == ["resource_key", "released_at"]
     with database.connect() as conn:
         assert conn.execute(ControlAdmission.__table__.select()).mappings().one()["holder"] == "task"
+
+
+class _FakeMySQL:
+    def __init__(self):
+        self.dialect = type("D", (), {"name": "mysql"})()
+        self.statements = []
+
+    def execute(self, statement):
+        self.statements.append(str(statement))
+
+
+def test_mysql_ddl_gives_up_on_a_metadata_lock_and_restores_the_session():
+    from shared.engine_control.migration import _bounded_metadata_lock
+
+    conn = _FakeMySQL()
+    with pytest.raises(RuntimeError):
+        with _bounded_metadata_lock(conn):
+            conn.execute("CREATE INDEX ...")
+            raise RuntimeError("Lock wait timeout exceeded")
+    assert conn.statements == [
+        "SET SESSION lock_wait_timeout = 30",
+        "CREATE INDEX ...",
+        "SET SESSION lock_wait_timeout = @@GLOBAL.lock_wait_timeout",
+    ]
+
+
+def test_the_alter_of_existing_tables_runs_under_the_bound(database, monkeypatch):
+    from shared.engine_control import migration
+
+    order = []
+    real_bound, real_alter = migration._bounded_metadata_lock, migration._alter_existing_tables
+
+    @contextlib.contextmanager
+    def bound(connection, seconds=30):
+        order.append("bound")
+        with real_bound(connection, seconds):
+            yield
+        order.append("released")
+
+    monkeypatch.setattr(migration, "_bounded_metadata_lock", bound)
+    monkeypatch.setattr(migration, "_alter_existing_tables", lambda c: (order.append("alter"), real_alter(c)))
+    upgrade(database)
+    assert order == ["bound", "alter", "released"]
