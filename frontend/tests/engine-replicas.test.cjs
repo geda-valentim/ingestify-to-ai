@@ -11,7 +11,7 @@ const compiled = ts.transpileModule(source, {
 }).outputText;
 const scope = { exports: {} };
 vm.runInNewContext(compiled, scope);
-const { featureReplicas, appliedLabel } = scope.exports;
+const { featureReplicas, appliedLabel, unattributedBusy } = scope.exports;
 
 // The vm realm has its own Array/Object: round-trip before comparing.
 const rows = (s) => JSON.parse(JSON.stringify(featureReplicas(s)));
@@ -185,4 +185,20 @@ assert.equal(appliedLabel(hidden), "não visível (parada)");
 assert.equal(
   appliedLabel(rows({ desired: { vision: rev("vision", 1, 1) }, applied: [], resources: [] })[0]),
   "nenhuma · revisão 1 salva, não aplicada",
+);
+
+// First operation of a feature: the locked resource has no applied state, so
+// no row can claim it, but the engine-level flag must show it.
+const first = {
+  desired: { transcription: rev("transcription", 1, 1) },
+  applied: [],
+  resources: [resource("local:h:service:audio", {}, null, {}, "op-9")],
+};
+assert.equal(one(first).busy, false);
+assert.equal(unattributedBusy(first), true);
+assert.equal(unattributedBusy(status), false); // op-1 belongs to vision's resource
+assert.equal(unattributedBusy(undefined), false);
+assert.equal(
+  unattributedBusy({ ...first, resources: [resource("local:h:service:audio", null, null, {})] }),
+  false,
 );

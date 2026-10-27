@@ -64,6 +64,20 @@ export function featureReplicas(status: RuntimeStatus | undefined): FeatureRepli
   });
 }
 
+/**
+ * An operation holds a resource that was never applied for any feature (the
+ * feature's first operation): runtime-status does not say which feature it
+ * is for, so it can only be flagged for the whole engine.
+ */
+export function unattributedBusy(status: RuntimeStatus | undefined): boolean {
+  return !!status?.resources.some(
+    (r) =>
+      r.operation_id != null &&
+      !r.applied?.feature &&
+      !Object.keys(r.applied?.feature_modes ?? {}).length,
+  );
+}
+
 const modeLabel: Record<string, string> = { stopped: "parada", standby: "standby" };
 
 /** The applied column: revision in force, its mode and any unapplied save. */

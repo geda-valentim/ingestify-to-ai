@@ -1,5 +1,5 @@
 "use client";
-import { appliedLabel, featureReplicas } from "@/lib/engine-replicas";
+import { appliedLabel, featureReplicas, unattributedBusy } from "@/lib/engine-replicas";
 import type { RuntimeStatus } from "@/types/engine-control";
 
 const n = (v: number | null) => (v == null ? "—" : String(v));
@@ -9,6 +9,11 @@ export function EngineReplicas({ status }: { status: RuntimeStatus | undefined }
   const rows = featureReplicas(status);
   return (
     <>
+      {unattributedBusy(status) && (
+        <p className="text-sm text-muted-foreground">
+          Operação em curso nesta engine; a feature ainda não aparece no estado.
+        </p>
+      )}
       {rows.length > 0 && (
         <table className="w-full text-sm">
           <thead>
