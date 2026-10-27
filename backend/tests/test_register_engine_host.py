@@ -342,6 +342,11 @@ def test_an_existing_registration_is_never_touched(args, monkeypatch):
     assert Path(args.output).read_text() == '{"machine_token": "old"}'
 
 
+def _assert_no_secret(err, args):
+    token = json.loads(Path(args.output).read_text())["machine_token"]
+    assert token not in err and register_engine_host.hashlib.sha256(token.encode()).hexdigest() not in err
+
+
 def _existing_identities(args):
     Path(args.identities).write_text(json.dumps({"other-host": "f" * 64}))
     return os.stat(args.identities).st_ino
@@ -365,7 +370,9 @@ def test_failure_after_the_live_identities_got_our_entry_keeps_the_config(args, 
         register_engine_host.register(args)
     assert args.host_id in json.loads(Path(args.identities).read_text())
     assert "machine_token" in json.loads(Path(args.output).read_text())
-    assert "is kept" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert "is kept" in err and "start the agent" in err
+    _assert_no_secret(err, args)
 
 
 def test_a_torn_rewrite_of_the_live_identities_points_to_the_backup(args, monkeypatch, capsys):
@@ -384,6 +391,7 @@ def test_a_torn_rewrite_of_the_live_identities_points_to_the_backup(args, monkey
     with pytest.raises(OSError):
         register_engine_host.register(args)
     err = capsys.readouterr().err
-    assert ".bak" in err and "machine_token" not in err
+    assert ".bak" in err
+    _assert_no_secret(err, args)
     assert Path(args.identities + ".bak").read_text() == before
     assert Path(args.output).exists()  # kept: the operator decides after restoring the backup

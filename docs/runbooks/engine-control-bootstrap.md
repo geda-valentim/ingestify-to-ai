@@ -145,12 +145,13 @@ lendo a versão antiga), o modo e o grupo (por exemplo `0640 root:10001`). Se o
 arquivo for novo, ele nasce `0600`; passe `--identities-group 10001` para criá-lo já
 `0640` com o grupo da API, ou aplique o passo 4. Não edite esse arquivo com ferramentas que
 substituem o arquivo (por exemplo `sed -i`). A API relê as identidades a cada requisição do host; não é preciso
-reiniciá-la.
+reiniciá-la. Se o inventário do host mudou (GPU ou manifests), vincule de novo
+o perfil de execução das engines locais (`PROFILE_INVENTORY_CHANGED`).
 
 Se o registro falhar, ele não deixa arquivo pela metade: um `engine-host.json` criado nesta
 execução é removido quando a identidade não chegou ao arquivo de identidades, e o rerun
 passa. Duas exceções, avisadas no erro: se a identidade já entrou no arquivo vivo, o config
-fica (é a única cópia do token; confira os dois arquivos); se o arquivo de identidades ficou
+fica (é a única cópia do token): o registro está feito, inicie o agente (depois de um erro de
+E/S, confira os dois arquivos antes); se o arquivo de identidades ficou
 com JSON inválido, restaure-o de `<arquivo>.bak` com `cp` (mantém o inode montado na API),
-remova o `engine-host.json` e rode de novo. `--identities-group` só vale para um arquivo novo. Se o inventário do host mudou (GPU ou manifests), vincule de novo
-o perfil de execução das engines locais (`PROFILE_INVENTORY_CHANGED`).
+remova o `engine-host.json` e rode de novo. `--identities-group` só vale para um arquivo novo.

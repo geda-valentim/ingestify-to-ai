@@ -48,7 +48,8 @@ def write_identities(path, identities, *, group=None, mode=None):
     offset 0, truncated to the new length and fsynced, so a reader sees either
     the old or the new JSON except for the instant of that write (the API retries
     once on a decode error). A brand-new target is created with O_EXCL and mode
-    0600, then gets `group` and `mode` (default: 0640 when a group is given).
+    0600, then gets `group` and `mode` (default: 0640 when a group is given); if
+    that fails, the new file is removed again.
     """
     path = Path(path)
     if not isinstance(identities, dict):
@@ -257,7 +258,8 @@ def register(args):
         elif recorded:
             print(
                 f"The identity was already written to {args.identities}; {args.output} is kept "
-                "(it holds the only copy of that token). Check both files before running again.",
+                "(it holds the only copy of that token): the registration is in place, start the "
+                "agent. After an I/O error, check both files before relying on them.",
                 file=sys.stderr,
             )
         else:
