@@ -53,13 +53,6 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import {
   Tooltip,
   TooltipContent,
   TooltipProvider,
@@ -72,12 +65,10 @@ import { formatDistanceToNow } from "date-fns";
 import { useToast } from "@/hooks/use-toast";
 import dynamic from "next/dynamic";
 import { ImageJobWorkspace } from "@/components/job/image-job-workspace";
-import { DocumentView } from "@/components/job/document-view";
 import { JobResultPanel } from "@/components/job/job-result-panel";
 import { engineKindLabel, queueReasonText, transcriptionProgress } from "@/components/job/job-progress";
 import { JobTagsCard } from "@/components/job/job-tags-card";
 import { LiveDocument, LiveViewToggle } from "@/components/job/live-document";
-import type { JobResultResponse, JobStatusResponse } from "@/types/api";
 
 // Dynamically import PDF viewer to avoid canvas module issues
 const PdfViewer = dynamic(
@@ -117,7 +108,6 @@ export default function JobStatusPage({ params }: PageProps) {
   const [selectedPage, setSelectedPage] = useState<PageInfo | null>(null);
 
   const [activeTab, setActiveTab] = useState<"pdf" | "markdown">("pdf");
-  const [numPdfPages, setNumPdfPages] = useState<number>(0);
   const [pdfError, setPdfError] = useState<string | null>(null);
   const [selectedPages, setSelectedPages] = useState<Set<number>>(new Set());
 
@@ -164,7 +154,7 @@ export default function JobStatusPage({ params }: PageProps) {
     queryKey: ["job-pages", resolvedParams.id, token],
     queryFn: () => jobsApi.getPages(resolvedParams.id),
     enabled: status?.type === "main" && (status?.total_pages ?? 0) > 0 && !!token,
-    refetchInterval: (query) => {
+    refetchInterval: () => {
       // Settled jobs (partial included) have nothing left to poll for
       const settled = ["completed", "partial", "failed", "cancelled"];
       return status?.status && settled.includes(status.status) ? false : 3000;
@@ -425,8 +415,7 @@ export default function JobStatusPage({ params }: PageProps) {
     bulkRetryMutation.mutate(pageNumbers);
   };
 
-  const onDocumentLoadSuccess = ({ numPages }: { numPages: number }) => {
-    setNumPdfPages(numPages);
+  const onDocumentLoadSuccess = () => {
     setPdfError(null);
   };
 

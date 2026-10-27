@@ -21,7 +21,6 @@ import type { Engine, Feature } from "@/types/compute";
 import type {
   RuntimeProfile,
   ControlPlan,
-  Operation,
   OperationEvent,
 } from "@/types/engine-control";
 

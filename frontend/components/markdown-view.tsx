@@ -44,6 +44,8 @@ const REMARK_PLUGINS = [remarkGfm];
 
 // Module-level so ReactMarkdown sees the same `components` on every render
 const MARKDOWN_COMPONENTS = {
+  // Pull `node` out so ReactMarkdown's AST node never reaches the <img> DOM attributes.
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   img: ({ node: _node, ...props }: ImgHTMLAttributes<HTMLImageElement> & { node?: unknown }) => <MarkdownImage {...props} />,
 };
 

@@ -1,6 +1,5 @@
 "use client";
 
-import { useEffect } from "react";
 import { Document, Page as PDFPage, pdfjs } from "react-pdf";
 import { Loader2 } from "lucide-react";
 import "react-pdf/dist/Page/AnnotationLayer.css";

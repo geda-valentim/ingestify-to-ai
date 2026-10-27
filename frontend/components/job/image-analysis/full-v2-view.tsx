@@ -1,6 +1,6 @@
 "use client";
 import { useState } from "react";
-import type { ImageFullAnalysisResult, VisionTask } from "@/types/api";
+import type { ImageFullAnalysisResult } from "@/types/api";
 import type { ImageFullV2Result } from "@/types/faces";
 import { Button } from "@/components/ui/button";
 import { downloadText } from "@/lib/utils";
