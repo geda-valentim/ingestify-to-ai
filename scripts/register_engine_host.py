@@ -95,6 +95,16 @@ def _gid(group):
 # profile off, and then `config` does not render the service; `--profile` replaces
 # COMPOSE_PROFILES, so it is only passed for these services, never for the rest.
 SERVICE_PROFILES = {"worker-live": "live", "worker-dispatch": "engines", "worker-remote": "engines"}
+# What the deploy builds, so what --use-built-image may record: the services of the default
+# render (the active COMPOSE_PROFILES) plus these, which it builds with their own profile
+# (worker-live: BUILD_LIVE=1). Keep it in step with scripts/deploy.sh.
+DEPLOY_BUILDS_WITH_PROFILE = {"worker-live"}
+
+
+def _compose_env():
+    """`make deploy` runs under `env -i`: its compose reads COMPOSE_PROFILES from .env only. Drop a
+    shell export, which would win over .env, so this sees the services the deploy built."""
+    return {k: v for k, v in os.environ.items() if k != "COMPOSE_PROFILES"}
 
 
 def _profile_args(service):
@@ -103,11 +113,13 @@ def _profile_args(service):
 
 
 def _service_configs(cmd, cwd, services):
-    """The rendered compose config of each of `services`; ValueError if one is not declared."""
+    """(rendered config of each of `services`, names in the default render); ValueError if one is missing."""
     rendered = {}
-    for extra in dict.fromkeys(tuple(_profile_args(s)) for s in services):
+    for extra in dict.fromkeys([()] + [tuple(_profile_args(s)) for s in services]):
         cfg = json.loads(
-            subprocess.check_output(cmd + list(extra) + ["config", "--format", "json"], cwd=cwd)
+            subprocess.check_output(
+                cmd + list(extra) + ["config", "--format", "json"], cwd=cwd, env=_compose_env()
+            )
         )
         rendered[extra] = cfg.get("services") or {}
     configs = {}
@@ -115,11 +127,11 @@ def _service_configs(cmd, cwd, services):
         found = rendered[tuple(_profile_args(service))].get(service)
         if found is None:
             raise ValueError(
-                f"Service {service} is not declared by the given manifests; pass the "
-                "compose file that defines it with --manifest"
+                f"Service {service} is not declared by the given manifests, or its compose "
+                "profile is not active; pass the compose file that defines it with --manifest"
             )
         configs[service] = found
-    return configs
+    return configs, set(rendered[()])
 
 
 def register(args):
@@ -133,11 +145,17 @@ def register(args):
     for service in args.service:
         if service not in SERVICES:
             raise ValueError("Unknown worker service")
-    configs = _service_configs(cmd, args.cwd, args.service)
+    configs, default_render = _service_configs(cmd, args.cwd, args.service)
     allowed = {}
     for service in args.service:
         image = configs[service].get("image")
         if args.use_built_image:
+            if service not in default_render and service not in DEPLOY_BUILDS_WITH_PROFILE:
+                raise ValueError(
+                    f"--use-built-image: the deploy does not build {service}, its compose profile "
+                    f"({SERVICE_PROFILES.get(service, '?')}) is not in COMPOSE_PROFILES; enable the "
+                    "profile and run the deploy, or register without the flag"
+                )
             # Without `build:` in the merged config (e.g. declared only in a local override, or
             # `build: !reset`) `compose build` built nothing: the declared image is not new.
             if not configs[service].get("build"):
@@ -150,6 +168,7 @@ def register(args):
             ids = subprocess.check_output(
                 cmd + _profile_args(service) + ["ps", "--all", "--quiet", service],
                 cwd=args.cwd,
+                env=_compose_env(),
                 text=True,
             ).split()
             if not ids:

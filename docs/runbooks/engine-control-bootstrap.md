@@ -25,11 +25,19 @@ que a API ainda está com esse valor; habilitar exige o bootstrap abaixo.
    imprime tokens e recusa sobrescrever uma identidade existente.
    Serviços com profile (`worker-live`: `live`; `worker-dispatch` e `worker-remote`:
    `engines`) são renderizados com o próprio profile, mesmo que o `COMPOSE_PROFILES`
-   do `.env` não o inclua. Os demais seguem o `COMPOSE_PROFILES`. Com
+   do `.env` não o inclua. Os demais seguem o `COMPOSE_PROFILES` do `.env`, como no
+   `make deploy` (que roda sob `env -i`): um `export COMPOSE_PROFILES=...` no shell é
+   ignorado pelo registro. Com
    `--use-built-image`, um serviço que, depois de juntar os manifests, fica sem `build:`
    (por exemplo, declarado só num override local, ou com `build: !reset`) é recusado,
    porque o deploy não construiu imagem para ele. Um `image:` somado a um serviço com
-   `build:` continua valendo como a tag construída.
+   `build:` continua valendo como a tag construída. Também é recusado, com a flag, um
+   serviço com profile fora do `COMPOSE_PROFILES` (exceto o `worker-live`, que o
+   `BUILD_LIVE=1` constrói), porque o deploy só constrói o que esse profile ativa: ative o
+   profile e rode o deploy, ou registre sem a flag. O registro não tem como saber se o
+   `BUILD_LIVE=1` rodou: sem ele antes, `--use-built-image` grava a imagem existente do
+   `worker-live`. Um override local com `depends_on`
+   num serviço de outro profile pode fazer o render com `--profile` falhar.
 4. O arquivo de identidades montado na API contém hashes dos tokens. Ele fica
    sob controle de root, mas precisa ser legível pelo usuário da API. Para a
    imagem padrão, que executa como UID/GID `10001`:

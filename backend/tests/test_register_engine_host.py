@@ -1,4 +1,4 @@
-"""scripts/register_engine_host.py resolves services behind a compose profile (worker-live: `live`).
+"""scripts/register_engine_host.py resolves services behind a compose profile (`live`, `engines`).
 
 COMPOSE_PROFILES from .env may leave `live` off; `docker compose config` then does not
 render worker-live and the registration died with a KeyError, right after the deploy
@@ -6,6 +6,7 @@ had built the image it was told to record. Subprocess is faked: no docker runs h
 """
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -19,27 +20,33 @@ sys.path.insert(0, str(SCRIPTS))
 import register_engine_host  # noqa: E402
 
 BUILD = {"context": "/repo"}
-ACTIVE = {"worker": {"build": BUILD, "image": "ingestify-worker", "command": ["celery", "worker"]}}
+ACTIVE = {"worker": {"build": BUILD, "image": "ingestify-worker", "command": ["celery", "worker"]},
+          "worker-vision": {"build": BUILD, "command": ["celery", "vision"]}}  # built, no `image:`
 LIVE = {"worker-live": {"build": BUILD, "command": "python -m workers.live"}}  # built, no `image:`
 ENGINES = {"worker-remote": {"build": BUILD, "command": ["celery", "remote"]},
            "worker-dispatch": {"build": BUILD, "command": ["celery", "dispatch"]}}
 PINNED = {"worker-audio": {"image": "ingestify-audio:old", "command": ["celery", "audio"]}}  # merged config has no build
+PROFILED = {"live": LIVE, "engines": ENGINES}
 
 
 class FakeDocker:
-    def __init__(self, live_declared=True):
-        self.live_declared = live_declared
+    """`--profile` REPLACES the active profiles, as in Compose v2. Active: COMPOSE_PROFILES from the
+    process env (a shell export wins over .env), else `active` (the .env value)."""
+
+    def __init__(self, active=(), live_declared=True):
+        self.active, self.live_declared = tuple(active), live_declared
         self.calls = []
 
-    def __call__(self, argv, cwd=None, text=False):
+    def __call__(self, argv, cwd=None, text=False, env=None):
         self.calls.append(argv)
         if argv[:2] == ["docker", "compose"] and "config" in argv:
+            flags = tuple(argv[i + 1] for i, a in enumerate(argv) if a == "--profile")
+            exported = (os.environ if env is None else env).get("COMPOSE_PROFILES")
+            active = tuple(p for p in exported.split(",") if p) if exported is not None else self.active
             services = {**ACTIVE, **PINNED}
-            profile = argv[argv.index("config") - 1]
-            if self.live_declared and profile == "live":
-                services.update(LIVE)
-            if profile == "engines":
-                services.update(ENGINES)
+            for profile in flags or active:
+                if profile != "live" or self.live_declared:
+                    services.update(PROFILED[profile])
             return json.dumps({"services": services}).encode()
         if argv[:3] == ["docker", "image", "inspect"]:
             return json.dumps([{"Id": f"sha256:{argv[3]}", "Config": {"Cmd": ["x"]}}]).encode()
@@ -75,7 +82,7 @@ def test_worker_live_is_rendered_with_its_profile_and_the_rest_without(args, mon
 
 
 def test_engines_profile_services_are_rendered_with_their_profile(args, monkeypatch):
-    docker = FakeDocker()
+    docker = FakeDocker(active=("engines",))  # the deploy built them: engines is in COMPOSE_PROFILES
     monkeypatch.setattr(register_engine_host.subprocess, "check_output", docker)
     args.service = ["worker", "worker-remote", "worker-dispatch"]
 
@@ -91,7 +98,7 @@ def test_engines_profile_services_are_rendered_with_their_profile(args, monkeypa
 def test_a_service_missing_from_the_manifests_is_a_clear_error(args, monkeypatch):
     monkeypatch.setattr(register_engine_host.subprocess, "check_output", FakeDocker(live_declared=False))
 
-    with pytest.raises(ValueError, match="worker-live is not declared"):
+    with pytest.raises(ValueError, match="worker-live is not declared.*or its compose profile is not active"):
         register_engine_host.register(args)
     assert not Path(args.output).exists() and not Path(args.identities).exists()
 
@@ -99,22 +106,23 @@ def test_a_service_missing_from_the_manifests_is_a_clear_error(args, monkeypatch
 def test_ps_fallback_targets_the_profile_too(args, monkeypatch):
     docker = FakeDocker()
 
-    def check_output(argv, cwd=None, text=False):
+    def check_output(argv, cwd=None, text=False, env=None):
         if "ps" in argv:
             docker.calls.append(argv)
             return "c1\n"
         if argv[:2] == ["docker", "inspect"]:
             return json.dumps([{"Image": "sha256:running"}]).encode()
-        return docker(argv, cwd=cwd, text=text)
+        return docker(argv, cwd=cwd, text=text, env=env)
 
     monkeypatch.setattr(register_engine_host.subprocess, "check_output", check_output)
     args.use_built_image = False
-    args.service = ["worker-live"]
+    args.service = ["worker-live", "worker-vision"]
 
     register_engine_host.register(args)
 
-    ps = [c for c in docker.calls if "ps" in c]
-    assert ps and ps[0][ps[0].index("ps") - 2:ps[0].index("ps")] == ["--profile", "live"]
+    ps = {c[-1]: c for c in docker.calls if "ps" in c}
+    assert ps["worker-live"][ps["worker-live"].index("ps") - 2:ps["worker-live"].index("ps")] == ["--profile", "live"]
+    assert "--profile" not in ps["worker-vision"]  # an unprofiled service keeps the active profiles
 
 
 def test_use_built_image_refuses_a_service_without_build(args, monkeypatch):
@@ -136,3 +144,39 @@ def test_without_use_built_image_the_declared_image_is_recorded(args, monkeypatc
     register_engine_host.register(args)
 
     assert json.loads(Path(args.output).read_text())["services"]["worker-audio"]["image"] == "sha256:ingestify-audio:old"
+
+
+def test_use_built_image_refuses_a_profiled_service_the_deploy_did_not_build(args, monkeypatch):
+    # engines is not in COMPOSE_PROFILES: the deploy built neither worker-remote nor worker-dispatch,
+    # so `ingestify-to-ai-worker-remote` is an old image (it holds the engine-secrets key)
+    docker = FakeDocker(active=())
+    monkeypatch.setattr(register_engine_host.subprocess, "check_output", docker)
+    args.service = ["worker", "worker-remote"]
+
+    with pytest.raises(ValueError, match="deploy does not build worker-remote.*engines"):
+        register_engine_host.register(args)
+    assert not Path(args.output).exists() and not Path(args.identities).exists()
+    assert not any("ingestify-to-ai-worker-remote" in c for c in docker.calls)
+
+
+def test_without_use_built_image_an_inactive_profile_still_registers(args, monkeypatch):
+    monkeypatch.setattr(register_engine_host.subprocess, "check_output", FakeDocker(active=()))
+    args.service, args.use_built_image = ["worker-remote"], False
+    ENGINES_IMAGE = {"worker-remote": {**ENGINES["worker-remote"], "image": "ingestify-remote:1"}}
+    monkeypatch.setitem(PROFILED, "engines", ENGINES_IMAGE)
+
+    register_engine_host.register(args)
+
+    assert json.loads(Path(args.output).read_text())["services"]["worker-remote"]["image"] == "sha256:ingestify-remote:1"
+
+
+def test_a_shell_export_of_compose_profiles_does_not_widen_what_counts_as_built(args, monkeypatch):
+    # .env leaves engines off (the deploy, under `env -i`, did not build worker-remote); the
+    # operator exported COMPOSE_PROFILES=engines in this shell to run it by hand
+    monkeypatch.setenv("COMPOSE_PROFILES", "engines")
+    monkeypatch.setattr(register_engine_host.subprocess, "check_output", FakeDocker(active=()))
+    args.service = ["worker-remote"]
+
+    with pytest.raises(ValueError, match="deploy does not build worker-remote"):
+        register_engine_host.register(args)
+    assert not Path(args.output).exists()
