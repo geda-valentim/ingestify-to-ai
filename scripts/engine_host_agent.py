@@ -13,15 +13,8 @@ import time
 import urllib.error
 import urllib.request
 import urllib.parse
+from engine_host_services import SERVICES, profile_args
 
-SERVICES = {
-    "worker",
-    "worker-audio",
-    "worker-vision",
-    "worker-live",
-    "worker-dispatch",
-    "worker-remote",
-}
 ACTIONS = {
     "test",
     "start",
@@ -162,13 +155,13 @@ class HostAgent:
             },
         )
 
-    def compose(self, overlay):
+    def compose(self, overlay, service):
         c = self.config
         cmd = ["docker", "compose", "--project-name", c["project"]]
         for filename in c["manifests"]:
             cmd.extend(["-f", filename])
         cmd.extend(["-f", overlay])
-        return cmd
+        return cmd + profile_args(service)
 
     def run(self, argv, timeout=180):
         self.check()
@@ -206,7 +199,7 @@ class HostAgent:
 
     def inspect(self, service, overlay):
         ids = self.run(
-            self.compose(overlay) + ["ps", "--all", "--quiet", service]
+            self.compose(overlay, service) + ["ps", "--all", "--quiet", service]
         ).split()
         if not ids:
             return []
@@ -303,7 +296,7 @@ class HostAgent:
         observe_only = item.get("observe_only", False)
         if not observe_only:
             self.event("applying", f"Aplicando {replicas} réplicas de {service}", True)
-        argv = self.compose(str(overlay))
+        argv = self.compose(str(overlay), service)
         if action in ("restart", "warmup", "apply_profile"):
             argv += ["up", "-d", "--force-recreate"]
         else:

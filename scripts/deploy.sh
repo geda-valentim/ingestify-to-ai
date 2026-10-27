@@ -34,6 +34,11 @@ die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 run() { if [ "$DRY_RUN" = 1 ]; then printf '[dry-run] %s\n' "$*"; else "$@"; fi; }
 compose() { docker compose "$@"; }
 in_list() { case " $2 " in *" $1 "*) return 0;; esac; return 1; }
+# Does service $1 have a build: section in the rendered `compose config` YAML $2? `compose build`
+# skips a service without one (e.g. an override pinning image:) and still exits 0.
+has_build() {
+  awk -v svc="  $1:" '$0 == svc {f=1; next} f && /^ ? ?[^ ]/ {f=0} f && /^    build:/ {b=1} END {exit !b}' <<<"$2"
+}
 
 on_exit() {
   local rc=$?
@@ -155,9 +160,8 @@ LIVE_DECLARED=0; grep -qx worker-live <<<"$LIVE_SERVICES" && LIVE_DECLARED=1
 if [ "$BUILD_LIVE" = 1 ]; then
   [ "$LIVE_DECLARED" = 1 ] ||
     die "BUILD_LIVE=1 but compose declares no worker-live service, even with --profile live (is docker-compose.live.yml in COMPOSE_FILE?); no container was touched"
-  # A service without `build:` (e.g. an override pinning `image:`) is skipped by `compose build` with exit 0.
   live_cfg="$(compose --profile live config worker-live)" || die "compose config worker-live failed; nothing was touched"
-  awk '/^  worker-live:$/{f=1; next} f && /^  [^ ]/{f=0} f && /^    build:/{b=1} END{exit !b}' <<<"$live_cfg" ||
+  has_build worker-live "$live_cfg" ||
     die "BUILD_LIVE=1 but worker-live has no build: section (an override pinning image:? is docker-compose.live.yml in COMPOSE_FILE?); nothing would be built; no container was touched"
 fi
 declared() { if [ "$1" = worker-live ]; then [ "$LIVE_DECLARED" = 1 ]; else in_list "$1" "$CONF"; fi; }
@@ -246,13 +250,20 @@ restart_running() {   # restart (not recreate) running containers: overlay kept
 }
 # ---------------------------------------------------------------- backend images
 STAGE="backend"
+NO_BUILD=""   # services `compose build` skipped (no build: section): repeated in the final notice
 if [ "$IMAGES" = 1 ] || [ "$COMPOSE_CHG" = 1 ]; then active_tasks_warning; fi
 if [ "$IMAGES" = 1 ] || [ "$COMPOSE_CHG" = 1 ]; then   # compose may change build inputs (args, Dockerfile)
   BUILD=""
   for s in $CODE_SERVICES; do in_list "$s" "$CONF" && BUILD="$BUILD $s"; done
-  log "Image inputs changed: building$BUILD (managed ones are only built)"
-  # shellcheck disable=SC2086
-  run compose build $BUILD
+  if [ -n "$BUILD" ]; then   # an empty list would make `compose build` build every service
+    # shellcheck disable=SC2086
+    build_cfg="$(compose config $BUILD)" || die "compose config failed for:$BUILD"
+    for s in $BUILD; do has_build "$s" "$build_cfg" || NO_BUILD="$NO_BUILD $s"; done
+    [ -z "$NO_BUILD" ] || warn "no build: section for:$NO_BUILD (build: !reset, or a service defined only in an override?). compose build skips them: their images are NOT rebuilt and keep the old requirements/Dockerfile."
+    log "Image inputs changed: building$BUILD (managed ones are only built)"
+    # shellcheck disable=SC2086
+    run compose build $BUILD
+  fi
 fi
 if [ "$IMAGES" = 1 ] || [ "$COMPOSE_CHG" = 1 ]; then
   if [ -n "$UNMANAGED_RUNNING" ]; then
@@ -288,6 +299,9 @@ fi
 # ---------------------------------------------------------------- frontend
 STAGE="frontend"
 if in_list frontend "$CONF" && { [ "$FRONT" = 1 ] || { [ "$COMPOSE_CHG" = 1 ] && [ -n "${RUNNING[frontend]:-}" ]; }; }; then
+  front_cfg="$(compose config frontend)" || die "compose config failed for: frontend"
+  has_build frontend "$front_cfg" || { NO_BUILD="$NO_BUILD frontend"
+    warn "no build: section for: frontend. compose build skips it: the frontend change is NOT deployed."; }
   log "Rebuilding the frontend (cached if nothing changed)"; run compose build frontend
   if [ -n "${RUNNING[frontend]:-}" ]; then
     run compose up -d --no-build --no-deps frontend
@@ -315,6 +329,14 @@ if [ -n "${NOTICE// /}" ]; then
       echo "  container's image is recorded), THEN apply_profile."
     fi
     echo "  Services stopped on purpose stay stopped."
+  } >&2
+fi
+if [ -n "$NO_BUILD" ]; then   # the next deploy will not detect the change again: say it last
+  {
+    echo
+    echo "ATTENTION - NOT rebuilt (no build: section in the compose config):${NO_BUILD}"
+    echo "  They keep their OLD image. Fix the override (or build the pinned image by hand); do NOT"
+    echo "  re-register them with --use-built-image until a build really ran."
   } >&2
 fi
 # ---------------------------------------------------------------- health

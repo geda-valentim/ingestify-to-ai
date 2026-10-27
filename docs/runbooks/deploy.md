@@ -49,7 +49,13 @@ Ao falhar, o script imprime `DEPLOY FAILED at stage: <estágio>`.
      `docker/entrypoint.sh`, `scripts/{make_admin,engines,seed_execution_profiles}.py`) **ou**
      o compose: avisa de tarefas ativas, faz `build` de todos os serviços de código (os
      gerenciados só são construídos) e recria os **não gerenciados em execução** com
-     `up -d --no-build --no-deps --force-recreate --scale <svc>=<rodando>`;
+     `up -d --no-build --no-deps --force-recreate --scale <svc>=<rodando>`. Um serviço de
+     código sem `build:` no config final (por exemplo, `build: !reset` ou um serviço definido
+     só num override) é pulado pelo `compose build` com saída 0: o script avisa
+     `no build: section for: <svc> … NOT rebuilt`, repete no fim (`ATTENTION - NOT rebuilt`) e
+     segue com a imagem antiga dele. O próximo deploy não detecta a mudança de novo: corrija o
+     override (ou construa a imagem fixada à mão) e só então re-registre um gerenciado com
+     `--use-built-image`. O mesmo vale para o `frontend`;
    - só o compose (sem imagem): os gerenciados em execução levam `docker restart`;
    - só código (`backend/{api,shared,workers}/`): `docker restart` dos em execução, gerenciados
      inclusive;
