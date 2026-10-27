@@ -245,7 +245,7 @@ async def put_engine_feature(engine_id: str, feature: str, body: BindingUpdate, 
                     auth_method="jwt", ip=request.client.host if request.client else None,
                     vision_model_id=settings.vision_model_id)
     except VersionConflict as e:
-        raise refusal(409, "VERSION_CONFLICT", e)
+        raise refusal(409, e.code, e)
     except store.RemoteCapacityError as e:
         db.rollback()
         raise refusal(409, "REMOTE_CAPACITY_EXCEEDED", e)
@@ -266,7 +266,7 @@ async def delete_engine_feature(engine_id: str, feature: str, request: Request, 
                     auth_method="jwt", ip=request.client.host if request.client else None,
                     vision_model_id=settings.vision_model_id)
     except VersionConflict as e:
-        raise refusal(409, "VERSION_CONFLICT", e)
+        raise refusal(409, e.code, e)
     except CapacityError as e:
         raise _capacity_error(e)
     except ValueError as e:
@@ -283,7 +283,7 @@ async def put_engine_gpus(engine_id: str, body: GpusUpdate, request: Request,
                        actor_user_id=str(admin_user.id), auth_method="jwt",
                        ip=request.client.host if request.client else None, vision_model_id=settings.vision_model_id)
     except VersionConflict as e:
-        raise refusal(409, "VERSION_CONFLICT", e)
+        raise refusal(409, e.code, e)
     except CapacityError as e:
         raise _capacity_error(e)
     return _view(db, engine)
@@ -386,7 +386,7 @@ async def activate_engine(engine_id: str, request: Request, body: Optional[Versi
                          actor_user_id=str(admin_user.id), auth_method="jwt", ip=_ip(request),
                          fingerprint_of=fingerprint_of, vision_model_id=settings.vision_model_id)
     except VersionConflict as e:
-        raise refusal(409, "VERSION_CONFLICT", e)
+        raise refusal(409, e.code, e)
     except store.EngineStateError as e:
         raise _state_error(e)
     logger.warning(f"[ADMIN] {admin_user.id} activated engine {engine.slug}")
@@ -401,7 +401,7 @@ async def pause_engine(engine_id: str, request: Request, body: Optional[VersionB
         store.set_status(db, engine, "paused", version=body.version if body else None,
                          actor_user_id=str(admin_user.id), auth_method="jwt", ip=_ip(request))
     except VersionConflict as e:
-        raise refusal(409, "VERSION_CONFLICT", e)
+        raise refusal(409, e.code, e)
     logger.warning(f"[ADMIN] {admin_user.id} paused engine {engine.slug}")
     return _view(db, engine)
 
@@ -423,7 +423,7 @@ async def put_engine_budget(engine_id: str, body: BudgetUpdate, request: Request
                          soft_pct=body.soft_pct, period_tz=body.period_tz, period_anchor_day=body.period_anchor_day,
                          version=body.version, actor_user_id=str(admin_user.id), auth_method="jwt", ip=_ip(request))
     except VersionConflict as e:
-        raise refusal(409, "VERSION_CONFLICT", e)
+        raise refusal(409, e.code, e)
     except store.EngineStateError as e:
         raise _state_error(e)
     logger.warning(f"[ADMIN] {admin_user.id} set the budget of engine {engine.slug}")
@@ -447,7 +447,7 @@ async def put_engine_credentials(
                               version=body.version, actor_user_id=str(admin_user.id), auth_method="jwt",
                               ip=_ip(request))
     except VersionConflict as e:
-        raise refusal(409, "VERSION_CONFLICT", e)
+        raise refusal(409, e.code, e)
     except store.EngineStateError as e:
         raise _state_error(e)
     logger.warning(f"[ADMIN] {admin_user.id} replaced the credentials of engine {engine.slug}")
@@ -468,7 +468,7 @@ async def delete_engine_credentials(
         store.clear_credentials(db, engine, version=body.version, actor_user_id=str(admin_user.id),
                                 auth_method="jwt", ip=_ip(request))
     except VersionConflict as e:
-        raise refusal(409, "VERSION_CONFLICT", e)
+        raise refusal(409, e.code, e)
     except store.EngineStateError as e:
         raise _state_error(e)
     logger.warning(f"[ADMIN] {admin_user.id} removed the credentials of engine {engine.slug}")

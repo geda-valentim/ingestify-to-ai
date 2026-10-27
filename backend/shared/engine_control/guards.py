@@ -64,7 +64,7 @@ def before_write(
     # CAS/serialization applies to legacy writers too, without introducing control-table reads.
     db.query(Engine).filter_by(id=engine.id).populate_existing().with_for_update().one()
     if version is not None and version != engine.version:
-        raise VersionConflict("VERSION_CONFLICT: re-read the engine")
+        raise VersionConflict("VERSION_CONFLICT: re-read the engine", code="VERSION_CONFLICT")
     if not get_settings().engine_control_enabled:
         return
     locked = (
@@ -75,18 +75,21 @@ def before_write(
     )
     if locked:
         raise VersionConflict(
-            "OPERATION_CONFLICT: resource is controlled by an active/uncertain operation"
+            "OPERATION_CONFLICT: resource is controlled by an active/uncertain operation",
+            code="OPERATION_CONFLICT",
         )
     managed = db.query(RuntimeProfile).filter_by(engine_id=engine.id).first()
     if not managed:
         return
     if runtime:
         raise VersionConflict(
-            "RUNTIME_OPERATION_REQUIRED: save a runtime profile and execute a plan"
+            "RUNTIME_OPERATION_REQUIRED: save a runtime profile and execute a plan",
+            code="RUNTIME_OPERATION_REQUIRED",
         )
     if credentials:
         for op in db.query(EngineOperation).filter_by(engine_id=engine.id):
             if (op.handles or {}).get("maintenance", {}).get("cleanup_required"):
                 raise VersionConflict(
-                    "CLEANUP_CREDENTIAL_REQUIRED: verify cooldown before rotating/removing credentials"
+                    "CLEANUP_CREDENTIAL_REQUIRED: verify cooldown before rotating/removing credentials",
+                    code="CLEANUP_CREDENTIAL_REQUIRED",
                 )
