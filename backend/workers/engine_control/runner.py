@@ -3,6 +3,7 @@ import time
 from datetime import datetime, timedelta
 from uuid import uuid4
 from sqlalchemy import update
+from sqlalchemy.exc import SQLAlchemyError
 from shared.config import get_settings
 from shared.database import SessionLocal
 from shared.engine_control import service, registry
@@ -189,11 +190,12 @@ class Context:
                 if not tickets and not usages:
                     return
             time.sleep(0.5)
-        # Residual state for the admin. Best effort: it never replaces DRAIN_TIMEOUT.
+        # Residual state for the admin. A database failure here never replaces
+        # DRAIN_TIMEOUT; a cancel or a lost lease still wins, as anywhere else.
         try:
             count, holders = orphan_tickets.residual(self.Session, plan["resources"])
             self.event("draining", f"Drenagem esgotada: {count} tickets abertos {holders}, {usages} usos em execução")
-        except Exception:  # noqa: BLE001
+        except SQLAlchemyError:
             pass
         raise TimeoutError("DRAIN_TIMEOUT")
 

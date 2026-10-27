@@ -131,41 +131,55 @@ Se qualquer passo não confirmar, não libere: recuse e tente a operação de no
    WHERE released_at IS NULL AND resource_key IN ('<chave 1>', '<chave 2>');
    ```
 
-2. **Liste os containers Celery vivos** da instalação, com os mesmos `-f` do registro.
-   O nome do nó de cada um termina com o id curto do container (`<fila>@<id>`).
-   O `worker-live` não é Celery e fica de fora:
+2. **Liste os containers dos serviços Celery** da instalação, com os mesmos `-f` do
+   registro, em qualquer estado. O nome do nó de cada um termina com o id curto do
+   container (`<fila>@<id>`). Só estes serviços são Celery; `worker-live` e
+   `worker-control-watchdog` não são e ficam de fora:
 
    ```bash
-   docker compose <os mesmos -f> ps --status running --format '{{.Service}} {{.ID}}' \
-     | grep -E '^worker' | grep -v '^worker-live ' > /tmp/celery-containers.txt
+   docker compose <os mesmos -f> ps -a --format '{{.Service}} {{.ID}} {{.State}}' \
+     | grep -E '^(worker|worker-audio|worker-vision|worker-remote|worker-dispatch|worker-control) ' \
+     > /tmp/celery-containers.txt
    cat /tmp/celery-containers.txt
    ```
 
    Se a instalação tem workers em mais de um host, rode isto em cada host e junte as
-   listas no mesmo arquivo: um container que ficou fora da lista não é cobrado no passo 3.
+   listas no mesmo arquivo. O passo 3 recusa um nó que responde sem estar na lista.
 
 3. **Pergunte a todos os nós quais tasks estão ativas** e confira, para cada task id do
-   passo 1, que todos os containers responderam e que nenhum a executa:
+   passo 1, que a lista não está vazia, que nenhum container está pausado ou reiniciando,
+   que todo container em execução respondeu, que nenhum nó fora da lista respondeu e que
+   ninguém executa a task:
 
    ```bash
-   # <serviço>: qualquer um da lista do passo 2 (por exemplo, worker-control)
+   # <serviço>: qualquer um da lista do passo 2 em execução (por exemplo, worker-control)
    docker compose <os mesmos -f> exec -T <serviço> \
      celery -A workers.celery_app inspect active --json --timeout 10 > /tmp/celery-active.json
    python3 - /tmp/celery-active.json /tmp/celery-containers.txt '<task id>' <<'PY'
    import json, sys
+   rows = [line.split() for line in open(sys.argv[2]) if line.strip()]
+   if not rows or any(len(r) != 3 for r in rows):
+       sys.exit("NÃO LIBERE: lista de containers vazia ou ilegível (confira diretório, -p e -f)")
+   stuck = [r for r in rows if r[2] not in ("running", "exited", "dead")]
+   if stuck:
+       sys.exit(f"NÃO LIBERE: containers pausados ou em transição {stuck}")
    replies = json.load(open(sys.argv[1]))
-   containers = {line.split()[1][:12] for line in open(sys.argv[2]) if line.strip()}
+   if not isinstance(replies, dict) or any(not isinstance(t, list) for t in replies.values()):
+       sys.exit("NÃO LIBERE: resposta do inspect com erro ou em formato inesperado")
+   containers = {r[1][:12] for r in rows if r[2] == "running"}
    answered = {node.split("@", 1)[1][:12] for node in replies}
-   silent = containers - answered
-   running = [n for n, tasks in replies.items() if any(t.get("id") == sys.argv[3] for t in tasks or [])]
-   if silent or running:
-       sys.exit(f"NÃO LIBERE: sem resposta={sorted(silent)} executando={running}")
+   silent, unknown = containers - answered, answered - containers
+   running = [n for n, tasks in replies.items() if any(t.get("id") == sys.argv[3] for t in tasks)]
+   if silent or unknown or running:
+       sys.exit(f"NÃO LIBERE: sem resposta={sorted(silent)} fora da lista={sorted(unknown)} executando={running}")
    print("todos os containers responderam e nenhum executa a task")
    PY
    ```
 
    Um container que não responde (ocupado num pool `solo`, travado, broker fora) não prova
-   nada: espere e repita o passo 3. Não libere com base em quanto tempo o ticket está aberto.
+   nada: espere e repita o passo 3. Um nó fora da lista indica outro host ou outra
+   instalação no mesmo broker: complete a lista do passo 2. Não libere com base em quanto
+   tempo o ticket está aberto.
 
 4. **Só com a confirmação do passo 3**, libere pelos `id` anotados no passo 1, nunca por
    chave de recurso. Confira que o número de linhas afetadas é o de tickets daquela task:

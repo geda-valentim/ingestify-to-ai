@@ -13,6 +13,7 @@ from datetime import datetime, timedelta
 
 import pytest
 from sqlalchemy import create_engine
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -136,6 +137,20 @@ class TestReleaseDead:
 
         assert _judge(Session, lambda nodes: {NODE: [("t-1", 11)]}) == [task_holder("t-1", NODE, pid=10)]
         assert ticket not in _open(Session)
+
+    def test_a_ticket_released_meanwhile_is_not_reported_as_ours(self, Session):
+        """The audit trail lists only what the drain released."""
+        mine = _ticket(Session, task_holder("t-1", NODE, pid=10))
+        theirs = _ticket(Session, task_holder("t-2", NODE, pid=11))
+
+        def inspector(nodes):
+            with Session() as db:  # t-2's own `finally` runs between the look and the release
+                db.get(ControlAdmission, theirs).released_at = datetime.utcnow()
+                db.commit()
+            return {NODE: []}
+
+        assert _judge(Session, inspector) == [task_holder("t-1", NODE, pid=10)]
+        assert mine not in _open(Session)
 
     def test_a_reply_without_the_process_id_does_not_clear_the_task(self, Session):
         ticket = _ticket(Session, task_holder("t-1", NODE, pid=10))
@@ -317,7 +332,7 @@ class TestDrain:
         monkeypatch.setattr(orphan_tickets, "active_by_node", lambda nodes: {})
 
         def broken(*args, **kwargs):
-            raise RuntimeError("database went away")
+            raise OperationalError("SELECT 1", {}, Exception("database went away"))
 
         monkeypatch.setattr(orphan_tickets, "residual", broken)
         ctx, plan = self._operation(Session, timeout_seconds=1)

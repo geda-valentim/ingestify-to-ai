@@ -81,7 +81,7 @@ def release_dead(session_factory, resource_keys, first_seen, inspect_active=None
     with session_factory() as db:
         rows = open_tickets(db, resource_keys)
     stamp = clock()
-    holders = {}
+    holders, holder_of = {}, {row.id: row.holder for row in rows}
     for row in rows:
         seen = first_seen.setdefault(row.id, stamp)
         parsed = parse_task_holder(row.holder)
@@ -100,19 +100,20 @@ def release_dead(session_factory, resource_keys, first_seen, inspect_active=None
     ]
     if not dead:
         return []
-    released_at = now()
+    released = []
     with session_factory() as db:
-        db.query(ControlAdmission).filter(
-            ControlAdmission.id.in_(dead), ControlAdmission.released_at.is_(None)
-        ).update({"released_at": released_at}, synchronize_session=False)
+        # Row by row: only what this call released goes to the audit trail, never a
+        # ticket its own `finally` released meanwhile.
+        for ticket in dead:
+            changed = (
+                db.query(ControlAdmission)
+                .filter(ControlAdmission.id == ticket, ControlAdmission.released_at.is_(None))
+                .update({"released_at": now()}, synchronize_session=False)
+            )
+            if changed:
+                released.append(holder_of[ticket])
         db.commit()
-        # Only the rows this call released; one released meanwhile by its own `finally` is not ours.
-        rows = (
-            db.query(ControlAdmission.holder)
-            .filter(ControlAdmission.id.in_(dead), ControlAdmission.released_at == released_at)
-            .all()
-        )
-    return list(dict.fromkeys(row.holder for row in rows))
+    return list(dict.fromkeys(released))
 
 
 def _still_running(active, task_id, pid):
