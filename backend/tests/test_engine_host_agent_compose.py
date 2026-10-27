@@ -1,5 +1,6 @@
 """
-scripts/engine_host_agent.py passes `--profile` for services behind a Compose profile.
+scripts/engine_host_agent.py passes `--profile` for services behind a Compose profile
+(the map lives in scripts/engine_host_services.py).
 
 Current Compose activates the profile of a service named on the command line, but
 that was never checked for `ps`, and an older Compose returns an empty `ps` without
@@ -103,15 +104,24 @@ def test_up_carries_the_service_profile(agent_module, tmp_path, monkeypatch):
 
 
 def test_the_map_matches_the_compose_files(agent_module):
-    """A service that gains or loses a profile in Compose must update the agent too."""
+    """A service that gains or loses a profile in Compose must update the map too."""
+    import engine_host_services
+
     yaml = pytest.importorskip("yaml")
     declared = {}
     for path in sorted(REPO.glob("docker-compose*.yml")):
         services = (yaml.safe_load(path.read_text()) or {}).get("services") or {}
         for name, spec in services.items():
-            if name in agent_module.SERVICES and (spec or {}).get("profiles"):
+            if name in engine_host_services.SERVICES and (spec or {}).get("profiles"):
                 declared.setdefault(name, set()).update(spec["profiles"])
 
     assert {name: profiles for name, profiles in declared.items()} == {
-        name: {profile} for name, profile in agent_module.SERVICE_PROFILES.items()
+        name: {profile} for name, profile in engine_host_services.SERVICE_PROFILES.items()
     }
+
+
+def test_the_agent_and_the_registration_share_one_service_list(agent_module):
+    """register_engine_host imports SERVICES through the agent; it must stay the same set."""
+    import engine_host_services
+
+    assert agent_module.SERVICES is engine_host_services.SERVICES

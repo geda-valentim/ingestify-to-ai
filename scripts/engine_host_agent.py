@@ -13,19 +13,8 @@ import time
 import urllib.error
 import urllib.request
 import urllib.parse
+from engine_host_services import SERVICES, profile_args
 
-SERVICES = {
-    "worker",
-    "worker-audio",
-    "worker-vision",
-    "worker-live",
-    "worker-dispatch",
-    "worker-remote",
-}
-# Services behind a Compose profile. Passed explicitly on every call that names one:
-# an older Compose may not activate a named service's profile and `ps` then comes back
-# empty without an error, which reads as "no replicas".
-SERVICE_PROFILES = {"worker-live": "live", "worker-dispatch": "engines", "worker-remote": "engines"}
 ACTIONS = {
     "test",
     "start",
@@ -172,9 +161,7 @@ class HostAgent:
         for filename in c["manifests"]:
             cmd.extend(["-f", filename])
         cmd.extend(["-f", overlay])
-        if service in SERVICE_PROFILES:
-            cmd.extend(["--profile", SERVICE_PROFILES[service]])
-        return cmd
+        return cmd + profile_args(service)
 
     def run(self, argv, timeout=180):
         self.check()
