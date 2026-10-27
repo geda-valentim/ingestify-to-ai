@@ -117,6 +117,7 @@ export interface RuntimeStatus {
     key: string;
     maintenance: boolean;
     operation_id: string | null;
+    applied?: { feature?: string; revision?: number } | null;
     observed_at: string | null;
     observed: Record<string, unknown>;
   }[];

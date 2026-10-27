@@ -15,6 +15,7 @@ import { computeApi } from "@/lib/api";
 import { RuntimeSettingsFields } from "./runtime-settings-fields";
 import { ExecutionProfileBinding } from "./execution-profile-binding";
 import { AdminError } from "./admin-error";
+import { EngineReplicas } from "./engine-replicas";
 import { guidedOperationError } from "@/lib/admin-errors";
 import { useAuthStore } from "@/lib/store/auth";
 import type { Engine, Feature } from "@/types/compute";
@@ -268,16 +269,7 @@ export function EngineControl({
                   : "desconhecido"}
               </div>
             </div>
-            {runtime.data?.resources.map((r) => (
-              <div key={r.key} className="rounded border p-3 text-sm">
-                <div className="break-all font-mono text-xs">{r.key}</div>
-                <p>
-                  {r.maintenance ? "Em manutenção" : "Admissão disponível"} ·{" "}
-                  {String(r.observed.replicas_alive ?? "—")} vivos /{" "}
-                  {String(r.observed.ready_replicas ?? "—")} prontos
-                </p>
-              </div>
-            ))}
+            <EngineReplicas status={runtime.data} />
             {setup?.message && (
               <AdminError
                 tone="info"
