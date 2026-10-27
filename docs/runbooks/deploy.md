@@ -109,8 +109,10 @@ Depois rode `apply_profile` dos serviços. Com `--use-built-image`, o script reg
 imagem recém-construída `<project>-<service>` (`--project`, padrão `ingestify-to-ai`), e não
 a do container existente. **Premissa:** o compose nomeia a imagem construída assim, quando o
 serviço não tem `image:`. Se a tag não existir, `docker image inspect` falha e o registro
-aborta com erro: confira com `docker images` antes de contornar. Serviço com `image:` no
-compose usa essa imagem, com ou sem a flag.
+aborta com erro: confira com `docker images` antes de contornar. Serviço com `image:` e
+`build:` no compose usa essa imagem (é a tag construída), com ou sem a flag. Com a flag, o
+registro recusa um serviço sem `build:` e um serviço com profile que o deploy não construiu
+(ver `engine-control-bootstrap.md`, passo 3).
 
 ## Flags
 

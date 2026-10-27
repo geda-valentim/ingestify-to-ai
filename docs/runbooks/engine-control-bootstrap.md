@@ -33,8 +33,10 @@ que a API ainda está com esse valor; habilitar exige o bootstrap abaixo.
    porque o deploy não construiu imagem para ele. Um `image:` somado a um serviço com
    `build:` continua valendo como a tag construída. Também é recusado, com a flag, um
    serviço com profile fora do `COMPOSE_PROFILES` (exceto o `worker-live`, que o
-   `BUILD_LIVE=1` constrói), porque o deploy só constrói o que esse profile ativa: ative o
-   profile e rode o deploy, ou registre sem a flag. O registro não tem como saber se o
+   `BUILD_LIVE=1` constrói), porque o deploy só constrói o que esse profile ativa: ponha o
+   profile no `COMPOSE_PROFILES` do `.env` e rode `make deploy FORCE_REBUILD=1` (o `.env` não
+   é versionado, então um deploy simples não detecta mudança e não constrói nada), ou
+   registre sem a flag. O registro não tem como saber se o
    `BUILD_LIVE=1` rodou: sem ele antes, `--use-built-image` grava a imagem existente do
    `worker-live`. Um override local com `depends_on`
    num serviço de outro profile pode fazer o render com `--profile` falhar.

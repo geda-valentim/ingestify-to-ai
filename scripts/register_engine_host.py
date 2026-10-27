@@ -102,9 +102,10 @@ DEPLOY_BUILDS_WITH_PROFILE = {"worker-live"}
 
 
 def _compose_env():
-    """`make deploy` runs under `env -i`: its compose reads COMPOSE_PROFILES from .env only. Drop a
-    shell export, which would win over .env, so this sees the services the deploy built."""
-    return {k: v for k, v in os.environ.items() if k != "COMPOSE_PROFILES"}
+    """`make deploy` runs under `env -i` and passes no COMPOSE_* variable: its compose reads
+    COMPOSE_PROFILES from .env only. Drop every shell COMPOSE_* (a profile list or another env
+    file would win over .env), so this sees the services the deploy built."""
+    return {k: v for k, v in os.environ.items() if not k.startswith("COMPOSE_")}
 
 
 def _profile_args(service):
@@ -153,8 +154,10 @@ def register(args):
             if service not in default_render and service not in DEPLOY_BUILDS_WITH_PROFILE:
                 raise ValueError(
                     f"--use-built-image: the deploy does not build {service}, its compose profile "
-                    f"({SERVICE_PROFILES.get(service, '?')}) is not in COMPOSE_PROFILES; enable the "
-                    "profile and run the deploy, or register without the flag"
+                    f"({SERVICE_PROFILES.get(service, '?')}) is not in COMPOSE_PROFILES; add it to "
+                    "COMPOSE_PROFILES in .env and run `make deploy FORCE_REBUILD=1` (.env is not "
+                    "tracked: a plain deploy detects no change and builds nothing), or register "
+                    "without the flag"
                 )
             # Without `build:` in the merged config (e.g. declared only in a local override, or
             # `build: !reset`) `compose build` built nothing: the declared image is not new.

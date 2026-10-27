@@ -106,21 +106,26 @@ def test_a_service_missing_from_the_manifests_is_a_clear_error(args, monkeypatch
 def test_ps_fallback_targets_the_profile_too(args, monkeypatch):
     docker = FakeDocker()
 
+    envs = []
+
     def check_output(argv, cwd=None, text=False, env=None):
         if "ps" in argv:
             docker.calls.append(argv)
+            envs.append(env)
             return "c1\n"
         if argv[:2] == ["docker", "inspect"]:
             return json.dumps([{"Image": "sha256:running"}]).encode()
         return docker(argv, cwd=cwd, text=text, env=env)
 
     monkeypatch.setattr(register_engine_host.subprocess, "check_output", check_output)
+    monkeypatch.setenv("COMPOSE_PROFILES", "engines")
     args.use_built_image = False
     args.service = ["worker-live", "worker-vision"]
 
     register_engine_host.register(args)
 
     ps = {c[-1]: c for c in docker.calls if "ps" in c}
+    assert all("COMPOSE_PROFILES" not in e for e in envs)  # ps runs with the deploy's env too
     assert ps["worker-live"][ps["worker-live"].index("ps") - 2:ps["worker-live"].index("ps")] == ["--profile", "live"]
     assert "--profile" not in ps["worker-vision"]  # an unprofiled service keeps the active profiles
 
@@ -180,3 +185,30 @@ def test_a_shell_export_of_compose_profiles_does_not_widen_what_counts_as_built(
     with pytest.raises(ValueError, match="deploy does not build worker-remote"):
         register_engine_host.register(args)
     assert not Path(args.output).exists()
+
+
+def test_every_shell_compose_variable_is_dropped(args, monkeypatch):
+    # another env file could switch engines on in the default render; the deploy passes no COMPOSE_*
+    seen = []
+    docker = FakeDocker(active=())
+
+    def check_output(argv, cwd=None, text=False, env=None):
+        seen.append(env)
+        return docker(argv, cwd=cwd, text=text, env=env)
+
+    monkeypatch.setenv("COMPOSE_ENV_FILES", "/tmp/other.env")
+    monkeypatch.setattr(register_engine_host.subprocess, "check_output", check_output)
+    args.service = ["worker"]
+
+    register_engine_host.register(args)
+
+    compose_envs = [e for e in seen if e is not None]
+    assert compose_envs and all(not any(k.startswith("COMPOSE_") for k in e) for e in compose_envs)
+
+
+def test_the_refusal_says_how_to_really_build(args, monkeypatch):
+    monkeypatch.setattr(register_engine_host.subprocess, "check_output", FakeDocker(active=()))
+    args.service = ["worker-remote"]
+
+    with pytest.raises(ValueError, match=r"FORCE_REBUILD=1"):
+        register_engine_host.register(args)
