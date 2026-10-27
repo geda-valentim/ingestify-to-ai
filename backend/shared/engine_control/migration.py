@@ -1,5 +1,7 @@
 """Explicit idempotent 0007 DDL, independent of legacy Alembic stamping."""
 
+from contextlib import contextmanager
+
 from sqlalchemy import inspect, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.schema import CreateColumn
@@ -15,8 +17,30 @@ TABLES = [
 ]
 
 
+@contextmanager
+def _bounded_metadata_lock(connection, seconds=30):
+    """MySQL/MariaDB DDL on an existing table waits for an exclusive metadata lock behind any
+    open transaction that touched it, and every later read/write of that table (admission
+    tickets: every task) queues behind the DDL. Give up after `seconds` instead of the server
+    default (a year in MySQL 8): the rerun is idempotent. Set on THIS connection, restored
+    before it goes back to the pool."""
+    if connection.dialect.name not in ("mysql", "mariadb"):
+        yield
+        return
+    connection.execute(text(f"SET SESSION lock_wait_timeout = {int(seconds)}"))
+    try:
+        yield
+    finally:
+        connection.execute(text("SET SESSION lock_wait_timeout = @@GLOBAL.lock_wait_timeout"))
+
+
 def _upgrade(connection):
     Base.metadata.create_all(connection, tables=TABLES)
+    with _bounded_metadata_lock(connection):
+        _alter_existing_tables(connection)
+
+
+def _alter_existing_tables(connection):
     # Early opt-in installations already created this table. create_all does
     # not add columns or indexes to it; retain its operations and resource gates.
     resource = models.ControlResource.__table__
@@ -30,6 +54,10 @@ def _upgrade(connection):
     for index in resource.indexes:
         if column.name in index.columns:
             index.create(connection, checkfirst=True)
+    # Indexes added to tables that already exist (create_all skips them): additive. InnoDB
+    # builds a secondary index online, after a brief exclusive metadata lock (bounded above).
+    for index in models.ControlAdmission.__table__.indexes:
+        index.create(connection, checkfirst=True)
 
 
 def upgrade(bind):

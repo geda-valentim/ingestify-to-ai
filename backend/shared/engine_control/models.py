@@ -11,6 +11,7 @@ from sqlalchemy import (
     Numeric,
     Date,
     UniqueConstraint,
+    Index,
 )
 from shared.database import Base
 
@@ -118,6 +119,9 @@ class OperationOutbox(Base):
 
 class ControlAdmission(Base):
     __tablename__ = "engine_control_admissions"
+    # Open tickets (released_at IS NULL) and the last release of a resource, read every few
+    # seconds by the idle policy: never a scan of every ticket a resource ever had.
+    __table_args__ = (Index("ix_control_admissions_resource_released", "resource_key", "released_at"),)
     id = Column(String(36), primary_key=True, default=uid)
     resource_key = Column(String(200), nullable=False, index=True)
     holder = Column(String(128), nullable=False)
