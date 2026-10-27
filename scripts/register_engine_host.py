@@ -91,6 +91,37 @@ def _gid(group):
     return grp.getgrnam(group).gr_gid
 
 
+# Services behind a compose profile. COMPOSE_PROFILES (often from .env) may leave the
+# profile off, and then `config` does not render the service; `--profile` replaces
+# COMPOSE_PROFILES, so it is only passed for these services, never for the rest.
+SERVICE_PROFILES = {"worker-live": "live", "worker-dispatch": "engines", "worker-remote": "engines"}
+
+
+def _profile_args(service):
+    profile = SERVICE_PROFILES.get(service)
+    return ["--profile", profile] if profile else []
+
+
+def _service_configs(cmd, cwd, services):
+    """The rendered compose config of each of `services`; ValueError if one is not declared."""
+    rendered = {}
+    for extra in dict.fromkeys(tuple(_profile_args(s)) for s in services):
+        cfg = json.loads(
+            subprocess.check_output(cmd + list(extra) + ["config", "--format", "json"], cwd=cwd)
+        )
+        rendered[extra] = cfg.get("services") or {}
+    configs = {}
+    for service in services:
+        found = rendered[tuple(_profile_args(service))].get(service)
+        if found is None:
+            raise ValueError(
+                f"Service {service} is not declared by the given manifests; pass the "
+                "compose file that defines it with --manifest"
+            )
+        configs[service] = found
+    return configs
+
+
 def register(args):
     manifests = {
         str(Path(p).resolve()): hashlib.sha256(Path(p).read_bytes()).hexdigest()
@@ -99,19 +130,20 @@ def register(args):
     cmd = ["docker", "compose", "--project-name", args.project]
     for p in manifests:
         cmd += ["-f", p]
-    cfg = json.loads(
-        subprocess.check_output(cmd + ["config", "--format", "json"], cwd=args.cwd)
-    )
-    allowed = {}
     for service in args.service:
         if service not in SERVICES:
             raise ValueError("Unknown worker service")
-        image = cfg["services"][service].get("image")
+    configs = _service_configs(cmd, args.cwd, args.service)
+    allowed = {}
+    for service in args.service:
+        image = configs[service].get("image")
         if not image and args.use_built_image:
             image = f"{args.project}-{service}"  # compose's default tag of a built service
         if not image:
             ids = subprocess.check_output(
-                cmd + ["ps", "--all", "--quiet", service], cwd=args.cwd, text=True
+                cmd + _profile_args(service) + ["ps", "--all", "--quiet", service],
+                cwd=args.cwd,
+                text=True,
             ).split()
             if not ids:
                 raise ValueError(
@@ -124,7 +156,7 @@ def register(args):
             image = json.loads(
                 subprocess.check_output(["docker", "image", "inspect", image])
             )[0]["Id"]
-        command = cfg["services"][service].get("command")
+        command = configs[service].get("command")
         if not command:
             command = json.loads(
                 subprocess.check_output(["docker", "image", "inspect", image])
