@@ -45,7 +45,14 @@ def audit(db: Session, *, actor_user_id: Optional[str], auth_method: str, ip: Op
 
 
 class VersionConflict(Exception):
-    """The engine changed since the caller read it"""
+    """The engine changed since the caller read it, or a control guard refused the write.
+
+    `code` is the error-catalog code the API answers with (the guards refine it, e.g.
+    RUNTIME_OPERATION_REQUIRED on a managed engine)."""
+
+    def __init__(self, message: str = "", code: str = "VERSION_CONFLICT"):
+        super().__init__(message)
+        self.code = code
 
 
 def _check_version(engine: Engine, version: Optional[int]) -> None:

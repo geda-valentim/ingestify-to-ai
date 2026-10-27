@@ -19,6 +19,7 @@ is refused - and are audited. Nothing here ever returns a secret.
 """
 
 import logging
+from contextlib import contextmanager
 from typing import Any, Dict, List, Optional
 
 from decimal import Decimal
@@ -89,6 +90,17 @@ def _view(db: Session, engine: Engine) -> Dict[str, Any]:
 
 def _ip(request: Request) -> Optional[str]:
     return request.client.host if request.client else None
+
+
+@contextmanager
+def _guard_refusals():
+    """An engine write refused by store/guards answers with its own code: 409, 403 or 503, never 500."""
+    try:
+        yield
+    except VersionConflict as e:
+        raise refusal(409, e.code, e)
+    except store.EngineStateError as e:
+        raise _state_error(e)
 
 
 def _capacity_error(e: CapacityError) -> HTTPException:
@@ -241,11 +253,9 @@ async def put_engine_feature(engine_id: str, feature: str, body: BindingUpdate, 
     engine = _engine_or_404(db, engine_id)
     binding = Binding(**body.model_dump(exclude={"version"}))
     try:
-        set_binding(db, engine, feature, binding, version=body.version, actor_user_id=str(admin_user.id),
-                    auth_method="jwt", ip=request.client.host if request.client else None,
-                    vision_model_id=settings.vision_model_id)
-    except VersionConflict as e:
-        raise refusal(409, "VERSION_CONFLICT", e)
+        with _guard_refusals():
+            set_binding(db, engine, feature, binding, version=body.version, actor_user_id=str(admin_user.id),
+                        auth_method="jwt", ip=_ip(request), vision_model_id=settings.vision_model_id)
     except store.RemoteCapacityError as e:
         db.rollback()
         raise refusal(409, "REMOTE_CAPACITY_EXCEEDED", e)
@@ -262,11 +272,9 @@ async def delete_engine_feature(engine_id: str, feature: str, request: Request, 
                                 admin_user=Depends(require_admin_session), db: Session = Depends(get_db)) -> Dict[str, Any]:
     engine = _engine_or_404(db, engine_id)
     try:
-        set_binding(db, engine, feature, None, version=version, actor_user_id=str(admin_user.id),
-                    auth_method="jwt", ip=request.client.host if request.client else None,
-                    vision_model_id=settings.vision_model_id)
-    except VersionConflict as e:
-        raise refusal(409, "VERSION_CONFLICT", e)
+        with _guard_refusals():
+            set_binding(db, engine, feature, None, version=version, actor_user_id=str(admin_user.id),
+                        auth_method="jwt", ip=_ip(request), vision_model_id=settings.vision_model_id)
     except CapacityError as e:
         raise _capacity_error(e)
     except ValueError as e:
@@ -279,11 +287,10 @@ async def put_engine_gpus(engine_id: str, body: GpusUpdate, request: Request,
                           admin_user=Depends(require_admin_session), db: Session = Depends(get_db)) -> Dict[str, Any]:
     engine = _engine_or_404(db, engine_id)
     try:
-        set_local_gpus(db, engine, [g.model_dump(exclude_none=True) for g in body.gpus], version=body.version,
-                       actor_user_id=str(admin_user.id), auth_method="jwt",
-                       ip=request.client.host if request.client else None, vision_model_id=settings.vision_model_id)
-    except VersionConflict as e:
-        raise refusal(409, "VERSION_CONFLICT", e)
+        with _guard_refusals():
+            set_local_gpus(db, engine, [g.model_dump(exclude_none=True) for g in body.gpus], version=body.version,
+                           actor_user_id=str(admin_user.id), auth_method="jwt", ip=_ip(request),
+                           vision_model_id=settings.vision_model_id)
     except CapacityError as e:
         raise _capacity_error(e)
     return _view(db, engine)
@@ -381,14 +388,10 @@ async def test_engine(engine_id: str, request: Request, admin_user=Depends(requi
 async def activate_engine(engine_id: str, request: Request, body: Optional[VersionBody] = None,
                           admin_user=Depends(require_admin_session), db: Session = Depends(get_db)) -> Dict[str, Any]:
     engine = _engine_or_404(db, engine_id)
-    try:
+    with _guard_refusals():
         store.set_status(db, engine, "active", version=body.version if body else None,
                          actor_user_id=str(admin_user.id), auth_method="jwt", ip=_ip(request),
                          fingerprint_of=fingerprint_of, vision_model_id=settings.vision_model_id)
-    except VersionConflict as e:
-        raise refusal(409, "VERSION_CONFLICT", e)
-    except store.EngineStateError as e:
-        raise _state_error(e)
     logger.warning(f"[ADMIN] {admin_user.id} activated engine {engine.slug}")
     return _view(db, engine)
 
@@ -397,11 +400,9 @@ async def activate_engine(engine_id: str, request: Request, body: Optional[Versi
 async def pause_engine(engine_id: str, request: Request, body: Optional[VersionBody] = None,
                        admin_user=Depends(require_admin_session), db: Session = Depends(get_db)) -> Dict[str, Any]:
     engine = _engine_or_404(db, engine_id)
-    try:
+    with _guard_refusals():
         store.set_status(db, engine, "paused", version=body.version if body else None,
                          actor_user_id=str(admin_user.id), auth_method="jwt", ip=_ip(request))
-    except VersionConflict as e:
-        raise refusal(409, "VERSION_CONFLICT", e)
     logger.warning(f"[ADMIN] {admin_user.id} paused engine {engine.slug}")
     return _view(db, engine)
 
@@ -410,7 +411,8 @@ async def pause_engine(engine_id: str, request: Request, body: Optional[VersionB
 async def reset_engine_health(engine_id: str, request: Request, admin_user=Depends(require_admin_session),
                               db: Session = Depends(get_db)) -> Dict[str, Any]:
     engine = _engine_or_404(db, engine_id)
-    store.reset_health(db, engine, actor_user_id=str(admin_user.id), auth_method="jwt", ip=_ip(request))
+    with _guard_refusals():
+        store.reset_health(db, engine, actor_user_id=str(admin_user.id), auth_method="jwt", ip=_ip(request))
     return _view(db, engine)
 
 
@@ -418,14 +420,10 @@ async def reset_engine_health(engine_id: str, request: Request, admin_user=Depen
 async def put_engine_budget(engine_id: str, body: BudgetUpdate, request: Request,
                             admin_user=Depends(require_admin_session), db: Session = Depends(get_db)) -> Dict[str, Any]:
     engine = _engine_or_404(db, engine_id)
-    try:
+    with _guard_refusals():
         store.set_budget(db, engine, limit_usd=body.limit_usd, min_remaining_usd=body.min_remaining_usd,
                          soft_pct=body.soft_pct, period_tz=body.period_tz, period_anchor_day=body.period_anchor_day,
                          version=body.version, actor_user_id=str(admin_user.id), auth_method="jwt", ip=_ip(request))
-    except VersionConflict as e:
-        raise refusal(409, "VERSION_CONFLICT", e)
-    except store.EngineStateError as e:
-        raise _state_error(e)
     logger.warning(f"[ADMIN] {admin_user.id} set the budget of engine {engine.slug}")
     return _view(db, engine)
 
@@ -442,14 +440,10 @@ async def put_engine_credentials(
     if not settings.engine_secrets_public_key:
         raise refusal(409, "ENGINE_SECRETS_KEY_MISSING")
     _require_password(admin_user, body.current_password)
-    try:
+    with _guard_refusals():
         store.set_credentials(db, engine, body.fields, public_key=settings.engine_secrets_public_key,
                               version=body.version, actor_user_id=str(admin_user.id), auth_method="jwt",
                               ip=_ip(request))
-    except VersionConflict as e:
-        raise refusal(409, "VERSION_CONFLICT", e)
-    except store.EngineStateError as e:
-        raise _state_error(e)
     logger.warning(f"[ADMIN] {admin_user.id} replaced the credentials of engine {engine.slug}")
     return _scoped_view(db, engine, admin_user.id)
 
@@ -464,13 +458,9 @@ async def delete_engine_credentials(
 ) -> Dict[str, Any]:
     engine = scoped_engine(db, engine_id, admin_user.id)
     _require_password(admin_user, body.current_password)
-    try:
+    with _guard_refusals():
         store.clear_credentials(db, engine, version=body.version, actor_user_id=str(admin_user.id),
                                 auth_method="jwt", ip=_ip(request))
-    except VersionConflict as e:
-        raise refusal(409, "VERSION_CONFLICT", e)
-    except store.EngineStateError as e:
-        raise _state_error(e)
     logger.warning(f"[ADMIN] {admin_user.id} removed the credentials of engine {engine.slug}")
     return _scoped_view(db, engine, admin_user.id)
 
