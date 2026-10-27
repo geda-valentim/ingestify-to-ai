@@ -15,6 +15,7 @@ import { computeApi } from "@/lib/api";
 import { RuntimeSettingsFields } from "./runtime-settings-fields";
 import { ExecutionProfileBinding } from "./execution-profile-binding";
 import { AdminError } from "./admin-error";
+import { EngineReplicas } from "./engine-replicas";
 import { guidedOperationError } from "@/lib/admin-errors";
 import { useAuthStore } from "@/lib/store/auth";
 import type { Engine, Feature } from "@/types/compute";
@@ -252,32 +253,7 @@ export function EngineControl({
               Configuração desejada, perfil aplicado e observação do executor
               são estados separados.
             </p>
-            <div className="grid gap-3 sm:grid-cols-3">
-              <div>Desejado: revisão {profile.data?.revision ?? "—"}</div>
-              <div>
-                Aplicado:{" "}
-                {runtime.data?.applied.find((p) => p.feature === feature)
-                  ?.revision ?? "—"}
-              </div>
-              <div>
-                Observado:{" "}
-                {runtime.data?.resources[0]?.observed_at
-                  ? new Date(
-                      runtime.data.resources[0].observed_at + "Z",
-                    ).toLocaleString()
-                  : "desconhecido"}
-              </div>
-            </div>
-            {runtime.data?.resources.map((r) => (
-              <div key={r.key} className="rounded border p-3 text-sm">
-                <div className="break-all font-mono text-xs">{r.key}</div>
-                <p>
-                  {r.maintenance ? "Em manutenção" : "Admissão disponível"} ·{" "}
-                  {String(r.observed.replicas_alive ?? "—")} vivos /{" "}
-                  {String(r.observed.ready_replicas ?? "—")} prontos
-                </p>
-              </div>
-            ))}
+            <EngineReplicas status={runtime.data} error={runtime.error} />
             {setup?.message && (
               <AdminError
                 tone="info"
