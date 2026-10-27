@@ -147,6 +147,14 @@ compose config --quiet || die "compose config is invalid; nothing was touched"
 mapfile -t CONFIGURED < <(compose config --services)
 [ "${#CONFIGURED[@]}" -gt 0 ] || die "compose config returned no services"
 CONF=" ${CONFIGURED[*]} "
+# worker-live is `profiles: [live]`: COMPOSE_PROFILES may leave it out of $CONF, yet BUILD_LIVE,
+# the stale-image warning and the inventory still concern it. Address it with --profile live.
+LIVE_ALL="$(compose --profile live config --services)" || die "compose config --profile live failed; nothing was touched"
+LIVE_DECLARED=0; grep -qx worker-live <<<"$LIVE_ALL" && LIVE_DECLARED=1
+[ "$BUILD_LIVE" != 1 ] || [ "$LIVE_DECLARED" = 1 ] ||
+  die "BUILD_LIVE=1 but compose declares no worker-live service, even with --profile live (is docker-compose.live.yml in COMPOSE_FILE?); no container was touched"
+declared() { if [ "$1" = worker-live ]; then [ "$LIVE_DECLARED" = 1 ]; else in_list "$1" "$CONF"; fi; }
+svc_compose() { local s="$1"; shift; if [ "$s" = worker-live ]; then compose --profile live "$@"; else compose "$@"; fi; }
 CF="$(sed -n 's/^COMPOSE_FILE=//p' .env 2>/dev/null | tail -1 | tr -d "\"'" || true)"
 log "COMPOSE_FILE from .env: ${CF:-<unset: compose defaults>}"
 if [ -f docker-compose.override.yml ] && [ -n "$CF" ]; then
@@ -171,8 +179,8 @@ fi
 
 declare -A RUNNING=() IDS=()   # service -> running count (> 0 only) / running container ids
 for s in $CODE_SERVICES worker-live frontend; do
-  in_list "$s" "$CONF" || continue
-  ids="$(compose ps --status running -q "$s")" || die "docker compose ps failed for $s; aborting (never guess replica counts)"
+  declared "$s" || continue
+  ids="$(svc_compose "$s" ps --status running -q "$s")" || die "docker compose ps failed for $s; aborting (never guess replica counts)"
   n="$(printf '%s' "$ids" | grep -c . || true)"
   if [ "$n" -gt 0 ]; then RUNNING[$s]="$n"; IDS[$s]="$(printf '%s' "$ids" | tr '\n' ' ')"; fi
 done
@@ -192,7 +200,7 @@ if [ "$DRY_RUN" != 1 ] && [ ! -s "$INV_FILE" ]; then   # first run of this deplo
 fi
 RESTORE=""   # a retry restores what the interrupted run left down/degraded, from the ORIGINAL inventory
 while read -r s n; do
-  [ -n "$s" ] && in_list "$s" "$CONF" && [ "${RUNNING[$s]:-0}" -lt "$n" ] || continue
+  [ -n "$s" ] && declared "$s" && [ "${RUNNING[$s]:-0}" -lt "$n" ] || continue
   if [ "$s" = worker-live ] || is_managed "$s"; then   # never started here (worker-live: BUILD_LIVE path)
     warn "$s ran $n replica(s) before the interrupted deploy and is down/degraded: re-apply its profile"; continue
   fi
@@ -263,9 +271,9 @@ fi
 # ---------------------------------------------------------------- worker-live
 STAGE="worker-live"
 LIVE_BUILT=0
-if in_list worker-live "$CONF"; then
-  if [ "$BUILD_LIVE" = 1 ]; then   # explicit request, independent of detection
-    log "worker-live bakes the code: building its image (never up'd here)"; run compose build worker-live; LIVE_BUILT=1
+if declared worker-live; then
+  if [ "$BUILD_LIVE" = 1 ]; then   # explicit request, independent of detection and of COMPOSE_PROFILES
+    log "worker-live bakes the code: building its image (never up'd here)"; run compose --profile live build worker-live; LIVE_BUILT=1
   elif [ "$LIVE" = 1 ]; then
     warn "worker-live inputs changed: its image is stale. Run with BUILD_LIVE=1 BEFORE re-registering, then apply_profile."
   fi
@@ -284,7 +292,7 @@ fi
 NOTICE=""
 if [ "$IMAGES" = 1 ] || [ "$COMPOSE_CHG" = 1 ]; then NOTICE="$MANAGED_TOUCHED"; fi
 [ "$LIVE_BUILT" = 0 ] || NOTICE="$NOTICE worker-live"
-if [ "$COMPOSE_CHG" = 1 ] && ! in_list worker-live "$NOTICE" && in_list worker-live "$CONF" && is_managed worker-live; then
+if [ "$COMPOSE_CHG" = 1 ] && ! in_list worker-live "$NOTICE" && declared worker-live && is_managed worker-live; then
   NOTICE="$NOTICE worker-live"   # built only, yet a compose change still needs the re-register
 fi
 if [ -n "${NOTICE// /}" ]; then
