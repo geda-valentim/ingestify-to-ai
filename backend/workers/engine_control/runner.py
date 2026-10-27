@@ -167,7 +167,7 @@ class Context:
                 # Tickets of killed processes never reach their `finally`.
                 released = orphan_tickets.release_dead(self.Session, plan["resources"], first_seen)
                 if released:
-                    self.event("draining", f"Liberados {released} tickets de processos encerrados")
+                    self.event("draining", f"Liberados tickets de processos encerrados: {released}")
                 next_reconcile = time.monotonic() + ORPHAN_RECONCILE_SECONDS
             with self.Session() as db:
                 tickets = (
@@ -189,9 +189,12 @@ class Context:
                 if not tickets and not usages:
                     return
             time.sleep(0.5)
-        # Residual state for the admin: a holder no node vouches for needs a forced cancel.
-        count, holders = orphan_tickets.residual(self.Session, plan["resources"])
-        self.event("draining", f"Drenagem esgotada: {count} tickets abertos {holders}, {usages} usos em execução")
+        # Residual state for the admin. Best effort: it never replaces DRAIN_TIMEOUT.
+        try:
+            count, holders = orphan_tickets.residual(self.Session, plan["resources"])
+            self.event("draining", f"Drenagem esgotada: {count} tickets abertos {holders}, {usages} usos em execução")
+        except Exception:  # noqa: BLE001
+            pass
         raise TimeoutError("DRAIN_TIMEOUT")
 
     def close(self):

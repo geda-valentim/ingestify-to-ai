@@ -8,6 +8,7 @@ that task in that process proves the ticket is orphaned. Silence, an unparseable
 holder or age alone keep it.
 """
 
+import os
 from datetime import datetime, timedelta
 
 import pytest
@@ -120,32 +121,32 @@ class TestReleaseDead:
     def test_a_task_its_node_no_longer_runs_is_released(self, Session):
         ticket = _ticket(Session, task_holder("t-1", NODE, pid=10))
 
-        assert _judge(Session, lambda nodes: {NODE: []}) == 1
+        assert _judge(Session, lambda nodes: {NODE: []}) == [task_holder("t-1", NODE, pid=10)]
         assert ticket not in _open(Session)
 
     def test_a_task_still_active_in_the_same_process_is_kept(self, Session):
         """A slow or hung task is in flight; the default never drops in-flight work."""
         ticket = _ticket(Session, task_holder("t-1", NODE, pid=10))
 
-        assert _judge(Session, lambda nodes: {NODE: [("t-1", 10)]}) == 0
+        assert _judge(Session, lambda nodes: {NODE: [("t-1", 10)]}) == []
         assert ticket in _open(Session)
 
     def test_the_same_task_redelivered_to_another_process_frees_the_dead_one(self, Session):
         ticket = _ticket(Session, task_holder("t-1", NODE, pid=10))
 
-        assert _judge(Session, lambda nodes: {NODE: [("t-1", 11)]}) == 1
+        assert _judge(Session, lambda nodes: {NODE: [("t-1", 11)]}) == [task_holder("t-1", NODE, pid=10)]
         assert ticket not in _open(Session)
 
     def test_a_reply_without_the_process_id_does_not_clear_the_task(self, Session):
         ticket = _ticket(Session, task_holder("t-1", NODE, pid=10))
 
-        assert _judge(Session, lambda nodes: {NODE: [("t-1", None)]}) == 0
+        assert _judge(Session, lambda nodes: {NODE: [("t-1", None)]}) == []
         assert ticket in _open(Session)
 
     def test_a_node_that_does_not_answer_proves_nothing(self, Session):
         ticket = _ticket(Session, task_holder("t-1", NODE, pid=10))
 
-        assert _judge(Session, lambda nodes: {}) == 0
+        assert _judge(Session, lambda nodes: {}) == []
         assert ticket in _open(Session)
 
     def test_no_broker_means_no_evidence(self, Session):
@@ -154,7 +155,7 @@ class TestReleaseDead:
         def unreachable(nodes):
             raise ConnectionError("broker down")
 
-        assert _judge(Session, unreachable) == 0
+        assert _judge(Session, unreachable) == []
         assert ticket in _open(Session)
 
     def test_age_alone_never_releases(self, Session):
@@ -170,7 +171,7 @@ class TestReleaseDead:
             asked.append(nodes)
             return {NODE: []}
 
-        assert _judge(Session, inspector) == 0
+        assert _judge(Session, inspector) == []
         assert kept <= _open(Session)
         assert asked == []
 
@@ -184,17 +185,18 @@ class TestReleaseDead:
             return {NODE: []}
 
         grace = orphan_tickets.ACCEPT_GRACE_SECONDS
-        assert release_dead(Session, [RESOURCE], first_seen, inspector, clock=lambda: 100.0) == 0
-        assert release_dead(Session, [RESOURCE], first_seen, inspector, clock=lambda: 100.0 + grace - 1) == 0
+        assert release_dead(Session, [RESOURCE], first_seen, inspector, clock=lambda: 100.0) == []
+        assert release_dead(Session, [RESOURCE], first_seen, inspector, clock=lambda: 100.0 + grace - 1) == []
         assert asked == [] and ticket in _open(Session)
 
-        assert release_dead(Session, [RESOURCE], first_seen, inspector, clock=lambda: 100.0 + grace) == 1
+        released = release_dead(Session, [RESOURCE], first_seen, inspector, clock=lambda: 100.0 + grace)
+        assert released == [task_holder("t-1", NODE, pid=10)]
         assert ticket not in _open(Session)
 
     def test_only_the_drained_resources_are_touched(self, Session):
         other = _ticket(Session, task_holder("t-2", NODE, pid=10), resource="vm:other")
 
-        assert _judge(Session, lambda nodes: {NODE: []}) == 0
+        assert _judge(Session, lambda nodes: {NODE: []}) == []
         assert other in _open(Session)
 
     def test_only_the_holders_nodes_are_asked(self, Session):
@@ -281,7 +283,8 @@ class TestDrain:
 
     def test_a_ticket_of_a_dead_process_does_not_hold_the_drain(self, Session, monkeypatch):
         """Before the reconcile, this drain waited the whole timeout and failed DRAIN_TIMEOUT."""
-        ticket = _ticket(Session, task_holder("t-1", NODE, pid=10))
+        holder = task_holder("t-1", NODE, pid=10)
+        ticket = _ticket(Session, holder)
         monkeypatch.setattr(orphan_tickets, "ACCEPT_GRACE_SECONDS", 0)
         monkeypatch.setattr(orphan_tickets, "active_by_node", lambda nodes: {NODE: []})
         ctx, plan = self._operation(Session, timeout_seconds=5)
@@ -291,6 +294,9 @@ class TestDrain:
             ctx.close()
 
         assert ticket not in _open(Session)
+        with Session() as db:
+            messages = [str(e.payload) for e in db.query(OperationEvent).filter_by(operation_id=ctx.op_id)]
+        assert any("Liberados" in m and holder in m for m in messages), "a release must be auditable"
 
     def test_the_drain_keeps_counting_the_grace_across_passes(self, Session, monkeypatch):
         """A drain that forgot when it first saw a ticket would never get past the grace."""
@@ -305,6 +311,21 @@ class TestDrain:
             ctx.close()
 
         assert ticket not in _open(Session)
+
+    def test_a_failing_residual_report_never_replaces_drain_timeout(self, Session, monkeypatch):
+        _ticket(Session, task_holder("t-1", NODE, pid=10))
+        monkeypatch.setattr(orphan_tickets, "active_by_node", lambda nodes: {})
+
+        def broken(*args, **kwargs):
+            raise RuntimeError("database went away")
+
+        monkeypatch.setattr(orphan_tickets, "residual", broken)
+        ctx, plan = self._operation(Session, timeout_seconds=1)
+        try:
+            with pytest.raises(TimeoutError, match="DRAIN_TIMEOUT"):
+                ctx.drain(plan)
+        finally:
+            ctx.close()
 
     def test_a_ticket_of_a_silent_node_still_times_out_and_is_reported(self, Session, monkeypatch):
         """A recreated container leaves a node that never answers: the admin needs the holder."""
@@ -351,6 +372,4 @@ def test_a_managed_task_names_its_process_in_the_ticket(monkeypatch):
     finally:
         convert.pop_request()
 
-    task_id, pid, node = parse_task_holder(holders[0])
-    assert (task_id, node) == ("t-9", NODE)
-    assert pid > 0
+    assert parse_task_holder(holders[0]) == ("t-9", os.getpid(), NODE)

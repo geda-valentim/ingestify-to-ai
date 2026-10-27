@@ -71,7 +71,9 @@ def open_tickets(db, resource_keys):
 
 
 def release_dead(session_factory, resource_keys, first_seen, inspect_active=None, clock=time.monotonic):
-    """Release open tickets on these resources whose task process is provably gone. Returns how many.
+    """Release open tickets on these resources whose task process is provably gone.
+
+    Returns the distinct holders it released, for the operation's audit trail.
 
     `first_seen` maps ticket id -> when this drain first saw it open; the caller
     keeps it between calls.
@@ -86,26 +88,31 @@ def release_dead(session_factory, resource_keys, first_seen, inspect_active=None
         if parsed and stamp - seen >= ACCEPT_GRACE_SECONDS:
             holders[row.id] = parsed
     if not holders:
-        return 0
+        return []
     try:
         active = (inspect_active or active_by_node)({node for _, _, node in holders.values()})
     except Exception:
-        return 0  # No broker, no evidence: keep waiting.
+        return []  # No broker, no evidence: keep waiting.
     dead = [
         ticket
         for ticket, (task_id, pid, node) in holders.items()
         if node in active and not _still_running(active[node], task_id, pid)
     ]
     if not dead:
-        return 0
+        return []
+    released_at = now()
     with session_factory() as db:
-        released = (
-            db.query(ControlAdmission)
-            .filter(ControlAdmission.id.in_(dead), ControlAdmission.released_at.is_(None))
-            .update({"released_at": now()}, synchronize_session=False)
-        )
+        db.query(ControlAdmission).filter(
+            ControlAdmission.id.in_(dead), ControlAdmission.released_at.is_(None)
+        ).update({"released_at": released_at}, synchronize_session=False)
         db.commit()
-    return released
+        # Only the rows this call released; one released meanwhile by its own `finally` is not ours.
+        rows = (
+            db.query(ControlAdmission.holder)
+            .filter(ControlAdmission.id.in_(dead), ControlAdmission.released_at == released_at)
+            .all()
+        )
+    return list(dict.fromkeys(row.holder for row in rows))
 
 
 def _still_running(active, task_id, pid):
