@@ -395,3 +395,53 @@ def test_a_torn_rewrite_of_the_live_identities_points_to_the_backup(args, monkey
     _assert_no_secret(err, args)
     assert Path(args.identities + ".bak").read_text() == before
     assert Path(args.output).exists()  # kept: the operator decides after restoring the backup
+
+
+def test_an_early_identities_failure_with_an_intact_live_file_never_points_to_the_backup(
+    args, monkeypatch, capsys
+):
+    # ENOSPC staging the temp copy: the live file was never touched, and any .bak is from an
+    # OLDER registration; restoring it would revoke the hosts registered since
+    monkeypatch.setattr(register_engine_host.subprocess, "check_output", FakeDocker())
+    _existing_identities(args)
+    before = Path(args.identities).read_text()
+    monkeypatch.setattr(register_engine_host, "_write_all", _enospc_when(b'{"other-host": '))
+
+    with pytest.raises(OSError):
+        register_engine_host.register(args)
+    assert ".bak" not in capsys.readouterr().err
+    assert Path(args.identities).read_text() == before
+    assert not Path(args.output).exists()  # surely absent: this run's config is removed
+
+
+def test_an_unreadable_identities_file_keeps_the_config_and_never_points_to_the_backup(
+    args, monkeypatch, capsys
+):
+    monkeypatch.setattr(register_engine_host.subprocess, "check_output", FakeDocker())
+    _existing_identities(args)
+    failed = []
+    fail = _enospc_when(b'{"other-host": ')
+
+    def write_all(fd, data):
+        try:
+            fail(fd, data)
+        except OSError:
+            failed.append(True)
+            raise
+
+    real_read_text = Path.read_text
+
+    def read_text(self, *a, **kw):
+        if failed and str(self) == args.identities:
+            raise OSError(errno.EIO, "I/O error")
+        return real_read_text(self, *a, **kw)
+
+    monkeypatch.setattr(register_engine_host, "_write_all", write_all)
+    monkeypatch.setattr(Path, "read_text", read_text)
+
+    with pytest.raises(OSError):
+        register_engine_host.register(args)
+    err = capsys.readouterr().err
+    assert "could not be checked" in err and ".bak" not in err
+    assert Path(args.output).exists()  # unknown: kept, the operator decides
+    _assert_no_secret(err, args)

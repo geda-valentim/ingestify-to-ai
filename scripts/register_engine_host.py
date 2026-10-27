@@ -76,6 +76,10 @@ def write_identities(path, identities, *, group=None, mode=None):
                 _write_all(fd, data)
                 os.ftruncate(fd, len(data))
                 os.fsync(fd)
+            except BaseException as exc:
+                # From here the live file may be torn, and `<name>.bak` is this run's copy of it.
+                exc.live_rewrite_started = True
+                raise
             finally:
                 os.close(fd)
         else:
@@ -144,14 +148,17 @@ def _service_configs(cmd, cwd, services):
 
 
 def _identity_state(path, host_id, digest):
-    """True if `path` maps host_id to digest, False if it surely does not, None if unreadable."""
+    """Whether `path` holds host_id -> digest: "present", "absent", "invalid" (not valid JSON)
+    or "unknown" (it could not be read)."""
     try:
         data = json.loads(Path(path).read_text())
     except FileNotFoundError:
-        return False
-    except (OSError, ValueError):
-        return None
-    return isinstance(data, dict) and data.get(host_id) == digest
+        return "absent"
+    except ValueError:
+        return "invalid"
+    except OSError:
+        return "unknown"
+    return "present" if isinstance(data, dict) and data.get(host_id) == digest else "absent"
 
 
 def register(args):
@@ -247,25 +254,35 @@ def register(args):
     _stage(args.output, json.dumps(config, indent=2).encode(), 0o600)
     try:
         write_identities(Path(args.identities), identities, group=group)
-    except BaseException:
+    except BaseException as exc:
         # The config was created by this run (O_EXCL above), so it is ours to remove: without
         # its identity the rerun would refuse "Host already registered". Only when the identity
         # is surely absent, though: if the live file already holds it, the token in the config
-        # is the only copy of a valid credential.
-        recorded = _identity_state(args.identities, args.host_id, digest)
-        if recorded is False:
+        # is the only copy of a valid credential. The .bak is only pointed to when this run
+        # tore the live file: otherwise it is an older copy, and restoring it would revoke
+        # every host registered since.
+        state = _identity_state(args.identities, args.host_id, digest)
+        if state == "absent":
             Path(args.output).unlink(missing_ok=True)
-        elif recorded:
+        elif state == "present":
             print(
                 f"The identity was already written to {args.identities}; {args.output} is kept "
                 "(it holds the only copy of that token): the registration is in place, start the "
                 "agent. After an I/O error, check both files before relying on them.",
                 file=sys.stderr,
             )
-        else:
+        elif state == "invalid" and getattr(exc, "live_rewrite_started", False):
             print(
                 f"Writing {args.identities} failed and it is no longer valid JSON: restore it from "
                 f"{args.identities}.bak with `cp` (keeps the inode the API mounts), remove "
+                f"{args.output} and run again.",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                f"Writing {args.identities} failed and it could not be checked afterwards; "
+                f"{args.output} is kept. Check {args.identities} (do not restore an older backup): "
+                f"if {args.host_id} is in it, the registration is in place; if not, remove "
                 f"{args.output} and run again.",
                 file=sys.stderr,
             )
