@@ -23,7 +23,7 @@ ACTIVE = {"worker": {"build": BUILD, "image": "ingestify-worker", "command": ["c
 LIVE = {"worker-live": {"build": BUILD, "command": "python -m workers.live"}}  # built, no `image:`
 ENGINES = {"worker-remote": {"build": BUILD, "command": ["celery", "remote"]},
            "worker-dispatch": {"build": BUILD, "command": ["celery", "dispatch"]}}
-PINNED = {"worker-audio": {"image": "ingestify-audio:old", "command": ["celery", "audio"]}}  # override, no build
+PINNED = {"worker-audio": {"image": "ingestify-audio:old", "command": ["celery", "audio"]}}  # merged config has no build
 
 
 class FakeDocker:
@@ -70,7 +70,8 @@ def test_worker_live_is_rendered_with_its_profile_and_the_rest_without(args, mon
     }
     assert services["worker"]["image"] == "sha256:ingestify-worker"
     configs = [c for c in docker.calls if "config" in c]
-    assert len(configs) == 2 and sum("--profile" in c for c in configs) == 1
+    assert len(configs) == 2 and [c[c.index("config") - 2:c.index("config")] for c in configs if "--profile" in c] == [
+        ["--profile", "live"]]
 
 
 def test_engines_profile_services_are_rendered_with_their_profile(args, monkeypatch):
@@ -82,7 +83,9 @@ def test_engines_profile_services_are_rendered_with_their_profile(args, monkeypa
 
     services = json.loads(Path(args.output).read_text())["services"]
     assert services["worker-remote"]["command"] == ["celery", "remote"] and "worker-dispatch" in services
-    assert len([c for c in docker.calls if "config" in c]) == 2  # one render per profile set
+    configs = [c for c in docker.calls if "config" in c]
+    assert len(configs) == 2  # one render per profile set
+    assert [c[c.index("config") - 2:c.index("config")] for c in configs if "--profile" in c] == [["--profile", "engines"]]
 
 
 def test_a_service_missing_from_the_manifests_is_a_clear_error(args, monkeypatch):
@@ -115,13 +118,15 @@ def test_ps_fallback_targets_the_profile_too(args, monkeypatch):
 
 
 def test_use_built_image_refuses_a_service_without_build(args, monkeypatch):
-    # e.g. a local override pins `image:`: the deploy built nothing, the declared image is not new
-    monkeypatch.setattr(register_engine_host.subprocess, "check_output", FakeDocker())
+    # e.g. declared only in a local override: the deploy built nothing, the declared image is not new
+    docker = FakeDocker()
+    monkeypatch.setattr(register_engine_host.subprocess, "check_output", docker)
     args.service = ["worker", "worker-audio"]
 
     with pytest.raises(ValueError, match="worker-audio has no build section"):
         register_engine_host.register(args)
     assert not Path(args.output).exists() and not Path(args.identities).exists()
+    assert not any("ingestify-audio:old" in c for c in docker.calls)
 
 
 def test_without_use_built_image_the_declared_image_is_recorded(args, monkeypatch):

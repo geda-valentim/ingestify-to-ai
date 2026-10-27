@@ -138,8 +138,8 @@ def register(args):
     for service in args.service:
         image = configs[service].get("image")
         if args.use_built_image:
-            # Without `build:` (e.g. an override pinning `image:`) `compose build` built nothing,
-            # and the declared image is not the one the deploy just rebuilt.
+            # Without `build:` in the merged config (e.g. declared only in a local override, or
+            # `build: !reset`) `compose build` built nothing: the declared image is not new.
             if not configs[service].get("build"):
                 raise ValueError(
                     f"--use-built-image: service {service} has no build section, so no image "

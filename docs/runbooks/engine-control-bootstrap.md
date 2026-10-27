@@ -26,8 +26,10 @@ que a API ainda está com esse valor; habilitar exige o bootstrap abaixo.
    Serviços com profile (`worker-live`: `live`; `worker-dispatch` e `worker-remote`:
    `engines`) são renderizados com o próprio profile, mesmo que o `COMPOSE_PROFILES`
    do `.env` não o inclua. Os demais seguem o `COMPOSE_PROFILES`. Com
-   `--use-built-image`, um serviço sem `build:` (por exemplo, um override que só fixa
-   `image:`) é recusado, porque o deploy não construiu imagem para ele.
+   `--use-built-image`, um serviço que, depois de juntar os manifests, fica sem `build:`
+   (por exemplo, declarado só num override local, ou com `build: !reset`) é recusado,
+   porque o deploy não construiu imagem para ele. Um `image:` somado a um serviço com
+   `build:` continua valendo como a tag construída.
 4. O arquivo de identidades montado na API contém hashes dos tokens. Ele fica
    sob controle de root, mas precisa ser legível pelo usuário da API. Para a
    imagem padrão, que executa como UID/GID `10001`:
