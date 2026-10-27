@@ -9,7 +9,7 @@ import secrets
 import shlex
 import stat
 import subprocess
-from engine_host_agent import SERVICES
+from engine_host_services import SERVICE_PROFILES, SERVICES, profile_args
 
 
 def _write_all(fd, data):
@@ -91,6 +91,44 @@ def _gid(group):
     return grp.getgrnam(group).gr_gid
 
 
+# COMPOSE_PROFILES (often from .env) may leave a service's profile (SERVICE_PROFILES) off, and
+# then `config` does not render it; `--profile` replaces COMPOSE_PROFILES, so profile_args()
+# is only passed for those services, never for the rest.
+# What the deploy builds, so what --use-built-image may record: the services of the default
+# render (the active COMPOSE_PROFILES) plus these, which it builds with their own profile
+# (worker-live: BUILD_LIVE=1). Keep it in step with scripts/deploy.sh.
+DEPLOY_BUILDS_WITH_PROFILE = {"worker-live"}
+
+
+def _compose_env():
+    """`make deploy` runs under `env -i` and passes no COMPOSE_* variable: its compose reads
+    COMPOSE_PROFILES from .env only. Drop every shell COMPOSE_* (a profile list or another env
+    file would win over .env), so this sees the services the deploy built."""
+    return {k: v for k, v in os.environ.items() if not k.startswith("COMPOSE_")}
+
+
+def _service_configs(cmd, cwd, services):
+    """(rendered config of each of `services`, names in the default render); ValueError if one is missing."""
+    rendered = {}
+    for extra in dict.fromkeys([()] + [tuple(profile_args(s)) for s in services]):
+        cfg = json.loads(
+            subprocess.check_output(
+                cmd + list(extra) + ["config", "--format", "json"], cwd=cwd, env=_compose_env()
+            )
+        )
+        rendered[extra] = cfg.get("services") or {}
+    configs = {}
+    for service in services:
+        found = rendered[tuple(profile_args(service))].get(service)
+        if found is None:
+            raise ValueError(
+                f"Service {service} is not declared by the given manifests, or its compose "
+                "profile is not active; pass the compose file that defines it with --manifest"
+            )
+        configs[service] = found
+    return configs, set(rendered[()])
+
+
 def register(args):
     manifests = {
         str(Path(p).resolve()): hashlib.sha256(Path(p).read_bytes()).hexdigest()
@@ -99,19 +137,36 @@ def register(args):
     cmd = ["docker", "compose", "--project-name", args.project]
     for p in manifests:
         cmd += ["-f", p]
-    cfg = json.loads(
-        subprocess.check_output(cmd + ["config", "--format", "json"], cwd=args.cwd)
-    )
-    allowed = {}
     for service in args.service:
         if service not in SERVICES:
             raise ValueError("Unknown worker service")
-        image = cfg["services"][service].get("image")
-        if not image and args.use_built_image:
-            image = f"{args.project}-{service}"  # compose's default tag of a built service
+    configs, default_render = _service_configs(cmd, args.cwd, args.service)
+    allowed = {}
+    for service in args.service:
+        image = configs[service].get("image")
+        if args.use_built_image:
+            if service not in default_render and service not in DEPLOY_BUILDS_WITH_PROFILE:
+                raise ValueError(
+                    f"--use-built-image: the deploy does not build {service}, its compose profile "
+                    f"({SERVICE_PROFILES.get(service, '?')}) is not in COMPOSE_PROFILES; add it to "
+                    "COMPOSE_PROFILES in .env and run `make deploy FORCE_REBUILD=1` (.env is not "
+                    "tracked: a plain deploy may detect no change and build nothing), or register "
+                    "without the flag"
+                )
+            # Without `build:` in the merged config (e.g. declared only in a local override, or
+            # `build: !reset`) `compose build` built nothing: the declared image is not new.
+            if not configs[service].get("build"):
+                raise ValueError(
+                    f"--use-built-image: service {service} has no build section, so no image "
+                    "was built for it; drop the flag to record its declared image"
+                )
+            image = image or f"{args.project}-{service}"  # `image:` is the built tag; else compose's default
         if not image:
             ids = subprocess.check_output(
-                cmd + ["ps", "--all", "--quiet", service], cwd=args.cwd, text=True
+                cmd + profile_args(service) + ["ps", "--all", "--quiet", service],
+                cwd=args.cwd,
+                env=_compose_env(),
+                text=True,
             ).split()
             if not ids:
                 raise ValueError(
@@ -124,7 +179,7 @@ def register(args):
             image = json.loads(
                 subprocess.check_output(["docker", "image", "inspect", image])
             )[0]["Id"]
-        command = cfg["services"][service].get("command")
+        command = configs[service].get("command")
         if not command:
             command = json.loads(
                 subprocess.check_output(["docker", "image", "inspect", image])

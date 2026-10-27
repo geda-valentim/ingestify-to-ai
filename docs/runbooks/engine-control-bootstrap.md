@@ -23,6 +23,25 @@ que a API ainda está com esse valor; habilitar exige o bootstrap abaixo.
    de uma imagem instalada; serviços parados podem declarar `image` no overlay
    local para que o registro resolva o digest sem iniciá-los. O registro não
    imprime tokens e recusa sobrescrever uma identidade existente.
+   Serviços com profile (`worker-live`: `live`; `worker-dispatch` e `worker-remote`:
+   `engines`) são renderizados com o próprio profile, mesmo que o `COMPOSE_PROFILES`
+   do `.env` não o inclua. Os demais seguem o `COMPOSE_PROFILES` do `.env`, como no
+   `make deploy` (que roda sob `env -i`): qualquer `COMPOSE_*` exportado no shell
+   (`COMPOSE_PROFILES`, `COMPOSE_ENV_FILES`…) é ignorado pelo registro. Com
+   `--use-built-image`, um serviço que, depois de juntar os manifests, fica sem `build:`
+   (por exemplo, declarado só num override local, ou com `build: !reset`) é recusado,
+   porque o deploy não construiu imagem para ele. Um `image:` somado a um serviço com
+   `build:` continua valendo como a tag construída. Também é recusado, com a flag, um
+   serviço com profile fora do `COMPOSE_PROFILES` (exceto o `worker-live`, que o
+   `BUILD_LIVE=1` constrói), porque o deploy só constrói o que esse profile ativa: ponha o
+   profile no `COMPOSE_PROFILES` do `.env` e rode `make deploy FORCE_REBUILD=1` (o `.env` não
+   é versionado, então um deploy simples pode não detectar mudança e não construir nada; o
+   `FORCE_REBUILD=1` reconstrói tudo, recria os não gerenciados em execução e reconstrói o
+   frontend), ou registre sem a flag. O registro não tem como saber se houve deploy depois
+   da mudança: sempre que mexer no `COMPOSE_PROFILES` (inclusive no passo 1), rode
+   `make deploy FORCE_REBUILD=1` antes de usar `--use-built-image`. Do mesmo modo, sem
+   `BUILD_LIVE=1` antes, a flag grava a imagem existente do `worker-live`. Um override local com `depends_on`
+   num serviço de outro profile pode fazer o render com `--profile` falhar.
 4. O arquivo de identidades montado na API contém hashes dos tokens. Ele fica
    sob controle de root, mas precisa ser legível pelo usuário da API. Para a
    imagem padrão, que executa como UID/GID `10001`:
@@ -86,6 +105,11 @@ O agente volta a registrar `Agent recovered` quando o heartbeat é aceito.
 Use após mudar manifests compose, serviços permitidos, imagens ou GPUs. É uma
 rotação deliberada: o registro antigo é substituído por um token novo.
 
+Com `--use-built-image`, confira antes de apagar o registro que cada serviço gerenciado
+aparece no render padrão (`docker compose <os mesmos -f> config --services`) ou é o
+`worker-live`; senão o registro recusa e o host fica sem registro até restaurar o backup
+(veja abaixo).
+
 ```bash
 systemctl stop ingestify-engine-host-agent
 stamp=$(date +%Y%m%d%H%M%S)
@@ -104,6 +128,12 @@ PY
 python3 scripts/register_engine_host.py <os mesmos argumentos do registro original>
 systemctl start ingestify-engine-host-agent
 ```
+
+Se o registro falhar (por exemplo, uma recusa do `--use-built-image`), restaure o anterior e
+volte o agente: `cp -p /etc/ingestify/engine-host.json.$stamp /etc/ingestify/engine-host.json`,
+`cp -p secrets/engine_host_identities.json.$stamp secrets/engine_host_identities.json` (o `cp`
+sobre o arquivo existente mantém o inode montado na API) e
+`systemctl start ingestify-engine-host-agent`.
 
 Use exatamente os mesmos `--host-id`, `--api-url`, `--manifest`, `--service`
 e `--gpu-uuid` do registro original (os perfis vinculados apontam para o
