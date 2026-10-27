@@ -96,3 +96,36 @@ def test_a_stale_version_is_still_version_conflict(world, client):  # noqa: F811
 
 def test_the_default_code_of_a_bare_version_conflict():
     assert store.VersionConflict("re-read").code == "VERSION_CONFLICT"
+
+
+ROUTES = [
+    ("put", "/admin/engines/e/features/transcription", {"workers": 1}),
+    ("delete", "/admin/engines/e/features/transcription", None),
+    ("put", "/admin/engines/l/gpus", {"gpus": []}),  # only the local engine declares GPUs
+    ("post", "/admin/engines/e/activate", None),
+    ("post", "/admin/engines/e/pause", None),
+    ("post", "/admin/engines/e/reset-health", None),
+    ("put", "/admin/engines/e/budget", {"limit_usd": "10"}),
+    ("delete", "/admin/engines/e/credentials", {"current_password": "x"}),
+]
+
+
+@pytest.mark.parametrize("method,path,body", ROUTES)
+def test_a_guard_access_refusal_keeps_its_status_and_code_on_every_route(
+    world, client, monkeypatch, method, path, body  # noqa: F811
+):
+    # the guard turns an IAM refusal into EngineStateError(403, code): some routes let it escape as a 500
+    import shared.engine_control.guards as guards
+
+    with world() as db:
+        db.add(Engine(id="l", slug="local-test", display_name="Local", adapter_type="local",
+                      config={"features": {}}, deployments={}, version=0))
+        db.commit()
+
+    def refuse(*a, **kw):
+        raise store.EngineStateError("ACCESS_DENIED", 403, code="ACCESS_DENIED")
+
+    monkeypatch.setattr(guards, "before_write", refuse)
+    r = client.request(method.upper(), path, json=body)
+    assert r.status_code == 403, r.text
+    assert r.json()["detail"]["code"] == "ACCESS_DENIED"
