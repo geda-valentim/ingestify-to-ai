@@ -253,22 +253,6 @@ export function EngineControl({
               Configuração desejada, perfil aplicado e observação do executor
               são estados separados.
             </p>
-            <div className="grid gap-3 sm:grid-cols-3">
-              <div>Desejado: revisão {profile.data?.revision ?? "—"}</div>
-              <div>
-                Aplicado:{" "}
-                {runtime.data?.applied.find((p) => p.feature === feature)
-                  ?.revision ?? "—"}
-              </div>
-              <div>
-                Observado:{" "}
-                {runtime.data?.resources[0]?.observed_at
-                  ? new Date(
-                      runtime.data.resources[0].observed_at + "Z",
-                    ).toLocaleString()
-                  : "desconhecido"}
-              </div>
-            </div>
             <EngineReplicas status={runtime.data} />
             {setup?.message && (
               <AdminError

@@ -3,8 +3,8 @@ import type { RuntimeStatus } from "@/types/engine-control";
 export interface FeatureReplicas {
   feature: string;
   desiredRevision: number;
-  /** null when the feature was stopped or cooled down on purpose. */
-  desired: number | null;
+  desired: number;
+  /** null when no applied revision is visible to this user. */
   appliedRevision: number | null;
   /** "running", "stopped" or "standby" as last applied; null if never applied. */
   mode: string | null;
@@ -23,10 +23,12 @@ const newest = (a: Resource, b: Resource) =>
 
 /**
  * Desired / applied / observed replicas per feature (spec 0007 CA2). Desired
- * comes from the latest saved revision, which may not be applied yet; alive
- * and ready come from the newest observation of a resource whose last applied
- * operation was for that feature, so a shared worker does not lend another
- * feature's counts. No observation yet means unknown (null), never zero.
+ * is always the latest saved revision, which may not be applied yet; the
+ * applied revision is the one applied last (the API's rule, so a rollback to
+ * an older revision counts), with its mode. Alive and ready come from the
+ * newest observation of a resource whose last applied operation was for that
+ * feature, so a shared worker does not lend another feature's counts. No
+ * observation yet means unknown (null), never zero.
  */
 export function featureReplicas(status: RuntimeStatus | undefined): FeatureReplicas[] {
   if (!status) return [];
@@ -34,26 +36,45 @@ export function featureReplicas(status: RuntimeStatus | undefined): FeatureRepli
     const related = status.resources.filter(
       (r) => r.applied?.feature === feature || r.applied?.feature_modes?.[feature],
     );
-    const observed = related
-      .filter((r) => r.applied?.feature === feature && r.observed_at)
-      .sort(newest)[0];
-    const moded = related.filter((r) => r.applied?.feature_modes?.[feature]).sort(newest)[0];
-    // `applied` is ordered by revision, newest first.
-    const appliedRevision =
-      status.applied.find((p) => p.feature === feature)?.revision ?? null;
-    const mode = moded?.applied?.feature_modes?.[feature] ?? null;
-    const stopped =
-      appliedRevision === rev.revision && (mode === "stopped" || mode === "standby");
+    const own = related.filter((r) => r.applied?.feature === feature).sort(newest);
+    const observed = own.find((r) => r.observed_at);
+    const moded =
+      own.find((r) => r.applied?.feature_modes?.[feature]) ??
+      related.filter((r) => r.applied?.feature_modes?.[feature]).sort(newest)[0];
+    const applied = status.applied
+      .filter((p) => p.feature === feature && p.applied_at)
+      .sort((a, b) =>
+        a.applied_at === b.applied_at
+          ? b.revision - a.revision
+          : a.applied_at! < b.applied_at!
+            ? 1
+            : -1,
+      )[0];
     return {
       feature,
       desiredRevision: rev.revision,
-      desired: stopped ? null : rev.profile.desired_replicas,
-      appliedRevision,
-      mode,
+      desired: rev.profile.desired_replicas,
+      appliedRevision: applied?.revision ?? null,
+      mode: moded?.applied?.feature_modes?.[feature] ?? null,
       busy: related.some((r) => r.operation_id != null),
       alive: count(observed?.observed.replicas_alive),
       ready: count(observed?.observed.ready_replicas),
       observedAt: observed?.observed_at ?? null,
     };
   });
+}
+
+const modeLabel: Record<string, string> = { stopped: "parada", standby: "standby" };
+
+/** The applied column: revision in force, its mode and any unapplied save. */
+export function appliedLabel(r: FeatureReplicas): string {
+  const mode = r.mode && modeLabel[r.mode] ? ` (${modeLabel[r.mode]})` : "";
+  // Applied on a resource, but the revision is hidden from this user: it
+  // cannot be compared with the saved one.
+  if (r.appliedRevision == null && r.mode != null) return `não visível${mode}`;
+  const applied =
+    r.appliedRevision != null ? `revisão ${r.appliedRevision}${mode}` : "nenhuma";
+  return r.appliedRevision === r.desiredRevision
+    ? applied
+    : `${applied} · revisão ${r.desiredRevision} salva, não aplicada`;
 }

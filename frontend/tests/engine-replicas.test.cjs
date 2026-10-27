@@ -11,14 +11,15 @@ const compiled = ts.transpileModule(source, {
 }).outputText;
 const scope = { exports: {} };
 vm.runInNewContext(compiled, scope);
-const { featureReplicas } = scope.exports;
+const { featureReplicas, appliedLabel } = scope.exports;
 
 // The vm realm has its own Array/Object: round-trip before comparing.
 const rows = (s) => JSON.parse(JSON.stringify(featureReplicas(s)));
-const rev = (feature, revision, desired_replicas) => ({
+const rev = (feature, revision, desired_replicas, applied_at = null) => ({
   feature,
   revision,
   profile: { desired_replicas },
+  applied_at,
 });
 const resource = (key, applied, observed_at, observed, operation_id = null) => ({
   key,
@@ -57,8 +58,11 @@ const status = {
     transcription: rev("transcription", 5, 3),
     vision: rev("vision", 1, 1),
   },
-  // Ordered by revision, newest first, as the API returns it.
-  applied: [rev("transcription", 4, 1), rev("vision", 1, 1), rev("transcription", 3, 1)],
+  applied: [
+    rev("transcription", 4, 1, "2026-10-27T08:00:00"),
+    rev("vision", 1, 1, "2026-10-27T07:00:00"),
+    rev("transcription", 3, 1, "2026-10-27T06:00:00"),
+  ],
   resources: [
     resource(
       "local:h:service:audio",
@@ -107,36 +111,78 @@ assert.deepEqual(rows(status), [
   },
 ]);
 
-// Drained on purpose: the applied revision is current and its mode is
-// stopped, so desired is not the profile's count.
-const stopped = rows({
+const one = (status) => rows(status)[0];
+const audio = (mode, observed_at = "2026-10-27T12:00:00") =>
+  resource(
+    "local:h:service:audio",
+    { feature: "transcription", feature_modes: { transcription: mode } },
+    observed_at,
+    { replicas_alive: 0, ready_replicas: 0 },
+  );
+
+// Drained on purpose: desired stays the saved count, the mode is applied state.
+const stopped = one({
   desired: { transcription: rev("transcription", 4, 3) },
-  applied: [rev("transcription", 4, 3)],
-  resources: [
-    resource(
-      "local:h:service:audio",
-      { feature: "transcription", feature_modes: { transcription: "stopped" } },
-      "2026-10-27T12:00:00",
-      { replicas_alive: 0, ready_replicas: 0 },
-    ),
-  ],
-})[0];
-assert.equal(stopped.desired, null);
+  applied: [rev("transcription", 4, 3, "2026-10-27T11:00:00")],
+  resources: [audio("stopped")],
+});
+assert.equal(stopped.desired, 3);
+assert.equal(stopped.appliedRevision, 4);
 assert.equal(stopped.mode, "stopped");
 assert.equal(stopped.alive, 0);
 
-// A newer revision saved after the stop is a pending desire, not "stopped".
-const pending = rows({
+// A newer revision saved after the stop: the stop stays visible.
+const pending = one({
   desired: { transcription: rev("transcription", 5, 3) },
-  applied: [rev("transcription", 4, 3)],
-  resources: [
-    resource(
-      "local:h:service:audio",
-      { feature: "transcription", feature_modes: { transcription: "standby" } },
-      "2026-10-27T12:00:00",
-      { replicas_alive: 0, ready_replicas: 0 },
-    ),
-  ],
-})[0];
+  applied: [rev("transcription", 4, 3, "2026-10-27T11:00:00")],
+  resources: [audio("standby")],
+});
 assert.equal(pending.desired, 3);
 assert.equal(pending.appliedRevision, 4);
+assert.equal(pending.mode, "standby");
+
+// Rollback: revision 2 applied after revision 3 is the one in force.
+const rollback = one({
+  desired: { transcription: rev("transcription", 3, 2) },
+  applied: [
+    rev("transcription", 3, 2, "2026-10-27T09:00:00"),
+    rev("transcription", 2, 1, "2026-10-27T10:00:00"),
+  ],
+  resources: [audio("running")],
+});
+assert.equal(rollback.appliedRevision, 2);
+
+// The mode of the feature's own resource wins over a stale shared one.
+const own = one({
+  desired: { transcription: rev("transcription", 1, 1) },
+  applied: [rev("transcription", 1, 1, "2026-10-27T09:00:00")],
+  resources: [
+    audio("running", "2026-10-27T09:00:00"),
+    resource(
+      "local:old:service:worker",
+      { feature: "vision", feature_modes: { transcription: "stopped" } },
+      "2026-10-27T13:00:00",
+      {},
+    ),
+  ],
+});
+assert.equal(own.mode, "running");
+
+// Applied revision hidden by IAM: unknown revision, mode still known.
+const hidden = one({
+  desired: { transcription: rev("transcription", 1, 1) },
+  applied: [],
+  resources: [audio("stopped")],
+});
+assert.equal(hidden.appliedRevision, null);
+assert.equal(hidden.mode, "stopped");
+
+// The applied column always says what is in force, including a stop.
+assert.equal(appliedLabel(stopped), "revisão 4 (parada)");
+assert.equal(appliedLabel(pending), "revisão 4 (standby) · revisão 5 salva, não aplicada");
+assert.equal(appliedLabel(rollback), "revisão 2 · revisão 3 salva, não aplicada");
+assert.equal(appliedLabel(hidden), "não visível (parada)");
+assert.equal(
+  appliedLabel(rows({ desired: { vision: rev("vision", 1, 1) }, applied: [], resources: [] })[0]),
+  "nenhuma · revisão 1 salva, não aplicada",
+);

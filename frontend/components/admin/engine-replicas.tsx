@@ -1,21 +1,8 @@
 "use client";
-import { featureReplicas, type FeatureReplicas } from "@/lib/engine-replicas";
+import { appliedLabel, featureReplicas } from "@/lib/engine-replicas";
 import type { RuntimeStatus } from "@/types/engine-control";
 
 const n = (v: number | null) => (v == null ? "—" : String(v));
-const modeLabel: Record<string, string> = { stopped: "parada", standby: "standby" };
-
-function desiredCell(r: FeatureReplicas) {
-  if (r.desired == null) return `0 (${modeLabel[r.mode ?? ""] ?? r.mode})`;
-  return String(r.desired);
-}
-
-function appliedCell(r: FeatureReplicas) {
-  const applied = r.appliedRevision == null ? "nenhuma" : `revisão ${r.appliedRevision}`;
-  return r.appliedRevision === r.desiredRevision
-    ? applied
-    : `${applied} · revisão ${r.desiredRevision} salva, não aplicada`;
-}
 
 /** Desired, applied and observed replicas per feature, then per resource. */
 export function EngineReplicas({ status }: { status: RuntimeStatus | undefined }) {
@@ -38,8 +25,8 @@ export function EngineReplicas({ status }: { status: RuntimeStatus | undefined }
             {rows.map((r) => (
               <tr key={r.feature} className="border-t">
                 <td className="py-1">{r.feature}</td>
-                <td className="py-1">{desiredCell(r)}</td>
-                <td className="py-1">{appliedCell(r)}</td>
+                <td className="py-1">{r.desired}</td>
+                <td className="py-1">{appliedLabel(r)}</td>
                 <td className="py-1">{n(r.alive)}</td>
                 <td className="py-1">{n(r.ready)}</td>
                 <td className="py-1">
