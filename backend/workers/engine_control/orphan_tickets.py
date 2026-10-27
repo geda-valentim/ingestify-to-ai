@@ -94,7 +94,7 @@ def release_dead(session_factory, resource_keys, first_seen, inspect_active=None
     dead = [
         ticket
         for ticket, (task_id, pid, node) in holders.items()
-        if node in active and (task_id, pid) not in active[node]
+        if node in active and not _still_running(active[node], task_id, pid)
     ]
     if not dead:
         return 0
@@ -108,8 +108,14 @@ def release_dead(session_factory, resource_keys, first_seen, inspect_active=None
     return released
 
 
+def _still_running(active, task_id, pid):
+    """A reply without the process id cannot clear that task."""
+    return any(tid == task_id and wpid in (pid, None) for tid, wpid in active)
+
+
 def residual(session_factory, resource_keys, limit=5):
-    """How many tickets still block a drain, and the oldest holders, for the timeout report."""
+    """How many tickets still block a drain, and the oldest distinct holders, for the timeout report."""
     with session_factory() as db:
         rows = open_tickets(db, resource_keys)
-    return len(rows), [row.holder for row in rows[:limit]]
+    # One task holds a ticket per resource; list each holder once.
+    return len(rows), list(dict.fromkeys(row.holder for row in rows))[:limit]

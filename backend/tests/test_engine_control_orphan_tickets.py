@@ -136,6 +136,12 @@ class TestReleaseDead:
         assert _judge(Session, lambda nodes: {NODE: [("t-1", 11)]}) == 1
         assert ticket not in _open(Session)
 
+    def test_a_reply_without_the_process_id_does_not_clear_the_task(self, Session):
+        ticket = _ticket(Session, task_holder("t-1", NODE, pid=10))
+
+        assert _judge(Session, lambda nodes: {NODE: [("t-1", None)]}) == 0
+        assert ticket in _open(Session)
+
     def test_a_node_that_does_not_answer_proves_nothing(self, Session):
         ticket = _ticket(Session, task_holder("t-1", NODE, pid=10))
 
@@ -243,6 +249,15 @@ class TestActiveByNode:
         assert orphan_tickets.active_by_node({NODE}) == {}
 
 
+def test_the_residual_report_lists_each_holder_once(Session):
+    """A task holds one ticket per resource; the report names holders, not tickets."""
+    one, two = task_holder("t-1", NODE, pid=10), task_holder("t-2", NODE, pid=11)
+    for holder, resource in ((one, RESOURCE), (one, "vm:other"), (two, RESOURCE)):
+        _ticket(Session, holder, resource=resource)
+
+    assert orphan_tickets.residual(Session, [RESOURCE, "vm:other"]) == (3, [one, two])
+
+
 class TestDrain:
     def _operation(self, Session, timeout_seconds):
         with Session() as db:
@@ -268,6 +283,20 @@ class TestDrain:
         """Before the reconcile, this drain waited the whole timeout and failed DRAIN_TIMEOUT."""
         ticket = _ticket(Session, task_holder("t-1", NODE, pid=10))
         monkeypatch.setattr(orphan_tickets, "ACCEPT_GRACE_SECONDS", 0)
+        monkeypatch.setattr(orphan_tickets, "active_by_node", lambda nodes: {NODE: []})
+        ctx, plan = self._operation(Session, timeout_seconds=5)
+        try:
+            ctx.drain(plan)
+        finally:
+            ctx.close()
+
+        assert ticket not in _open(Session)
+
+    def test_the_drain_keeps_counting_the_grace_across_passes(self, Session, monkeypatch):
+        """A drain that forgot when it first saw a ticket would never get past the grace."""
+        ticket = _ticket(Session, task_holder("t-1", NODE, pid=10))
+        monkeypatch.setattr(orphan_tickets, "ACCEPT_GRACE_SECONDS", 1)
+        monkeypatch.setattr(runner, "ORPHAN_RECONCILE_SECONDS", 0)
         monkeypatch.setattr(orphan_tickets, "active_by_node", lambda nodes: {NODE: []})
         ctx, plan = self._operation(Session, timeout_seconds=5)
         try:
