@@ -45,7 +45,7 @@ export default function LoginPage() {
         safeNextPath(new URLSearchParams(window.location.search).get("next")),
       );
     },
-    onError: (error: any) => {
+    onError: (error) => {
       setError(formatApiError(error));
     },
   });

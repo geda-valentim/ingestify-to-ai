@@ -530,12 +530,12 @@ const COPY = {
         </span>,
         <span key="d">
           Projeto do job, por nome (criado se não existir) ou por ID. Veja{" "}
-          <a
+          <Link
             href="/pt/docs/projects"
             className="text-primary underline-offset-4 hover:underline"
           >
             Projetos e pastas
-          </a>
+          </Link>
           .
         </span>,
       ],
@@ -925,12 +925,12 @@ const COPY = {
         </span>,
         <span key="d">
           The job&apos;s project, by name (created if new) or by ID. See{" "}
-          <a
+          <Link
             href="/docs/projects"
             className="text-primary underline-offset-4 hover:underline"
           >
             Projects and folders
-          </a>
+          </Link>
           .
         </span>,
       ],

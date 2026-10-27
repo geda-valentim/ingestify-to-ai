@@ -47,7 +47,7 @@ export default function RegisterPage() {
         router.push("/login");
       }, 2000);
     },
-    onError: (error: any) => {
+    onError: (error) => {
       setError(formatApiError(error));
     },
   });

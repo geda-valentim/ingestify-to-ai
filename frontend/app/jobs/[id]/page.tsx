@@ -257,7 +257,7 @@ export default function JobStatusPage({ params }: PageProps) {
         description: `Page queued for retry`,
       });
     },
-    onError: (error: any) => {
+    onError: (error) => {
       toast({
         title: "Retry failed",
         description: formatApiError(error),
@@ -290,7 +290,7 @@ export default function JobStatusPage({ params }: PageProps) {
         description: `${succeeded} pages queued for retry${failed > 0 ? `, ${failed} failed` : ''}`,
       });
     },
-    onError: (error: any) => {
+    onError: (error) => {
       toast({
         title: "Bulk retry failed",
         description: formatApiError(error),
@@ -311,7 +311,7 @@ export default function JobStatusPage({ params }: PageProps) {
       });
       router.push("/jobs");
     },
-    onError: (error: any) => {
+    onError: (error) => {
       toast({
         title: "Error deleting job",
         description: formatApiError(error),
