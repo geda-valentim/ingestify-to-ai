@@ -65,6 +65,7 @@ def test_worker_live_is_addressed_outside_the_active_profiles():
     assert 'declared "$s" || continue' in CODE and 'svc_compose "$s" ps --status running -q "$s"' in CODE
     assert 'compose --profile live "$@"' in CODE and '&& declared "$s" &&' in CODE
     assert "if declared worker-live; then" in CODE
+    assert "has no build: section" in CODE and "compose --profile live config worker-live" in CODE
 
 
 def test_inventory_hardening_and_health_parameters():
@@ -123,7 +124,12 @@ while [ $# -gt 0 ]; do
 done
 set -- "${args[@]}"
 case "$1 $2" in
-  "config --services") printf '%s\\n' $STUB_SERVICES; [ "$live" = 0 ] || printf '%s\\n' ${STUB_LIVE_SERVICES-};;
+  # --profile live replaces COMPOSE_PROFILES: STUB_LIVE_SERVICES (when set) is that whole list
+  "config --services") if [ "$live" = 1 ] && [ -n "${STUB_LIVE_SERVICES+x}" ]; then printf '%s\\n' $STUB_LIVE_SERVICES
+    else printf '%s\\n' $STUB_SERVICES; fi;;
+  "config worker-live") printf 'name: t\\nservices:\\n  worker-live:\\n'
+    [ -n "${STUB_LIVE_NO_BUILD-}" ] || printf '    build:\\n      context: /repo\\n'
+    printf '    image: ingestify-to-ai-worker-live:latest\\nnetworks:\\n  default: {}\\n';;
   "ps --status") v="STUB_RUN_${5//-/_}"; [ -z "${!v-}" ] || printf '%s\\n' "${!v}";;
   "port api") echo 0.0.0.0:8000;;
 esac
@@ -219,7 +225,7 @@ def test_retry_restores_inventory_but_never_worker_live(dep):
     p, calls = dep.run(running=degraded)
     assert p.returncode == 0, p.stderr
     assert "compose up -d --no-build --no-deps --scale worker=2 worker" in calls
-    assert not any(c.startswith("compose up") and "worker-live" in c for c in calls)
+    assert not any(" up " in c and "worker-live" in c for c in mutating(calls))
     assert "worker-live ran 1 replica" in p.stderr and "re-apply its profile" in p.stderr
     assert dep.state("deploy-last-success").read_text().strip() == target
     assert not dep.state("deploy-pending-inventory").exists() and not dep.state("deploy-pending").exists()
@@ -231,7 +237,7 @@ def test_compose_only_change_warns_about_live_image(dep):
     p, calls = dep.run()
     assert p.returncode == 0, p.stderr
     assert "worker-live inputs changed" in p.stderr and "REGISTERED_MANIFEST_CHANGED" in p.stderr
-    assert "restart u1" in calls and not any(c.startswith("compose up") and "worker-audio" in c for c in calls)
+    assert "restart u1" in calls and not any(" up " in c and "worker-audio" in c for c in mutating(calls))
     assert not any("worker-live" in c for c in mutating(calls))
     assert any("--force-recreate" in c for c in calls)
 
@@ -271,6 +277,14 @@ def test_build_live_fails_loudly_when_compose_has_no_worker_live(dep):
     dep.publish("backend/api/x.py")
     p, calls = dep.run(BUILD_LIVE="1", STUB_SERVICES=LIVE_OFF["STUB_SERVICES"], STUB_LIVE_SERVICES="")
     assert p.returncode != 0 and "no worker-live service" in p.stderr and "stage: inventory" in p.stderr
+    assert not mutating(calls)
+
+
+def test_build_live_fails_loudly_when_worker_live_has_nothing_to_build(dep):
+    # e.g. a local override pins `worker-live: image:` and the live compose file is not in COMPOSE_FILE
+    dep.publish("backend/api/x.py")
+    p, calls = dep.run(BUILD_LIVE="1", STUB_LIVE_NO_BUILD="1", **LIVE_OFF)
+    assert p.returncode != 0 and "has no build: section" in p.stderr and "stage: inventory" in p.stderr
     assert not mutating(calls)
 
 

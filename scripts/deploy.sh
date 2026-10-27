@@ -149,10 +149,17 @@ mapfile -t CONFIGURED < <(compose config --services)
 CONF=" ${CONFIGURED[*]} "
 # worker-live is `profiles: [live]`: COMPOSE_PROFILES may leave it out of $CONF, yet BUILD_LIVE,
 # the stale-image warning and the inventory still concern it. Address it with --profile live.
-LIVE_ALL="$(compose --profile live config --services)" || die "compose config --profile live failed; nothing was touched"
-LIVE_DECLARED=0; grep -qx worker-live <<<"$LIVE_ALL" && LIVE_DECLARED=1
-[ "$BUILD_LIVE" != 1 ] || [ "$LIVE_DECLARED" = 1 ] ||
-  die "BUILD_LIVE=1 but compose declares no worker-live service, even with --profile live (is docker-compose.live.yml in COMPOSE_FILE?); no container was touched"
+# --profile REPLACES COMPOSE_PROFILES: this list only answers "is worker-live declared".
+LIVE_SERVICES="$(compose --profile live config --services)" || die "compose config --profile live failed; nothing was touched"
+LIVE_DECLARED=0; grep -qx worker-live <<<"$LIVE_SERVICES" && LIVE_DECLARED=1
+if [ "$BUILD_LIVE" = 1 ]; then
+  [ "$LIVE_DECLARED" = 1 ] ||
+    die "BUILD_LIVE=1 but compose declares no worker-live service, even with --profile live (is docker-compose.live.yml in COMPOSE_FILE?); no container was touched"
+  # A service without `build:` (e.g. an override pinning `image:`) is skipped by `compose build` with exit 0.
+  live_cfg="$(compose --profile live config worker-live)" || die "compose config worker-live failed; nothing was touched"
+  awk '/^  worker-live:$/{f=1; next} f && /^  [^ ]/{f=0} f && /^    build:/{b=1} END{exit !b}' <<<"$live_cfg" ||
+    die "BUILD_LIVE=1 but worker-live has no build: section (an override pinning image:? is docker-compose.live.yml in COMPOSE_FILE?); nothing would be built; no container was touched"
+fi
 declared() { if [ "$1" = worker-live ]; then [ "$LIVE_DECLARED" = 1 ]; else in_list "$1" "$CONF"; fi; }
 svc_compose() { local s="$1"; shift; if [ "$s" = worker-live ]; then compose --profile live "$@"; else compose "$@"; fi; }
 CF="$(sed -n 's/^COMPOSE_FILE=//p' .env 2>/dev/null | tail -1 | tr -d "\"'" || true)"
