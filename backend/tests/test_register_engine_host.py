@@ -5,6 +5,7 @@ render worker-live and the registration died with a KeyError, right after the de
 had built the image it was told to record. Subprocess is faked: no docker runs here.
 """
 import argparse
+import errno
 import json
 import os
 import sys
@@ -246,3 +247,77 @@ def test_a_strict_umask_still_leaves_the_owner_able_to_read_the_token(args, monk
         os.umask(old)
 
     assert os.stat(args.output).st_mode & 0o777 == 0o600
+
+
+def _enospc_when(marker):
+    real_write_all = register_engine_host._write_all
+
+    def write_all(fd, data):
+        if marker in data:
+            raise OSError(errno.ENOSPC, "No space left on device")
+        real_write_all(fd, data)
+
+    return write_all
+
+
+_write_all_real = register_engine_host._write_all
+
+
+def _rerun_is_possible(args, monkeypatch):
+    """After the failure, the same registration goes through (nothing blocks it)."""
+    monkeypatch.setattr(register_engine_host, "_write_all", _write_all_real)
+    register_engine_host.register(args)
+    assert args.host_id in json.loads(Path(args.identities).read_text())
+
+
+def test_unknown_identities_group_fails_before_anything_is_written(args, monkeypatch):
+    monkeypatch.setattr(register_engine_host.subprocess, "check_output", FakeDocker())
+    args.identities_group = "no-such-group-for-this-test"
+
+    with pytest.raises(ValueError, match="Unknown --identities-group"):
+        register_engine_host.register(args)
+    assert not Path(args.output).exists() and not Path(args.identities).exists()
+
+
+def test_enospc_writing_the_config_leaves_no_partial_file(args, monkeypatch):
+    monkeypatch.setattr(register_engine_host.subprocess, "check_output", FakeDocker())
+    monkeypatch.setattr(register_engine_host, "_write_all", _enospc_when(b"machine_token"))
+
+    with pytest.raises(OSError):
+        register_engine_host.register(args)
+    assert not Path(args.output).exists() and not Path(args.identities).exists()
+    _rerun_is_possible(args, monkeypatch)
+
+
+def test_enospc_writing_the_identities_removes_this_runs_config(args, monkeypatch):
+    monkeypatch.setattr(register_engine_host.subprocess, "check_output", FakeDocker())
+    monkeypatch.setattr(register_engine_host, "_write_all", _enospc_when(f'"{args.host_id}"'.encode()))
+
+    with pytest.raises(OSError):
+        register_engine_host.register(args)
+    assert not Path(args.output).exists() and not Path(args.identities).exists()
+    assert not list(Path(args.identities).parent.glob(".*.tmp"))  # no staged leftovers either
+    _rerun_is_possible(args, monkeypatch)
+
+
+def test_a_refused_chown_on_a_new_identities_file_undoes_both_files(args, monkeypatch):
+    monkeypatch.setattr(register_engine_host.subprocess, "check_output", FakeDocker())
+    args.identities_group = "10001"
+
+    def chown(path, uid, gid):
+        raise PermissionError(errno.EPERM, "Operation not permitted")
+
+    monkeypatch.setattr(register_engine_host.os, "chown", chown)
+
+    with pytest.raises(PermissionError):
+        register_engine_host.register(args)
+    assert not Path(args.output).exists() and not Path(args.identities).exists()
+
+
+def test_an_existing_registration_is_never_touched(args, monkeypatch):
+    monkeypatch.setattr(register_engine_host.subprocess, "check_output", FakeDocker())
+    Path(args.output).write_text('{"machine_token": "old"}')
+
+    with pytest.raises(ValueError, match="Host already registered"):
+        register_engine_host.register(args)
+    assert Path(args.output).read_text() == '{"machine_token": "old"}'

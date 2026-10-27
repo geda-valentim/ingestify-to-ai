@@ -25,6 +25,9 @@ def _stage(path, data, mode):
         os.fchmod(fd, mode)  # exact mode (the umask may have dropped bits), on this inode
         _write_all(fd, data)
         os.fsync(fd)
+    except BaseException:
+        os.unlink(path)  # O_EXCL: this call created it; never leave a partial file behind
+        raise
     finally:
         os.close(fd)
 
@@ -73,12 +76,16 @@ def write_identities(path, identities, *, group=None, mode=None):
             finally:
                 os.close(fd)
         else:
+            gid = None if group is None else group if isinstance(group, int) else _gid(group)
             _stage(path, data, 0o600)
-            if group is not None:
-                gid = group if isinstance(group, int) else _gid(group)
-                os.chown(path, -1, gid)
-            wanted = mode if mode is not None else (0o640 if group is not None else 0o600)
-            os.chmod(path, wanted)
+            try:
+                if gid is not None:
+                    os.chown(path, -1, gid)
+                wanted = mode if mode is not None else (0o640 if group is not None else 0o600)
+                os.chmod(path, wanted)
+            except BaseException:
+                path.unlink()  # created just above: a half-set-up file would block the rerun
+                raise
     finally:
         tmp.unlink(missing_ok=True)
         backup_tmp.unlink(missing_ok=True)
@@ -89,7 +96,10 @@ def _gid(group):
         return int(group)
     import grp
 
-    return grp.getgrnam(group).gr_gid
+    try:
+        return grp.getgrnam(group).gr_gid
+    except KeyError:
+        raise ValueError(f"Unknown --identities-group {group!r}") from None
 
 
 # COMPOSE_PROFILES (often from .env) may leave a service's profile (SERVICE_PROFILES) off, and
@@ -141,6 +151,8 @@ def register(args):
     for service in args.service:
         if service not in SERVICES:
             raise ValueError("Unknown worker service")
+    # Everything that can be checked is checked before anything is written.
+    group = None if args.identities_group is None else _gid(args.identities_group)
     configs, default_render = _service_configs(cmd, args.cwd, args.service)
     allowed = {}
     for service in args.service:
@@ -215,9 +227,13 @@ def register(args):
     # Born 0600 (never readable under the umask, even briefly); O_EXCL also refuses a file
     # (or symlink) that appeared after the check above.
     _stage(args.output, json.dumps(config, indent=2).encode(), 0o600)
-    write_identities(
-        Path(args.identities), identities, group=args.identities_group
-    )
+    try:
+        write_identities(Path(args.identities), identities, group=group)
+    except BaseException:
+        # Created by this run (O_EXCL above), so it is ours to remove: a config without its
+        # identity would make the rerun refuse "Host already registered".
+        Path(args.output).unlink(missing_ok=True)
+        raise
     print(
         "Registration written. Install the systemd unit and mount the identities file in API."
     )
