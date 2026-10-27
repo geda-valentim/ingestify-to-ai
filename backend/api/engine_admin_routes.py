@@ -410,7 +410,10 @@ async def pause_engine(engine_id: str, request: Request, body: Optional[VersionB
 async def reset_engine_health(engine_id: str, request: Request, admin_user=Depends(require_admin_session),
                               db: Session = Depends(get_db)) -> Dict[str, Any]:
     engine = _engine_or_404(db, engine_id)
-    store.reset_health(db, engine, actor_user_id=str(admin_user.id), auth_method="jwt", ip=_ip(request))
+    try:
+        store.reset_health(db, engine, actor_user_id=str(admin_user.id), auth_method="jwt", ip=_ip(request))
+    except VersionConflict as e:
+        raise refusal(409, e.code, e)
     return _view(db, engine)
 
 
