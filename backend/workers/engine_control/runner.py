@@ -15,6 +15,9 @@ from shared.engine_control.models import (
     ControlAdmission,
 )
 from shared.models import Engine, EngineUsage
+from workers.engine_control import orphan_tickets
+
+ORPHAN_RECONCILE_SECONDS = 10
 
 
 class Cancelled(Exception):
@@ -157,8 +160,15 @@ class Context:
                 usage_id, error_code="ENGINE_MAINTENANCE", session_factory=self.Session
             )
         end = time.monotonic() + plan["drain_timeout_seconds"]
+        next_reconcile = 0.0
         while time.monotonic() < end:
             self.check()
+            if time.monotonic() >= next_reconcile:
+                # Tickets of killed processes never reach their `finally`.
+                released = orphan_tickets.release_dead(self.Session, plan["resources"])
+                if released:
+                    self.event("draining", f"Liberados {released} tickets de processos encerrados")
+                next_reconcile = time.monotonic() + ORPHAN_RECONCILE_SECONDS
             with self.Session() as db:
                 tickets = (
                     db.query(ControlAdmission)
