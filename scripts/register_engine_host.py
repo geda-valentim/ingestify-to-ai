@@ -9,6 +9,7 @@ import secrets
 import shlex
 import stat
 import subprocess
+import sys
 from engine_host_services import SERVICE_PROFILES, SERVICES, profile_args
 
 
@@ -19,7 +20,8 @@ def _write_all(fd, data):
 
 
 def _stage(path, data, mode):
-    """Write `data` to a fresh sibling file (O_EXCL, `mode`) and fsync it."""
+    """Create `path` (O_EXCL: never an existing file or symlink) with exactly `mode`, write
+    `data` and fsync it. On failure the file it created is removed, so no partial file is left."""
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode)
     try:
         os.fchmod(fd, mode)  # exact mode (the umask may have dropped bits), on this inode
@@ -140,6 +142,17 @@ def _service_configs(cmd, cwd, services):
     return configs, set(rendered[()])
 
 
+def _identity_state(path, host_id, digest):
+    """True if `path` maps host_id to digest, False if it surely does not, None if unreadable."""
+    try:
+        data = json.loads(Path(path).read_text())
+    except FileNotFoundError:
+        return False
+    except (OSError, ValueError):
+        return None
+    return isinstance(data, dict) and data.get(host_id) == digest
+
+
 def register(args):
     manifests = {
         str(Path(p).resolve()): hashlib.sha256(Path(p).read_bytes()).hexdigest()
@@ -151,8 +164,11 @@ def register(args):
     for service in args.service:
         if service not in SERVICES:
             raise ValueError("Unknown worker service")
-    # Everything that can be checked is checked before anything is written.
-    group = None if args.identities_group is None else _gid(args.identities_group)
+    # Everything that can be checked is checked before anything is written. The group only
+    # applies to a NEW identities file (an existing one keeps its own).
+    group = None
+    if args.identities_group is not None and not Path(args.identities).exists():
+        group = _gid(args.identities_group)
     configs, default_render = _service_configs(cmd, args.cwd, args.service)
     allowed = {}
     for service in args.service:
@@ -223,16 +239,34 @@ def register(args):
         raise ValueError(
             "Host already registered; rotate deliberately, do not overwrite"
         )
-    identities[args.host_id] = hashlib.sha256(token.encode()).hexdigest()
+    digest = hashlib.sha256(token.encode()).hexdigest()
+    identities[args.host_id] = digest
     # Born 0600 (never readable under the umask, even briefly); O_EXCL also refuses a file
     # (or symlink) that appeared after the check above.
     _stage(args.output, json.dumps(config, indent=2).encode(), 0o600)
     try:
         write_identities(Path(args.identities), identities, group=group)
     except BaseException:
-        # Created by this run (O_EXCL above), so it is ours to remove: a config without its
-        # identity would make the rerun refuse "Host already registered".
-        Path(args.output).unlink(missing_ok=True)
+        # The config was created by this run (O_EXCL above), so it is ours to remove: without
+        # its identity the rerun would refuse "Host already registered". Only when the identity
+        # is surely absent, though: if the live file already holds it, the token in the config
+        # is the only copy of a valid credential.
+        recorded = _identity_state(args.identities, args.host_id, digest)
+        if recorded is False:
+            Path(args.output).unlink(missing_ok=True)
+        elif recorded:
+            print(
+                f"The identity was already written to {args.identities}; {args.output} is kept "
+                "(it holds the only copy of that token). Check both files before running again.",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                f"Writing {args.identities} failed and it is no longer valid JSON: restore it from "
+                f"{args.identities}.bak with `cp` (keeps the inode the API mounts), remove "
+                f"{args.output} and run again.",
+                file=sys.stderr,
+            )
         raise
     print(
         "Registration written. Install the systemd unit and mount the identities file in API."

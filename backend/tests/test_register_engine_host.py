@@ -270,6 +270,16 @@ def _rerun_is_possible(args, monkeypatch):
     assert args.host_id in json.loads(Path(args.identities).read_text())
 
 
+def test_identities_group_is_ignored_for_an_existing_file(args, monkeypatch):
+    monkeypatch.setattr(register_engine_host.subprocess, "check_output", FakeDocker())
+    _existing_identities(args)
+    args.identities_group = "no-such-group-for-this-test"  # only applies to a new file
+
+    register_engine_host.register(args)
+
+    assert args.host_id in json.loads(Path(args.identities).read_text())
+
+
 def test_unknown_identities_group_fails_before_anything_is_written(args, monkeypatch):
     monkeypatch.setattr(register_engine_host.subprocess, "check_output", FakeDocker())
     args.identities_group = "no-such-group-for-this-test"
@@ -291,10 +301,19 @@ def test_enospc_writing_the_config_leaves_no_partial_file(args, monkeypatch):
 
 def test_enospc_writing_the_identities_removes_this_runs_config(args, monkeypatch):
     monkeypatch.setattr(register_engine_host.subprocess, "check_output", FakeDocker())
-    monkeypatch.setattr(register_engine_host, "_write_all", _enospc_when(f'"{args.host_id}"'.encode()))
+    # the identities JSON, not the config (which also says "h1", but indented)
+    fail = _enospc_when(f'{{"{args.host_id}": "'.encode())
+    config_existed = []
+
+    def write_all(fd, data):
+        config_existed.append(Path(args.output).exists())
+        fail(fd, data)
+
+    monkeypatch.setattr(register_engine_host, "_write_all", write_all)
 
     with pytest.raises(OSError):
         register_engine_host.register(args)
+    assert config_existed[-1]  # it failed in write_identities, after the config was written
     assert not Path(args.output).exists() and not Path(args.identities).exists()
     assert not list(Path(args.identities).parent.glob(".*.tmp"))  # no staged leftovers either
     _rerun_is_possible(args, monkeypatch)
@@ -321,3 +340,50 @@ def test_an_existing_registration_is_never_touched(args, monkeypatch):
     with pytest.raises(ValueError, match="Host already registered"):
         register_engine_host.register(args)
     assert Path(args.output).read_text() == '{"machine_token": "old"}'
+
+
+def _existing_identities(args):
+    Path(args.identities).write_text(json.dumps({"other-host": "f" * 64}))
+    return os.stat(args.identities).st_ino
+
+
+def test_failure_after_the_live_identities_got_our_entry_keeps_the_config(args, monkeypatch, capsys):
+    # re-registration: the live file (the inode the API mounts) is rewritten in place, then fsync
+    # fails; the API already sees the new hash, so the config holds the only copy of a valid token
+    monkeypatch.setattr(register_engine_host.subprocess, "check_output", FakeDocker())
+    live = _existing_identities(args)
+    real_fsync = os.fsync
+
+    def fsync(fd):
+        if os.fstat(fd).st_ino == live:
+            raise OSError(errno.EIO, "I/O error")
+        real_fsync(fd)
+
+    monkeypatch.setattr(register_engine_host.os, "fsync", fsync)
+
+    with pytest.raises(OSError):
+        register_engine_host.register(args)
+    assert args.host_id in json.loads(Path(args.identities).read_text())
+    assert "machine_token" in json.loads(Path(args.output).read_text())
+    assert "is kept" in capsys.readouterr().err
+
+
+def test_a_torn_rewrite_of_the_live_identities_points_to_the_backup(args, monkeypatch, capsys):
+    monkeypatch.setattr(register_engine_host.subprocess, "check_output", FakeDocker())
+    live = _existing_identities(args)
+    before = Path(args.identities).read_text()
+
+    def write_all(fd, data):
+        if os.fstat(fd).st_ino == live:
+            os.write(fd, data[:-10])  # past the old content's end, short of the new one: invalid JSON
+            raise OSError(errno.ENOSPC, "No space left on device")
+        _write_all_real(fd, data)
+
+    monkeypatch.setattr(register_engine_host, "_write_all", write_all)
+
+    with pytest.raises(OSError):
+        register_engine_host.register(args)
+    err = capsys.readouterr().err
+    assert ".bak" in err and "machine_token" not in err
+    assert Path(args.identities + ".bak").read_text() == before
+    assert Path(args.output).exists()  # kept: the operator decides after restoring the backup
