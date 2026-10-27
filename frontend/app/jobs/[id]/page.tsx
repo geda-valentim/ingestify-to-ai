@@ -108,7 +108,6 @@ export default function JobStatusPage({ params }: PageProps) {
   const [selectedPage, setSelectedPage] = useState<PageInfo | null>(null);
 
   const [activeTab, setActiveTab] = useState<"pdf" | "markdown">("pdf");
-  const [numPdfPages, setNumPdfPages] = useState<number>(0);
   const [pdfError, setPdfError] = useState<string | null>(null);
   const [selectedPages, setSelectedPages] = useState<Set<number>>(new Set());
 
@@ -416,8 +415,7 @@ export default function JobStatusPage({ params }: PageProps) {
     bulkRetryMutation.mutate(pageNumbers);
   };
 
-  const onDocumentLoadSuccess = ({ numPages }: { numPages: number }) => {
-    setNumPdfPages(numPages);
+  const onDocumentLoadSuccess = () => {
     setPdfError(null);
   };
 
