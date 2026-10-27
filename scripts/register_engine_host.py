@@ -22,6 +22,7 @@ def _stage(path, data, mode):
     """Write `data` to a fresh sibling file (O_EXCL, `mode`) and fsync it."""
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode)
     try:
+        os.fchmod(fd, mode)  # exact mode (the umask may have dropped bits), on this inode
         _write_all(fd, data)
         os.fsync(fd)
     finally:
@@ -211,8 +212,9 @@ def register(args):
             "Host already registered; rotate deliberately, do not overwrite"
         )
     identities[args.host_id] = hashlib.sha256(token.encode()).hexdigest()
-    Path(args.output).write_text(json.dumps(config, indent=2))
-    os.chmod(args.output, 0o600)
+    # Born 0600 (never readable under the umask, even briefly); O_EXCL also refuses a file
+    # (or symlink) that appeared after the check above.
+    _stage(args.output, json.dumps(config, indent=2).encode(), 0o600)
     write_identities(
         Path(args.identities), identities, group=args.identities_group
     )

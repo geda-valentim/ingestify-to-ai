@@ -212,3 +212,37 @@ def test_the_refusal_says_how_to_really_build(args, monkeypatch):
 
     with pytest.raises(ValueError, match=r"FORCE_REBUILD=1"):
         register_engine_host.register(args)
+
+
+def test_the_token_file_is_born_0600_under_a_permissive_umask(args, monkeypatch):
+    # write_text + chmod left the machine token world-readable (0644 under umask 022) until chmod
+    monkeypatch.setattr(register_engine_host.subprocess, "check_output", FakeDocker())
+    modes_when_token_written = []
+    real_write_all = register_engine_host._write_all
+
+    def write_all(fd, data):
+        if b"machine_token" in data:
+            modes_when_token_written.append(os.fstat(fd).st_mode & 0o777)
+        real_write_all(fd, data)
+
+    monkeypatch.setattr(register_engine_host, "_write_all", write_all)
+    old = os.umask(0o022)
+    try:
+        register_engine_host.register(args)
+    finally:
+        os.umask(old)
+
+    assert modes_when_token_written == [0o600]
+    assert os.stat(args.output).st_mode & 0o777 == 0o600
+    assert "machine_token" in json.loads(Path(args.output).read_text())
+
+
+def test_a_strict_umask_still_leaves_the_owner_able_to_read_the_token(args, monkeypatch):
+    monkeypatch.setattr(register_engine_host.subprocess, "check_output", FakeDocker())
+    old = os.umask(0o277)  # would drop the owner's write bit
+    try:
+        register_engine_host.register(args)
+    finally:
+        os.umask(old)
+
+    assert os.stat(args.output).st_mode & 0o777 == 0o600
