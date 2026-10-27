@@ -83,6 +83,12 @@ O deploy **nunca** o sobe, reinicia ou restaura, e **nunca** o constrói sozinho
   is stale`. O compose entra porque pode mexer em build args ou no Dockerfile.
 - Para construir, rode `make deploy BUILD_LIVE=1` (só `build`, independente da detecção).
   Depois re-registre o host e rode `apply_profile`.
+- O `worker-live` é `profiles: [live]`. O script o trata com `--profile live` (build, inventário
+  e aviso de imagem velha), mesmo que o `COMPOSE_PROFILES` do `.env` não inclua `live`. Se nem
+  assim o compose declara o serviço (falta o `docker-compose.live.yml` no `COMPOSE_FILE`), ou se
+  o serviço declarado não tem `build:` (um override que só fixa `image:`, caso em que o `compose
+  build` sairia com 0 sem construir nada), `BUILD_LIVE=1` falha no stage `inventory`: o código já está no HEAD novo, mas nenhum container
+  foi tocado. Corrija o `COMPOSE_FILE` e rode de novo.
 
 ## Serviços gerenciados: re-registrar
 
