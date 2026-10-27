@@ -5,15 +5,19 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))
 }
 
+const isRecord = (v: unknown): v is Record<string, unknown> =>
+  typeof v === "object" && v !== null
+
 /**
  * Formats API error responses into a user-friendly string message
  * Handles FastAPI validation errors and standard error responses
  */
-export function formatApiError(error: any, fallbackMessage = "An error occurred"): string {
-  // Check for standard error response with detail
-  if (error?.response?.data?.detail) {
-    const detail = error.response.data.detail;
+export function formatApiError(error: unknown, fallbackMessage = "An error occurred"): string {
+  const response = isRecord(error) && isRecord(error.response) ? error.response : undefined
+  const detail = response && isRecord(response.data) ? response.data.detail : undefined
 
+  // Check for standard error response with detail
+  if (detail) {
     // If detail is a string, return it
     if (typeof detail === "string") {
       return detail;
@@ -22,16 +26,17 @@ export function formatApiError(error: any, fallbackMessage = "An error occurred"
     // If detail is an array (Pydantic validation errors)
     if (Array.isArray(detail)) {
       return detail
-        .map((err: any) => {
+        .map((err: unknown) => {
+          const item = isRecord(err) ? err : {};
           // Format: "field: error message"
-          const field = err.loc?.slice(1).join(".") || "field";
-          return `${field}: ${err.msg}`;
+          const field = (Array.isArray(item.loc) && item.loc.slice(1).join(".")) || "field";
+          return `${field}: ${item.msg}`;
         })
         .join(", ");
     }
 
     // Structured errors ({code, message}) carry a readable message
-    if (typeof detail === "object" && typeof detail.message === "string") {
+    if (isRecord(detail) && typeof detail.message === "string") {
       return detail.message;
     }
 
@@ -42,7 +47,7 @@ export function formatApiError(error: any, fallbackMessage = "An error occurred"
   }
 
   // Check for error message
-  if (error?.message && typeof error.message === "string") {
+  if (isRecord(error) && error.message && typeof error.message === "string") {
     return error.message;
   }
 
