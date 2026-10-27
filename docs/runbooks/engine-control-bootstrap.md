@@ -147,3 +147,19 @@ arquivo for novo, ele nasce `0600`; passe `--identities-group 10001` para criá-
 substituem o arquivo (por exemplo `sed -i`). A API relê as identidades a cada requisição do host; não é preciso
 reiniciá-la. Se o inventário do host mudou (GPU ou manifests), vincule de novo
 o perfil de execução das engines locais (`PROFILE_INVENTORY_CHANGED`).
+
+Se o registro falhar, ele não deixa arquivo pela metade: um `engine-host.json` criado nesta
+execução é removido quando a identidade não chegou ao arquivo de identidades, e o rerun
+passa. Nos outros casos o config fica e o erro diz o que fazer:
+- a identidade já entrou no arquivo vivo: o config é a única cópia do token; o registro está
+  feito, inicie o agente (depois de um erro de E/S, confira os dois arquivos antes);
+- esta execução começou a reescrever o arquivo vivo e ele ficou com JSON inválido: restaure-o
+  de `<arquivo>.bak` com `cp` (mantém o inode montado na API), remova o `engine-host.json` e
+  rode de novo. Só nesse caso o `.bak` é desta execução;
+- não deu para reler o arquivo de identidades: confira-o à mão, **sem** restaurar um backup
+  antigo (ele revogaria os hosts registrados depois dele). Se o `host_id` estiver lá, o
+  registro está feito; se não, remova o `engine-host.json` e rode de novo.
+
+No re-registro do procedimento acima, a restauração dos `.$stamp` desfaz a rotação inteira
+(config e identidades daquele momento); a orientação do erro vale para o registro novo.
+`--identities-group` só vale para um arquivo novo.

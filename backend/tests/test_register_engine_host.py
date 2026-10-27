@@ -5,6 +5,7 @@ render worker-live and the registration died with a KeyError, right after the de
 had built the image it was told to record. Subprocess is faked: no docker runs here.
 """
 import argparse
+import errno
 import json
 import os
 import sys
@@ -246,3 +247,201 @@ def test_a_strict_umask_still_leaves_the_owner_able_to_read_the_token(args, monk
         os.umask(old)
 
     assert os.stat(args.output).st_mode & 0o777 == 0o600
+
+
+def _enospc_when(marker):
+    real_write_all = register_engine_host._write_all
+
+    def write_all(fd, data):
+        if marker in data:
+            raise OSError(errno.ENOSPC, "No space left on device")
+        real_write_all(fd, data)
+
+    return write_all
+
+
+_write_all_real = register_engine_host._write_all
+
+
+def _rerun_is_possible(args, monkeypatch):
+    """After the failure, the same registration goes through (nothing blocks it)."""
+    monkeypatch.setattr(register_engine_host, "_write_all", _write_all_real)
+    register_engine_host.register(args)
+    assert args.host_id in json.loads(Path(args.identities).read_text())
+
+
+def test_identities_group_is_ignored_for_an_existing_file(args, monkeypatch):
+    monkeypatch.setattr(register_engine_host.subprocess, "check_output", FakeDocker())
+    _existing_identities(args)
+    args.identities_group = "no-such-group-for-this-test"  # only applies to a new file
+
+    register_engine_host.register(args)
+
+    assert args.host_id in json.loads(Path(args.identities).read_text())
+
+
+def test_unknown_identities_group_fails_before_anything_is_written(args, monkeypatch):
+    monkeypatch.setattr(register_engine_host.subprocess, "check_output", FakeDocker())
+    args.identities_group = "no-such-group-for-this-test"
+
+    with pytest.raises(ValueError, match="Unknown --identities-group"):
+        register_engine_host.register(args)
+    assert not Path(args.output).exists() and not Path(args.identities).exists()
+
+
+def test_enospc_writing_the_config_leaves_no_partial_file(args, monkeypatch):
+    monkeypatch.setattr(register_engine_host.subprocess, "check_output", FakeDocker())
+    monkeypatch.setattr(register_engine_host, "_write_all", _enospc_when(b"machine_token"))
+
+    with pytest.raises(OSError):
+        register_engine_host.register(args)
+    assert not Path(args.output).exists() and not Path(args.identities).exists()
+    _rerun_is_possible(args, monkeypatch)
+
+
+def test_enospc_writing_the_identities_removes_this_runs_config(args, monkeypatch):
+    monkeypatch.setattr(register_engine_host.subprocess, "check_output", FakeDocker())
+    # the identities JSON, not the config (which also says "h1", but indented)
+    fail = _enospc_when(f'{{"{args.host_id}": "'.encode())
+    config_existed = []
+
+    def write_all(fd, data):
+        config_existed.append(Path(args.output).exists())
+        fail(fd, data)
+
+    monkeypatch.setattr(register_engine_host, "_write_all", write_all)
+
+    with pytest.raises(OSError):
+        register_engine_host.register(args)
+    assert config_existed[-1]  # it failed in write_identities, after the config was written
+    assert not Path(args.output).exists() and not Path(args.identities).exists()
+    assert not list(Path(args.identities).parent.glob(".*.tmp"))  # no staged leftovers either
+    _rerun_is_possible(args, monkeypatch)
+
+
+def test_a_refused_chown_on_a_new_identities_file_undoes_both_files(args, monkeypatch):
+    monkeypatch.setattr(register_engine_host.subprocess, "check_output", FakeDocker())
+    args.identities_group = "10001"
+
+    def chown(path, uid, gid):
+        raise PermissionError(errno.EPERM, "Operation not permitted")
+
+    monkeypatch.setattr(register_engine_host.os, "chown", chown)
+
+    with pytest.raises(PermissionError):
+        register_engine_host.register(args)
+    assert not Path(args.output).exists() and not Path(args.identities).exists()
+
+
+def test_an_existing_registration_is_never_touched(args, monkeypatch):
+    monkeypatch.setattr(register_engine_host.subprocess, "check_output", FakeDocker())
+    Path(args.output).write_text('{"machine_token": "old"}')
+
+    with pytest.raises(ValueError, match="Host already registered"):
+        register_engine_host.register(args)
+    assert Path(args.output).read_text() == '{"machine_token": "old"}'
+
+
+def _assert_no_secret(err, args):
+    token = json.loads(Path(args.output).read_text())["machine_token"]
+    assert token not in err and register_engine_host.hashlib.sha256(token.encode()).hexdigest() not in err
+
+
+def _existing_identities(args):
+    Path(args.identities).write_text(json.dumps({"other-host": "f" * 64}))
+    return os.stat(args.identities).st_ino
+
+
+def test_failure_after_the_live_identities_got_our_entry_keeps_the_config(args, monkeypatch, capsys):
+    # re-registration: the live file (the inode the API mounts) is rewritten in place, then fsync
+    # fails; the API already sees the new hash, so the config holds the only copy of a valid token
+    monkeypatch.setattr(register_engine_host.subprocess, "check_output", FakeDocker())
+    live = _existing_identities(args)
+    real_fsync = os.fsync
+
+    def fsync(fd):
+        if os.fstat(fd).st_ino == live:
+            raise OSError(errno.EIO, "I/O error")
+        real_fsync(fd)
+
+    monkeypatch.setattr(register_engine_host.os, "fsync", fsync)
+
+    with pytest.raises(OSError):
+        register_engine_host.register(args)
+    assert args.host_id in json.loads(Path(args.identities).read_text())
+    assert "machine_token" in json.loads(Path(args.output).read_text())
+    err = capsys.readouterr().err
+    assert "is kept" in err and "start the agent" in err
+    _assert_no_secret(err, args)
+
+
+def test_a_torn_rewrite_of_the_live_identities_points_to_the_backup(args, monkeypatch, capsys):
+    monkeypatch.setattr(register_engine_host.subprocess, "check_output", FakeDocker())
+    live = _existing_identities(args)
+    before = Path(args.identities).read_text()
+
+    def write_all(fd, data):
+        if os.fstat(fd).st_ino == live:
+            os.write(fd, data[:-10])  # past the old content's end, short of the new one: invalid JSON
+            raise OSError(errno.ENOSPC, "No space left on device")
+        _write_all_real(fd, data)
+
+    monkeypatch.setattr(register_engine_host, "_write_all", write_all)
+
+    with pytest.raises(OSError):
+        register_engine_host.register(args)
+    err = capsys.readouterr().err
+    assert ".bak" in err
+    _assert_no_secret(err, args)
+    assert Path(args.identities + ".bak").read_text() == before
+    assert Path(args.output).exists()  # kept: the operator decides after restoring the backup
+
+
+def test_an_early_identities_failure_with_an_intact_live_file_never_points_to_the_backup(
+    args, monkeypatch, capsys
+):
+    # ENOSPC staging the temp copy: the live file was never touched, and any .bak is from an
+    # OLDER registration; restoring it would revoke the hosts registered since
+    monkeypatch.setattr(register_engine_host.subprocess, "check_output", FakeDocker())
+    _existing_identities(args)
+    before = Path(args.identities).read_text()
+    monkeypatch.setattr(register_engine_host, "_write_all", _enospc_when(b'{"other-host": '))
+
+    with pytest.raises(OSError):
+        register_engine_host.register(args)
+    assert ".bak" not in capsys.readouterr().err
+    assert Path(args.identities).read_text() == before
+    assert not Path(args.output).exists()  # surely absent: this run's config is removed
+
+
+def test_an_unreadable_identities_file_keeps_the_config_and_never_points_to_the_backup(
+    args, monkeypatch, capsys
+):
+    monkeypatch.setattr(register_engine_host.subprocess, "check_output", FakeDocker())
+    _existing_identities(args)
+    failed = []
+    fail = _enospc_when(b'{"other-host": ')
+
+    def write_all(fd, data):
+        try:
+            fail(fd, data)
+        except OSError:
+            failed.append(True)
+            raise
+
+    real_read_text = Path.read_text
+
+    def read_text(self, *a, **kw):
+        if failed and str(self) == args.identities:
+            raise OSError(errno.EIO, "I/O error")
+        return real_read_text(self, *a, **kw)
+
+    monkeypatch.setattr(register_engine_host, "_write_all", write_all)
+    monkeypatch.setattr(Path, "read_text", read_text)
+
+    with pytest.raises(OSError):
+        register_engine_host.register(args)
+    err = capsys.readouterr().err
+    assert "could not be checked" in err and ".bak" not in err
+    assert Path(args.output).exists()  # unknown: kept, the operator decides
+    _assert_no_secret(err, args)
