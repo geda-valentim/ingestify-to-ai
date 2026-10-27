@@ -1,17 +1,32 @@
 "use client";
-import { appliedLabel, featureReplicas, unattributedBusy } from "@/lib/engine-replicas";
+import { appliedLabel, engineBusy, featureReplicas } from "@/lib/engine-replicas";
 import type { RuntimeStatus } from "@/types/engine-control";
+import { AdminError } from "./admin-error";
 
 const n = (v: number | null) => (v == null ? "—" : String(v));
 
 /** Desired, applied and observed replicas per feature, then per resource. */
-export function EngineReplicas({ status }: { status: RuntimeStatus | undefined }) {
+export function EngineReplicas({
+  status,
+  error,
+}: {
+  status: RuntimeStatus | undefined;
+  error: unknown;
+}) {
   const rows = featureReplicas(status);
   return (
     <>
-      {unattributedBusy(status) && (
+      {error != null && (
+        <AdminError error={error} title="Não foi possível carregar o estado do runtime" />
+      )}
+      {status && rows.length === 0 && status.resources.length === 0 && (
         <p className="text-sm text-muted-foreground">
-          Operação em curso nesta engine; a feature ainda não aparece no estado.
+          Nenhuma feature com perfil salvo visível nesta engine.
+        </p>
+      )}
+      {engineBusy(status) && (
+        <p className="text-sm text-muted-foreground">
+          Operação em curso ou pendente nesta engine; o estado não diz de qual feature.
         </p>
       )}
       {rows.length > 0 && (
@@ -38,7 +53,6 @@ export function EngineReplicas({ status }: { status: RuntimeStatus | undefined }
                   {r.observedAt
                     ? new Date(r.observedAt + "Z").toLocaleString()
                     : "desconhecido"}
-                  {r.busy && " · operação em curso"}
                 </td>
               </tr>
             ))}

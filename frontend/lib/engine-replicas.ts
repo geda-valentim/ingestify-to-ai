@@ -8,8 +8,6 @@ export interface FeatureReplicas {
   appliedRevision: number | null;
   /** "running", "stopped" or "standby" as last applied; null if never applied. */
   mode: string | null;
-  /** An operation holds one of the feature's resources right now. */
-  busy: boolean;
   alive: number | null;
   ready: number | null;
   observedAt: string | null;
@@ -56,7 +54,6 @@ export function featureReplicas(status: RuntimeStatus | undefined): FeatureRepli
       desired: rev.profile.desired_replicas,
       appliedRevision: applied?.revision ?? null,
       mode: moded?.applied?.feature_modes?.[feature] ?? null,
-      busy: related.some((r) => r.operation_id != null),
       alive: count(observed?.observed.replicas_alive),
       ready: count(observed?.observed.ready_replicas),
       observedAt: observed?.observed_at ?? null,
@@ -65,24 +62,26 @@ export function featureReplicas(status: RuntimeStatus | undefined): FeatureRepli
 }
 
 /**
- * An operation holds a resource that was never applied for any feature (the
- * feature's first operation): runtime-status does not say which feature it
- * is for, so it can only be flagged for the whole engine.
+ * An operation holds one of the engine's resources. runtime-status does not
+ * say which feature the operation is for (a resource's `applied` is the last
+ * finished one, maybe another feature's), so it is flagged for the engine.
  */
-export function unattributedBusy(status: RuntimeStatus | undefined): boolean {
-  return !!status?.resources.some(
-    (r) =>
-      r.operation_id != null &&
-      !r.applied?.feature &&
-      !Object.keys(r.applied?.feature_modes ?? {}).length,
-  );
+export function engineBusy(status: RuntimeStatus | undefined): boolean {
+  return !!status?.resources.some((r) => r.operation_id != null);
 }
 
 const modeLabel: Record<string, string> = { stopped: "parada", standby: "standby" };
 
 /** The applied column: revision in force, its mode and any unapplied save. */
 export function appliedLabel(r: FeatureReplicas): string {
-  const mode = r.mode && modeLabel[r.mode] ? ` (${modeLabel[r.mode]})` : "";
+  const mode =
+    r.mode == null
+      ? r.appliedRevision != null
+        ? " (modo desconhecido)"
+        : ""
+      : modeLabel[r.mode]
+        ? ` (${modeLabel[r.mode]})`
+        : "";
   // Applied on a resource, but the revision is hidden from this user: it
   // cannot be compared with the saved one.
   if (r.appliedRevision == null && r.mode != null) return `não visível${mode}`;

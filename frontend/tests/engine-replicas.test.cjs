@@ -11,7 +11,7 @@ const compiled = ts.transpileModule(source, {
 }).outputText;
 const scope = { exports: {} };
 vm.runInNewContext(compiled, scope);
-const { featureReplicas, appliedLabel, unattributedBusy } = scope.exports;
+const { featureReplicas, appliedLabel, engineBusy } = scope.exports;
 
 // The vm realm has its own Array/Object: round-trip before comparing.
 const rows = (s) => JSON.parse(JSON.stringify(featureReplicas(s)));
@@ -43,7 +43,6 @@ assert.deepEqual(
       desired: 3,
       appliedRevision: null,
       mode: null,
-      busy: false,
       alive: null,
       ready: null,
       observedAt: null,
@@ -93,7 +92,6 @@ assert.deepEqual(rows(status), [
     desired: 3,
     appliedRevision: 4,
     mode: "running",
-    busy: false,
     alive: 2,
     ready: 1,
     observedAt: "2026-10-27T11:00:00",
@@ -104,7 +102,6 @@ assert.deepEqual(rows(status), [
     desired: 1,
     appliedRevision: 1,
     mode: "running",
-    busy: true,
     alive: null,
     ready: null,
     observedAt: "2026-10-27T09:00:00",
@@ -187,18 +184,58 @@ assert.equal(
   "nenhuma · revisão 1 salva, não aplicada",
 );
 
-// First operation of a feature: the locked resource has no applied state, so
-// no row can claim it, but the engine-level flag must show it.
+// Operations are flagged for the engine only: the API does not say which
+// feature an in-flight operation is for, so no row may claim it.
 const first = {
   desired: { transcription: rev("transcription", 1, 1) },
   applied: [],
   resources: [resource("local:h:service:audio", {}, null, {}, "op-9")],
 };
-assert.equal(one(first).busy, false);
-assert.equal(unattributedBusy(first), true);
-assert.equal(unattributedBusy(status), false); // op-1 belongs to vision's resource
-assert.equal(unattributedBusy(undefined), false);
+assert.equal(engineBusy(first), true);
+assert.equal(engineBusy(status), true); // op-1 locks the GPU resource
+assert.equal(engineBusy(undefined), false);
 assert.equal(
-  unattributedBusy({ ...first, resources: [resource("local:h:service:audio", null, null, {})] }),
+  engineBusy({ ...first, resources: [resource("local:h:service:audio", null, null, {})] }),
   false,
 );
+
+// First operation of a new feature on a worker last applied for another one:
+// the engine flag shows it and no row carries an operation flag.
+const shared = {
+  desired: {
+    transcription: rev("transcription", 1, 1),
+    document_conversion: rev("document_conversion", 1, 2),
+  },
+  applied: [rev("transcription", 1, 1, "2026-10-27T09:00:00")],
+  resources: [
+    resource(
+      "local:h:service:worker",
+      { feature: "transcription", feature_modes: { transcription: "running" } },
+      "2026-10-27T09:00:00",
+      { replicas_alive: 1, ready_replicas: 1 },
+      "op-10",
+    ),
+  ],
+};
+assert.equal(engineBusy(shared), true);
+for (const row of rows(shared)) assert.equal("busy" in row, false);
+
+// Same applied_at: the higher revision is the one in force.
+const tie = one({
+  desired: { transcription: rev("transcription", 3, 1) },
+  applied: [
+    rev("transcription", 2, 1, "2026-10-27T09:00:00"),
+    rev("transcription", 3, 1, "2026-10-27T09:00:00"),
+  ],
+  resources: [audio("running")],
+});
+assert.equal(tie.appliedRevision, 3);
+
+// Applied revision visible but no resource says its mode: do not imply running.
+const unknownMode = one({
+  desired: { transcription: rev("transcription", 2, 1) },
+  applied: [rev("transcription", 2, 1, "2026-10-27T09:00:00")],
+  resources: [],
+});
+assert.equal(unknownMode.mode, null);
+assert.equal(appliedLabel(unknownMode), "revisão 2 (modo desconhecido)");

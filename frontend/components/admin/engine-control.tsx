@@ -253,7 +253,7 @@ export function EngineControl({
               Configuração desejada, perfil aplicado e observação do executor
               são estados separados.
             </p>
-            <EngineReplicas status={runtime.data} />
+            <EngineReplicas status={runtime.data} error={runtime.error} />
             {setup?.message && (
               <AdminError
                 tone="info"
