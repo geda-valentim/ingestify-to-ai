@@ -76,7 +76,6 @@ function ConversionWorkspace() {
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const { user } = useAuthStore();
-  const token = useAuthStore((state) => state.token);
   const isAuthenticated = useAuthStore((state) => state.token !== null && state.user !== null);
   const hasHydrated = useAuthStore((state) => state._hasHydrated);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);

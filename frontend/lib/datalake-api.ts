@@ -1,6 +1,5 @@
 import { API_URL, apiFetch, getHeaders, PT_LANGUAGE, throwApiError } from "@/lib/api";
-import type { DatalakeConfig, DatalakeConnection, DatalakeDelivery, DatalakeDestination, DatalakeProvider, PartitionPreviewRequest, PartitionPreviewResponse } from "@/types/datalake";
-import type { JobCreatedResponse, UploadLocation } from "@/types/api";
+import type { DatalakeConfig, DatalakeConnection, DatalakeDelivery, DatalakeProvider, PartitionPreviewRequest, PartitionPreviewResponse } from "@/types/datalake";
 
 export interface ConnectionWrite {
   name: string;
