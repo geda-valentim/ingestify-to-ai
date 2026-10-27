@@ -6,10 +6,14 @@ DRAIN_TIMEOUT. A ticket is released here only on positive evidence: the Celery
 node that ran the task answers, and that task is no longer active in that
 process. A node that does not answer proves nothing, and age alone never
 releases a ticket.
+
+Node names must be unique per process tree (`-n name@%h`, one container each):
+`inspect` merges replies by node name, so two workers sharing a name could
+answer for each other.
 """
 
 import os
-from datetime import timedelta
+import time
 
 from shared.engine_control.models import ControlAdmission
 from shared.engine_control.service import now
@@ -17,8 +21,9 @@ from shared.engine_control.service import now
 TASK_PREFIX = "task:"
 HOLDER_LIMIT = 128  # ControlAdmission.holder
 # A prefork parent learns asynchronously that its child started a task, so a
-# brand-new ticket may not be in `active()` yet. Younger tickets are not judged.
-# This is a precondition for looking, never a reason to release.
+# brand-new ticket may not be in `active()` yet. A ticket is judged only after
+# this drain has seen it open for this long, by its own clock. This is a
+# precondition for looking, never a reason to release.
 ACCEPT_GRACE_SECONDS = 30
 
 
@@ -36,7 +41,7 @@ def parse_task_holder(holder):
     if not holder.startswith(TASK_PREFIX):
         return None
     parts = holder[len(TASK_PREFIX):].split("|", 2)
-    if len(parts) != 3 or not parts[0] or not parts[1].isdigit() or not parts[2]:
+    if len(parts) != 3 or not parts[0] or not parts[1].isdecimal() or not parts[2]:
         return None
     return parts[0], int(parts[1]), parts[2]
 
@@ -47,26 +52,39 @@ def active_by_node(nodes, timeout=1.0):
 
     replies = celery_app.control.inspect(destination=sorted(nodes), timeout=timeout).active() or {}
     return {
-        node: [(t.get("id"), t.get("worker_pid")) for t in (tasks or [])]
+        node: [(t.get("id"), t.get("worker_pid")) for t in tasks]
         for node, tasks in replies.items()
-        if isinstance(tasks, list)
+        if isinstance(tasks, list)  # {"error": ...} is no answer
     }
 
 
-def release_dead(session_factory, resource_keys, inspect_active=None):
-    """Release open tickets on these resources whose task process is provably gone. Returns how many."""
-    with session_factory() as db:
-        rows = (
-            db.query(ControlAdmission.id, ControlAdmission.holder)
-            .filter(
-                ControlAdmission.resource_key.in_(resource_keys),
-                ControlAdmission.released_at.is_(None),
-                ControlAdmission.created_at < now() - timedelta(seconds=ACCEPT_GRACE_SECONDS),
-            )
-            .all()
+def open_tickets(db, resource_keys):
+    return (
+        db.query(ControlAdmission.id, ControlAdmission.holder)
+        .filter(
+            ControlAdmission.resource_key.in_(resource_keys),
+            ControlAdmission.released_at.is_(None),
         )
-    holders = {row.id: parse_task_holder(row.holder) for row in rows}
-    holders = {ticket: h for ticket, h in holders.items() if h}
+        .order_by(ControlAdmission.created_at)
+        .all()
+    )
+
+
+def release_dead(session_factory, resource_keys, first_seen, inspect_active=None, clock=time.monotonic):
+    """Release open tickets on these resources whose task process is provably gone. Returns how many.
+
+    `first_seen` maps ticket id -> when this drain first saw it open; the caller
+    keeps it between calls.
+    """
+    with session_factory() as db:
+        rows = open_tickets(db, resource_keys)
+    stamp = clock()
+    holders = {}
+    for row in rows:
+        seen = first_seen.setdefault(row.id, stamp)
+        parsed = parse_task_holder(row.holder)
+        if parsed and stamp - seen >= ACCEPT_GRACE_SECONDS:
+            holders[row.id] = parsed
     if not holders:
         return 0
     try:
@@ -88,3 +106,10 @@ def release_dead(session_factory, resource_keys, inspect_active=None):
         )
         db.commit()
     return released
+
+
+def residual(session_factory, resource_keys, limit=5):
+    """How many tickets still block a drain, and the oldest holders, for the timeout report."""
+    with session_factory() as db:
+        rows = open_tickets(db, resource_keys)
+    return len(rows), [row.holder for row in rows[:limit]]

@@ -160,12 +160,12 @@ class Context:
                 usage_id, error_code="ENGINE_MAINTENANCE", session_factory=self.Session
             )
         end = time.monotonic() + plan["drain_timeout_seconds"]
-        next_reconcile = 0.0
+        next_reconcile, first_seen, usages = 0.0, {}, 0
         while time.monotonic() < end:
             self.check()
             if time.monotonic() >= next_reconcile:
                 # Tickets of killed processes never reach their `finally`.
-                released = orphan_tickets.release_dead(self.Session, plan["resources"])
+                released = orphan_tickets.release_dead(self.Session, plan["resources"], first_seen)
                 if released:
                     self.event("draining", f"Liberados {released} tickets de processos encerrados")
                 next_reconcile = time.monotonic() + ORPHAN_RECONCILE_SECONDS
@@ -189,6 +189,9 @@ class Context:
                 if not tickets and not usages:
                     return
             time.sleep(0.5)
+        # Residual state for the admin: a holder no node vouches for needs a forced cancel.
+        count, holders = orphan_tickets.residual(self.Session, plan["resources"])
+        self.event("draining", f"Drenagem esgotada: {count} tickets abertos {holders}, {usages} usos em execução")
         raise TimeoutError("DRAIN_TIMEOUT")
 
     def close(self):
