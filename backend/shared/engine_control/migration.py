@@ -30,6 +30,10 @@ def _upgrade(connection):
     for index in resource.indexes:
         if column.name in index.columns:
             index.create(connection, checkfirst=True)
+    # Indexes added to tables that already exist (create_all skips them): additive. InnoDB
+    # builds a secondary index online, after a brief exclusive metadata lock.
+    for index in models.ControlAdmission.__table__.indexes:
+        index.create(connection, checkfirst=True)
 
 
 def upgrade(bind):

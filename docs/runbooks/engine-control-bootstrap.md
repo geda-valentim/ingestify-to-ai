@@ -16,7 +16,11 @@ que a API ainda está com esse valor; habilitar exige o bootstrap abaixo.
 
    A migração também acrescenta `maintenance_operation_id` e seu índice em
    instalações que criaram as tabelas durante o desenvolvimento da spec 0007.
-   Preserva dados, operações em voo e gates de admissão.
+   Preserva dados, operações em voo e gates de admissão. Rode-a de novo em instalações
+   existentes ao atualizar (é idempotente): ela acrescenta índices novos às tabelas que já
+   existem, como `ix_control_admissions_resource_released`, usado pela política de ociosidade.
+   O índice é criado online, mas espera um lock de metadados curto: rode fora de pico, ou
+   com `SET SESSION lock_wait_timeout=30` antes, para não ficar atrás de uma transação longa.
 3. Registre o host com `scripts/register_engine_host.py`: forneça `--host-id`,
    `--api-url`, todos os manifests efetivos, os serviços permitidos e os UUIDs
    das GPUs. Use loopback ou HTTPS verificado para a API. Cada serviço precisa

@@ -1,13 +1,14 @@
 """Retain existing resource ownership when upgrading an early control schema."""
 
 import os
+from datetime import datetime
 
 import pytest
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.engine import make_url
 
 from shared.engine_control.migration import TABLES, upgrade
-from shared.engine_control.models import ControlResource
+from shared.engine_control.models import ControlAdmission, ControlResource
 
 
 @pytest.fixture(params=["sqlite", "mysql"])
@@ -68,3 +69,19 @@ def test_upgrade_restores_missing_maintenance_index(database):
     index.drop(database)
     upgrade(database)
     assert index.name in {i["name"] for i in inspect(database).get_indexes(index.table.name)}
+
+
+def test_upgrade_adds_the_admission_index_to_an_existing_table_and_keeps_tickets(database):
+    # an installation migrated before the index existed: create_all skips existing tables
+    upgrade(database)
+    index = next(i for i in ControlAdmission.__table__.indexes if i.name == "ix_control_admissions_resource_released")
+    index.drop(database)
+    with database.begin() as conn:
+        conn.execute(ControlAdmission.__table__.insert().values(
+            id="t1", resource_key="local:host:worker", holder="task", created_at=datetime(2026, 10, 27)))
+    upgrade(database)
+    upgrade(database)  # repeatable
+    indexes = {i["name"]: i["column_names"] for i in inspect(database).get_indexes("engine_control_admissions")}
+    assert indexes["ix_control_admissions_resource_released"] == ["resource_key", "released_at"]
+    with database.connect() as conn:
+        assert conn.execute(ControlAdmission.__table__.select()).mappings().one()["holder"] == "task"
