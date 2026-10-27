@@ -28,6 +28,9 @@ const adminCsp = [
 const nextConfig: NextConfig = {
   output: 'standalone',
 
+  // Lint gates review (testar.sh front), not the image build.
+  eslint: { ignoreDuringBuilds: true },
+
   async headers() {
     return [
       {
