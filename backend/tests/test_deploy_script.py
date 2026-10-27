@@ -51,10 +51,16 @@ def test_managed_services_are_never_upped_directly():
     assert "compose up" not in restart_part
 
 
+def test_services_without_build_are_never_skipped_silently():
+    # `compose build` exits 0 on a service without build: (the harness proves the behaviour)
+    assert 'has_build "$s" "$build_cfg" || NO_BUILD=' in CODE and "NOT rebuilt" in CODE
+    assert "has_build worker-live" in CODE and 'if [ -n "$BUILD" ]; then' in CODE
+
+
 def test_rollback_and_worker_live_gates():
     assert 'git merge-base --is-ancestor "$DEPLOY_REF" origin/main' in CODE and "reset --hard" not in CODE
     assert 'git reset --keep "$NEWHEAD"' in CODE and 'is-ancestor HEAD "$NEWHEAD"' in CODE
-    assert CODE.count("build worker-live") == 1 and 'if [ "$BUILD_LIVE" = 1 ]; then' in CODE
+    assert CODE.count(" build worker-live") == 1 and 'if [ "$BUILD_LIVE" = 1 ]; then' in CODE
 
 
 def test_worker_live_is_addressed_outside_the_active_profiles():
@@ -127,9 +133,12 @@ case "$1 $2" in
   # --profile live replaces COMPOSE_PROFILES: STUB_LIVE_SERVICES (when set) is that whole list
   "config --services") if [ "$live" = 1 ] && [ -n "${STUB_LIVE_SERVICES+x}" ]; then printf '%s\\n' $STUB_LIVE_SERVICES
     else printf '%s\\n' $STUB_SERVICES; fi;;
-  "config worker-live") printf 'name: t\\nservices:\\n  worker-live:\\n'
-    [ -n "${STUB_LIVE_NO_BUILD-}" ] || printf '    build:\\n      context: /repo\\n'
-    printf '    image: ingestify-to-ai-worker-live:latest\\nnetworks:\\n  default: {}\\n';;
+  "config --quiet") ;;
+  config\\ [a-z]*) shift; printf 'name: t\\nservices:\\n'   # STUB_NO_BUILD: services rendered without build:
+    for svc in "$@"; do printf '  %s:\\n' "$svc"
+      case " ${STUB_NO_BUILD-} " in *" $svc "*) ;; *) printf '    build:\\n      context: /repo\\n';; esac
+      printf '    image: ingestify-to-ai-%s:latest\\n' "$svc"; done
+    printf 'networks:\\n  default: {}\\n';;
   "ps --status") v="STUB_RUN_${5//-/_}"; [ -z "${!v-}" ] || printf '%s\\n' "${!v}";;
   "port api") echo 0.0.0.0:8000;;
 esac
@@ -283,7 +292,7 @@ def test_build_live_fails_loudly_when_compose_has_no_worker_live(dep):
 def test_build_live_fails_loudly_when_worker_live_has_nothing_to_build(dep):
     # e.g. a local override pins `worker-live: image:` and the live compose file is not in COMPOSE_FILE
     dep.publish("backend/api/x.py")
-    p, calls = dep.run(BUILD_LIVE="1", STUB_LIVE_NO_BUILD="1", **LIVE_OFF)
+    p, calls = dep.run(BUILD_LIVE="1", STUB_NO_BUILD="worker-live", **LIVE_OFF)
     assert p.returncode != 0 and "has no build: section" in p.stderr and "stage: inventory" in p.stderr
     assert not mutating(calls)
 
@@ -294,3 +303,27 @@ def test_stale_live_image_warning_survives_an_inactive_live_profile(dep):
     assert p.returncode == 0, p.stderr
     assert "worker-live inputs changed" in p.stderr and "BUILD_LIVE=1" in p.stderr
     assert not any("worker-live" in c for c in mutating(calls))
+
+
+def test_code_service_without_build_is_named_out_loud(dep):
+    # e.g. `build: !reset` in an override: `compose build` skips worker-audio and exits 0
+    dep.publish("backend/requirements.txt")
+    p, calls = dep.run(STUB_NO_BUILD="worker-audio")
+    assert p.returncode == 0, p.stderr
+    assert "no build: section for: worker-audio" in p.stderr and "NOT rebuilt" in p.stderr
+    assert "NOT rebuilt (no build: section in the compose config): worker-audio" in p.stderr  # repeated at the end
+    assert any(c.startswith("compose build ") and "worker-audio" in c for c in calls)
+
+
+def test_build_section_check_is_scoped_to_the_service_block(dep):
+    # api is rendered right before worker: an unclosed block would credit api with worker's build:
+    dep.publish("backend/requirements.txt")
+    p, _ = dep.run(STUB_NO_BUILD="worker-audio api")
+    assert "no build: section for: api worker-audio" in p.stderr
+
+
+def test_frontend_without_build_is_named_out_loud(dep):
+    dep.publish("frontend/x")
+    p, _ = dep.run(STUB_NO_BUILD="frontend")
+    assert p.returncode == 0, p.stderr
+    assert "frontend change is NOT deployed" in p.stderr and "NOT rebuilt (no build: section in the compose config): frontend" in p.stderr
