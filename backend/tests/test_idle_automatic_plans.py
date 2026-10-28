@@ -26,6 +26,7 @@ from tests._idle_world import (  # noqa: F401  (db is a fixture)
     RUNTIME,
     T0,
     _cooldown,
+    _keys,
     _local_engine,
     _local_opt_in,
     _operation,
@@ -165,20 +166,31 @@ def test_with_iam_on_a_profile_scoped_operator_runs_the_automatic_cooldown_end_t
     automatic cooldown (plan and enqueue) all pass with the same grant."""
     from shared.access import contracts as C, service as access
     from shared.engine_control import registry
+    from shared.access.models import ResourceScope
     from shared.engine_control.models import ControlResource
     from tests.test_execution_profiles import ADAPTER, draft, settings
 
     base = registry.descriptor(ADAPTER)
     d = dict(base, type="local", actions=["scale", "drain_stop", "cooldown", "start", "apply_profile"],
-             model_profiles=[dict(m, adapters=["local"]) for m in base["model_profiles"]])
-    monkeypatch.setitem(registry._registry, ("local", 1), (d, registry._registry[(ADAPTER, 1)][1]))
+             model_profiles=[dict(m, adapters=["local"]) for m in base["model_profiles"]],
+             provider_fields=base["provider_fields"] + [dict(name="host_id", type="text")])
+    class LocalLayout(registry._registry[(ADAPTER, 1)][1]):
+        def resource_keys(self, engine, feature, p):  # the local adapter's: a dedicated service row
+            return _keys(SimpleNamespace(profile=p), feature)
+
+    monkeypatch.setitem(registry._registry, ("local", 1), (d, LocalLayout))
     with iam_world() as db:
         db.get(Engine, "engine-a").adapter_type = "local"
+        for key in _keys(SimpleNamespace(profile={"provider_settings": {"host_id": "h"}}), "transcription"):
+            db.add(ControlResource(key=key, owner_engine_id="engine-a"))
+            db.add(ResourceScope(key=key, consumers=[dict(engine_id="engine-a", feature="transcription")],
+                                 qualified=True))
         db.commit()
-        p = draft(db, adapter_type="local", settings=dict(settings(), idle_cooldown=True))
+        p = draft(db, adapter_type="local",
+                  settings=dict(settings(provider_settings={"zone": "test-a", "host_id": "h"}), idle_cooldown=True))
         p = access.publish(db, p["id"], C.Publish(version=p["version"], revision_id=p["revisions"][0]["id"]),
                            "bootstrap")
-        scope = constraints(adapters=["local"], profile_ids=[p["id"]])
+        scope = constraints(adapters=["local"], profile_ids=[p["id"]], host_ids=["h"])
         grant(db, scope=scope)  # engine_operator: plan, cooldown, start, apply_profile...
         grant(db, role="runtime_configurator", scope=scope)  # ...and binding the profile
         access.bind(db, db.get(Engine, "engine-a"),
@@ -198,7 +210,7 @@ def test_with_iam_on_a_profile_scoped_operator_runs_the_automatic_cooldown_end_t
             trigger="idle_policy"), "operator")
         done = service.enqueue(db, auto["plan_id"], auto["plan_hash"], "idle:1", "operator", True)
         assert done["trigger"] == "idle_policy"
-        assert db.query(ControlResource).filter(ControlResource.operation_id.isnot(None)).count() == 1
+        assert db.query(ControlResource).filter(ControlResource.operation_id.isnot(None)).count() == 2  # both keys
 
 
 # --- the rule holds at every point from plan to effect (§4.6) --------------------------------

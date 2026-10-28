@@ -137,7 +137,8 @@ def test_common_inputs_are_read_once_per_request(world, monkeypatch):
     assert len(calls) == 1
 
 
-def engine_control(world, monkeypatch, *, gate_closed=False, modes=None, engine=True):
+def engine_control(world, monkeypatch, *, gate_closed=False, modes=None, engine=True,
+                   key='local:h1:service:worker-live'):
     from shared.engine_control.models import ControlResource
     from shared.models import Engine
     monkeypatch.setattr(live_routes.get_settings(), 'engine_control_enabled', True)
@@ -145,7 +146,7 @@ def engine_control(world, monkeypatch, *, gate_closed=False, modes=None, engine=
         if engine:
             db.add(Engine(id='local', slug='local', display_name='Local', adapter_type='local', config={'features': {}},
                           deployments={}, limit_usd=10, min_remaining_usd=0, version=0))
-            db.add(ControlResource(key='live-gpu', owner_engine_id='local', gate_closed=gate_closed,
+            db.add(ControlResource(key=key, owner_engine_id='local', gate_closed=gate_closed,
                                    applied={'feature_modes': modes or {}}))
         db.commit()
 
@@ -172,6 +173,11 @@ def test_engine_control_refusal_matches_the_post(world, monkeypatch, kwargs):
     assert (body['available'], body['code']) == (False, 'LIVE_NOT_READY')
     response = world.client.post('/transcribe/live/sessions', json={'project_id': 'p'})
     assert (response.status_code, response.json()['detail']['code']) == (503, 'LIVE_NOT_READY')
+
+
+def test_another_services_drain_leaves_live_available(world, monkeypatch):
+    engine_control(world, monkeypatch, gate_closed=True, key='local:h1:service:worker-audio')
+    assert get(world)['available'] is True  # no profile: live is admitted on worker-live only
 
 
 def test_availability_takes_no_row_locks(world, monkeypatch):

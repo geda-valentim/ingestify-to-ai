@@ -151,7 +151,7 @@ def _host(db, feature, gpu_uuid=None):
     hosts narrow to those seen within HOST_READY_SECONDS; still more than one is
     HOST_AMBIGUOUS, since a seeded profile must name a concrete host.
     """
-    from workers.engine_control.local import SERVICES
+    from shared.engine_control.local_services import SERVICES
 
     hosts = db.query(ControlHost).order_by(ControlHost.id).all()
     if not hosts:

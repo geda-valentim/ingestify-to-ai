@@ -20,6 +20,7 @@ from shared.engine_control.models import (
     ControlHost,
 )
 from shared.engine_control.contracts import RuntimeSettings, TERMINAL, comparable_settings
+from shared.engine_control.applied_state import applied_state
 from shared.engine_control import registry, catalog, idle_opt_in
 from shared.engines import budget
 from shared.engines.redact import redact
@@ -879,19 +880,7 @@ def publish_applied(db, op_id, generation, observed):
             p.applied_at = now()
             e.version += 1
             for r in db.query(ControlResource).filter_by(operation_id=op_id):
-                modes = dict((r.applied or {}).get("feature_modes") or {})
-                modes[plan.body["feature"]] = (
-                    "stopped"
-                    if plan.body["type"] == "drain_stop"
-                    else "standby" if plan.body["type"] == "cooldown" else "running"
-                )
-                r.applied = {
-                    "profile_id": p.id,
-                    "revision": p.revision,
-                    "type": plan.body["type"],
-                    "feature": p.feature,
-                    "feature_modes": modes,
-                }
+                r.applied = applied_state(r.applied, p, plan.body, op_id, op.actor_id)
     db.commit()
 
 

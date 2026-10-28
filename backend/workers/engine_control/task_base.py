@@ -6,7 +6,7 @@ from celery.exceptions import Reject
 from shared.engine_control import admission
 from shared.engine_control.service import ControlError
 from shared.config import get_settings
-from workers.engine_control import orphan_tickets
+from workers.engine_control import idle_signals, orphan_tickets
 
 
 class ManagedTask(Task):
@@ -50,6 +50,9 @@ class ManagedTask(Task):
             holder = orphan_tickets.task_holder(self.request.id, self.request.hostname)
             tickets = admission.acquire(feature, holder, engine_id)
         except Exception as exc:
+            if getattr(exc, "code", None) == "ENGINE_NOT_RUNNING":
+                # A standby service: tell the idle policy there is work (never raises).
+                idle_signals.mark_demand(feature, engine_id)
             # Reject/requeue before executing; never turn an authority failure into local fallback.
             raise Reject("Maintenance admission unavailable", requeue=True) from exc
         try:
