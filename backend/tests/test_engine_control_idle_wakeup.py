@@ -11,8 +11,8 @@ from datetime import timedelta
 import pytest
 
 from shared.engine_control import service
-from shared.engine_control.models import EngineOperation, OperationEvent, OperationOutbox, OperationPlan
-from tests.test_engine_control_idle_policy import ACTOR, NOW, Session, _applied, redis  # noqa: F401
+from shared.engine_control.models import ControlResource, EngineOperation, OperationEvent, OperationOutbox, OperationPlan
+from tests.test_engine_control_idle_policy import AUDIO, ACTOR, NOW, Session, _applied, redis  # noqa: F401
 from workers.engine_control import idle_notes, idle_policy
 
 
@@ -30,6 +30,9 @@ class TestWakeupRetry:
                                  hash="h", expires_at=NOW))
             created.opt_in = _operation(db, "opt-in", state="succeeded", finished_at=NOW - timedelta(hours=2),
                                         plan_id="opt-in-plan").id
+            row = db.get(ControlResource, AUDIO)  # the reference its publish left, kept by the cooldown
+            row.applied = dict(row.applied, opt_in_operation_id=created.opt_in, opt_in_actor=ACTOR)
+            db.commit()
 
         def create_plan(db, engine, request, actor):
             return {"plan_id": "plan", "plan_hash": "hash"}
@@ -112,6 +115,13 @@ class TestWakeupRetry:
         assert self._wake(Session, NOW + timedelta(days=1))
         assert standby == [f"{self._base(Session)}:2"]
 
+    def test_after_giving_up_later_ticks_skip_the_state_at_once(self, Session, standby, redis):
+        for n in range(1, 6):
+            self._attempt(Session, n, "failed")
+
+        assert self._wake(Session, NOW + timedelta(days=1)) is None
+        assert redis.keys("engine_idle:refused:*"), "no note lookup and row lock every 15 s"
+
     def test_after_five_attempts_it_gives_up_once_and_says_why(self, Session, standby):
         for n in range(1, 6):
             last = self._attempt(Session, n, "failed")
@@ -130,7 +140,7 @@ class TestWakeupRetry:
 
     @pytest.mark.parametrize("code", ["ACCESS_DENIED", "ACCESS_REVOKED", "IDLE_POLICY_NOT_OPTED_IN"])
     def test_a_lost_permission_is_not_retried(self, Session, standby, code):
-        """Refused by the runner or reported by the host agent (engine_host_failures.failure_code)."""
+        """Refused by the server's own authorization: at the plan, at claim or before the effect."""
         self._attempt(Session, 1, "failed", code=code)
 
         assert self._wake(Session, NOW + timedelta(days=1)) is None
@@ -138,6 +148,18 @@ class TestWakeupRetry:
         with Session() as db:
             noted = db.query(OperationEvent).filter_by(operation_id=standby.opt_in, type=idle_notes.REFUSED_EVENT)
             assert noted.count() == (0 if code == "IDLE_POLICY_NOT_OPTED_IN" else 1), "a moved opt-in is no loss"
+
+    def test_the_same_code_from_the_host_agent_is_an_ordinary_failure(self, Session, standby, redis):
+        """The host's call was refused, not the actor: retried with backoff, no note, no refusal key."""
+        with Session() as db:
+            _operation(db, f"{self._base(Session)}:1", state="failed", finished_at=NOW,
+                       error={"code": "ACCESS_REVOKED", "source": "host"})
+
+        assert self._wake(Session, NOW + timedelta(minutes=1))
+        assert standby == [f"{self._base(Session)}:2"]
+        with Session() as db:
+            assert db.query(OperationEvent).filter_by(type=idle_notes.REFUSED_EVENT).count() == 0
+        assert not redis.keys("engine_idle:refused:*")
 
     def test_a_failure_from_recovery_waits_its_backoff_like_any_other(self, Session, standby):
         """A recovery that found the effect missing ends failed; nothing retries it at once."""

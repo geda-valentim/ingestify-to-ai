@@ -41,6 +41,17 @@ class Cancelled(Exception):
     pass
 
 
+class HostFailure(RuntimeError):
+    """The host agent's report: its code answers the host's own call, never the operation's
+    actor's authorization, so the error records where it came from."""
+
+
+def failure(exc):
+    """The operation's error for `exc`."""
+    error = {"code": str(exc) or "CANCELLED", "message": str(exc)}
+    return dict(error, source="host") if isinstance(exc, HostFailure) else error
+
+
 class Context:
     def __init__(self, op_id, generation, session_factory=SessionLocal):
         self.op_id, self.generation, self.Session = op_id, generation, session_factory
@@ -133,7 +144,7 @@ class Context:
                 response = (op.handles or {}).get("host_result")
                 if response:
                     if not response.get("ok"):
-                        raise RuntimeError(response.get("code", "HOST_APPLY_FAILED"))
+                        raise HostFailure(response.get("code", "HOST_APPLY_FAILED"))
                     return response["observed"]
             time.sleep(1)
 
@@ -277,7 +288,7 @@ def run(op_id, session_factory=SessionLocal):
                     op_id,
                     generation,
                     state,
-                    error={"code": str(exc) or "CANCELLED", "message": str(exc)},
+                    error=failure(exc),
                     safe=not effect,
                 )
         except service.ControlError:

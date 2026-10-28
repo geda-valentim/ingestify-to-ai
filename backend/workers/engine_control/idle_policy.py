@@ -27,6 +27,7 @@ live sessions are admitted by HTTP, not by a queue.
 """
 
 import logging
+import time
 from datetime import timedelta
 
 from sqlalchemy import func, or_
@@ -43,7 +44,7 @@ from shared.engine_control.models import (
     RuntimeProfile,
 )
 from shared.models import Engine, FeatureRoute, JobDispatch
-from workers.engine_control import idle_notes
+from workers.engine_control import idle_notes, idle_signals
 from workers.engine_control.local import SERVICES, LocalControlAdapter
 
 logger = logging.getLogger(__name__)
@@ -60,8 +61,9 @@ WAKEUP_MAX_ATTEMPTS = 5
 # (see _cancel_asked).
 RETRYABLE = ("failed", "cancelled")
 CANCEL_ASKED = "cancel.requested"
-# A lost permission, whether refused here or reported by the host agent, or an opt-in
-# no longer in force (claimed at claim or before the effect): retrying cannot succeed.
+# A lost permission refused by the server's own authorization, or an opt-in no longer in
+# force (at claim or before the effect): retrying cannot succeed. A host agent's report
+# with the same code is an ordinary failure (see _server_code).
 NOT_RETRIED_CODES = ("ACCESS_DENIED", "ACCESS_REVOKED", "IDLE_POLICY_NOT_OPTED_IN")
 TRIGGER = {"cooldown": "idle_policy", "start": "wakeup"}
 
@@ -77,9 +79,10 @@ def queue_depth(queue):
     try:
         from shared.redis_client import get_redis_client
 
-        client = get_redis_client().client
-        names = [queue] + [f"{queue}{KOMBU_PRIORITY_SEP}{step}" for step in range(1, 10)]
-        return sum(int(client.llen(name) or 0) for name in names)
+        pipe = get_redis_client().client.pipeline(transaction=False)
+        for name in [queue] + [f"{queue}{KOMBU_PRIORITY_SEP}{step}" for step in range(1, 10)]:
+            pipe.llen(name)
+        return sum(int(n or 0) for n in pipe.execute())  # one round trip
     except Exception:  # noqa: BLE001 - unknown, never "empty"
         return None
 
@@ -135,20 +138,28 @@ def _placed(db, engine_id, feature):
     )
 
 
-def _routed_backlog(db, engine_id, feature, due_at=None, states=("waiting",)):
+def _backlog(db, engine_id, feature, due_at=None, states=("waiting",)):
     """Items waiting for a route that can place them on this engine; with `due_at`, only
     those placeable by then (not in a dispatcher backoff)."""
     route = db.get(FeatureRoute, feature)
     if not route or route.state != "active":
-        return 0
+        return None
     if not any(engine_id in (step.get("engine_ids") or []) for step in route.steps or []):
-        return 0
-    return (
-        db.query(func.count(JobDispatch.id))
-        .filter(JobDispatch.feature == feature, JobDispatch.state.in_(states),
-                *([or_(JobDispatch.not_before.is_(None), JobDispatch.not_before <= due_at)] if due_at else []))
-        .scalar()
-    )
+        return None
+    return db.query(JobDispatch.id).filter(
+        JobDispatch.feature == feature, JobDispatch.state.in_(states),
+        *([or_(JobDispatch.not_before.is_(None), JobDispatch.not_before <= due_at)] if due_at else []))
+
+
+def _has_backlog(db, engine_id, feature, due_at=None, states=("waiting",)):
+    found = _backlog(db, engine_id, feature, due_at, states)
+    return found is not None and found.first() is not None
+
+
+def _routed_backlog(db, engine_id, feature, due_at=None):
+    """How many, for the give-up note."""
+    found = _backlog(db, engine_id, feature, due_at)
+    return found.with_entities(func.count(JobDispatch.id)).scalar() if found is not None else 0
 
 
 def _standby_is_ours(db, row, profile, actor):
@@ -167,8 +178,9 @@ def _standby_is_ours(db, row, profile, actor):
     return op is not None and op.actor_id == actor
 
 
-def decide(db, engine, feature, profile, depth, at, actor=None):
-    """'cooldown', 'start' or None for one feature of one local engine."""
+def decide(db, engine, feature, profile, depth, at, actor=None, demand=False):
+    """'cooldown', 'start' or None for one feature of one local engine. `demand`: a task of
+    the feature was just refused ENGINE_NOT_RUNNING (legacy media on the default queue)."""
     settings = profile.profile
     if not settings.get("idle_cooldown"):
         return None
@@ -185,14 +197,14 @@ def decide(db, engine, feature, profile, depth, at, actor=None):
         row = next((r for r in rows if r.key == service_key), None)
         if not _standby_is_ours(db, row, profile, actor):
             return None
-        if (depth or 0) > 0 or _routed_backlog(db, engine.id, feature, at) > 0:
+        if (depth or 0) > 0 or demand or _has_backlog(db, engine.id, feature, at):
             return "start"
         return None
     if mode != "running" or settings.get("min_ready_replicas"):
         return None
     if depth is None or depth > 0 or _open_tickets(db, [service_key]) or _placed(db, engine.id, feature):
         return None
-    if _routed_backlog(db, engine.id, feature, states=("probing", "waiting")) > 0:
+    if _has_backlog(db, engine.id, feature, states=("probing", "waiting")):
         return None  # arriving or waiting for this engine, even in a backoff: not idle (else a loop)
     quiet_since = at - timedelta(seconds=int(settings.get("idle_timeout_seconds") or 60))
     last = _last_release(db, [service_key])
@@ -227,10 +239,18 @@ def _cancel_asked(db, attempts):
     ).first() is not None
 
 
+def _server_code(op):
+    """The operation's error code when the server's own authorization gave it (plan, enqueue,
+    claim, before the effect); None for the host agent's report, which only says the host's
+    call was refused: an ordinary failure, never the actor's lost permission."""
+    error = op.error or {}
+    return None if error.get("source") == "host" else error.get("code")
+
+
 def _refused_later(db, engine_id, feature, profile, actor, action, op):
-    """A permission lost after the enqueue (at claim, before the effect, on the host) is
-    noted like one refused at the plan, and suppressed the same way."""
-    code = (op.error or {}).get("code")
+    """A permission lost after the enqueue (at claim, before the effect) is noted like one
+    refused at the plan, and suppressed the same way."""
+    code = _server_code(op)
     if op.state != "failed" or code not in NOT_RETRIED_CODES or code == "IDLE_POLICY_NOT_OPTED_IN":
         return
     idle_notes.remember_refusal(idle_notes.refusal_key(engine_id, feature, profile, actor))
@@ -245,13 +265,15 @@ def _next_wakeup(db, engine_id, feature, profile, actor, base, at, waiting):
     number, last = attempts[-1]
     if last.state not in RETRYABLE:
         return None, last.id  # running, succeeded or needs_attention: nothing to add
-    if ((last.error or {}).get("code")) in NOT_RETRIED_CODES:
+    if _server_code(last) in NOT_RETRIED_CODES:
         _refused_later(db, engine_id, feature, profile, actor, "start", last)
         return None, None
     if _cancel_asked(db, attempts):
         return None, None
     if number >= WAKEUP_MAX_ATTEMPTS:
         idle_notes.give_up(db, engine_id, feature, profile, actor, WAKEUP_MAX_ATTEMPTS, waiting)
+        # Only an admin or a new applied state resumes it: later ticks skip this state at once.
+        idle_notes.remember_refusal(idle_notes.refusal_key(engine_id, feature, profile, actor))
         return None, None
     ended = last.finished_at or last.created_at
     if at < ended + timedelta(minutes=WAKEUP_BACKOFF_MINUTES[number - 1]):
@@ -300,30 +322,62 @@ def _enqueue(session_factory, engine_id, feature, action, actor, at=None, waitin
             raise
 
 
-def tick(session_factory=SessionLocal, depth_of=queue_depth, opt_in_of=default_opt_in, now=None):
-    """One pass over the local engines. Returns [(engine_id, feature, action, operation_id)]."""
-    at = now or service.now()
-    queues = feature_queues()
+# A tick gives up (until the next one) once it has run this long: a slow Redis or a
+# locked engine never ties up the control worker's threads, which humans' operations use.
+TICK_BUDGET_SECONDS = 10
+_warned = {}  # (engine, feature) -> applied state already warned about; logs only
+
+
+def _warn_no_opt_in(engine_id, feature, profile, action):
+    state = idle_notes.state_tag(profile)
+    if _warned.get((engine_id, feature)) != state:
+        _warned[(engine_id, feature)] = state
+        logger.warning("engine idle policy: %s/%s has no opt-in for the applied revision; %s skipped "
+                       "(apply the profile again to opt in)", engine_id, feature, action)
+
+
+def tick(session_factory=SessionLocal, depth_of=queue_depth, opt_in_of=default_opt_in, now=None,
+         demand_of=idle_signals.demand, clock=time.monotonic):
+    """One pass over the local engines, one at a time and within TICK_BUDGET_SECONDS.
+    Returns [(engine_id, feature, action, operation_id)]."""
+    token = idle_signals.acquire_tick()
+    if token is None:
+        return []
+    try:
+        return _tick(session_factory, depth_of, opt_in_of, now or service.now(), demand_of,
+                     clock, clock() + TICK_BUDGET_SECONDS)
+    finally:
+        idle_signals.release_tick(token)
+
+
+def _tick(session_factory, depth_of, opt_in_of, at, demand_of, clock, deadline):
+    # Redis first, with no database session open while it answers.
+    signals = {feature: (depth_of(queue), demand_of(feature)) for feature, queue in feature_queues().items()}
     candidates = []
     with session_factory() as db:
         for engine in db.query(Engine).filter(Engine.adapter_type == ADAPTER).all():
-            for feature, queue in queues.items():
+            if clock() > deadline:
+                logger.warning("engine idle policy: tick over its %ss budget; the next one goes on",
+                               TICK_BUDGET_SECONDS)
+                return []
+            for feature, (depth, marked) in signals.items():
                 profile = applied_profile(db, engine.id, feature)
                 if profile is None or not profile.profile.get("idle_cooldown"):
                     continue
-                depth = depth_of(queue)
                 opt = opt_in_of(db, engine.id, feature)
-                action = decide(db, engine, feature, profile, depth, at, opt.actor if opt else None)
+                action = decide(db, engine, feature, profile, depth, at, opt.actor if opt else None,
+                                idle_signals.demanded(engine, marked))
                 if not action:
                     continue
-                waiting = (depth or 0) + _routed_backlog(db, engine.id, feature, at)
                 if not opt or opt.revision != profile.revision:
-                    logger.warning("engine idle policy: %s/%s has no opt-in for the applied revision; %s skipped",
-                                   engine.id, feature, action)
+                    _warn_no_opt_in(engine.id, feature, profile, action)
                     continue
+                waiting = (depth or 0) + _routed_backlog(db, engine.id, feature, at)
                 candidates.append((engine.id, feature, action, opt.actor, opt.revision, profile.applied_at, waiting))
     done = []
     for engine_id, feature, action, actor, revision, applied_at, waiting in candidates:
+        if clock() > deadline:
+            break
         try:
             operation_id = _enqueue(session_factory, engine_id, feature, action, actor, at, waiting, revision,
                                     applied_at)

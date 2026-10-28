@@ -9,7 +9,8 @@ once per applied state, deduplicated on that operation under its row lock, not b
 import logging
 
 from shared.engine_control import service
-from shared.engine_control.models import EngineOperation, OperationEvent, OperationPlan
+from shared.engine_control import idle_opt_in
+from shared.engine_control.models import EngineOperation, OperationEvent
 
 logger = logging.getLogger(__name__)
 
@@ -24,12 +25,12 @@ REFUSED_EVENT = "idle_policy.refused"
 REFUSAL_TTL_SECONDS = 24 * 3600
 
 
-def applied_state(profile):
+def state_tag(profile):
     return f"{profile.revision}:{profile.applied_at:%Y%m%dT%H%M%S%f}"
 
 
 def refusal_key(engine_id, feature, profile, actor):
-    return f"engine_idle:refused:{engine_id}:{feature}:{applied_state(profile)}:{actor}"
+    return f"engine_idle:refused:{engine_id}:{feature}:{state_tag(profile)}:{actor}"
 
 
 def _redis():
@@ -53,28 +54,22 @@ def remember_refusal(key):
         return False
 
 
-def _opt_in_operation(db, engine_id, profile, actor):
-    """The latest successful apply_profile of this revision by the opt-in's actor (as opt_in() finds it)."""
-    return (
-        db.query(EngineOperation.id)
-        .join(OperationPlan, OperationPlan.id == EngineOperation.plan_id)
-        .filter(EngineOperation.engine_id == engine_id, EngineOperation.actor_id == actor,
-                EngineOperation.state == "succeeded", OperationPlan.profile_id == profile.id,
-                OperationPlan.body["type"].as_string() == "apply_profile")
-        .order_by(EngineOperation.finished_at.desc())
-        .first()
-    )
+def _opt_in_operation(db, engine_id, feature, profile, actor):
+    """The apply_profile that opted this revision in, by this actor: the applied state's
+    reference, read by primary key (never a search of the operation history)."""
+    found = idle_opt_in.opt_in_reference(db, engine_id, feature)
+    return found[0] if found and found[1] == (actor, profile.revision) else None
 
 
 def _note(db, engine_id, feature, profile, actor, event, payload):
     """Write `event` once per applied state on the opt-in operation; False if there is none."""
-    found = _opt_in_operation(db, engine_id, profile, actor)
+    found = _opt_in_operation(db, engine_id, feature, profile, actor)
     if found is None:
         logger.warning("engine idle policy: %s on %s/%s; no opt-in operation to note it on",
                        event, engine_id, feature)
         return False
-    op = db.query(EngineOperation).filter_by(id=found.id).with_for_update().one()
-    state = applied_state(profile)
+    op = db.query(EngineOperation).filter_by(id=found).with_for_update().one()
+    state = state_tag(profile)
     noted = db.query(OperationEvent.payload).filter_by(operation_id=op.id, type=event).all()
     if any((row.payload or {}).get("state") == state for row in noted):
         db.rollback()

@@ -26,7 +26,7 @@ from shared.engine_control.models import (
     RuntimeProfile,
 )
 from shared.models import Engine, FeatureRoute, JobDispatch
-from workers.engine_control import idle_notes, idle_policy
+from workers.engine_control import idle_notes, idle_policy, idle_signals
 
 HOST = "h1"
 AUDIO = f"local:{HOST}:service:worker-audio"
@@ -46,6 +46,7 @@ def redis(monkeypatch):
 
     client = fakeredis.FakeRedis(decode_responses=True)
     monkeypatch.setattr(idle_notes, "_redis", lambda: client)
+    monkeypatch.setattr(idle_signals, "_redis", lambda: client)
     return client
 
 
@@ -85,7 +86,8 @@ def _applied(Session, engine_id="local-1", feature="transcription", applied_at=N
         p = RuntimeProfile(engine_id=engine_id, feature=feature, revision=1, profile=_profile(**profile),
                            applied_at=applied_at)
         db.add(p)
-        applied = {"feature_modes": {feature: mode}}
+        db.flush()
+        applied = {"profile_id": p.id, "feature_modes": {feature: mode}}
         if last:
             kind, trigger, actor, revision = last
             op = EngineOperation(engine_id=engine_id, actor_id=actor, plan_id="plan", idempotency_key=f"last-{kind}",

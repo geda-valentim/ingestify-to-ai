@@ -12,7 +12,7 @@ import pytest
 
 from shared.engine_control import admission, registry, service
 from shared.engine_control.contracts import PlanRequest
-from shared.engine_control.models import ControlResource, OperationPlan
+from shared.engine_control.models import ControlResource, EngineOperation, OperationPlan
 from shared.models import Engine, EngineUsage
 from tests.test_engine_control_orphan_tickets import Session, _open, _ticket  # noqa: F401  (fixture)
 from workers.engine_control import orphan_tickets, runner
@@ -157,3 +157,25 @@ def test_without_a_dedicated_key_the_automatic_plan_drains_everything():
     plan = {"trigger": "idle_policy", "feature": "transcription", "resources": [GENERIC, GPU]}
 
     assert runner.drain_scope(plan) == ([GENERIC, GPU], None)
+
+
+def test_a_host_agent_failure_says_it_came_from_the_host(local):
+    """Its ACCESS_* answers the host's own call: the idle policy must not read it as the actor's."""
+    with local() as db:
+        e = db.get(Engine, "e")
+        plan = service.create_plan(db, e, PlanRequest(type="scale", engine_version=e.version, profile_revision=1,
+                                                      max_usd="0"), "admin")
+        op = service.enqueue(db, plan["plan_id"], plan["plan_hash"], "k", "admin", True)
+        generation = service.claim(db, op["operation_id"], "test")
+        row = db.get(EngineOperation, op["operation_id"])
+        row.handles = dict(row.handles or {}, host_result={"ok": False, "code": "ACCESS_REVOKED"})
+        db.commit()
+    ctx = runner.Context(op["operation_id"], generation, local)
+    try:
+        with pytest.raises(runner.HostFailure) as raised:
+            ctx.assign_host("h")
+    finally:
+        ctx.close()
+
+    assert runner.failure(raised.value) == {"code": "ACCESS_REVOKED", "message": "ACCESS_REVOKED", "source": "host"}
+    assert "source" not in runner.failure(RuntimeError("DRAIN_TIMEOUT"))

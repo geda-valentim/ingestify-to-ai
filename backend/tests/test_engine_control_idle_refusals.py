@@ -150,6 +150,15 @@ class TestRealOperation:
             assert db.query(OperationEvent).filter_by(operation_id="opt-in-op",
                                                       type=idle_notes.REFUSED_EVENT).count() == 1
 
+    def test_a_refused_actor_that_is_not_the_opt_in_s_is_never_noted_on_it(self, local, monkeypatch):
+        monkeypatch.setattr(service, "create_plan",
+                            lambda *a, **k: (_ for _ in ()).throw(service.ControlError("ACCESS_DENIED", 403)))
+        with pytest.raises(service.ControlError):
+            idle_policy._enqueue(local, "local-1", "transcription", "cooldown", "someone-else")
+
+        with local() as db:
+            assert db.query(OperationEvent).filter_by(type=idle_notes.REFUSED_EVENT).count() == 0
+
     def test_a_new_applied_state_is_asked_again(self, local, monkeypatch):
         asked = []
 
