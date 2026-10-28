@@ -24,6 +24,7 @@ from shared.engine_control import registry, catalog, force_cancel
 from shared.engines import budget
 from shared.engines.redact import redact
 from shared import error_catalog
+from shared.engine_control.operation_events import events  # noqa: F401  (re-exported)
 
 
 class ControlError(Exception):
@@ -820,36 +821,6 @@ def request_cancel(db, op_id, actor=None):
         append_event(db, op, "cancel.requested", {"message": "Cancelamento solicitado"})
         db.commit()
     return operation_view(op)
-
-
-def events(db, op_id, after=0, limit=100):
-    op = db.get(EngineOperation, op_id)
-    if not op:
-        raise ControlError("OPERATION_NOT_FOUND", 404)
-    rows = (
-        db.query(OperationEvent)
-        .filter(OperationEvent.operation_id == op_id, OperationEvent.seq > after)
-        .order_by(OperationEvent.seq)
-        .limit(limit + 1)
-        .all()
-    )
-    more = len(rows) > limit
-    rows = rows[:limit]
-    return dict(
-        events=[
-            dict(
-                seq=x.seq,
-                type=x.type,
-                stage=x.stage,
-                payload=x.payload,
-                at=x.created_at,
-            )
-            for x in rows
-        ],
-        next=rows[-1].seq if rows else after,
-        has_more=more,
-        state=op.state,
-    )
 
 
 def publish_applied(db, op_id, generation, observed):

@@ -5,7 +5,8 @@ from decimal import Decimal
 from sqlalchemy.exc import SQLAlchemyError
 from shared.config import get_settings
 from shared.admin import is_effective_admin
-from shared.models import User, Engine, AdminAudit
+from shared.models import User, Engine
+from shared.access.audit import audit  # noqa: F401  (re-exported)
 from shared.engine_control.contracts import ACTIONS
 from shared.engine_control.service import ControlError, digest
 from shared.access.models import (
@@ -55,19 +56,6 @@ def epoch(db, lock=False):
     if row is None:
         raise ControlError("ACCESS_SCHEMA_NOT_READY", 503)
     return row
-
-
-def audit(db, actor, action, target, after=None):
-    db.add(
-        AdminAudit(
-            actor_user_id=actor,
-            auth_method="jwt",
-            action=action,
-            target_type="access",
-            target_id=str(target),
-            after=after,
-        )
-    )
 
 
 def active_grant(db, grant, seen=None, lock=False):

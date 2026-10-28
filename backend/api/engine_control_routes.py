@@ -25,6 +25,8 @@ from api.engine_admin_routes import require_admin_session, _engine_or_404
 from api.admin_routes import require_admin
 from api.access_deps import access_session, scoped_engine, scoped_features
 from api.iam_deps import engine_access
+from api.engine_operation_views import can_read_operation, operation_view  # noqa: F401  (moved)
+import api.force_cancel_probe  # noqa: F401  (registers the holder probe of force_cancel plans)
 from shared.access import policy
 
 # 0009 routes: engine_access only declares them in the IAM inventory (0014 CA1).
@@ -645,24 +647,3 @@ def recover(
 ):
     enabled()
     return invoke(service.request_recovery, db, operation_id, user.id)
-
-
-def can_read_operation(db, op, actor):
-    try:
-        service.authorize_operation(db, op.id, actor)
-        return True
-    except service.ControlError:
-        return False
-
-
-def operation_view(db, op, actor):
-    out = service.operation_view(op)
-    for flag, permission in [
-        ("can_cancel", "engine_operations.cancel"),
-        ("can_recover", "engine_operations.recover"),
-    ]:
-        try:
-            service.authorize_operation(db, op.id, actor, permission)
-        except service.ControlError:
-            out[flag] = False
-    return out
