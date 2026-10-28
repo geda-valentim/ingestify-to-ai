@@ -10,6 +10,7 @@ settled by the sweeper, and one with a live heartbeat is real work.
 
 from datetime import timedelta
 
+from sqlalchemy import update
 from sqlalchemy.exc import IntegrityError
 
 from shared.engine_control.contracts import FORCE_CANCEL
@@ -106,11 +107,21 @@ def _usages(db, engine_id, holder, seen, now):
     return rows
 
 
+def _require_schema(db):
+    """Until the additive 0007 migration adds release_reason, only force_cancel is unavailable."""
+    from shared.engine_control.migration import has_added_columns
+    from shared.engine_control.service import ControlError
+
+    if not has_added_columns(db.get_bind(), "engine_control_admissions"):
+        raise ControlError("ENGINE_CONTROL_MIGRATION_REQUIRED", 503)
+
+
 def create_plan(db, engine, req, actor):
     from shared.access import policy
     from shared.engine_control import admission
     from shared.engine_control.service import ControlError, clean, digest, locked_engine, now
 
+    _require_schema(db)
     # Ask the Celery nodes (up to 2 s) before taking any lock, and only for someone who may
     # force-cancel at all; a ticket seen only after the locks gets "unknown".
     if policy.enabled() and not policy.allowed(db, actor, PERMISSION, engine=engine, feature=req.feature):
@@ -165,6 +176,7 @@ def enqueue(db, plan, plan_hash, key, actor, confirm):
     )
     from shared.models import AdminAudit, Engine
 
+    _require_schema(db)
     if policy.enabled():
         policy.epoch(db, True)
     if not key or len(key) > 128:
@@ -204,9 +216,9 @@ def enqueue(db, plan, plan_hash, key, actor, confirm):
         .with_for_update()
     ]
     if open_now:
-        db.query(ControlAdmission).filter(
-            ControlAdmission.id.in_(open_now), ControlAdmission.released_at.is_(None)
-        ).update({"released_at": at, "release_reason": f"{FORCE_CANCEL}:{op.id}"}, synchronize_session=False)
+        t = ControlAdmission.__table__
+        db.execute(update(t).where(t.c.id.in_(open_now), t.c.released_at.is_(None))
+                   .values(released_at=at, release_reason=f"{FORCE_CANCEL}:{op.id}"))
     released = [i for i in frozen if i in set(open_now)]
     already = [i for i in frozen if i not in set(open_now)]
     op.result = {"released": released, "already_released": already, "ledger_effect": "none"}

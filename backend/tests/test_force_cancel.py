@@ -7,6 +7,7 @@ transaction, with the reason. No ledger effect, no job change, no other operatio
 from datetime import date, datetime, timedelta
 
 import pytest
+from sqlalchemy import select
 
 from shared.engine_control import force_cancel, service
 from shared.engine_control.contracts import ACTIONS, PlanRequest
@@ -43,6 +44,11 @@ def _usage(db, holder, heartbeat_seconds_ago, job_id="job-1"):
     db.add(EngineUsage(engine_id="e", feature="transcription", period_start=date.today(), status="running",
                        holder=holder, job_id=job_id, subject_type="job", subject_id=job_id,
                        heartbeat_at=datetime.utcnow() - timedelta(seconds=heartbeat_seconds_ago)))
+
+
+def _reason(db, ticket_id):
+    t = ControlAdmission.__table__  # not mapped on the model (deploy-order independence)
+    return db.execute(select(t.c.release_reason).where(t.c.id == ticket_id)).scalar()
 
 
 def _plan(db):
@@ -124,8 +130,8 @@ def test_execution_releases_only_the_frozen_tickets_with_the_reason_and_touches_
         op = service.enqueue(db, plan["plan_id"], plan["plan_hash"], "k", "admin", confirm_force_cancel="test-vm:2")
         assert op["state"] == "succeeded" and not op["can_cancel"]
         assert op["result"] == {"released": ["t1"], "already_released": ["t2"], "ledger_effect": "none"}
-        assert db.get(ControlAdmission, "t1").release_reason == "force_cancel:" + op["operation_id"]
-        assert db.get(ControlAdmission, "t2").release_reason is None  # released normally, untouched
+        assert _reason(db, "t1") == "force_cancel:" + op["operation_id"]
+        assert _reason(db, "t2") is None  # released normally, untouched
         assert db.get(ControlAdmission, "t3").released_at is None  # not in the plan
         usage = db.query(EngineUsage).one()
         assert (usage.status, usage.holder) == ("running", "worker-1:4242")
@@ -236,24 +242,45 @@ def test_a_delegation_envelope_cannot_carry_force_cancel(iam_world):  # noqa: F8
         assert "DELEGATION_INVALID" in str(getattr(e.value, "code", e.value))
 
 
-def test_boot_refuses_engine_control_without_the_release_reason_column(monkeypatch):
+@pytest.fixture
+def old_schema():
+    """A database the additive migration has not reached yet: admissions without release_reason."""
     from sqlalchemy import create_engine, text
+    from sqlalchemy.orm import sessionmaker
     from sqlalchemy.pool import StaticPool
 
-    from shared import database
     from shared.database import Base
 
     sql = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
     Base.metadata.create_all(sql)
-    with sql.begin() as conn:  # a database migrated before this release
+    with sql.begin() as conn:
         conn.execute(text("DROP TABLE engine_control_admissions"))
         conn.execute(text("CREATE TABLE engine_control_admissions (id VARCHAR(36) PRIMARY KEY, "
                           "resource_key VARCHAR(200) NOT NULL, holder VARCHAR(128) NOT NULL, "
                           "created_at DATETIME NOT NULL, released_at DATETIME)"))
-    monkeypatch.setattr(database, "engine", sql)
-    monkeypatch.setattr(database.settings, "engine_control_enabled", True)  # what init_db reads
-    with pytest.raises(RuntimeError, match="rerunning the explicit 0007 migration"):
-        database.init_db()
+    yield sessionmaker(bind=sql)
+    sql.dispose()
+
+
+def test_admission_and_the_drain_keep_working_before_the_migration(old_schema):
+    from shared.engine_control import admission
+    from workers.engine_control.orphan_tickets import open_tickets
+
+    with old_schema() as db:  # acquire's insert, the drain's count, the G1 read
+        db.add(ControlAdmission(id="t1", resource_key=KEY, holder="task:x|1|n@h"))
+        db.commit()
+        assert db.query(ControlAdmission).filter(ControlAdmission.released_at.is_(None)).count() == 1
+        assert [row.id for row in open_tickets(db, [KEY])] == ["t1"]
+    admission.release(["t1"], session_factory=old_schema)
+    with old_schema() as db:
+        assert db.get(ControlAdmission, "t1").released_at is not None
+
+
+def test_force_cancel_is_unavailable_until_the_migration_runs(old_schema):
+    with old_schema() as db:
+        with pytest.raises(service.ControlError) as e:
+            force_cancel.create_plan(db, None, PlanRequest(type="force_cancel", engine_version=0), "admin")
+        assert (e.value.code, e.value.status) == ("ENGINE_CONTROL_MIGRATION_REQUIRED", 503)
 
 
 @pytest.mark.parametrize("holder", ["task:abc|42|celery@w-1", "task:abc", "task:abc|x|n@h", "task:|1|n@h",

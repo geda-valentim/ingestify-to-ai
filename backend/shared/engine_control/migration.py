@@ -34,9 +34,14 @@ def _bounded_metadata_lock(connection, seconds=30):
         connection.execute(text("SET SESSION lock_wait_timeout = @@GLOBAL.lock_wait_timeout"))
 
 
-# Columns added to tables that already existed: the API refuses to start without them (run this
-# migration before replacing the worker images too: their ORM queries select every column).
+# Columns added to tables that already existed. They are not mapped on the ORM models (see
+# ControlAdmission.release_reason), so the code runs before this migration does; only the feature
+# that needs a column answers 503 until then.
 ADDED_COLUMNS = {"engine_control_admissions": ("release_reason",)}
+
+
+def has_added_columns(bind, table):
+    return set(ADDED_COLUMNS[table]) <= {c["name"] for c in inspect(bind).get_columns(table)}
 
 
 def _upgrade(connection):

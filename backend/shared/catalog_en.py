@@ -69,6 +69,7 @@ EN = {
         "Execution profiles and access scopes are turned off on this installation "
         "(IAM_MODE is not enforce)."
     ),
+    "ENGINE_CONTROL_MIGRATION_REQUIRED": "This needs the latest engine-control migration, which was not applied yet. Run the backend migrations and try again.",
     "ACCESS_SCHEMA_NOT_READY": "The access tables have not been migrated yet. Run the backend migrations and try again.",
     "FEATURE_NOT_SUPPORTED": "This adapter does not offer this feature.",
     "FEATURE_UNSUPPORTED": "This adapter does not offer this feature.",

@@ -205,6 +205,11 @@ _PT = {
         "(IAM_MODE diferente de enforce).",
         ["enable_control"],
     ),
+    "ENGINE_CONTROL_MIGRATION_REQUIRED": (
+        "Esta função precisa da migração mais recente do controle de engines, que ainda não foi "
+        "aplicada. Rode as migrações do backend e tente de novo.",
+        ["retry"],
+    ),
     "ACCESS_SCHEMA_NOT_READY": (
         "As tabelas de acesso ainda não foram migradas. Rode as migrações do backend e tente de novo.",
         ["enable_control", "retry"],
