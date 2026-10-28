@@ -25,16 +25,17 @@ def resource_rows(db, engine, feature, lock=True):
     if not p:
         # Without a profile, only the feature's own services (any host): a document conversion is
         # not refused because transcription's dedicated service is draining (spec 0007 §4.6).
-        if engine.adapter_type == "local":
-            services = admission_services(feature)
-            like = or_(*(ControlResource.key.like(f"local:%:service:{s}") for s in sorted(services)))
-            return [r for r in _lockable(  # the LIKE narrows in SQL; the exact match is below
-                db.query(ControlResource)
-                .filter(ControlResource.owner_engine_id == engine.id, like)
-                .order_by(ControlResource.key),
-                lock,
-            ).all() if is_service_key(r.key, services)]
-        return []
+        if engine.adapter_type != "local":
+            return []
+        services = admission_services(feature)
+        rows = db.query(ControlResource).filter(ControlResource.owner_engine_id == engine.id)
+        if services is None:  # a feature without a service of its own: every row, as before
+            return _lockable(rows.order_by(ControlResource.key), lock).all()
+        like = or_(*(ControlResource.key.like(f"local:%:service:{s}") for s in sorted(services)))
+        return [r for r in _lockable(  # the LIKE narrows in SQL; the exact match is below
+            rows.filter(like).order_by(ControlResource.key),
+            lock,
+        ).all() if is_service_key(r.key, services)]
     driver = registry.create(engine.adapter_type)
     keys = set(driver.resource_keys(engine, feature, p.profile))
     applied = (

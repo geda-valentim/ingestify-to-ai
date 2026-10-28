@@ -13,14 +13,17 @@ GENERIC = "worker"  # legacy media can also execute on the generic worker
 def admission_services(feature):
     """The services whose resources a feature WITHOUT a runtime profile is admitted on (spec 0007
     §4.6): its canonical service, plus the generic worker for transcription and vision. No GPU
-    key: without a profile there is no GPU binding to protect."""
-    names = {SERVICES.get(feature, feature)}
+    key: without a profile there is no GPU binding to protect. None for a feature without a
+    service here: the caller keeps every row of the engine (no fail-open)."""
+    if feature not in SERVICES:
+        return None
+    names = {SERVICES[feature]}
     if feature in ("transcription", "vision"):
         names.add(GENERIC)
     return names
 
 
 def is_service_key(key, services):
-    """`local:<host>:service:<name>` of one of `services`, on any host."""
+    """`local:<host>:service:<name>` of one of `services`, on any host (a host id may hold ":")."""
     parts = key.split(":")
-    return len(parts) == 4 and parts[0] == "local" and parts[2] == "service" and parts[3] in services
+    return len(parts) >= 4 and parts[0] == "local" and parts[-2] == "service" and parts[-1] in services
