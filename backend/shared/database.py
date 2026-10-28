@@ -70,10 +70,13 @@ def init_db():
     ]
     Base.metadata.create_all(bind=engine, tables=tables)
     if settings.engine_control_enabled:
-        from shared.engine_control.migration import TABLES
+        from shared.engine_control.migration import ADDED_COLUMNS, TABLES
         missing={table.name for table in TABLES}-set(inspect(engine).get_table_names())
         if missing:
             raise RuntimeError('Engine control requires the explicit 0007 migration before enabling it')
+        for table, columns in ADDED_COLUMNS.items():
+            if not set(columns) <= {c["name"] for c in inspect(engine).get_columns(table)}:
+                raise RuntimeError('Engine control requires rerunning the explicit 0007 migration for this release')
     _add_missing_columns()
     if settings.engine_control_enabled:
         # The additive runtime columns are used even when delegated access is off.

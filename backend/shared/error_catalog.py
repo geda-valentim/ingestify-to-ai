@@ -169,6 +169,15 @@ _PT = {
         "perfil de execução e uma operação revisada, não pela edição direta.",
         ["bind_profile"],
     ),
+    "FORCE_CANCEL_NOTHING_TO_RELEASE": (
+        "Não há ticket de admissão aberto nos recursos desta funcionalidade: nada a liberar.",
+        ["reload"],
+    ),
+    "FORCE_CANCEL_CONFIRMATION_REQUIRED": (
+        "Confirme digitando exatamente o texto pedido (o nome da engine e o número de tickets "
+        "do plano).",
+        ["fix_input"],
+    ),
     "TEST_CONNECTION_FIRST": (
         "A conexão com o provedor ainda não foi verificada. Use “Testar conexão” nesta engine; "
         "depois vincule um perfil de execução.",

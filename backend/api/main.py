@@ -11,6 +11,7 @@ from contextlib import asynccontextmanager
 from shared.config import get_settings
 from shared.schemas import ErrorResponse
 from api.live_routes import router as live_router
+import api.force_cancel_probe  # noqa: F401  (registers the holder probe of force_cancel plans)
 from api.routes import router
 from api.auth_routes import router as auth_router
 from api.apikey_routes import router as apikey_router

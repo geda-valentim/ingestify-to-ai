@@ -39,7 +39,10 @@ ROLES = {
 PERMISSIONS = set().union(*ROLES.values()) | {
     "engine_connections.credentials.manage",
     "access.resources.manage",
+    # In no role (spec 0007 §4.5): in practice only the effective platform admin force-cancels.
+    "engine_operations.execute.force_cancel",
 }
+NEVER_DELEGATED = {"engine_operations.execute.force_cancel"}  # not even in a delegation envelope
 
 
 def enabled():

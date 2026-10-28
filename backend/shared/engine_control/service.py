@@ -20,7 +20,7 @@ from shared.engine_control.models import (
     ControlHost,
 )
 from shared.engine_control.contracts import RuntimeSettings, TERMINAL
-from shared.engine_control import registry, catalog
+from shared.engine_control import registry, catalog, force_cancel
 from shared.engines import budget
 from shared.engines.redact import redact
 from shared import error_catalog
@@ -413,6 +413,9 @@ def _host_context(db, engine_id, feature):
 def create_plan(db, engine, req, actor):
     from shared.access import policy
 
+    if req.type == force_cancel.FORCE_CANCEL:  # no adapter, no capability: its own plan
+        return force_cancel.create_plan(db, engine, req, actor)
+
     if policy.enabled():
         policy.epoch(db, True)
     engine = locked_engine(db, engine.id)
@@ -531,8 +534,12 @@ def create_plan(db, engine, req, actor):
     )
 
 
-def enqueue(db, plan_id, plan_hash, key, actor, confirm_paid=False):
+def enqueue(db, plan_id, plan_hash, key, actor, confirm_paid=False, confirm_force_cancel=None):
     from shared.access import policy
+
+    forced = db.get(OperationPlan, plan_id)
+    if forced is not None and forced.body.get("type") == force_cancel.FORCE_CANCEL:
+        return force_cancel.enqueue(db, forced, plan_hash, key, actor, confirm_force_cancel)
 
     if policy.enabled():
         policy.epoch(db, True)

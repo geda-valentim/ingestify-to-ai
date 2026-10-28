@@ -18,6 +18,8 @@ ACTIONS = (
     "benchmark",
 )
 TERMINAL = {"succeeded", "failed", "cancelled", "needs_attention"}
+# Not in ACTIONS: no role gets it through execute.<action>, and it never reaches an adapter.
+FORCE_CANCEL = "force_cancel"
 
 
 def utc_deadline(value):
@@ -70,7 +72,7 @@ class PlanRequest(Closed):
 
     @model_validator(mode="after")
     def action(self):
-        if self.type not in ACTIONS:
+        if self.type not in ACTIONS and self.type != FORCE_CANCEL:
             raise ValueError("Unknown operation type")
         return self
 

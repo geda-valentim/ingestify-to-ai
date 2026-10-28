@@ -204,6 +204,8 @@ EN = {
     "REGISTERED_MANIFEST_CHANGED": "The registered docker compose files changed, and the host agent refuses to operate. Register the host again (scripts/register_engine_host.py).",
     "RESOURCE_OWNED_BY_ANOTHER_ENGINE": "This profile's resource already belongs to another engine.",
     "RESOURCE_OWNERSHIP_CONFLICT": "Another engine claimed the same resource at the same time. Reload.",
+    "FORCE_CANCEL_NOTHING_TO_RELEASE": "There is no open admission ticket on this feature's resources: nothing to release.",
+    "FORCE_CANCEL_CONFIRMATION_REQUIRED": "Confirm by typing exactly the requested text (the engine name and the plan's number of tickets).",
     "RUNTIME_OPERATION_REQUIRED": "This engine is managed by the control plane: runtime changes go through an execution profile and a reviewed operation, not through direct editing.",
     "RUNTIME_PROFILE_EXISTS": "The engine already has a desired profile{for_feature}; the automatic binding does not replace it.",
     "RUNTIME_PROFILE_NOT_FOUND": "There is no desired execution profile{for_feature} on this engine (or it is outside your scope).",

@@ -67,6 +67,7 @@ class Execute(Closed):
     plan_id: str
     plan_hash: str
     confirm_paid_operation: bool = False
+    confirm_force_cancel: str | None = None  # `<engine slug>:<number of tickets>`, force_cancel only
 
 
 class Connection(Closed):
@@ -295,7 +296,7 @@ def execute(
         body.plan_hash,
         idempotency_key,
         str(user.id),
-        body.confirm_paid_operation,
+        body.confirm_paid_operation, body.confirm_force_cancel,
     )
 
 

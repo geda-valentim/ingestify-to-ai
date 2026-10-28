@@ -127,6 +127,8 @@ class ControlAdmission(Base):
     holder = Column(String(128), nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     released_at = Column(DateTime)
+    # Why it was released when not by its holder: `force_cancel:<operation_id>`. NULL = normal release.
+    release_reason = Column(String(80))
 
 
 class ControlHost(Base):

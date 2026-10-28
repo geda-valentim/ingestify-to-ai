@@ -129,3 +129,23 @@ def test_the_alter_of_existing_tables_runs_under_the_bound(database, monkeypatch
     monkeypatch.setattr(migration, "_alter_existing_tables", lambda c: (order.append("alter"), real_alter(c)))
     upgrade(database)
     assert order == ["bound", "alter", "released"]
+
+
+def test_upgrade_adds_the_release_reason_column_and_keeps_tickets(database):
+    upgrade(database)
+    with database.begin() as conn:
+        conn.execute(text("DROP TABLE engine_control_admissions"))
+        conn.execute(text("""
+            CREATE TABLE engine_control_admissions (
+                id VARCHAR(36) PRIMARY KEY, resource_key VARCHAR(200) NOT NULL,
+                holder VARCHAR(128) NOT NULL, created_at DATETIME NOT NULL, released_at DATETIME
+            )
+        """))
+        conn.execute(text("INSERT INTO engine_control_admissions (id, resource_key, holder, created_at) "
+                          "VALUES ('t1', 'local:host:worker', 'task:x', '2026-10-27 12:00:00')"))
+    upgrade(database)
+    upgrade(database)  # repeatable
+    assert "release_reason" in {c["name"] for c in inspect(database).get_columns("engine_control_admissions")}
+    with database.connect() as conn:
+        row = conn.execute(ControlAdmission.__table__.select()).mappings().one()
+    assert (row["holder"], row["release_reason"]) == ("task:x", None)
