@@ -15,7 +15,7 @@ from shared.engine_control.models import (
     ControlResource,
     ControlAdmission,
 )
-from shared.models import Engine, EngineUsage
+from shared.models import EngineUsage
 from workers.engine_control import orphan_tickets
 
 ORPHAN_RECONCILE_SECONDS = 10
@@ -225,14 +225,14 @@ def run(op_id, session_factory=SessionLocal):
             ctx.drain(plan)
         driver = registry.create(plan["adapter_type"], plan["adapter_version"])
         if recovering:
-            with session_factory() as db:
-                e = db.get(Engine, plan["engine_id"])
-                db.expunge(e)
-            observation = driver.observe(e, plan["feature"], plan["profile"], ctx)
-            proof = driver.reconcile(dict(plan=plan, handles=old_handles), observation)
+            e = service.detached_engine(session_factory, plan["engine_id"])
+            result = driver.observe(e, plan["feature"], plan["profile"], ctx)
+            proof = driver.reconcile(dict(plan=plan, handles=old_handles), result)
+            if plan.get("trigger") and proof.get("safe_to_unlock") and not proof.get("desired_applied"):
+                with session_factory() as db:  # automatic, proven not applied: failed, unlocked (§4.6)
+                    return service.finish(db, op_id, generation, "failed", error=service.idle_opt_in.NOT_APPLIED, safe=True)
             if not proof.get("desired_applied") or not proof.get("safe_to_unlock"):
                 raise RuntimeError("RECOVERY_STATE_UNCONFIRMED")
-            result = observation
         else:
             result = driver.apply(plan, ctx)
         ctx.event("verifying", "Publicando apenas o estado verificado")

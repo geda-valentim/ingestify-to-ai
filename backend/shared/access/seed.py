@@ -34,7 +34,7 @@ from shared.models import ROOT_SLOT, AdminAudit, Engine, User
 from shared.admin import is_effective_admin
 from shared.engine_control import catalog, registry
 from shared.engine_control import service as control
-from shared.engine_control.contracts import RuntimeSettings
+from shared.engine_control.contracts import RuntimeSettings, comparable_settings
 from shared.engine_control.models import ControlHost
 from shared.access import contracts as C, policy, service
 from shared.access.models import EngineAttributes, ExecutionProfile, ExecutionRevision
@@ -477,7 +477,7 @@ def _refresh(db, plan, profile, actor, report, dry_run):
     body = _body(plan)
     wanted, _ = service.normalize(body.adapter_type, body.feature, body)
     current = db.get(ExecutionRevision, profile.latest_published_revision_id)
-    if current is not None and current.settings == wanted:
+    if current is not None and comparable_settings(current.settings) == comparable_settings(wanted):
         return profile
     if not _seed_owned(db, profile, key):
         report.skip(key, "SEEDED_PROFILE_STALE", stage="bind", profile_id=profile.id)

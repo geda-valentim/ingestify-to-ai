@@ -14780,6 +14780,7 @@ Esquema JSON completo:
 | `idle_timeout_seconds` | não | integer | default=60; minimum=2.0; maximum=3600.0 |  |
 | `memory_mb` | não | integer / null |  |  |
 | `warmup_mode` | não | string | default="on_start"; enum=["on_start", "manual"] |  |
+| `idle_cooldown` | não | boolean | default=false |  |
 | `warm_until` | não | string (date-time) / null |  |  |
 | `provider_settings` | não | object | additionalProperties=true |  |
 
@@ -14858,6 +14859,11 @@ Esquema JSON completo:
       ],
       "title": "Warmup Mode",
       "default": "on_start"
+    },
+    "idle_cooldown": {
+      "type": "boolean",
+      "title": "Idle Cooldown",
+      "default": false
     },
     "warm_until": {
       "anyOf": [
