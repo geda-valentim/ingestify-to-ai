@@ -27,6 +27,7 @@ from datetime import datetime
 from shared.catalog_admin import ADMIN_CATALOG
 from shared.catalog_api import API_CATALOG
 from shared.catalog_en import EN
+from shared.catalog_engine_control import ENGINE_CONTROL_CATALOG
 from shared.catalog_images import IMAGES_CATALOG
 from shared.i18n import DEFAULT, LANGS, current_lang
 
@@ -623,15 +624,10 @@ def _bilingual(pt_entries):
 
 
 CATALOG = _bilingual(_PT)
-_overlap = CATALOG.keys() & API_CATALOG.keys()
-assert not _overlap, f"codes defined in both catalogs: {sorted(_overlap)}"
-CATALOG.update(API_CATALOG)
-_overlap = CATALOG.keys() & IMAGES_CATALOG.keys()
-assert not _overlap, f"codes defined in both catalogs: {sorted(_overlap)}"
-CATALOG.update(IMAGES_CATALOG)
-_overlap = CATALOG.keys() & ADMIN_CATALOG.keys()
-assert not _overlap, f"codes defined in both catalogs: {sorted(_overlap)}"
-CATALOG.update(ADMIN_CATALOG)
+for _domain in (API_CATALOG, IMAGES_CATALOG, ADMIN_CATALOG, ENGINE_CONTROL_CATALOG):
+    _overlap = CATALOG.keys() & _domain.keys()
+    assert not _overlap, f"codes defined in both catalogs: {sorted(_overlap)}"
+    CATALOG.update(_domain)
 
 _CODE = re.compile(r"^([A-Z][A-Z0-9_]{3,})(?:\s*:\s*(.*))?$", re.S)
 
