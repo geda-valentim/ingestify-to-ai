@@ -8,16 +8,21 @@ from shared.config import get_settings
 settings = get_settings()
 logger = logging.getLogger(__name__)
 
+def engine_options(**overrides):
+    """The shared engine's options; a dedicated pool (e.g. a capped lock wait) overrides its size."""
+    return {
+        "pool_pre_ping": True,  # Verify connections before using
+        "pool_recycle": 3600,   # Recycle connections after 1 hour
+        "pool_size": settings.db_pool_size,
+        "max_overflow": settings.db_max_overflow,
+        "pool_timeout": settings.db_pool_timeout,
+        "echo": settings.sql_echo,  # SQL_ECHO=true to debug (logs parameters, e.g. password hashes)
+        **overrides,
+    }
+
+
 # Create SQLAlchemy engine
-engine = create_engine(
-    settings.database_url,
-    pool_pre_ping=True,  # Verify connections before using
-    pool_recycle=3600,   # Recycle connections after 1 hour
-    pool_size=settings.db_pool_size,
-    max_overflow=settings.db_max_overflow,
-    pool_timeout=settings.db_pool_timeout,
-    echo=settings.sql_echo,  # SQL_ECHO=true to debug (logs parameters, e.g. password hashes)
-)
+engine = create_engine(settings.database_url, **engine_options())
 
 # Create SessionLocal class
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
