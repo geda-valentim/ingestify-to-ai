@@ -7,6 +7,7 @@ from shared.admin import is_effective_admin
 from shared.engine_control import catalog, registry
 from shared.engine_control.contracts import RuntimeSettings
 from shared.engine_control import service as control
+from shared.engine_control.idle_opt_in import IDLE_FEATURES
 from shared.access import policy
 from shared.access.models import (
     ExecutionProfile,
@@ -131,6 +132,9 @@ def normalize(adapter, feature, body):
     settings = body.settings.model_dump(mode="json")
     if settings["warm_until"] is not None:
         raise control.ControlError("USE_WARM_DURATION", 422)
+    if settings["idle_cooldown"] and (adapter != "local" or feature not in IDLE_FEATURES):
+        # fail on save, not later on bind (spec 0007 §4.6)
+        raise control.ControlError("IDLE_COOLDOWN_NOT_SUPPORTED", 422, feature=feature)
     d = registry.descriptor(adapter, settings["adapter_version"])
     if feature not in d["features"]:
         raise control.ControlError("FEATURE_NOT_SUPPORTED", 422)

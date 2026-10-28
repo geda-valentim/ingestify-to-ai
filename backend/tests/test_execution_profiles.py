@@ -1468,3 +1468,11 @@ def test_a_revision_published_before_a_runtime_field_existed_still_binds(world):
         )
         bound = db.query(RuntimeProfile).filter_by(engine_id="engine-a", feature="transcription").one()
         assert bound.profile["idle_cooldown"] is False
+
+
+def test_an_execution_profile_cannot_opt_in_to_idle_cooldown_off_local(world):
+    # refused on save, not only when an engine binds it later
+    with world() as db:
+        with pytest.raises(control.ControlError) as e:
+            draft(db, settings=dict(settings(), idle_cooldown=True))
+        assert e.value.code == "IDLE_COOLDOWN_NOT_SUPPORTED"

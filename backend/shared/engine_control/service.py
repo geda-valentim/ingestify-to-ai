@@ -514,6 +514,8 @@ def create_plan(db, engine, req, actor):
             resources=body["resources"],
             lock=True,
         )
+    if getattr(req, "trigger", None):
+        idle_opt_in.check_automatic(db, engine, req, actor, profile, body["resources"])
     if req.type == "apply_profile":  # after the plan's own authorization: its refusal comes first
         idle_opt_in.require(db, engine, req.feature, profile, actor, body["resources"],
                             profile=source_profile(db, p.source_profile_revision_id) if p else None)
@@ -561,6 +563,7 @@ def enqueue(db, plan_id, plan_hash, key, actor, confirm_paid=False):
         )
     if not key or len(key) > 128:
         raise ControlError("IDEMPOTENCY_KEY_REQUIRED", 422)
+    idle_opt_in.reauthorize_automatic(db, plan_id, actor)
     request_hash = digest(
         dict(plan_id=plan_id, plan_hash=plan_hash, confirm_paid=confirm_paid)
     )

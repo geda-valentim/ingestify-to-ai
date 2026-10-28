@@ -206,6 +206,7 @@ EN = {
     "RESOURCE_OWNERSHIP_CONFLICT": "Another engine claimed the same resource at the same time. Reload.",
     "IDLE_COOLDOWN_NOT_SUPPORTED": "Idle cooldown is only available on a local engine, for transcription and vision.",
     "IDLE_COOLDOWN_PERMISSION_REQUIRED": "To turn on idle cooldown you must be able to plan, cool down and start this engine: the automatic operations run with your access.",
+    "IDLE_POLICY_NOT_OPTED_IN": "This automatic operation does not match the idle cooldown in force on this engine (different applied revision, actor or feature).",
     "RUNTIME_OPERATION_REQUIRED": "This engine is managed by the control plane: runtime changes go through an execution profile and a reviewed operation, not through direct editing.",
     "RUNTIME_PROFILE_EXISTS": "The engine already has a desired profile{for_feature}; the automatic binding does not replace it.",
     "RUNTIME_PROFILE_NOT_FOUND": "There is no desired execution profile{for_feature} on this engine (or it is outside your scope).",

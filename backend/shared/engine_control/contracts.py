@@ -83,6 +83,13 @@ class TriggeredPlanRequest(PlanRequest):
 
     trigger: Literal["idle_policy", "wakeup"]
 
+    @model_validator(mode="after")
+    def automatic(self):
+        # The borrowed identity only ever cools down (idle) or starts (wakeup).
+        if {"idle_policy": "cooldown", "wakeup": "start"}[self.trigger] != self.type:
+            raise ValueError("idle_policy plans a cooldown and wakeup a start")
+        return self
+
 
 def comparable_settings(settings):
     """Runtime settings with every default filled in, to compare a stored copy (written before

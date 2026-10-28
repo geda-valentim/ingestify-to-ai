@@ -178,6 +178,11 @@ _PT = {
         "iniciar esta engine: as operações automáticas rodam com o seu acesso.",
         ["request_access"],
     ),
+    "IDLE_POLICY_NOT_OPTED_IN": (
+        "Esta operação automática não corresponde ao desligamento por ociosidade ativo nesta "
+        "engine (revisão aplicada, ator ou feature diferentes).",
+        ["reload"],
+    ),
     "TEST_CONNECTION_FIRST": (
         "A conexão com o provedor ainda não foi verificada. Use “Testar conexão” nesta engine; "
         "depois vincule um perfil de execução.",

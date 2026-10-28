@@ -137,12 +137,12 @@ def _revision(db, revision, idle, applied_at=T0):
     return row
 
 
-def _operation(db, revision_row, type_, actor, state="succeeded", finished=T0):
-    plan = OperationPlan(engine_id="l", actor_id=actor, engine_version=0, profile_id=revision_row.id,
+def _operation(db, revision_row, type_, actor, state="succeeded", finished=T0, engine_id="l"):
+    plan = OperationPlan(engine_id=engine_id, actor_id=actor, engine_version=0, profile_id=revision_row.id,
                          body={"type": type_, "feature": "transcription"}, hash="h", expires_at=T0)
     db.add(plan)
     db.flush()
-    db.add(EngineOperation(engine_id="l", actor_id=actor, plan_id=plan.id, idempotency_key=plan.id,
+    db.add(EngineOperation(engine_id=engine_id, actor_id=actor, plan_id=plan.id, idempotency_key=plan.id,
                            request_hash="r", state=state, deadline=T0, finished_at=finished))
     db.flush()
 
@@ -172,6 +172,33 @@ def test_no_actor_without_the_opt_in_or_without_a_successful_apply(db):
     assert idle_opt_in.opt_in(db, "l", "transcription") is None
 
 
+def test_reapplying_an_old_opted_in_revision_by_another_type_does_not_revive_it(db):
+    # X (opt-in) applied by A; Y (no opt-in) applied later; B, who could only start, starts X
+    x = _revision(db, 1, idle=True, applied_at=T0)
+    _operation(db, x, "apply_profile", "admin-a", finished=T0)
+    y = _revision(db, 2, idle=False, applied_at=T0 + timedelta(minutes=1))
+    _operation(db, y, "apply_profile", "admin-a", finished=T0 + timedelta(minutes=1))
+    x.applied_at = T0 + timedelta(minutes=2)
+    _operation(db, x, "start", "operator-b", finished=T0 + timedelta(minutes=2))
+    assert idle_opt_in.opt_in(db, "l", "transcription") is None
+
+
+def test_a_newer_desired_revision_not_applied_does_not_change_the_opt_in(db):
+    rev = _revision(db, 1, idle=True)
+    _operation(db, rev, "apply_profile", "admin-a")
+    db.add(RuntimeProfile(engine_id="l", feature="transcription", revision=2, profile={"idle_cooldown": False}))
+    db.flush()
+    assert idle_opt_in.opt_in(db, "l", "transcription") == ("admin-a", 1)
+
+
+def test_tests_and_reconciles_of_the_feature_do_not_break_the_chain(db):
+    rev = _revision(db, 1, idle=True)
+    _operation(db, rev, "apply_profile", "admin-a")
+    other = _revision(db, 2, idle=False, applied_at=None)
+    _operation(db, other, "test", "admin-b", finished=T0 + timedelta(minutes=3))
+    assert idle_opt_in.opt_in(db, "l", "transcription") == ("admin-a", 1)
+
+
 def test_no_actor_before_any_revision_was_applied(db):
     db.add(RuntimeProfile(engine_id="l", feature="transcription", revision=1, profile={"idle_cooldown": True}))
     db.flush()
@@ -187,22 +214,101 @@ def test_saving_the_opt_in_on_a_remote_engine_is_refused(control_world):  # noqa
         assert e.value.code == "IDLE_COOLDOWN_NOT_SUPPORTED"
 
 
-def test_an_automatic_operation_carries_its_trigger_to_the_view_and_the_audit(control_world):  # noqa: F811
-    p = prepared(control_world)
+def _local_opt_in(control_world, monkeypatch, actor="admin"):
+    """The control-test engine as a local transcription engine whose applied revision 1 opted
+    in through `actor`'s apply_profile (the test adapter stands in for the local one)."""
+    from shared.engine_control import registry
+    from shared.models import User
+
+    d = dict(registry.descriptor("test-vm"), type="local", features=["transcription", "vision"],
+             actions=["scale", "drain_stop", "cooldown", "start", "apply_profile"])
+    monkeypatch.setitem(registry._registry, ("local", 1), (d, registry._registry[("test-vm", 1)][1]))
+    prepared(control_world)
     with control_world() as s:
-        e = s.get(Engine, "e")
-        plan = service.create_plan(s, e, TriggeredPlanRequest(type="scale", engine_version=e.version,
-                                                              profile_revision=1, max_usd="0.1",
-                                                              trigger="idle_policy"), "admin")
+        s.get(Engine, "e").adapter_type = "local"
+        s.add(User(id=actor, username=actor, email=actor + "@example.test", hashed_password="x",
+                   is_admin=True, is_active=True))
+        rev = s.query(RuntimeProfile).filter_by(engine_id="e", revision=1).one()
+        rev.profile = dict(rev.profile, idle_cooldown=True)
+        rev.applied_at = datetime.utcnow()
+        _operation(s, rev, "apply_profile", actor, finished=datetime.utcnow(), engine_id="e")
+        s.commit()
+
+
+def _cooldown(s, actor="admin", revision=1, feature="transcription"):
+    e = s.get(Engine, "e")
+    return service.create_plan(s, e, TriggeredPlanRequest(
+        type="cooldown", feature=feature, engine_version=e.version, profile_revision=revision,
+        max_usd="0.1", trigger="idle_policy"), actor)
+
+
+def test_an_automatic_cooldown_carries_its_trigger_to_the_view_and_the_audit(control_world, monkeypatch):  # noqa: F811
+    _local_opt_in(control_world, monkeypatch)
+    with control_world() as s:
+        plan = _cooldown(s)
         assert plan["trigger"] == "idle_policy"
         op = service.enqueue(s, plan["plan_id"], plan["plan_hash"], "idle:1", "admin", True)
         assert op["trigger"] == "idle_policy"
         audit = s.query(AdminAudit).filter_by(action="engine.operation_created").one()
         assert audit.after["trigger"] == "idle_policy"
-    assert p  # the human plan of `prepared` has no trigger
+
+
+def test_an_automatic_plan_must_match_the_opt_in_it_claims(control_world, monkeypatch):  # noqa: F811
+    _local_opt_in(control_world, monkeypatch)
     with control_world() as s:
-        human = s.get(OperationPlan, p["plan_id"])
-        assert "trigger" not in human.body
+        rev1 = s.query(RuntimeProfile).filter_by(engine_id="e", revision=1).one()
+        s.add(RuntimeProfile(engine_id="e", feature="transcription", revision=2, profile=rev1.profile))
+        s.add(RuntimeProfile(engine_id="e", feature="vision", revision=1, profile=rev1.profile))
+        s.commit()  # desired revisions exist, but only transcription revision 1 opted in (applied)
+        for kwargs in ({"actor": "someone-else"}, {"revision": 2}, {"feature": "vision"}):
+            with pytest.raises(service.ControlError) as e:
+                _cooldown(s, **kwargs)
+            assert e.value.code == "IDLE_POLICY_NOT_OPTED_IN", kwargs
+        assert s.query(OperationPlan).filter(OperationPlan.body["trigger"].as_string() == "idle_policy").count() == 0
+
+
+def test_with_iam_off_a_deactivated_opt_in_admin_no_longer_lends_their_identity(control_world, monkeypatch):  # noqa: F811
+    from shared.models import User
+
+    _local_opt_in(control_world, monkeypatch)
+    with control_world() as s:
+        s.get(User, "admin").is_active = False
+        s.commit()
+        with pytest.raises(service.ControlError) as e:
+            _cooldown(s)
+        assert (e.value.code, e.value.status) == ("ACCESS_REVOKED", 403)
+
+
+def test_with_iam_off_a_demotion_between_plan_and_enqueue_is_refused_at_enqueue(control_world, monkeypatch):  # noqa: F811
+    from shared.models import User
+
+    _local_opt_in(control_world, monkeypatch)
+    with control_world() as s:
+        plan = _cooldown(s)
+        s.get(User, "admin").is_admin = False
+        s.commit()
+        with pytest.raises(service.ControlError) as e:
+            service.enqueue(s, plan["plan_id"], plan["plan_hash"], "idle:1", "admin", True)
+        assert e.value.code == "ACCESS_REVOKED"
+        assert s.query(EngineOperation).filter_by(idempotency_key="idle:1").count() == 0
+
+
+def test_an_automatic_plan_off_a_local_engine_is_refused(control_world, monkeypatch):  # noqa: F811
+    from shared.engine_control import registry
+
+    monkeypatch.setitem(registry.descriptor("test-vm"), "actions", ["scale", "drain_stop", "cooldown"])
+    prepared(control_world)
+    with control_world() as s:
+        with pytest.raises(service.ControlError) as e:
+            _cooldown(s)
+        assert e.value.code == "IDLE_COOLDOWN_NOT_SUPPORTED"
+
+
+@pytest.mark.parametrize("type_,trigger", [("scale", "idle_policy"), ("deploy", "wakeup"),
+                                            ("start", "idle_policy"), ("cooldown", "wakeup")])
+def test_the_borrowed_identity_only_cools_down_or_starts(type_, trigger):
+    with pytest.raises(ValueError):
+        TriggeredPlanRequest(type=type_, engine_version=0, trigger=trigger)
 
 
 def test_an_unknown_trigger_is_refused():
