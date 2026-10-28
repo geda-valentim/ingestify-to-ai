@@ -12,7 +12,8 @@ deactivated or demoted since the opt-in no longer lends their identity).
 
 from typing import NamedTuple, Optional
 
-from shared.engine_control.models import EngineOperation, OperationPlan, RuntimeProfile
+from shared.engine_control.local_services import SERVICES
+from shared.engine_control.models import ControlResource, EngineOperation, OperationPlan, RuntimeProfile
 
 IDLE_FEATURES = frozenset({"transcription", "vision"})
 # Two authorities, each checkable against one grant: cool down, and start again.
@@ -146,10 +147,22 @@ def check_before_effect(db, op_id) -> None:
 def opt_in(db, engine_id: str, feature: str) -> Optional[OptIn]:
     """Who the automatic operations of this feature run as, and on which revision: the actor
     of the latest successful apply_profile of the currently applied revision, when that
-    revision opted in and no other revision was applied (published, whatever became of its
-    operation) at or after that apply_profile finished. Re-applying an old opted-in revision by
-    any other type (a start by someone else) does not revive its opt-in; a tie fails closed.
-    None: the policy does nothing."""
+    revision opted in and nothing else was applied since (applied_state keeps the reference
+    only while the same revision stays applied, so re-applying an old opted-in revision by
+    any other type does not revive it).
+
+    Read from the applied state of the feature's dedicated service row, then the operation
+    and its plan, all by primary key, never from the operation history: it runs on every
+    tick of the idle policy. A missing row, or one without the reference (written before it
+    existed), means no opt-in until the profile is applied again. None: the policy does
+    nothing.
+    """
+    found = opt_in_reference(db, engine_id, feature)
+    return found[1] if found else None
+
+
+def opt_in_reference(db, engine_id: str, feature: str):
+    """(id of the apply_profile operation that opted in, OptIn), or None: see opt_in()."""
     applied = (
         db.query(RuntimeProfile)
         .filter_by(engine_id=engine_id, feature=feature)
@@ -159,21 +172,19 @@ def opt_in(db, engine_id: str, feature: str) -> Optional[OptIn]:
     )
     if applied is None or not (applied.profile or {}).get("idle_cooldown"):
         return None
-    granted = (
-        db.query(EngineOperation.actor_id, EngineOperation.finished_at)
-        .join(OperationPlan, OperationPlan.id == EngineOperation.plan_id)
-        .filter(EngineOperation.engine_id == engine_id, EngineOperation.state == "succeeded",
-                OperationPlan.profile_id == applied.id,
-                OperationPlan.body["type"].as_string() == "apply_profile")
-        .order_by(EngineOperation.finished_at.desc())
-        .first()
-    )
-    if granted is None or granted.finished_at is None:
+    # The feature's dedicated service row only, by primary key: a shared row (the generic
+    # worker, a GPU) is also written by other features' operations, the dedicated one never.
+    if feature not in IDLE_FEATURES:
         return None
-    since = (
-        db.query(RuntimeProfile.id)
-        .filter(RuntimeProfile.engine_id == engine_id, RuntimeProfile.feature == feature,
-                RuntimeProfile.id != applied.id, RuntimeProfile.applied_at >= granted.finished_at)
-        .first()
-    )
-    return None if since else OptIn(granted.actor_id, applied.revision)
+    host = ((applied.profile or {}).get("provider_settings") or {}).get("host_id")
+    row = db.get(ControlResource, f"local:{host}:service:{SERVICES[feature]}") if host else None
+    state = (row.applied or {}) if row is not None else {}
+    if state.get("profile_id") != applied.id:
+        return None  # no dedicated row, or it names another revision: fail closed
+    op_id, actor = state.get("opt_in_operation_id"), state.get("opt_in_actor")
+    op = db.get(EngineOperation, op_id) if op_id else None
+    plan = db.get(OperationPlan, op.plan_id) if op else None
+    if (op is None or op.state != "succeeded" or op.actor_id != actor or op.engine_id != engine_id
+            or plan is None or plan.profile_id != applied.id or (plan.body or {}).get("type") != "apply_profile"):
+        return None
+    return op.id, OptIn(actor, applied.revision)

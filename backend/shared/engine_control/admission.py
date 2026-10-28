@@ -1,10 +1,15 @@
 """Admission and maintenance use the same SQL resource locks. No fail-open."""
 
 from uuid import uuid4
+
+from sqlalchemy import or_
 from shared.config import get_settings
+from shared.engine_control.local_services import admission_services, is_service_key
 from shared.engine_control.models import (
     ControlResource,
     ControlAdmission,
+    EngineOperation,
+    OperationPlan,
     RuntimeProfile,
 )
 from shared.engine_control.service import ControlError, locked_engine, now
@@ -18,15 +23,19 @@ def resource_rows(db, engine, feature, lock=True):
 
     p = latest_profile(db, engine.id, feature)
     if not p:
-        # Generic tasks can execute multiple features in the same managed service.
-        if engine.adapter_type == "local":
-            return _lockable(
-                db.query(ControlResource)
-                .filter_by(owner_engine_id=engine.id)
-                .order_by(ControlResource.key),
-                lock,
-            ).all()
-        return []
+        # Without a profile, only the feature's own services (any host): a document conversion is
+        # not refused because transcription's dedicated service is draining (spec 0007 §4.6).
+        if engine.adapter_type != "local":
+            return []
+        services = admission_services(feature)
+        rows = db.query(ControlResource).filter(ControlResource.owner_engine_id == engine.id)
+        if services is None:  # a feature without a service of its own: every row, as before
+            return _lockable(rows.order_by(ControlResource.key), lock).all()
+        like = or_(*(ControlResource.key.like(f"local:%:service:{s}") for s in sorted(services)))
+        return [r for r in _lockable(  # the LIKE narrows in SQL; the exact match is below
+            rows.filter(like).order_by(ControlResource.key),
+            lock,
+        ).all() if is_service_key(r.key, services)]
     driver = registry.create(engine.adapter_type)
     keys = set(driver.resource_keys(engine, feature, p.profile))
     applied = (
@@ -125,10 +134,26 @@ def placement_blocked(db, engine, feature):
     if not get_settings().engine_control_enabled:
         return False
     rows = resource_rows(db, engine, feature)
+    held = {}
     return any(
         r.gate_closed
-        or r.operation_id
+        or (r.operation_id and _holds_placement(db, r.operation_id, feature, held))
         or (r.applied or {}).get("feature_modes", {}).get(feature)
         in ("standby", "stopped")
         for r in rows
     )
+
+
+def _holds_placement(db, operation_id, feature, held):
+    """An automatic operation (a plan with `trigger`) of another feature only locks the shared keys:
+    its effect acts on its own dedicated service (spec 0007 §4.6). One primary-key read per
+    operation, only for a locked row; a missing plan keeps blocking."""
+    if operation_id not in held:
+        body = (
+            db.query(OperationPlan.body)
+            .join(EngineOperation, EngineOperation.plan_id == OperationPlan.id)
+            .filter(EngineOperation.id == operation_id)
+            .scalar()
+        ) or {}
+        held[operation_id] = not (body.get("trigger") and body.get("feature") not in (None, feature))
+    return held[operation_id]

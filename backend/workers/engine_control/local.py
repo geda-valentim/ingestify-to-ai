@@ -3,12 +3,7 @@ from shared.engine_control import registry
 from shared.engine_control.models import ControlHost
 from workers.engine_control import common
 
-SERVICES = {
-    "transcription": "worker-audio",
-    "document_conversion": "worker",
-    "vision": "worker-vision",
-    "live-transcription": "worker-live",
-}
+from shared.engine_control.local_services import SERVICES  # noqa: E402  (moved to shared)
 
 
 class LocalControlAdapter:
