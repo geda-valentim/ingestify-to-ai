@@ -47,21 +47,24 @@ def resource_rows(db, engine, feature, lock=True):
 
 
 def _rows_without_profile(db, engine, feature, lock):
-    """The feature's own service rows on the hosts where its canonical service already has a
-    row, and every row of the hosts where it has none yet: the drain of its first profile there
-    waits for the work already running. A key of another shape is kept (no fail-open)."""
+    """The feature's own service rows on every host, plus, on the hosts where its canonical
+    service has no row yet, the rows that are no service (the GPU): the drain of its first
+    profile there waits for the work already running. Another feature's dedicated service is
+    never taken; a key of another shape is (no fail-open)."""
     rows = db.query(ControlResource).filter(ControlResource.owner_engine_id == engine.id)
+    # One locked read: a row loaded earlier in this session would keep a stale gate.
+    every = _lockable(rows.order_by(ControlResource.key), lock).all()
     services = admission_services(feature)
     if services is None:  # a feature without a service of its own: every row, as before
-        return _lockable(rows.order_by(ControlResource.key), lock).all()
-    every = [r.key for r in rows]  # no lock: the engine row is locked by every writer of these
-    ready = {key_host(k) for k in every if is_service_key(k, {SERVICES[feature]})}
-    keys = [k for k in every if key_host(k) not in ready or is_service_key(k, services)]
-    return _lockable(rows.filter(ControlResource.key.in_(keys)).order_by(ControlResource.key), lock).all()
+        return every
+    ready = {key_host(r.key) for r in every if is_service_key(r.key, {SERVICES[feature]})}
+    return [r for r in every
+            if is_service_key(r.key, services) or (key_host(r.key) not in ready and not is_service_key(r.key))]
 
 
 def _lockable(query, lock):
-    return query.with_for_update() if lock else query
+    # populate_existing: a row the session loaded before the lock keeps no stale gate or lock.
+    return query.with_for_update().populate_existing() if lock else query
 
 
 def _find_engine(db, engine_id):

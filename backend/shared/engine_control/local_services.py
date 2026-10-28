@@ -23,10 +23,12 @@ def admission_services(feature):
     return names
 
 
-def is_service_key(key, services):
-    """`local:<host>:service:<name>` of one of `services`, on any host (a host id may hold ":")."""
+def is_service_key(key, services=None):
+    """`local:<host>:service:<name>` of one of `services` (any service without them), on any
+    host (a host id may hold ":")."""
     parts = key.split(":")
-    return len(parts) >= 4 and parts[0] == "local" and parts[-2] == "service" and parts[-1] in services
+    return (len(parts) >= 4 and parts[0] == "local" and parts[-2] == "service"
+            and (services is None or parts[-1] in services))
 
 
 def key_host(key):

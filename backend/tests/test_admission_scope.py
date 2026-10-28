@@ -46,10 +46,9 @@ def test_without_a_profile_a_feature_is_admitted_on_its_own_services_only(local)
         assert _keys(db, "transcription") == ["local:h1:service:worker", "local:h1:service:worker-audio",
                                               "local:h2:service:worker", "local:h2:service:worker-audio",
                                               "local:h:3:service:worker"]
-        # h2 and h:3 have no worker-vision row yet: every row there (its first profile's drain)
+        # h2 and h:3 have no worker-vision row yet, nor a GPU row: never the audio service there
         assert _keys(db, "vision") == ["local:h1:service:worker", "local:h1:service:worker-vision",
-                                       "local:h2:service:worker", "local:h2:service:worker-audio",
-                                       "local:h:3:service:worker"]
+                                       "local:h2:service:worker", "local:h:3:service:worker"]
 
 
 def test_a_feature_without_a_service_of_its_own_keeps_every_row(local):
@@ -136,7 +135,7 @@ def test_without_its_service_row_yet_a_feature_keeps_every_row(world):  # noqa: 
         for key in ("local:h1:gpu:GPU-0", "local:h1:service:worker-live"):
             db.add(ControlResource(key=key, owner_engine_id="l"))
         db.commit()
-        assert _keys(db, "document_conversion") == ["local:h1:gpu:GPU-0", "local:h1:service:worker-live"]
+        assert _keys(db, "document_conversion") == ["local:h1:gpu:GPU-0"]  # not live's service
     tickets = admission.acquire("document_conversion", "task:doc", "l", world)
     with world() as db:
         held = {t.resource_key for t in db.query(ControlAdmission).filter(ControlAdmission.id.in_(tickets))}
@@ -153,7 +152,7 @@ def test_a_host_without_the_canonical_row_keeps_every_row_of_that_host(world):  
                     "legacy-key"):
             db.add(ControlResource(key=key, owner_engine_id="l"))
         db.commit()
-        assert _keys(db, "document_conversion") == ["legacy-key", "local:h1:gpu:G", "local:h1:service:worker-live",
+        assert _keys(db, "document_conversion") == ["legacy-key", "local:h1:gpu:G",
                                                     "local:unregistered:service:worker"]  # no fail-open
 
 
@@ -162,3 +161,14 @@ def test_the_host_of_a_key():
 
     assert [key_host(k) for k in ("local:h1:gpu:G", "local:h:3:service:worker", "LOCAL:h:service:w", "x")] == \
         ["h1", "h:3", None, None]
+
+
+def test_a_gate_closed_after_the_session_read_the_row_is_seen(local):
+    """One locked read: a row already in the session keeps no stale gate (a drain committed it)."""
+    with local() as db:
+        _keys(db, "document_conversion")  # loads the rows into this session
+        with local() as other:
+            other.get(ControlResource, "local:h1:service:worker").gate_closed = True
+            other.commit()
+        assert admission._refusal(admission.resource_rows(db, db.get(Engine, "l"), "document_conversion"),
+                                  "document_conversion") == "ENGINE_MAINTENANCE"

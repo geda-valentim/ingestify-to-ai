@@ -175,16 +175,16 @@ def test_engine_control_refusal_matches_the_post(world, monkeypatch, kwargs):
     assert (response.status_code, response.json()['detail']['code']) == (503, 'LIVE_NOT_READY')
 
 
-@pytest.mark.parametrize('live_row,available', [(True, True), (False, False)])
-def test_another_services_drain_leaves_live_available(world, monkeypatch, live_row, available):
+@pytest.mark.parametrize('live_row', [True, False])
+def test_another_services_drain_leaves_live_available(world, monkeypatch, live_row):
     from shared.engine_control.models import ControlResource
     engine_control(world, monkeypatch, gate_closed=True, key='local:h1:service:worker-audio')
     if live_row:
         with world.db() as db:
             db.add(ControlResource(key='local:h1:service:worker-live', owner_engine_id='local'))
             db.commit()
-    # No profile: live is admitted on worker-live only, once that row exists; before, on every row.
-    assert get(world)['available'] is available
+    # No profile: live never takes another feature's dedicated service, with or without its own row.
+    assert get(world)['available'] is True
 
 
 def test_availability_takes_no_row_locks(world, monkeypatch):
