@@ -650,20 +650,20 @@ def enqueue(db, plan_id, plan_hash, key, actor, confirm_paid=False, confirm_forc
     )
     db.add(op)
     db.add(OperationOutbox(operation_id=op_id))
-    db.flush()
-    append_event(db, op, "operation.accepted", {"message": "Operação aceita"})
-    db.add(
-        AdminAudit(
-            actor_user_id=actor,
-            auth_method="jwt",
-            action="engine.operation_created",
-            target_type="engine",
-            target_id=e.id,
-            before=None,
-            after={"operation_id": op_id, "type": plan.body["type"], "trigger": plan.body.get("trigger")},
+    try:  # a raced key is refused on the flush or on the commit
+        db.flush()
+        append_event(db, op, "operation.accepted", {"message": "Operação aceita"})
+        db.add(
+            AdminAudit(
+                actor_user_id=actor,
+                auth_method="jwt",
+                action="engine.operation_created",
+                target_type="engine",
+                target_id=e.id,
+                before=None,
+                after={"operation_id": op_id, "type": plan.body["type"], "trigger": plan.body.get("trigger")},
+            )
         )
-    )
-    try:
         db.commit()
     except IntegrityError:
         db.rollback()

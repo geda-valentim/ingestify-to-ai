@@ -4,11 +4,15 @@ drain's own rule (workers/engine_control/orphan_tickets). Registered once at imp
 """
 
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 
 from shared.engine_control import force_cancel
 
 INSPECT_TIMEOUT_SECONDS = 2.0  # end to end: connection, publish, retries and replies
+# Celery waits its whole timeout when a node is silent; it stops collecting this much before the
+# deadline, so the replies of the nodes that did answer come back before the wall-clock wait ends.
+REPLY_MARGIN_SECONDS = 0.5
 # The inspect runs here with a hard wall-clock deadline: Celery's own timeout only bounds the
 # wait for replies, not reaching a broker that is down. Two inspects in flight at most: with
 # both slots held by a hung broker, a new plan answers "unknown" at once, without queueing
@@ -18,15 +22,17 @@ _slots = threading.BoundedSemaphore(2)
 
 
 def _inspect(active_by_node, nodes):
+    deadline = time.monotonic() + INSPECT_TIMEOUT_SECONDS  # one budget for the whole probe
     if not _slots.acquire(blocking=False):
         raise FutureTimeout("both probe slots are held by earlier inspects")
     try:
-        future = _pool.submit(active_by_node, nodes, timeout=INSPECT_TIMEOUT_SECONDS)
+        replies_for = max(deadline - time.monotonic() - REPLY_MARGIN_SECONDS, 0.0)
+        future = _pool.submit(active_by_node, nodes, timeout=replies_for)
     except Exception:
         _slots.release()
         raise
     future.add_done_callback(lambda _: _slots.release())
-    return future.result(timeout=INSPECT_TIMEOUT_SECONDS)
+    return future.result(timeout=max(deadline - time.monotonic(), 0.0))
 
 
 def holder_verdicts(holders):

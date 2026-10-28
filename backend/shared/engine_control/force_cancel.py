@@ -212,29 +212,29 @@ def enqueue(db, plan, plan_hash, key, actor, confirm):
                          request_hash=request_hash, state="succeeded", stage="done", started_at=at,
                          finished_at=at, deadline=at, reserved_usd=0, actual_usd=0, cost_confirmed=True)
     db.add(op)
-    db.flush()
-    frozen = [t["ticket_id"] for t in plan.body["tickets"]]
-    open_now = [
-        t.id for t in db.query(ControlAdmission)
-        .filter(ControlAdmission.id.in_(frozen), ControlAdmission.released_at.is_(None))
-        .with_for_update()
-    ]
-    if open_now:
-        t = ControlAdmission.__table__
-        db.execute(update(t).where(t.c.id.in_(open_now), t.c.released_at.is_(None))
-                   .values(released_at=at, release_reason=f"{FORCE_CANCEL}:{op.id}"))
-    released = [i for i in frozen if i in set(open_now)]
-    already = [i for i in frozen if i not in set(open_now)]
-    op.result = {"released": released, "already_released": already, "ledger_effect": "none"}
-    append_event(db, op, "operation.accepted", {"message": "Operação aceita"})
-    append_event(db, op, "operation.succeeded", {"result": op.result, "error": None})
-    db.add(AdminAudit(actor_user_id=actor, auth_method="jwt", action="engine.force_cancel", target_type="engine",
-                      target_id=e.id, before=None,
-                      after={"operation_id": op.id, "tickets": plan.body["tickets"], "confirmation": confirm,
-                             "released": released, "already_released": already}))
-    try:
+    try:  # the same key raced on another engine's lock: refused on the flush or the commit
+        db.flush()
+        frozen = [t["ticket_id"] for t in plan.body["tickets"]]
+        open_now = [
+            t.id for t in db.query(ControlAdmission)
+            .filter(ControlAdmission.id.in_(frozen), ControlAdmission.released_at.is_(None))
+            .with_for_update()
+        ]
+        if open_now:
+            t = ControlAdmission.__table__
+            db.execute(update(t).where(t.c.id.in_(open_now), t.c.released_at.is_(None))
+                       .values(released_at=at, release_reason=f"{FORCE_CANCEL}:{op.id}"))
+        released = [i for i in frozen if i in set(open_now)]
+        already = [i for i in frozen if i not in set(open_now)]
+        op.result = {"released": released, "already_released": already, "ledger_effect": "none"}
+        append_event(db, op, "operation.accepted", {"message": "Operação aceita"})
+        append_event(db, op, "operation.succeeded", {"result": op.result, "error": None})
+        db.add(AdminAudit(actor_user_id=actor, auth_method="jwt", action="engine.force_cancel", target_type="engine",
+                          target_id=e.id, before=None,
+                          after={"operation_id": op.id, "tickets": plan.body["tickets"], "confirmation": confirm,
+                                 "released": released, "already_released": already}))
         db.commit()
-    except IntegrityError:  # the same key raced on another engine's lock
+    except IntegrityError:
         db.rollback()
         raise ControlError("IDEMPOTENCY_CONFLICT") from None
     return operation_view(op)

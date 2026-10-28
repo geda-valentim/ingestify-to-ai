@@ -175,7 +175,7 @@ def test_with_iam_on_an_engine_operator_cannot_plan_it_and_the_platform_admin_ca
 
 def test_holder_verdicts(monkeypatch):
     import workers.engine_control.orphan_tickets as g1
-    from api.force_cancel_probe import INSPECT_TIMEOUT_SECONDS, holder_verdicts
+    from api.force_cancel_probe import INSPECT_TIMEOUT_SECONDS, REPLY_MARGIN_SECONDS, holder_verdicts
 
     asked = {}
 
@@ -190,7 +190,8 @@ def test_holder_verdicts(monkeypatch):
     assert v == {"task:alive|11|celery@a": "alive", "task:blind|12|celery@a": "alive",  # no pid: cannot clear
                  "task:gone|13|celery@b": "absent", "task:x|14|celery@silent": "node_silent",
                  "task:legacy": "legacy_holder", "live:job-9": "unknown"}
-    assert asked == {"nodes": {"celery@a", "celery@b", "celery@silent"}, "timeout": 2.0}
+    assert asked["nodes"] == {"celery@a", "celery@b", "celery@silent"}
+    assert asked["timeout"] <= INSPECT_TIMEOUT_SECONDS - REPLY_MARGIN_SECONDS  # replies come back in time
     assert INSPECT_TIMEOUT_SECONDS == 2.0  # spec 0007 §4.5
     assert holder_verdicts(["task:gone|13|celery@b"])["task:gone|13|celery@b"]["host"] == "b"
 
@@ -374,6 +375,24 @@ def test_a_hung_broker_ends_the_probe_within_its_deadline(monkeypatch):
     v = holder_verdicts(["task:x|1|celery@a"])
     assert time.monotonic() - started < INSPECT_TIMEOUT_SECONDS + 0.5
     assert v["task:x|1|celery@a"]["verdict"] == "unknown"
+
+
+def test_a_silent_node_keeps_the_replies_of_the_others_within_the_deadline(monkeypatch):
+    import time
+
+    import workers.engine_control.orphan_tickets as g1
+    from api.force_cancel_probe import INSPECT_TIMEOUT_SECONDS, holder_verdicts
+
+    def one_silent(nodes, timeout):
+        time.sleep(timeout)  # Celery waits its whole timeout for the node that never answers
+        return {"celery@a": [("alive", 11)]}
+
+    monkeypatch.setattr(g1, "active_by_node", one_silent)
+    started = time.monotonic()
+    v = holder_verdicts(["task:alive|11|celery@a", "task:x|14|celery@silent"])
+    assert time.monotonic() - started <= INSPECT_TIMEOUT_SECONDS
+    assert v["task:alive|11|celery@a"]["verdict"] == "alive"
+    assert v["task:x|14|celery@silent"]["verdict"] == "node_silent"
 
 
 def test_a_replay_is_authorized_before_it_returns_the_operation(world, probe, monkeypatch):  # noqa: F811
