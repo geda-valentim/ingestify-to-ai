@@ -12,9 +12,9 @@ GENERIC = "worker"  # legacy media can also execute on the generic worker
 
 def admission_services(feature):
     """The services whose resources a feature WITHOUT a runtime profile is admitted on (spec 0007
-    §4.6): its canonical service, plus the generic worker for transcription and vision. No GPU
-    key: without a profile there is no GPU binding to protect. None for a feature without a
-    service here: the caller keeps every row of the engine (no fail-open)."""
+    §4.6): its canonical service, plus the generic worker for transcription and vision. The GPU
+    rows are taken only on a host where the canonical service has no row yet (admission). None
+    for a feature without a service here: the caller keeps every row of the engine (no fail-open)."""
     if feature not in SERVICES:
         return None
     names = {SERVICES[feature]}

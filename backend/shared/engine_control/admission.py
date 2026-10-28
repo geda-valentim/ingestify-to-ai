@@ -63,7 +63,8 @@ def _rows_without_profile(db, engine, feature, lock):
 
 
 def _lockable(query, lock):
-    # populate_existing: a row the session loaded before the lock keeps no stale gate or lock.
+    # populate_existing: a row the session loaded before the lock keeps no stale gate or lock
+    # (and an unflushed edit of one is overwritten: callers do not edit these rows first).
     return query.with_for_update().populate_existing() if lock else query
 
 
