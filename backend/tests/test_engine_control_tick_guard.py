@@ -107,7 +107,8 @@ class TestShortLockWaits:
 
         assert own is not mysql and own.url == mysql.url, "same database, same config, not the shared pool"
         assert own.pool.size() == 2 and own.pool._max_overflow == 0
-        assert own.pool._pre_ping and own.pool._recycle == 3600 and own.pool._timeout == mysql.pool._timeout
+        assert own.pool._pre_ping and own.pool._recycle == 3600 and own.echo == mysql.echo
+        assert own.pool.timeout() == min(mysql.pool.timeout(), 5), "a busy pool waits no longer than a lock"
         assert event.contains(own, "connect", capped), "every new connection gets the cap"
         own.dispose()
 

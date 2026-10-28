@@ -7,6 +7,7 @@ Each guard stands alone and calls nothing of the caller's: the idle policy's tic
 """
 
 import os
+import threading
 import time
 from functools import lru_cache
 from uuid import uuid4
@@ -74,7 +75,11 @@ def short_lock_wait_sessions(seconds=LOCK_WAIT_SECONDS):
     never at import or in a parent that forks (a connection opened before a fork would be
     shared by the children). Other databases (SQLite in tests) get the shared sessions.
     """
-    return _sessions(seconds, os.getpid())
+    with _building:  # two threads on first use build one pool, not two
+        return _sessions(seconds, os.getpid())
+
+
+_building = threading.Lock()
 
 
 @lru_cache(maxsize=None)
@@ -86,6 +91,8 @@ def _sessions(seconds, _pid):
 
     if engine.dialect.name != "mysql":
         return SessionLocal
-    own = create_engine(engine.url, **engine_options(pool_size=2, max_overflow=0))
+    # Waiting for a free connection is capped like a lock wait: never longer than the config's.
+    timeout = min(engine_options()["pool_timeout"], seconds)
+    own = create_engine(engine.url, **engine_options(pool_size=2, max_overflow=0, pool_timeout=timeout))
     event.listen(own, "connect", lock_wait_setter(seconds))
     return sessionmaker(autocommit=False, autoflush=False, bind=own)
