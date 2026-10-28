@@ -169,6 +169,15 @@ _PT = {
         "perfil de execução e uma operação revisada, não pela edição direta.",
         ["bind_profile"],
     ),
+    "FORCE_CANCEL_NOTHING_TO_RELEASE": (
+        "Não há ticket de admissão aberto nos recursos desta funcionalidade: nada a liberar.",
+        ["reload"],
+    ),
+    "FORCE_CANCEL_CONFIRMATION_REQUIRED": (
+        "Confirme digitando exatamente o texto pedido (o nome da engine e o número de tickets "
+        "do plano).",
+        ["fix_input"],
+    ),
     "IDLE_COOLDOWN_NOT_SUPPORTED": (
         "O desligamento por ociosidade só vale em engine local, para transcrição e visão.",
         ["fix_input"],
@@ -214,6 +223,13 @@ _PT = {
         "Perfis de execução e escopos de acesso estão desligados nesta instalação "
         "(IAM_MODE diferente de enforce).",
         ["enable_control"],
+    ),
+    "ENGINE_CONTROL_MIGRATION_REQUIRED": (
+        "Esta função precisa da migração explícita do controle de engines, que é idempotente: "
+        "o passo 2 do runbook engine-control-bootstrap (upgrade(engine) de "
+        "shared.engine_control.migration, no ambiente da API). Numa instalação existente, o "
+        "alembic upgrade não a aplica.",
+        ["retry"],
     ),
     "ACCESS_SCHEMA_NOT_READY": (
         "As tabelas de acesso ainda não foram migradas. Rode as migrações do backend e tente de novo.",

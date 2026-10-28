@@ -127,6 +127,12 @@ class ControlAdmission(Base):
     holder = Column(String(128), nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     released_at = Column(DateTime)
+    # Why it was released when not by its holder: `force_cancel:<operation_id>` (NULL = a normal
+    # release). In the table (create_all makes it) but NOT mapped: the ORM puts every mapped column
+    # in its INSERT and SELECT, so admission, release, the drain and its reconciliation would break
+    # on a database the additive migration has not reached yet. Read/write it through __table__.
+    release_reason = Column(String(80))
+    __mapper_args__ = {"exclude_properties": ["release_reason"]}
 
 
 class ControlHost(Base):

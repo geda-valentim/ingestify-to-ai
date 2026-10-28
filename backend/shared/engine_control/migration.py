@@ -34,6 +34,16 @@ def _bounded_metadata_lock(connection, seconds=30):
         connection.execute(text("SET SESSION lock_wait_timeout = @@GLOBAL.lock_wait_timeout"))
 
 
+# Columns added to tables that already existed. They are not mapped on the ORM models (see
+# ControlAdmission.release_reason), so the code runs before this migration does; only the feature
+# that needs a column answers 503 until then.
+ADDED_COLUMNS = {"engine_control_admissions": ("release_reason",)}
+
+
+def has_added_columns(bind, table):
+    return set(ADDED_COLUMNS[table]) <= {c["name"] for c in inspect(bind).get_columns(table)}
+
+
 def _upgrade(connection):
     Base.metadata.create_all(connection, tables=TABLES)
     with _bounded_metadata_lock(connection):
@@ -54,6 +64,10 @@ def _alter_existing_tables(connection):
     for index in resource.indexes:
         if column.name in index.columns:
             index.create(connection, checkfirst=True)
+    admissions = models.ControlAdmission.__table__
+    if "release_reason" not in {c["name"] for c in inspect(connection).get_columns(admissions.name)}:
+        definition = str(CreateColumn(admissions.c.release_reason).compile(dialect=connection.dialect))
+        connection.execute(text(f"ALTER TABLE {admissions.name} ADD COLUMN {definition}"))
     # Indexes added to tables that already exist (create_all skips them): additive. InnoDB
     # builds a secondary index online, after a brief exclusive metadata lock (bounded above).
     for index in models.ControlAdmission.__table__.indexes:
