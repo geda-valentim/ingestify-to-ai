@@ -19,12 +19,13 @@ from shared.engine_control.models import (
     OperationOutbox,
     ControlHost,
 )
-from shared.engine_control.contracts import RuntimeSettings, TERMINAL
-from shared.engine_control import registry, catalog, force_cancel
+from shared.engine_control.contracts import RuntimeSettings, TERMINAL, comparable_settings
+from shared.engine_control import registry, catalog, force_cancel, idle_opt_in
 from shared.engines import budget
 from shared.engines.redact import redact
 from shared import error_catalog
 from shared.engine_control.operation_events import events  # noqa: F401  (re-exported)
+from shared.engine_control.operation_view import operation_view  # noqa: F401  (re-exported)
 
 
 class ControlError(Exception):
@@ -86,6 +87,14 @@ def clean(value):
     if isinstance(value, (list, tuple)):
         return [clean(v) for v in value[:100]]
     return value
+
+
+def detached_engine(session_factory, engine_id):
+    """The engine row, readable after its session closed (a recovery observes outside SQL)."""
+    with session_factory() as db:
+        e = db.get(Engine, engine_id)
+        db.expunge(e)
+        return e
 
 
 def locked_engine(db, engine_id):
@@ -324,7 +333,7 @@ def save_profile(
         ):
             raise ControlError("PROFILE_INCOMPATIBLE", 422)
         template = dict(p, warm_until=None)
-        if template != revision.settings:
+        if template != comparable_settings(revision.settings):
             raise ControlError("PROFILE_CONTENT_MISMATCH", 422)
         if (
             digest(catalog.get(p["model_profile_id"], engine.adapter_type, feature))
@@ -370,6 +379,7 @@ def save_profile(
             resources=sorted(affected),
             lock=True,
         )
+    idle_opt_in.require(db, engine, feature, p, actor, sorted(affected), profile=origin)
     old = latest_profile(db, engine.id, feature)
     row = RuntimeProfile(
         engine_id=engine.id,
@@ -487,6 +497,7 @@ def create_plan(db, engine, req, actor):
         source_profile_revision_id=p.source_profile_revision_id if p else None,
         drain_timeout_seconds=req.drain_timeout_seconds,
         max_usd=str(req.max_usd),
+        **({"trigger": req.trigger} if getattr(req, "trigger", None) else {}),
     )
     body["resources"] = sorted(driver.resource_keys(engine, req.feature, profile))
     applied = (
@@ -515,6 +526,11 @@ def create_plan(db, engine, req, actor):
             resources=body["resources"],
             lock=True,
         )
+    if getattr(req, "trigger", None):
+        idle_opt_in.check_automatic(db, engine, req, actor, profile, body["resources"])
+    if req.type == "apply_profile":  # after the plan's own authorization: its refusal comes first
+        idle_opt_in.require(db, engine, req.feature, profile, actor, body["resources"],
+                            profile=source_profile(db, p.source_profile_revision_id) if p else None)
     body["engine_config_hash"] = digest(
         {"config": engine.config, "deployments": engine.deployments}
     )
@@ -577,6 +593,7 @@ def enqueue(db, plan_id, plan_hash, key, actor, confirm_paid=False, confirm_forc
     if not plan or plan.actor_id != actor:
         raise ControlError("PLAN_NOT_FOUND", 404)
     e = locked_engine(db, plan.engine_id)
+    idle_opt_in.reauthorize_automatic(db, plan_id, actor)  # after the engine lock, like create_plan
     # The first lookup may precede a concurrent commit. A locking read sees the
     # accepted request after waiting for the engine lock under InnoDB RR.
     existing = (
@@ -643,7 +660,7 @@ def enqueue(db, plan_id, plan_hash, key, actor, confirm_paid=False, confirm_forc
             target_type="engine",
             target_id=e.id,
             before=None,
-            after={"operation_id": op_id, "type": plan.body["type"]},
+            after={"operation_id": op_id, "type": plan.body["type"], "trigger": plan.body.get("trigger")},
         )
     )
     try:
@@ -659,31 +676,6 @@ def enqueue(db, plan_id, plan_hash, key, actor, confirm_paid=False, confirm_forc
             return operation_view(existing)
         raise ControlError("OPERATION_CONFLICT") from None
     return operation_view(op)
-
-
-def operation_view(op):
-    return dict(
-        operation_id=op.id,
-        engine_id=op.engine_id,
-        plan_id=op.plan_id,
-        state=op.state,
-        can_recover=op.state == "needs_attention"
-        and bool((op.handles or {}).get("executor_exited")),
-        stage=op.stage,
-        can_cancel=op.state not in TERMINAL,
-        cancel_requested=op.cancel_requested,
-        generation=op.generation,
-        last_seq=op.seq,
-        result=op.result,
-        error=error_catalog.operation_error(op.error),
-        reserved_usd=str(op.reserved_usd),
-        actual_usd=str(op.actual_usd) if op.actual_usd is not None else None,
-        cost_confirmed=op.cost_confirmed,
-        created_at=op.created_at,
-        started_at=op.started_at,
-        finished_at=op.finished_at,
-        events_url=f"/admin/engine-operations/{op.id}/events",
-    )
 
 
 def append_event(db, op, kind, payload):
@@ -731,6 +723,11 @@ def claim(db, op_id, holder):
     op.lease_until = now() + timedelta(seconds=30)
     append_event(db, op, "operation.running", {"message": "Executor iniciou"})
     db.commit()
+    # A new effect only while the opt-in holds; an admitted one is recovered (observe/reconcile only).
+    refused = None if op.effect_started else idle_opt_in.refusal_at_claim(db, op)
+    if refused:
+        finish(db, op_id, op.generation, "failed", error=refused, safe=True)
+        return None
     return op.generation
 
 
@@ -979,6 +976,7 @@ def admit_effect(db, op_id, generation, step, executor="control"):
     from shared.access import policy
     from shared.access.models import EffectAdmission
 
+    idle_opt_in.check_before_effect(db, op_id)  # automatic operations: even with IAM off
     if not policy.enabled():
         return
     policy.epoch(db, True)

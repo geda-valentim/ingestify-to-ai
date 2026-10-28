@@ -48,6 +48,8 @@ class RuntimeSettings(Closed):
     idle_timeout_seconds: int = Field(60, ge=2, le=3600)
     memory_mb: int | None = Field(None, ge=256, le=262144)
     warmup_mode: Literal["on_start", "manual"] = "on_start"
+    # Opt-in: let the idle policy cool the feature down after idle_timeout_seconds (local only).
+    idle_cooldown: bool = False
     warm_until: AwareDatetime | None = None
     provider_settings: dict[str, Any] = Field(default_factory=dict)
 
@@ -75,6 +77,30 @@ class PlanRequest(Closed):
         if self.type not in ACTIONS and self.type != FORCE_CANCEL:
             raise ValueError("Unknown operation type")
         return self
+
+
+class TriggeredPlanRequest(PlanRequest):
+    """A plan the system starts on its own (the idle policy, a wakeup). Internal only: the
+    HTTP route takes PlanRequest, so a client cannot claim to be automatic in the audit."""
+
+    trigger: Literal["idle_policy", "wakeup"]
+
+    @model_validator(mode="after")
+    def automatic(self):
+        # The borrowed identity only ever cools down (idle) or starts (wakeup).
+        if {"idle_policy": "cooldown", "wakeup": "start"}[self.trigger] != self.type:
+            raise ValueError("idle_policy plans a cooldown and wakeup a start")
+        return self
+
+
+def comparable_settings(settings):
+    """Runtime settings with every default filled in, to compare a stored copy (written before
+    a field was added) with a fresh one. A stored copy the current schema rejects compares as
+    itself (so it differs, and e.g. the seed publishes a fresh revision instead of failing)."""
+    try:
+        return RuntimeSettings.model_validate(settings).model_dump(mode="json")
+    except ValueError:
+        return settings
 
 
 class EngineControlAdapter(Protocol):
