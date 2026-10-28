@@ -377,6 +377,67 @@ def test_the_iam_off_rule_matches_authorize_force(db, monkeypatch, actor):
     db.commit()
     permission = "engine_operations.execute.cooldown"
 
-    manual = _outcome(lambda: idle_opt_in._authorize_actor(db, actor, permission))
+    manual = _outcome(lambda: idle_opt_in._authorize_actor(db, actor))
     forced = _outcome(lambda: policy.authorize(db, actor, permission, force=True))
     assert manual == forced, actor
+
+
+def test_with_iam_on_a_profile_scoped_operator_runs_the_automatic_cooldown_end_to_end(iam_world, monkeypatch):  # noqa: F811
+    """The operator's grant is scoped to the source profile (profile_ids): opt-in, apply and the
+    automatic cooldown (plan and enqueue) all pass with the same grant."""
+    from shared.access import contracts as C, service as access
+    from shared.engine_control import registry
+    from shared.engine_control.models import ControlResource
+    from tests.test_execution_profiles import ADAPTER, draft, settings
+
+    base = registry.descriptor(ADAPTER)
+    d = dict(base, type="local", actions=["scale", "drain_stop", "cooldown", "start", "apply_profile"],
+             model_profiles=[dict(m, adapters=["local"]) for m in base["model_profiles"]])
+    monkeypatch.setitem(registry._registry, ("local", 1), (d, registry._registry[(ADAPTER, 1)][1]))
+    with iam_world() as db:
+        db.get(Engine, "engine-a").adapter_type = "local"
+        db.commit()
+        p = draft(db, adapter_type="local", settings=dict(settings(), idle_cooldown=True))
+        p = access.publish(db, p["id"], C.Publish(version=p["version"], revision_id=p["revisions"][0]["id"]),
+                           "bootstrap")
+        scope = constraints(adapters=["local"], profile_ids=[p["id"]])
+        grant(db, scope=scope)  # engine_operator: plan, cooldown, start, apply_profile...
+        grant(db, role="runtime_configurator", scope=scope)  # ...and binding the profile
+        access.bind(db, db.get(Engine, "engine-a"),
+                    C.Bind(version=0, feature="transcription", revision_id=p["latest_published_revision_id"]),
+                    "operator")
+        e = db.get(Engine, "engine-a")
+        plan = service.create_plan(db, e, PlanRequest(type="apply_profile", engine_version=e.version,
+                                                      profile_revision=1, max_usd="0.10"), "operator")
+        op = service.enqueue(db, plan["plan_id"], plan["plan_hash"], "apply", "operator", True)
+        gen = service.claim(db, op["operation_id"], "one")
+        service.publish_applied(db, op["operation_id"], gen, {})
+        service.finish(db, op["operation_id"], gen, "succeeded", {}, safe=True)
+        assert idle_opt_in.opt_in(db, "engine-a", "transcription") == ("operator", 1)
+        e = db.get(Engine, "engine-a")
+        auto = service.create_plan(db, e, TriggeredPlanRequest(
+            type="cooldown", engine_version=e.version, profile_revision=1, max_usd="0.10",
+            trigger="idle_policy"), "operator")
+        done = service.enqueue(db, auto["plan_id"], auto["plan_hash"], "idle:1", "operator", True)
+        assert done["trigger"] == "idle_policy"
+        assert db.query(ControlResource).filter(ControlResource.operation_id.isnot(None)).count() == 1
+
+
+def test_a_published_but_unfinished_application_of_another_revision_breaks_the_chain(db):
+    # Y was published (applied_at) but its operation never finished succeeded (needs_attention)
+    x = _revision(db, 1, idle=True, applied_at=T0)
+    _operation(db, x, "apply_profile", "admin-a", finished=T0)
+    y = _revision(db, 2, idle=False, applied_at=T0 + timedelta(minutes=1))
+    _operation(db, y, "apply_profile", "admin-a", state="needs_attention", finished=None)
+    x.applied_at = T0 + timedelta(minutes=2)
+    _operation(db, x, "start", "operator-b", finished=T0 + timedelta(minutes=2))
+    assert idle_opt_in.opt_in(db, "l", "transcription") is None
+
+
+def test_an_application_in_the_same_second_fails_closed(db):
+    x = _revision(db, 1, idle=True, applied_at=T0)
+    _operation(db, x, "apply_profile", "admin-a", finished=T0)
+    _revision(db, 2, idle=False, applied_at=T0)  # same instant: cannot tell which came last
+    x.applied_at = T0 + timedelta(seconds=1)
+    db.flush()
+    assert idle_opt_in.opt_in(db, "l", "transcription") is None

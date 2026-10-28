@@ -20,7 +20,7 @@ IDLE_PERMISSIONS = (
     frozenset({"engine_operations.plan", "engine_operations.execute.cooldown"}),
     frozenset({"engine_operations.plan", "engine_operations.execute.start"}),
 )
-NOT_APPLIED = ("test", "reconcile")  # operation types that never publish an applied revision
+AUTOMATIC = {"idle_policy": "cooldown", "wakeup": "start"}  # trigger -> the only type it may plan
 
 
 class OptIn(NamedTuple):
@@ -57,18 +57,20 @@ def require(db, engine, feature, runtime, actor, resources, *, profile=None) -> 
         raise ControlError("IDLE_COOLDOWN_PERMISSION_REQUIRED", 403, feature=feature) from None
 
 
-def _authorize_actor(db, actor, permissions, **scope) -> None:
-    """The opt-in actor still holds `permissions`. With IAM on, the usual grants; with IAM off
-    (where the domain call otherwise authorizes nothing), the rule the API applies to every
-    human request: an active, effective admin. Not authorize(force=True): it needs the access
-    schema, which an installation with IAM off may not have."""
+def _authorize_actor(db, actor) -> None:
+    """With IAM off (where the domain call otherwise authorizes nothing), the opt-in actor must
+    still pass the rule the API applies to every human request: an active, effective admin. Not
+    authorize(force=True): it needs the access schema, which an installation with IAM off may
+    not have (a test proves both rules agree). With IAM on, the plan's own authorization holds."""
     from shared.access import policy
     from shared.admin import is_effective_admin
     from shared.engine_control.service import ControlError
     from shared.models import User
 
     if policy.enabled():
-        policy.authorize(db, actor, permissions, lock=True, **scope)
+        # create_plan/enqueue already authorize this actor with the full scope (source profile,
+        # max_usd, lock), and the effect is admitted again; a partial second check here would
+        # only refuse profile-scoped grants.
         return
     user = db.query(User).filter_by(id=str(actor)).populate_existing().with_for_update().first()
     if user is None or not user.is_active or not is_effective_admin(user):
@@ -82,10 +84,11 @@ def check_automatic(db, engine, req, actor, runtime, resources) -> None:
     from shared.engine_control.service import ControlError
 
     _qualifies(engine, req.feature)
+    if AUTOMATIC.get(getattr(req, "trigger", None)) != req.type:  # even if the model was bypassed
+        raise ControlError("IDLE_POLICY_NOT_OPTED_IN", 403, feature=req.feature)
     if opt_in(db, engine.id, req.feature) != (actor, req.profile_revision):
         raise ControlError("IDLE_POLICY_NOT_OPTED_IN", 403, feature=req.feature)
-    _authorize_actor(db, actor, {"engine_operations.plan", "engine_operations.execute." + req.type},
-                     engine=engine, feature=req.feature, runtime=runtime, resources=resources)
+    _authorize_actor(db, actor)
 
 
 def reauthorize_automatic(db, plan_id, actor) -> None:
@@ -93,33 +96,16 @@ def reauthorize_automatic(db, plan_id, actor) -> None:
     plan = db.get(OperationPlan, plan_id)
     if plan is None or not (plan.body or {}).get("trigger") or plan.actor_id != actor:
         return  # human plans keep their usual path; a foreign plan is refused there
-    from shared.models import Engine
-
-    b = plan.body
-    _authorize_actor(db, actor, "engine_operations.execute." + b["type"], engine=db.get(Engine, plan.engine_id),
-                     feature=b["feature"], runtime=b.get("profile"), resources=b.get("resources"))
-
-
-def _applications(db, engine_id, feature):
-    """Successful operations that applied a revision of this feature (every type but test and
-    reconcile publishes the applied revision), newest first."""
-    return (
-        db.query(EngineOperation, OperationPlan)
-        .join(OperationPlan, OperationPlan.id == EngineOperation.plan_id)
-        .filter(EngineOperation.engine_id == engine_id, EngineOperation.state == "succeeded",
-                OperationPlan.profile_id.isnot(None),
-                OperationPlan.body["feature"].as_string() == feature,
-                OperationPlan.body["type"].as_string().notin_(NOT_APPLIED))
-        .order_by(EngineOperation.finished_at.desc())
-        .yield_per(100)
-    )
+    _authorize_actor(db, actor)
 
 
 def opt_in(db, engine_id: str, feature: str) -> Optional[OptIn]:
     """Who the automatic operations of this feature run as, and on which revision: the actor
-    of the apply_profile that applied the current revision, when that revision opted in and no
-    other revision was applied since. Re-applying an old opted-in revision by any other type
-    (a start by someone else) does not revive its opt-in. None: the policy does nothing."""
+    of the latest successful apply_profile of the currently applied revision, when that
+    revision opted in and no other revision was applied (published, whatever became of its
+    operation) at or after that apply_profile finished. Re-applying an old opted-in revision by
+    any other type (a start by someone else) does not revive its opt-in; a tie fails closed.
+    None: the policy does nothing."""
     applied = (
         db.query(RuntimeProfile)
         .filter_by(engine_id=engine_id, feature=feature)
@@ -129,9 +115,21 @@ def opt_in(db, engine_id: str, feature: str) -> Optional[OptIn]:
     )
     if applied is None or not (applied.profile or {}).get("idle_cooldown"):
         return None
-    for op, plan in _applications(db, engine_id, feature):
-        if plan.profile_id != applied.id:
-            return None  # another revision was applied after this revision's last apply_profile
-        if plan.body.get("type") == "apply_profile":
-            return OptIn(op.actor_id, applied.revision)
-    return None
+    granted = (
+        db.query(EngineOperation.actor_id, EngineOperation.finished_at)
+        .join(OperationPlan, OperationPlan.id == EngineOperation.plan_id)
+        .filter(EngineOperation.engine_id == engine_id, EngineOperation.state == "succeeded",
+                OperationPlan.profile_id == applied.id,
+                OperationPlan.body["type"].as_string() == "apply_profile")
+        .order_by(EngineOperation.finished_at.desc())
+        .first()
+    )
+    if granted is None or granted.finished_at is None:
+        return None
+    since = (
+        db.query(RuntimeProfile.id)
+        .filter(RuntimeProfile.engine_id == engine_id, RuntimeProfile.feature == feature,
+                RuntimeProfile.id != applied.id, RuntimeProfile.applied_at >= granted.finished_at)
+        .first()
+    )
+    return None if since else OptIn(granted.actor_id, applied.revision)

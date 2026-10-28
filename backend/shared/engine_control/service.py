@@ -563,7 +563,6 @@ def enqueue(db, plan_id, plan_hash, key, actor, confirm_paid=False):
         )
     if not key or len(key) > 128:
         raise ControlError("IDEMPOTENCY_KEY_REQUIRED", 422)
-    idle_opt_in.reauthorize_automatic(db, plan_id, actor)
     request_hash = digest(
         dict(plan_id=plan_id, plan_hash=plan_hash, confirm_paid=confirm_paid)
     )
@@ -578,6 +577,7 @@ def enqueue(db, plan_id, plan_hash, key, actor, confirm_paid=False):
     if not plan or plan.actor_id != actor:
         raise ControlError("PLAN_NOT_FOUND", 404)
     e = locked_engine(db, plan.engine_id)
+    idle_opt_in.reauthorize_automatic(db, plan_id, actor)  # after the engine lock, like create_plan
     # The first lookup may precede a concurrent commit. A locking read sees the
     # accepted request after waiting for the engine lock under InnoDB RR.
     existing = (
