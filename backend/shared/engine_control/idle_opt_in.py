@@ -77,26 +77,60 @@ def _authorize_actor(db, actor) -> None:
         raise ControlError("ACCESS_REVOKED", 403)
 
 
-def check_automatic(db, engine, req, actor, runtime, resources) -> None:
-    """An automatic plan (TriggeredPlanRequest) only for the opt-in it claims: a local
-    transcription/vision engine whose applied revision opted in, run as that opt-in's actor on
-    that revision; and the actor re-authorized even with IAM off (active, still an admin)."""
+def _check(db, engine, feature, type_, trigger, actor, revision) -> None:
+    """The one rule for an automatic operation, at every point from its plan to its effect
+    (spec 0007 §4.6): it only cools down (idle_policy) or starts (wakeup) a local
+    transcription/vision engine, as the actor and on the revision of the opt-in in force, and
+    that actor is still authorized (with IAM off: active, effective admin)."""
     from shared.engine_control.service import ControlError
 
-    _qualifies(engine, req.feature)
-    if AUTOMATIC.get(getattr(req, "trigger", None)) != req.type:  # even if the model was bypassed
-        raise ControlError("IDLE_POLICY_NOT_OPTED_IN", 403, feature=req.feature)
-    if opt_in(db, engine.id, req.feature) != (actor, req.profile_revision):
-        raise ControlError("IDLE_POLICY_NOT_OPTED_IN", 403, feature=req.feature)
+    _qualifies(engine, feature)
+    if AUTOMATIC.get(trigger) != type_ or opt_in(db, engine.id, feature) != (actor, revision):
+        raise ControlError("IDLE_POLICY_NOT_OPTED_IN", 403, feature=feature)
     _authorize_actor(db, actor)
+
+
+def check_automatic(db, engine, req, actor, runtime, resources) -> None:
+    """At create_plan, for a TriggeredPlanRequest."""
+    _check(db, engine, req.feature, req.type, getattr(req, "trigger", None), actor, req.profile_revision)
+
+
+def check_plan(db, plan) -> None:
+    """The same rule for a stored plan: at enqueue, at claim and right before each external
+    effect (an opt-in revoked or an actor deactivated in between stops it there). Human plans
+    are not concerned."""
+    body = plan.body or {}
+    if not body.get("trigger"):
+        return
+    from shared.models import Engine
+
+    _check(db, db.get(Engine, plan.engine_id), body["feature"], body["type"], body["trigger"],
+           plan.actor_id, body.get("profile_revision"))
 
 
 def reauthorize_automatic(db, plan_id, actor) -> None:
-    """At enqueue, an automatic plan's actor is authorized again even with IAM off."""
+    """At enqueue (the plan's own actor; a foreign plan is refused by the caller)."""
     plan = db.get(OperationPlan, plan_id)
-    if plan is None or not (plan.body or {}).get("trigger") or plan.actor_id != actor:
-        return  # human plans keep their usual path; a foreign plan is refused there
-    _authorize_actor(db, actor)
+    if plan is not None and plan.actor_id == actor:
+        check_plan(db, plan)
+
+
+def refusal_at_claim(db, op):
+    """At claim: None, or the error with which the automatic operation ends before any effect."""
+    from shared.engine_control.service import ControlError
+
+    try:
+        check_plan(db, db.get(OperationPlan, op.plan_id))
+    except ControlError as exc:
+        return {"code": exc.code, "message": "A operação automática deixou de valer antes do efeito."}
+    return None
+
+
+def check_before_effect(db, op_id) -> None:
+    """Right before an external effect (admit_effect), even with IAM off."""
+    op = db.get(EngineOperation, op_id)
+    if op is not None:
+        check_plan(db, db.get(OperationPlan, op.plan_id))
 
 
 def opt_in(db, engine_id: str, feature: str) -> Optional[OptIn]:

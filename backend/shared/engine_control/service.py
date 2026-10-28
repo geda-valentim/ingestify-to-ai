@@ -707,6 +707,10 @@ def claim(db, op_id, holder):
     op.lease_until = now() + timedelta(seconds=30)
     append_event(db, op, "operation.running", {"message": "Executor iniciou"})
     db.commit()
+    refused = idle_opt_in.refusal_at_claim(db, op)  # an automatic op whose opt-in no longer holds
+    if refused:
+        finish(db, op_id, op.generation, "failed", error=refused, safe=True)
+        return None
     return op.generation
 
 
@@ -985,6 +989,7 @@ def admit_effect(db, op_id, generation, step, executor="control"):
     from shared.access import policy
     from shared.access.models import EffectAdmission
 
+    idle_opt_in.check_before_effect(db, op_id)  # automatic operations: even with IAM off
     if not policy.enabled():
         return
     policy.epoch(db, True)

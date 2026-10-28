@@ -441,3 +441,67 @@ def test_an_application_in_the_same_second_fails_closed(db):
     x.applied_at = T0 + timedelta(seconds=1)
     db.flush()
     assert idle_opt_in.opt_in(db, "l", "transcription") is None
+
+
+# --- the rule holds at every point from plan to effect (§4.6) --------------------------------
+
+def _another_admin_applies_the_revision(s):
+    """B re-applies revision 1 by apply_profile: the opt-in now belongs to B, not to A."""
+    from shared.models import User
+
+    s.add(User(id="admin-b", username="admin-b", email="b@example.test", hashed_password="x",
+               is_admin=True, is_active=True))
+    rev = s.query(RuntimeProfile).filter_by(engine_id="e", revision=1).one()
+    _operation(s, rev, "apply_profile", "admin-b", finished=datetime.utcnow() + timedelta(seconds=5),
+               engine_id="e")
+    s.commit()
+
+
+def test_enqueue_refuses_a_plan_whose_opt_in_changed_owner(control_world, monkeypatch):  # noqa: F811
+    _local_opt_in(control_world, monkeypatch)
+    with control_world() as s:
+        plan = _cooldown(s)
+        _another_admin_applies_the_revision(s)
+        with pytest.raises(service.ControlError) as e:
+            service.enqueue(s, plan["plan_id"], plan["plan_hash"], "idle:1", "admin", True)
+        assert e.value.code == "IDLE_POLICY_NOT_OPTED_IN"
+
+
+def test_claim_ends_without_effect_an_operation_whose_opt_in_changed_owner(control_world, monkeypatch):  # noqa: F811
+    from shared.engine_control.models import ControlResource
+
+    _local_opt_in(control_world, monkeypatch)
+    with control_world() as s:
+        plan = _cooldown(s)
+        op = service.enqueue(s, plan["plan_id"], plan["plan_hash"], "idle:1", "admin", True)
+        _another_admin_applies_the_revision(s)
+        assert service.claim(s, op["operation_id"], "one") is None
+        row = s.get(EngineOperation, op["operation_id"])
+        assert (row.state, row.error["code"], row.effect_started) == ("failed", "IDLE_POLICY_NOT_OPTED_IN", False)
+        assert s.query(ControlResource).filter(ControlResource.operation_id.isnot(None)).count() == 0
+
+
+def test_with_iam_off_a_deactivation_after_claim_stops_the_effect(control_world, monkeypatch):  # noqa: F811
+    from shared.models import User
+
+    _local_opt_in(control_world, monkeypatch)
+    with control_world() as s:
+        plan = _cooldown(s)
+        op = service.enqueue(s, plan["plan_id"], plan["plan_hash"], "idle:1", "admin", True)
+        gen = service.claim(s, op["operation_id"], "one")
+        s.get(User, "admin").is_active = False
+        s.commit()
+        with pytest.raises(service.ControlError) as e:
+            service.event(s, op["operation_id"], gen, "scaling", effect=True)  # the effect gate
+        assert e.value.code == "ACCESS_REVOKED"
+        s.rollback()
+        assert s.get(EngineOperation, op["operation_id"]).effect_started is False
+
+
+def test_human_operations_are_not_concerned_by_the_opt_in_rule(control_world):  # noqa: F811
+    p = prepared(control_world)
+    with control_world() as s:
+        op = service.enqueue(s, p["plan_id"], p["plan_hash"], "human", "admin", True)
+        gen = service.claim(s, op["operation_id"], "one")
+        assert gen is not None
+        service.event(s, op["operation_id"], gen, "scaling", effect=True)
