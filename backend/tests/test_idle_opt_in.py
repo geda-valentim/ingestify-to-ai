@@ -336,3 +336,47 @@ def test_the_opt_in_is_checked_again_when_its_apply_profile_is_planned(control_w
             service.create_plan(s, e, PlanRequest(type="apply_profile", engine_version=e.version,
                                                   profile_revision=1, max_usd="0.1"), "admin")
         assert err.value.code == "IDLE_COOLDOWN_NOT_SUPPORTED"
+
+
+# --- the IAM-off rule equals authorize(force=True) -------------------------------------------
+# With IAM off the automatic actor is checked by hand (authorize(force=True) needs the access
+# schema, which an installation with IAM off may lack). Same matrix, both paths, same outcome:
+# if either rule changes alone, this breaks.
+
+ACTORS = {
+    "admin": dict(is_admin=True, is_active=True),
+    "inactive-admin": dict(is_admin=True, is_active=False),
+    "demoted": dict(is_admin=False, is_active=True),
+    "plain": dict(is_admin=False, is_active=True),
+    "inactive-plain": dict(is_admin=False, is_active=False),
+    "root": dict(is_admin=False, is_active=True, root_slot=1),
+    "listed": dict(is_admin=False, is_active=True),  # admin by ADMIN_USER_IDS
+}
+
+
+def _outcome(call):
+    try:
+        call()
+        return "pass"
+    except service.ControlError as exc:
+        return (exc.code, exc.status)
+
+
+@pytest.mark.parametrize("actor", [*ACTORS, "missing"])
+def test_the_iam_off_rule_matches_authorize_force(db, monkeypatch, actor):
+    from shared.access import policy
+    from shared.access.models import AuthorizationEpoch
+    from shared.config import get_settings
+    from shared.models import User
+
+    monkeypatch.setattr(get_settings(), "engine_access_enabled", False)
+    monkeypatch.setattr(get_settings(), "admin_user_ids", "listed")
+    db.add(AuthorizationEpoch(id=1, version=0))
+    for uid, fields in ACTORS.items():
+        db.add(User(id=uid, username=uid, email=uid + "@example.test", hashed_password="x", **fields))
+    db.commit()
+    permission = "engine_operations.execute.cooldown"
+
+    manual = _outcome(lambda: idle_opt_in._authorize_actor(db, actor, permission))
+    forced = _outcome(lambda: policy.authorize(db, actor, permission, force=True))
+    assert manual == forced, actor
