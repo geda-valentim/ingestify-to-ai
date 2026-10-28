@@ -308,3 +308,15 @@ def test_without_a_probe_answer_the_linked_usage_and_its_warning_stay(world):  #
     (ticket,) = plan["tickets"]
     assert ticket["verdict"] == "unknown" and [u["status"] for u in ticket["usages"]] == ["running"]
     assert plan["looks_like_live_work"] is True
+
+
+def test_release_reason_is_in_the_table_but_in_no_orm_statement():
+    from sqlalchemy import insert as sa_insert
+
+    from shared.database import SessionLocal  # noqa: F401  (models imported)
+
+    assert "release_reason" in ControlAdmission.__table__.c  # create_all makes it on a new install
+    select_sql = str(select(ControlAdmission).compile())
+    assert "release_reason" not in select_sql  # the ORM never selects it...
+    assert "release_reason" not in ControlAdmission.__mapper__.columns.keys()  # ...nor inserts it
+    assert "release_reason" in str(sa_insert(ControlAdmission.__table__).compile())  # only __table__ does
