@@ -15,14 +15,55 @@ from shared.engine_control.models import (
     ControlResource,
     ControlAdmission,
 )
+from shared.engine_control.local_services import SERVICES, is_service_key
 from shared.models import EngineUsage
 from workers.engine_control import orphan_tickets
 
 ORPHAN_RECONCILE_SECONDS = 10
 
 
+WORK_ARRIVED = "IDLE_WORK_ARRIVED"
+
+
+def _work_arrived(db, plan, keys):
+    """An automatic cooldown never waits for work: a ticket on its dedicated key, or a usage of
+    its feature, that came after the tick saw it idle ends it without an effect. Read under the
+    engine's lock, which every admission also takes, so nothing slips in after the check."""
+    ticket = db.query(ControlAdmission.id).filter(
+        ControlAdmission.resource_key.in_(keys), ControlAdmission.released_at.is_(None)).first()
+    usage = db.query(EngineUsage.id).filter(
+        EngineUsage.engine_id == plan["engine_id"], EngineUsage.feature == plan["feature"],
+        EngineUsage.status.in_(("reserved", "spawning", "running"))).first()
+    return ticket is not None or usage is not None
+
+
+def drain_scope(plan):
+    """(keys gated and awaited, feature whose usages count; None = all) for a plan's drain.
+
+    An automatic plan (idle cooldown, wakeup) drains only its feature's dedicated service:
+    every ticket of the feature carries that key, while the generic worker's and the shared
+    GPU's keys also admit document conversions, which it must not hold up (spec 0007, 4.6).
+    The resource lock still covers every key of the plan.
+    """
+    if not plan.get("trigger"):
+        return plan["resources"], None
+    dedicated = [key for key in plan["resources"] if is_service_key(key, {SERVICES.get(plan["feature"])})]
+    return (dedicated, plan["feature"]) if dedicated else (plan["resources"], None)
+
+
 class Cancelled(Exception):
     pass
+
+
+class HostFailure(RuntimeError):
+    """The host agent's report: its code answers the host's own call, never the operation's
+    actor's authorization, so the error records where it came from."""
+
+
+def failure(exc):
+    """The operation's error for `exc`."""
+    error = {"code": str(exc) or "CANCELLED", "message": str(exc)}
+    return dict(error, source="host") if isinstance(exc, HostFailure) else error
 
 
 class Context:
@@ -108,6 +149,8 @@ class Context:
             db.commit()
 
     def assign_host(self, host_id):
+        with self.Session() as db:  # an automatic plan's opt-in, checked here so the refusal is the server's
+            service.idle_opt_in.check_before_effect(db, self.op_id)
         self.handles({"host_id": host_id, "assigned": True})
         self.event("waiting_host", "Aguardando o agente do host")
         while True:
@@ -117,7 +160,7 @@ class Context:
                 response = (op.handles or {}).get("host_result")
                 if response:
                     if not response.get("ok"):
-                        raise RuntimeError(response.get("code", "HOST_APPLY_FAILED"))
+                        raise HostFailure(response.get("code", "HOST_APPLY_FAILED"))
                     return response["observed"]
             time.sleep(1)
 
@@ -128,6 +171,8 @@ class Context:
         self.event(
             "draining", "Bloqueando novas admissões e aguardando trabalho em voo"
         )
+        keys, only = drain_scope(plan)
+        feature = {"feature": only} if only else {}
         with self.Session() as db:
             from shared.access import policy
 
@@ -144,13 +189,17 @@ class Context:
                 .with_for_update()
                 .all()
             )
+            if plan.get("trigger") == "idle_policy" and _work_arrived(db, plan, keys):
+                db.rollback()  # gate untouched, reservations kept: the job goes on as if nothing happened
+                raise RuntimeError(WORK_ARRIVED)
             for r in rows:
-                r.gate_closed = True
+                if r.key in keys:
+                    r.gate_closed = True
             # Reserved work has not started. Reuse the ledger's release/requeue path outside this txn.
             pending = [
                 u.id
                 for u in db.query(EngineUsage).filter_by(
-                    engine_id=e.id, status="reserved"
+                    engine_id=e.id, status="reserved", **feature
                 )
             ]
             db.commit()
@@ -166,6 +215,8 @@ class Context:
             self.check()
             if time.monotonic() >= next_reconcile:
                 # Tickets of killed processes never reach their `finally`.
+                # Every key of the plan: only a provably dead process is freed, and its
+                # other tickets would otherwise stay open until a human drain.
                 released = orphan_tickets.release_dead(self.Session, plan["resources"], first_seen)
                 if released:
                     self.event("draining", f"Liberados tickets de processos encerrados: {released}")
@@ -174,7 +225,7 @@ class Context:
                 tickets = (
                     db.query(ControlAdmission)
                     .filter(
-                        ControlAdmission.resource_key.in_(plan["resources"]),
+                        ControlAdmission.resource_key.in_(keys),
                         ControlAdmission.released_at.is_(None),
                     )
                     .count()
@@ -185,6 +236,7 @@ class Context:
                         EngineUsage.engine_id == plan["engine_id"],
                         EngineUsage.status.in_(("spawning", "running")),
                     )
+                    .filter_by(**feature)
                     .count()
                 )
                 if not tickets and not usages:
@@ -193,7 +245,7 @@ class Context:
         # Residual state for the admin. A database failure here never replaces
         # DRAIN_TIMEOUT; a cancel or a lost lease still wins, as anywhere else.
         try:
-            count, holders = orphan_tickets.residual(self.Session, plan["resources"])
+            count, holders = orphan_tickets.residual(self.Session, keys)
             self.event("draining", f"Drenagem esgotada: {count} tickets abertos {holders}, {usages} usos em execução")
         except SQLAlchemyError:
             pass
@@ -255,7 +307,7 @@ def run(op_id, session_factory=SessionLocal):
                     op_id,
                     generation,
                     state,
-                    error={"code": str(exc) or "CANCELLED", "message": str(exc)},
+                    error=failure(exc),
                     safe=not effect,
                 )
         except service.ControlError:
