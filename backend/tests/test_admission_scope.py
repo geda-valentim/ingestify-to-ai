@@ -9,7 +9,8 @@ from datetime import datetime, timedelta
 import pytest
 
 from shared.engine_control import admission
-from shared.engine_control.models import ControlResource, EngineOperation, OperationPlan, RuntimeProfile
+from shared.engine_control.models import (ControlAdmission, ControlResource, EngineOperation, OperationPlan,
+                                          RuntimeProfile)
 from shared.models import Engine
 from tests.test_engine_control import world  # noqa: F401  (fixture)
 
@@ -123,3 +124,19 @@ def test_a_lock_without_a_readable_automatic_plan_still_blocks_placement(local, 
     with local() as db:
         _operation(db, **kwargs)
         assert admission.placement_blocked(db, db.get(Engine, "l"), "document_conversion")
+
+
+def test_without_its_service_row_yet_a_feature_keeps_every_row(world):  # noqa: F811
+    """Only the live profile's rows exist: a document holds a ticket on every row, the GPU
+    included, so the drain of its first profile's apply waits for it."""
+    with world() as db:
+        db.add(Engine(id="l", slug="local", display_name="Local", adapter_type="local",
+                      config={"features": {}, "gpus": [{"ref": "g0", "uuid": "GPU-0"}]}, deployments={}, version=0))
+        for key in ("local:h1:gpu:GPU-0", "local:h1:service:worker-live"):
+            db.add(ControlResource(key=key, owner_engine_id="l"))
+        db.commit()
+        assert _keys(db, "document_conversion") == ["local:h1:gpu:GPU-0", "local:h1:service:worker-live"]
+    tickets = admission.acquire("document_conversion", "task:doc", "l", world)
+    with world() as db:
+        held = {t.resource_key for t in db.query(ControlAdmission).filter(ControlAdmission.id.in_(tickets))}
+    assert "local:h1:gpu:GPU-0" in held

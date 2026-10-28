@@ -4,7 +4,7 @@ from uuid import uuid4
 
 from sqlalchemy import or_
 from shared.config import get_settings
-from shared.engine_control.local_services import admission_services, is_service_key
+from shared.engine_control.local_services import SERVICES, admission_services, is_service_key
 from shared.engine_control.models import (
     ControlResource,
     ControlAdmission,
@@ -29,13 +29,12 @@ def resource_rows(db, engine, feature, lock=True):
             return []
         services = admission_services(feature)
         rows = db.query(ControlResource).filter(ControlResource.owner_engine_id == engine.id)
-        if services is None:  # a feature without a service of its own: every row, as before
+        own = services and _service_rows(rows, services, lock=False)
+        if not own or not any(is_service_key(r.key, {SERVICES[feature]}) for r in own):
+            # No service of its own, or its service has no row yet (its first profile would
+            # drain only what holds a ticket): every row, as before.
             return _lockable(rows.order_by(ControlResource.key), lock).all()
-        like = or_(*(ControlResource.key.like(f"local:%:service:{s}") for s in sorted(services)))
-        return [r for r in _lockable(  # the LIKE narrows in SQL; the exact match is below
-            rows.filter(like).order_by(ControlResource.key),
-            lock,
-        ).all() if is_service_key(r.key, services)]
+        return _service_rows(rows, services, lock)
     driver = registry.create(engine.adapter_type)
     keys = set(driver.resource_keys(engine, feature, p.profile))
     applied = (
@@ -53,6 +52,13 @@ def resource_rows(db, engine, feature, lock=True):
         .order_by(ControlResource.key),
         lock,
     ).all()
+
+
+def _service_rows(rows, services, lock):
+    like = or_(*(ControlResource.key.like(f"local:%:service:{s}") for s in sorted(services)))
+    # The LIKE narrows in SQL; the exact match on the key shape is below.
+    return [r for r in _lockable(rows.filter(like).order_by(ControlResource.key), lock).all()
+            if is_service_key(r.key, services)]
 
 
 def _lockable(query, lock):
