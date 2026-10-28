@@ -26,7 +26,7 @@ The UI does not mirror this rule: it asks `GET /projects/resolve`.
 import logging
 import re
 import unicodedata
-from typing import Optional, Tuple
+from typing import Dict, Optional, Tuple
 
 from fastapi import HTTPException
 from sqlalchemy import func
@@ -134,25 +134,46 @@ def find_folder(db: Session, project_id: str, key: str):
     return db.query(Folder).filter(Folder.project_id == project_id, Folder.name_key == key).first()
 
 
-def _enforce_project_limit(db: Session, user_id: str) -> None:
+# The usage the API reports (spec 0023) and the limits below count with these same functions.
+
+def count_projects(db: Session, user_id: str) -> int:
+    """Projects that count towards the user's PROJECT_LIMIT: all of them, archived included."""
     from shared.models import Project
 
+    return db.query(func.count(Project.id)).filter(Project.user_id == user_id).scalar() or 0
+
+
+def folder_counts(db: Session, project_ids) -> Dict[str, int]:
+    """Folders per project, as FOLDER_LIMIT counts them, in one GROUP BY (absent = 0)."""
+    from shared.models import Folder
+
+    if not project_ids:
+        return {}
+    rows = (
+        db.query(Folder.project_id, func.count(Folder.id))
+        .filter(Folder.project_id.in_(list(project_ids)))
+        .group_by(Folder.project_id)
+    )
+    return {project_id: count for project_id, count in rows}
+
+
+def count_folders(db: Session, project_id: str) -> int:
+    return folder_counts(db, [project_id]).get(project_id, 0)
+
+
+def _enforce_project_limit(db: Session, user_id: str) -> None:
     limit = get_settings().max_projects_per_user
     if limit <= 0:  # 0 = no limit
         return
-    count = db.query(func.count(Project.id)).filter(Project.user_id == user_id).scalar() or 0
-    if count >= limit:
+    if count_projects(db, user_id) >= limit:
         raise api_error(422, "PROJECT_LIMIT", limit=limit)
 
 
 def _enforce_folder_limit(db: Session, project_id: str) -> None:
-    from shared.models import Folder
-
     limit = get_settings().max_folders_per_project
     if limit <= 0:  # 0 = no limit
         return
-    count = db.query(func.count(Folder.id)).filter(Folder.project_id == project_id).scalar() or 0
-    if count >= limit:
+    if count_folders(db, project_id) >= limit:
         raise api_error(422, "FOLDER_LIMIT", limit=limit)
 
 

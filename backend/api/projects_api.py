@@ -30,11 +30,11 @@ disk for a request that is going to fail:
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Dict, List, Optional, Tuple
+from typing import Optional, Tuple
 
 from fastapi import APIRouter, Depends, Form, Query
 from pydantic import BaseModel, Field
-from sqlalchemy import func, or_
+from sqlalchemy import or_
 from sqlalchemy.exc import InterfaceError, OperationalError
 from sqlalchemy.orm import Session
 
@@ -43,11 +43,12 @@ from api.deps import (
     owned_folder_or_404,
     owned_project_or_404,
 )
+from api import project_summaries
 from api.iam_deps import Scope, authorized, visible
 from shared.config import get_settings
 from shared.database import get_db
 from shared.error_catalog import render
-from shared.models import APIKey, Folder, Job, JobStatus as DBJobStatus, Project, User
+from shared.models import Folder, Job, JobStatus as DBJobStatus, Project, User
 from shared.projects import (
     InvalidNameError,
     find_folder,
@@ -438,38 +439,8 @@ def existing_job_location(db: Session, job: Job, location: UploadLocation) -> di
 
 
 # ===========================================================================
-# Read API (phase 1): GET /projects, name resolution
+# Read API (phase 1): name resolution; GET /projects is in api.project_summaries
 # ===========================================================================
-
-class ProjectFolderSummary(BaseModel):
-    id: str
-    name: str
-    job_count: int
-
-
-class ProjectSummary(BaseModel):
-    id: str
-    name: str
-    description: Optional[str] = None
-    archived: bool
-    job_count: int
-    root_job_count: int = Field(..., description="Jobs of the project that are in no folder")
-    failed_count: int
-    active_count: int = Field(..., description="Jobs queued or processing")
-    last_job_at: Optional[datetime] = None
-    api_keys: List[ProjectRef] = Field(..., description="API keys bound to this project")
-    folders: Optional[List[ProjectFolderSummary]] = Field(None, description="Only with ?include=folders")
-
-
-class ProjectLimits(BaseModel):
-    max_projects: int = Field(..., description="0 = sem limite")
-    max_folders_per_project: int = Field(..., description="0 = sem limite")
-
-
-class ProjectListResponse(BaseModel):
-    projects: List[ProjectSummary]
-    limits: ProjectLimits
-
 
 class NameResolveResponse(BaseModel):
     valid: bool
@@ -478,95 +449,6 @@ class NameResolveResponse(BaseModel):
 
 
 router = APIRouter(tags=["Projects"])
-
-_ACTIVE = (DBJobStatus.PENDING, DBJobStatus.PROCESSING)
-
-
-@router.get(
-    "/projects",
-    response_model=ProjectListResponse,
-    response_model_exclude_unset=True,
-    summary="Listar projetos com contagens",
-)
-async def list_projects(
-    include: Optional[str] = Query(None, description="`folders` inclui as pastas de cada projeto"),
-    scope: Scope = Depends(visible(Project, "projects.read")),
-    db: Session = Depends(get_db),
-):
-    """
-    Os projetos do usuário, com contagens de jobs MAIN, os mais recentes primeiro
-    (`last_job_at` desc, depois nome). `?include=folders` traz as pastas de cada
-    projeto, com contagem.
-
-    As contagens vêm de um único `GROUP BY project_id, folder_id, status`.
-    """
-    with_folders = "folders" in {part.strip() for part in (include or "").split(",")}
-
-    # One declaration, visible(Project); the counts read the same principal's jobs,
-    # keys and folders through `scope.of(...)` (today the same owner filter).
-    projects = db.query(Project).filter(scope.predicate).all()
-    stats = {p.id: {"job_count": 0, "root_job_count": 0, "failed_count": 0, "active_count": 0,
-                    "last_job_at": None} for p in projects}
-    folder_counts: Dict[str, int] = {}
-
-    rows = (
-        db.query(Job.project_id, Job.folder_id, Job.status, func.count(Job.id), func.max(Job.created_at))
-        .filter(scope.of(Job), Job.job_type == "MAIN", Job.project_id.isnot(None))
-        .group_by(Job.project_id, Job.folder_id, Job.status)
-        .all()
-    )
-    for project_id, folder_id, status, count, last in rows:
-        st = stats.get(project_id)
-        if st is None:
-            continue  # a job pointing at a deleted project
-        st["job_count"] += count
-        if folder_id is None:
-            st["root_job_count"] += count
-        else:
-            folder_counts[folder_id] = folder_counts.get(folder_id, 0) + count
-        if status == DBJobStatus.FAILED:
-            st["failed_count"] += count
-        elif status in _ACTIVE:
-            st["active_count"] += count
-        if last is not None and (st["last_job_at"] is None or last > st["last_job_at"]):
-            st["last_job_at"] = last
-
-    keys_by_project: Dict[str, List[ProjectRef]] = {}
-    for key_id, key_name, project_id in (
-        db.query(APIKey.id, APIKey.name, APIKey.project_id)
-        .filter(scope.of(APIKey), APIKey.project_id.isnot(None))
-        .order_by(APIKey.name)
-    ):
-        keys_by_project.setdefault(project_id, []).append(ProjectRef(id=key_id, name=key_name or ""))
-
-    folders_by_project: Dict[str, List[ProjectFolderSummary]] = {}
-    if with_folders:
-        for folder in db.query(Folder).filter(scope.of(Folder)).all():
-            folders_by_project.setdefault(folder.project_id, []).append(ProjectFolderSummary(
-                id=folder.id, name=folder.name, job_count=folder_counts.get(folder.id, 0)))
-        for folders in folders_by_project.values():
-            folders.sort(key=lambda f: name_key(f.name))  # accent-insensitive, like the keys
-
-    projects.sort(key=lambda p: p.name_key)
-    projects.sort(key=lambda p: stats[p.id]["last_job_at"] or datetime.min, reverse=True)
-
-    summaries = []
-    for p in projects:
-        fields = dict(
-            id=p.id, name=p.name, description=p.description, archived=p.archived_at is not None,
-            api_keys=keys_by_project.get(p.id, []), **stats[p.id],
-        )
-        if with_folders:
-            fields["folders"] = folders_by_project.get(p.id, [])
-        summaries.append(ProjectSummary(**fields))
-
-    settings = get_settings()
-    return ProjectListResponse(
-        projects=summaries,
-        limits=ProjectLimits(max_projects=settings.max_projects_per_user,
-                             max_folders_per_project=settings.max_folders_per_project),
-    )
-
 
 def _resolve(kind: str, name: str, find) -> NameResolveResponse:
     try:
@@ -615,3 +497,7 @@ async def resolve_folder_name(
 ):
     """Igual a `GET /projects/resolve`, para uma pasta do projeto. Projeto alheio: 404."""
     return _resolve("folder", name, lambda key: find_folder(db, project.id, key))
+
+
+# Last: its `/projects/{project_id}` would otherwise capture `/projects/resolve`.
+router.include_router(project_summaries.router)

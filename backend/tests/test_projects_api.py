@@ -128,7 +128,7 @@ def test_list_projects_with_counts_and_folders(client, world):
     assert a == {
         "id": world["a"].id, "name": "Cliente A", "description": None, "archived": False,
         "job_count": 4, "root_job_count": 1, "failed_count": 1, "active_count": 1,
-        "last_job_at": "2026-01-05T00:00:00",
+        "last_job_at": "2026-01-05T00:00:00", "folder_count": 2,
         "api_keys": [{"id": a["api_keys"][0]["id"], "name": "cliente-audio"}],
         "folders": [
             {"id": world["a1"].id, "name": "Áudios", "job_count": 2},
