@@ -6,7 +6,6 @@ sessions whose MySQL row-lock waits give up early without touching the shared po
 
 import pytest
 
-from shared.config import get_settings
 from shared.database import SessionLocal
 from workers.engine_control import tick_guard
 
@@ -83,29 +82,60 @@ class TestShortLockWaits:
 
         assert executed == ["SET SESSION innodb_lock_wait_timeout = 5", "closed"]
 
-    def test_mysql_gets_its_own_pool_and_never_the_shared_one(self, monkeypatch):
+    @pytest.fixture
+    def mysql(self, monkeypatch):
+        """The shared engine pointing at MySQL (never connected here)."""
+        from sqlalchemy import create_engine
+
+        from shared import database
+
+        main = create_engine("mysql+pymysql://user:pw@db.invalid/app", **database.engine_options())
+        monkeypatch.setattr(database, "engine", main)
+        tick_guard._sessions.cache_clear()
+        yield main
+        tick_guard._sessions.cache_clear()
+        main.dispose()
+
+    def test_mysql_gets_its_own_small_pool_with_the_shared_options(self, mysql, monkeypatch):
         from sqlalchemy import event
 
         def capped(dbapi_connection, record):
             pass
 
-        monkeypatch.setattr(get_settings(), "database_url", "mysql+pymysql://user:pw@db.invalid/app")
         monkeypatch.setattr(tick_guard, "lock_wait_setter", lambda seconds: capped)
-        tick_guard.short_lock_wait_sessions.cache_clear()
-        try:
-            factory = tick_guard.short_lock_wait_sessions(5)
-            bind = factory.kw["bind"]
+        own = tick_guard.short_lock_wait_sessions(5).kw["bind"]
 
-            assert factory is not SessionLocal and bind is not SessionLocal.kw["bind"]
-            assert event.contains(bind, "connect", capped), "every new connection gets the cap"
-            bind.dispose()
-        finally:
-            tick_guard.short_lock_wait_sessions.cache_clear()
+        assert own is not mysql and own.url == mysql.url, "same database, same config, not the shared pool"
+        assert own.pool.size() == 2 and own.pool._max_overflow == 0
+        assert own.pool._pre_ping and own.pool._recycle == 3600 and own.pool._timeout == mysql.pool._timeout
+        assert event.contains(own, "connect", capped), "every new connection gets the cap"
+        own.dispose()
+
+    def test_one_pool_per_process_and_none_before_first_use(self, mysql, monkeypatch):
+        """Prefork: a pool built in the parent would hand its connections to the children."""
+        import importlib
+
+        importlib.reload(tick_guard)
+        assert tick_guard._sessions.cache_info().currsize == 0, "nothing built at import"
+
+        monkeypatch.setattr(tick_guard.os, "getpid", lambda: 101)
+        parent = tick_guard.short_lock_wait_sessions(5)
+        assert tick_guard.short_lock_wait_sessions(5) is parent
+        monkeypatch.setattr(tick_guard.os, "getpid", lambda: 102)
+        child = tick_guard.short_lock_wait_sessions(5)
+
+        assert child is not parent and child.kw["bind"] is not parent.kw["bind"]
+        for factory in (parent, child):
+            factory.kw["bind"].dispose()
 
     def test_other_databases_get_the_shared_sessions(self, monkeypatch):
-        monkeypatch.setattr(get_settings(), "database_url", "sqlite://")
-        tick_guard.short_lock_wait_sessions.cache_clear()
+        from sqlalchemy import create_engine
+
+        from shared import database
+
+        monkeypatch.setattr(database, "engine", create_engine("sqlite://"))
+        tick_guard._sessions.cache_clear()
         try:
             assert tick_guard.short_lock_wait_sessions(5) is SessionLocal
         finally:
-            tick_guard.short_lock_wait_sessions.cache_clear()
+            tick_guard._sessions.cache_clear()

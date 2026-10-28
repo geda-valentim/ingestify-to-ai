@@ -6,6 +6,7 @@ the same threads humans' operations use.
 Each guard stands alone and calls nothing of the caller's: the idle policy's tick uses them.
 """
 
+import os
 import time
 from functools import lru_cache
 from uuid import uuid4
@@ -64,24 +65,27 @@ def lock_wait_setter(seconds):
     return set_lock_wait
 
 
-@lru_cache(maxsize=None)
 def short_lock_wait_sessions(seconds=LOCK_WAIT_SECONDS):
     """Sessions whose MySQL row-lock waits give up after `seconds`.
 
     They use their own small pool: a SET on a session of the shared pool would stay on that
     connection after it goes back (a session returns its connection at every commit), and
-    would cut every later user's wait too. Other databases (SQLite in tests) get the
-    shared sessions unchanged.
+    would cut every later user's wait too. The pool is built on first use in each process,
+    never at import or in a parent that forks (a connection opened before a fork would be
+    shared by the children). Other databases (SQLite in tests) get the shared sessions.
     """
+    return _sessions(seconds, os.getpid())
+
+
+@lru_cache(maxsize=None)
+def _sessions(seconds, _pid):
     from sqlalchemy import create_engine, event
     from sqlalchemy.orm import sessionmaker
 
-    from shared.config import get_settings
-    from shared.database import SessionLocal
+    from shared.database import SessionLocal, engine, engine_options
 
-    url = get_settings().database_url
-    if not url.startswith("mysql"):
+    if engine.dialect.name != "mysql":
         return SessionLocal
-    engine = create_engine(url, pool_pre_ping=True, pool_recycle=3600, pool_size=2, max_overflow=0)
-    event.listen(engine, "connect", lock_wait_setter(seconds))
-    return sessionmaker(autocommit=False, autoflush=False, bind=engine)
+    own = create_engine(engine.url, **engine_options(pool_size=2, max_overflow=0))
+    event.listen(own, "connect", lock_wait_setter(seconds))
+    return sessionmaker(autocommit=False, autoflush=False, bind=own)
