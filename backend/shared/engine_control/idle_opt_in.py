@@ -12,6 +12,7 @@ deactivated or demoted since the opt-in no longer lends their identity).
 
 from typing import NamedTuple, Optional
 
+from shared.engine_control.local_services import SERVICES
 from shared.engine_control.models import ControlResource, EngineOperation, OperationPlan, RuntimeProfile
 
 IDLE_FEATURES = frozenset({"transcription", "vision"})
@@ -150,10 +151,11 @@ def opt_in(db, engine_id: str, feature: str) -> Optional[OptIn]:
     only while the same revision stays applied, so re-applying an old opted-in revision by
     any other type does not revive it).
 
-    Read from the resources' applied state and then by primary key, never from the
-    operation history: it runs on every tick of the idle policy. A resource without the
-    reference (written before it existed) has no opt-in until the profile is applied
-    again; references that disagree fail closed. None: the policy does nothing.
+    Read from the applied state of the feature's dedicated service row, then the operation
+    and its plan, all by primary key, never from the operation history: it runs on every
+    tick of the idle policy. A missing row, or one without the reference (written before it
+    existed), means no opt-in until the profile is applied again. None: the policy does
+    nothing.
     """
     found = opt_in_reference(db, engine_id, feature)
     return found[1] if found else None
@@ -170,16 +172,16 @@ def opt_in_reference(db, engine_id: str, feature: str):
     )
     if applied is None or not (applied.profile or {}).get("idle_cooldown"):
         return None
-    # One row per resource of the engine (a handful), not a history.
-    rows = db.query(ControlResource.applied).filter(ControlResource.owner_engine_id == engine_id).all()
-    refs = {
-        ((row.applied or {}).get("opt_in_operation_id"), (row.applied or {}).get("opt_in_actor"))
-        for row in rows
-        if (row.applied or {}).get("profile_id") == applied.id
-    }
-    if len(refs) != 1:
+    # The feature's dedicated service row only, by primary key: a shared row (the generic
+    # worker, a GPU) is also written by other features' operations, the dedicated one never.
+    if feature not in IDLE_FEATURES:
         return None
-    op_id, actor = refs.pop()
+    host = ((applied.profile or {}).get("provider_settings") or {}).get("host_id")
+    row = db.get(ControlResource, f"local:{host}:service:{SERVICES[feature]}") if host else None
+    state = (row.applied or {}) if row is not None else {}
+    if state.get("profile_id") != applied.id:
+        return None  # no dedicated row, or it names another revision: fail closed
+    op_id, actor = state.get("opt_in_operation_id"), state.get("opt_in_actor")
     op = db.get(EngineOperation, op_id) if op_id else None
     plan = db.get(OperationPlan, op.plan_id) if op else None
     if (op is None or op.state != "succeeded" or op.actor_id != actor or op.engine_id != engine_id

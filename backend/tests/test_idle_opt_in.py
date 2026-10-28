@@ -228,13 +228,30 @@ def test_a_resource_applied_before_the_reference_existed_has_no_opt_in(db):
     assert idle_opt_in.opt_in(db, "l", "transcription") is None, "the admin applies the profile again"
 
 
-def test_resources_that_disagree_fail_closed(db):
+def test_another_feature_writing_the_shared_row_leaves_the_opt_in_alone(db):
+    """Vision's operations also write the generic worker's row; only the dedicated row is read."""
     rev = _revision(db, 1, idle=True)
     _operation(db, rev, "apply_profile", "admin-a")
-    row = db.query(ControlResource).one()
-    db.add(ControlResource(key="test:l:gpu", owner_engine_id="l", applied=dict(row.applied, opt_in_actor="admin-b")))
+    vision = RuntimeProfile(engine_id="l", feature="vision", revision=1, applied_at=T0,
+                            profile={"idle_cooldown": True, "provider_settings": {"host_id": "h"}})
+    db.add(vision)
     db.flush()
-    assert idle_opt_in.opt_in(db, "l", "transcription") is None
+    _operation(db, vision, "apply_profile", "admin-v")  # rewrites local:h:service:worker
+    _operation(db, rev, "cooldown", "admin-a", finished=T0 + timedelta(minutes=5))
+    _operation(db, vision, "cooldown", "admin-v", finished=T0 + timedelta(minutes=6))
+    _operation(db, rev, "start", "admin-a", finished=T0 + timedelta(minutes=7))
+
+    assert idle_opt_in.opt_in(db, "l", "transcription") == ("admin-a", 1)
+    assert idle_opt_in.opt_in(db, "l", "vision") == ("admin-v", 1)
+
+
+def test_without_the_dedicated_row_there_is_no_opt_in(db):
+    rev = _revision(db, 1, idle=True)
+    _operation(db, rev, "apply_profile", "admin-a")
+    db.delete(db.get(ControlResource, "local:h:service:worker-audio"))
+    db.flush()
+
+    assert idle_opt_in.opt_in(db, "l", "transcription") is None, "the shared row is never read"
 
 
 def test_a_reference_to_an_operation_that_did_not_succeed_is_no_opt_in(db):
@@ -249,6 +266,7 @@ def test_the_history_is_not_read(db, monkeypatch):
     _operation(db, rev, "apply_profile", "admin-a")
     for n in range(30):  # the policy's own operations pile up; none is looked at
         _operation(db, rev, "cooldown" if n % 2 else "start", "admin-a", finished=T0 + timedelta(minutes=n + 1))
+    db.expire_all()  # nothing answered from the identity map: every read is a statement
     statements = []
     event.listen(db.get_bind(), "before_cursor_execute", lambda *a: statements.append(a[2]))
     assert idle_opt_in.opt_in(db, "l", "transcription") == ("admin-a", 1)
