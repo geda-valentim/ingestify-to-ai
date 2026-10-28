@@ -206,8 +206,9 @@ _PT = {
         ["enable_control"],
     ),
     "ENGINE_CONTROL_MIGRATION_REQUIRED": (
-        "Esta função precisa da migração mais recente do controle de engines, que ainda não foi "
-        "aplicada. Rode as migrações do backend e tente de novo.",
+        "Esta função precisa da migração explícita do controle de engines (passo 2 do runbook "
+        "de bootstrap: scripts/migrate_0007_engine_control.py, que é idempotente). O alembic "
+        "upgrade não a aplica.",
         ["retry"],
     ),
     "ACCESS_SCHEMA_NOT_READY": (

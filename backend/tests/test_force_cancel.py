@@ -29,9 +29,10 @@ def probe():
     def fake(holders):
         return {h: seen.get(h, {"verdict": "unknown", "pid": None, "host": None}) for h in holders}
 
+    before = force_cancel._probe
     force_cancel.set_holder_probe(fake)
     yield seen
-    force_cancel.set_holder_probe(None)
+    force_cancel.set_holder_probe(before)
 
 
 def _ticket(db, id_, holder, minutes_ago=30, released=False):
@@ -295,6 +296,7 @@ def test_without_a_probe_answer_the_linked_usage_and_its_warning_stay(world):  #
     def broken(holders):
         raise ConnectionError("no broker")
 
+    before = force_cancel._probe
     force_cancel.set_holder_probe(broken)
     try:
         prepared(world)
@@ -304,7 +306,7 @@ def test_without_a_probe_answer_the_linked_usage_and_its_warning_stay(world):  #
             db.commit()
             plan = _plan(db)
     finally:
-        force_cancel.set_holder_probe(None)
+        force_cancel.set_holder_probe(before)
     (ticket,) = plan["tickets"]
     assert ticket["verdict"] == "unknown" and [u["status"] for u in ticket["usages"]] == ["running"]
     assert plan["looks_like_live_work"] is True
@@ -320,3 +322,36 @@ def test_release_reason_is_in_the_table_but_in_no_orm_statement():
     assert "release_reason" not in select_sql  # the ORM never selects it...
     assert "release_reason" not in ControlAdmission.__mapper__.columns.keys()  # ...nor inserts it
     assert "release_reason" in str(sa_insert(ControlAdmission.__table__).compile())  # only __table__ does
+
+
+def test_an_alive_holder_without_usage_still_warns_of_live_work(world, probe):  # noqa: F811
+    # images and legacy paths hold a ticket with no ledger row: the verdict is the strongest proof
+    prepared(world)
+    with world() as db:
+        _ticket(db, "t1", "task:img|7|celery@w")
+        db.commit()
+        probe["task:img|7|celery@w"] = {"verdict": "alive", "pid": 7, "host": "w"}
+        plan = _plan(db)
+    assert plan["tickets"][0]["usages"] == [] and plan["looks_like_live_work"] is True
+
+
+def test_a_live_session_ticket_lists_its_usage_on_whatever_engine(world, probe):  # noqa: F811
+    prepared(world)
+    with world() as db:
+        db.add(Engine(id="gpu-2", slug="gpu-2", display_name="GPU 2", adapter_type="test-vm",
+                      config={"features": {}}, deployments={}, version=0, limit_usd=10, min_remaining_usd=0))
+        _ticket(db, "t1", "live:job-9")
+        db.add(EngineUsage(engine_id="gpu-2", feature="live-transcription", period_start=date.today(),
+                           status="running", holder="x", job_id="job-9", subject_type="job", subject_id="job-9",
+                           heartbeat_at=datetime.utcnow()))
+        db.commit()
+        (ticket,) = _plan(db)["tickets"]
+    assert [u["job_id"] for u in ticket["usages"]] == ["job-9"] and ticket["job_id"] == "job-9"
+
+
+def test_the_migration_required_message_names_the_explicit_migration():
+    from shared import error_catalog
+
+    for lang in ("pt", "en"):
+        message = error_catalog.detail("ENGINE_CONTROL_MIGRATION_REQUIRED", lang=lang)["message"]
+        assert "migrate_0007_engine_control" in message, lang

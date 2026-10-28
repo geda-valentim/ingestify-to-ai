@@ -89,10 +89,11 @@ def _usages(db, engine_id, holder, seen, now):
     against the usage holder `host:pid[:thread]` (a heuristic, said so in the plan)."""
     from shared.models import EngineUsage
 
-    q = db.query(EngineUsage).filter(EngineUsage.engine_id == engine_id, EngineUsage.status.in_(IN_FLIGHT))
-    if holder.startswith("live:"):
+    q = db.query(EngineUsage).filter(EngineUsage.status.in_(IN_FLIGHT))
+    if holder.startswith("live:"):  # by job, whatever engine (a GPU resource may be shared)
         q = q.filter(EngineUsage.job_id == holder[len("live:"):])
     elif seen.get("pid") is not None and seen.get("host"):
+        q = q.filter(EngineUsage.engine_id == engine_id)  # a host:pid is only unique per engine
         own = f"{seen['host']}:{seen['pid']}"
         escaped = own.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         q = q.filter((EngineUsage.holder == own) | EngineUsage.holder.like(escaped + ":%", escape="\\"))
@@ -127,9 +128,9 @@ def create_plan(db, engine, req, actor):
     if policy.enabled() and not policy.allowed(db, actor, PERMISSION, engine=engine, feature=req.feature):
         raise ControlError("ACCESS_DENIED", 403)
     first = _open_tickets(db, sorted(r.key for r in admission.resource_rows(db, engine, req.feature, lock=False)))
-    seen = _verdicts(sorted({t.holder for t in first}))
-    engine_id = engine.id
-    db.rollback()
+    holders, engine_id = sorted({t.holder for t in first}), engine.id
+    db.rollback()  # no transaction (nor metadata lock) stays open during the inspect
+    seen = _verdicts(holders)
     if policy.enabled():
         policy.epoch(db, True)
     engine = locked_engine(db, engine_id)
@@ -157,7 +158,9 @@ def create_plan(db, engine, req, actor):
     body = clean(dict(
         type=FORCE_CANCEL, feature=req.feature, engine_id=engine.id, adapter_type=engine.adapter_type,
         resources=keys, tickets=listed, ledger_effect="none", usage_link="heuristic: (pid, host)",
-        looks_like_live_work=any(u["looks_alive"] for t in listed for u in t["usages"]),
+        # alive: the holder's node still runs the task (images, legacy paths have no usage row)
+        looks_like_live_work=any(t["verdict"] == "alive" or any(u["looks_alive"] for u in t["usages"])
+                                 for t in listed),
         confirmation=f"{engine.slug}:{len(listed)}",
     ))
     plan = OperationPlan(engine_id=engine.id, actor_id=actor, engine_version=engine.version, profile_id=None,
