@@ -505,3 +505,113 @@ def test_human_operations_are_not_concerned_by_the_opt_in_rule(control_world):  
         gen = service.claim(s, op["operation_id"], "one")
         assert gen is not None
         service.event(s, op["operation_id"], gen, "scaling", effect=True)
+
+
+# --- recovery of an automatic operation whose effect was admitted (§4.6, §4.8) ---------------
+
+def _automatic_op_lost_mid_effect(control_world, monkeypatch, proof):
+    """An automatic cooldown that admitted its effect, lost its executor (needs_attention), and
+    whose opt-in actor was then deactivated; admin-b asks for the recovery."""
+    from shared.engine_control import registry
+    from shared.models import User
+    from tests.test_engine_control import VMAdapter
+
+    calls = []
+
+    class Recoverable(VMAdapter):
+        def apply(self, plan, ctx):
+            calls.append("apply")
+            raise AssertionError("an admitted effect is never replayed")
+
+        def observe(self, engine, feature, p, ctx):
+            calls.append("observe")
+            return {"replicas_alive": 0, "ready_replicas": 0}
+
+        def reconcile(self, op, observed):
+            return proof
+
+    _local_opt_in(control_world, monkeypatch)
+    monkeypatch.setitem(registry._registry, ("local", 1), (registry._registry[("local", 1)][0], Recoverable))
+    with control_world() as s:
+        s.add(User(id="admin-b", username="admin-b", email="b@example.test", hashed_password="x",
+                   is_admin=True, is_active=True))
+        plan = _cooldown(s)
+        op = service.enqueue(s, plan["plan_id"], plan["plan_hash"], "idle:1", "admin", True)
+        gen = service.claim(s, op["operation_id"], "one")
+        service.event(s, op["operation_id"], gen, "cooling", effect=True)
+        service.finish(s, op["operation_id"], gen, "needs_attention", safe=False)
+        row = s.get(EngineOperation, op["operation_id"])
+        row.handles = dict(row.handles or {}, executor_exited=True)
+        s.get(User, "admin").is_active = False
+        s.commit()
+        service.request_recovery(s, op["operation_id"], "admin-b")
+    return op["operation_id"], calls
+
+
+def _locked(control_world):
+    from shared.engine_control.models import ControlResource
+
+    with control_world() as s:
+        return s.query(ControlResource).filter(ControlResource.operation_id.isnot(None)).count()
+
+
+def test_a_recovery_reconciles_and_unlocks_only_with_proof(control_world, monkeypatch):  # noqa: F811
+    from workers.engine_control.runner import run
+
+    op_id, calls = _automatic_op_lost_mid_effect(
+        control_world, monkeypatch, {"desired_applied": True, "safe_to_unlock": True})
+    run(op_id, control_world)
+    with control_world() as s:
+        assert s.get(EngineOperation, op_id).state == "succeeded"
+    assert calls == ["observe"] and _locked(control_world) == 0
+
+
+def test_a_recovery_without_proof_stays_locked(control_world, monkeypatch):  # noqa: F811
+    from workers.engine_control.runner import run
+
+    op_id, calls = _automatic_op_lost_mid_effect(
+        control_world, monkeypatch, {"desired_applied": False, "safe_to_unlock": False})
+    run(op_id, control_world)
+    with control_world() as s:
+        assert s.get(EngineOperation, op_id).state == "needs_attention"
+    assert calls == ["observe"] and _locked(control_world) == 1
+
+
+def test_a_recovery_proving_the_effect_never_happened_ends_failed_without_replay(control_world, monkeypatch):  # noqa: F811
+    from workers.engine_control.runner import run
+
+    op_id, calls = _automatic_op_lost_mid_effect(
+        control_world, monkeypatch, {"desired_applied": False, "safe_to_unlock": True})
+    run(op_id, control_world)
+    with control_world() as s:
+        row = s.get(EngineOperation, op_id)
+        assert (row.state, row.error["code"]) == ("failed", "AUTOMATIC_EFFECT_NOT_APPLIED")
+    assert calls == ["observe"] and _locked(control_world) == 0
+
+
+def test_a_human_recovery_proving_nothing_applied_is_unchanged(control_world):  # noqa: F811
+    # (c) only automatic operations end failed on that proof; a human one stays needs_attention
+    from shared.engine_control import registry
+    from tests.test_engine_control import VMAdapter
+    from workers.engine_control.runner import run
+
+    class Unapplied(VMAdapter):
+        def observe(self, engine, feature, p, ctx):
+            return {}
+
+        def reconcile(self, op, observed):
+            return {"desired_applied": False, "safe_to_unlock": True}
+
+    registry.register("test-vm", registry.descriptor("test-vm"), Unapplied)
+    p = prepared(control_world)
+    with control_world() as s:
+        op = service.enqueue(s, p["plan_id"], p["plan_hash"], "human", "admin", True)
+        gen = service.claim(s, op["operation_id"], "one")
+        service.event(s, op["operation_id"], gen, "applying", effect=True)
+        service.finish(s, op["operation_id"], gen, "needs_attention", safe=False)
+        s.get(EngineOperation, op["operation_id"]).handles = {"executor_exited": True}
+        s.commit()
+        service.request_recovery(s, op["operation_id"])
+    run(op["operation_id"], control_world)
+    with control_world() as s:
+        assert s.get(EngineOperation, op["operation_id"]).state == "needs_attention"

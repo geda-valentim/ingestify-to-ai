@@ -88,6 +88,14 @@ def clean(value):
     return value
 
 
+def detached_engine(session_factory, engine_id):
+    """The engine row, readable after its session closed (a recovery observes outside SQL)."""
+    with session_factory() as db:
+        e = db.get(Engine, engine_id)
+        db.expunge(e)
+        return e
+
+
 def locked_engine(db, engine_id):
     e = (
         db.query(Engine)
@@ -707,7 +715,8 @@ def claim(db, op_id, holder):
     op.lease_until = now() + timedelta(seconds=30)
     append_event(db, op, "operation.running", {"message": "Executor iniciou"})
     db.commit()
-    refused = idle_opt_in.refusal_at_claim(db, op)  # an automatic op whose opt-in no longer holds
+    # A new effect only while the opt-in holds; an admitted one is recovered (observe/reconcile only).
+    refused = None if op.effect_started else idle_opt_in.refusal_at_claim(db, op)
     if refused:
         finish(db, op_id, op.generation, "failed", error=refused, safe=True)
         return None
