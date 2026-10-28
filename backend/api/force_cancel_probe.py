@@ -3,9 +3,15 @@
 drain's own rule (workers/engine_control/orphan_tickets). Registered once at import.
 """
 
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
+
 from shared.engine_control import force_cancel
 
-INSPECT_TIMEOUT_SECONDS = 2.0
+INSPECT_TIMEOUT_SECONDS = 2.0  # end to end: connection, publish, retries and replies
+# The inspect runs here with a hard wall-clock deadline: Celery's own timeout only bounds the
+# wait for replies, not reaching a broker that is down. Two workers at most: with the broker
+# hung, later plans queue behind them and time out as "unknown" too, threads never pile up.
+_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="force-cancel-probe")
 
 
 def holder_verdicts(holders):
@@ -17,8 +23,9 @@ def holder_verdicts(holders):
     parsed = {h: parse_task_holder(h) for h in holders}
     nodes = {p[2] for p in parsed.values() if p}
     try:
-        active, answered = (active_by_node(nodes, timeout=INSPECT_TIMEOUT_SECONDS) if nodes else {}), True
-    except Exception:
+        future = _pool.submit(active_by_node, nodes, timeout=INSPECT_TIMEOUT_SECONDS) if nodes else None
+        active, answered = (future.result(timeout=INSPECT_TIMEOUT_SECONDS) if future else {}), True
+    except (FutureTimeout, Exception):
         active, answered = {}, False
     out = {}
     for holder, p in parsed.items():

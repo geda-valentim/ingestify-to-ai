@@ -357,3 +357,38 @@ def test_the_migration_required_message_names_the_explicit_migration():
         # what runbook step 2 runs inside the API container (the script is not in that image)
         assert "engine-control-bootstrap" in message and "shared.engine_control.migration" in message, lang
         assert "scripts/" not in message, lang
+
+
+def test_a_hung_broker_ends_the_probe_within_its_deadline(monkeypatch):
+    import time
+
+    import workers.engine_control.orphan_tickets as g1
+    from api.force_cancel_probe import INSPECT_TIMEOUT_SECONDS, holder_verdicts
+
+    def hung(nodes, timeout):
+        time.sleep(INSPECT_TIMEOUT_SECONDS + 3)  # a broker that never answers, whatever the timeout says
+        return {}
+
+    monkeypatch.setattr(g1, "active_by_node", hung)
+    started = time.monotonic()
+    v = holder_verdicts(["task:x|1|celery@a"])
+    assert time.monotonic() - started < INSPECT_TIMEOUT_SECONDS + 0.5
+    assert v["task:x|1|celery@a"]["verdict"] == "unknown"
+
+
+def test_a_replay_is_authorized_before_it_returns_the_operation(world, probe, monkeypatch):  # noqa: F811
+    prepared(world)
+    with world() as db:
+        _ticket(db, "t1", "task:legacy")
+        db.commit()
+        plan = _plan(db)
+        service.enqueue(db, plan["plan_id"], plan["plan_hash"], "k", "admin", confirm_force_cancel="test-vm:1")
+
+    def denied(db, engine, feature, actor):
+        raise service.ControlError("ACCESS_DENIED", 403)
+
+    monkeypatch.setattr(force_cancel, "_authorize", denied)  # the actor lost the permission since
+    with world() as db:
+        with pytest.raises(service.ControlError) as e:
+            service.enqueue(db, plan["plan_id"], plan["plan_hash"], "k", "admin", confirm_force_cancel="test-vm:1")
+    assert e.value.code == "ACCESS_DENIED"  # not the earlier operation's view

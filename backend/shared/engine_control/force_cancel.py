@@ -182,6 +182,8 @@ def enqueue(db, plan, plan_hash, key, actor, confirm):
     _require_schema(db)
     if policy.enabled():
         policy.epoch(db, True)
+    # Authorized before anything answers, the idempotent replay included (it returns the result).
+    _authorize(db, db.get(Engine, plan.engine_id), plan.body["feature"], actor)
     if not key or len(key) > 128:
         raise ControlError("IDEMPOTENCY_KEY_REQUIRED", 422)
     request_hash = digest(dict(plan_id=plan.id, plan_hash=plan_hash, confirm=confirm))
@@ -199,7 +201,6 @@ def enqueue(db, plan, plan_hash, key, actor, confirm):
         raise ControlError("PLAN_STALE")
     if confirm != plan.body["confirmation"]:
         raise ControlError("FORCE_CANCEL_CONFIRMATION_REQUIRED", 422)
-    _authorize(db, db.get(Engine, plan.engine_id), plan.body["feature"], actor)
     resources = (
         db.query(ControlResource).filter(ControlResource.key.in_(plan.body["resources"]))
         .order_by(ControlResource.key).with_for_update().all()
