@@ -6,6 +6,7 @@ from celery.exceptions import Reject
 from shared.engine_control import admission
 from shared.engine_control.service import ControlError
 from shared.config import get_settings
+from workers.engine_control import orphan_tickets
 
 
 class ManagedTask(Task):
@@ -46,7 +47,8 @@ class ManagedTask(Task):
                 usage = db.get(EngineUsage, usage_id)
                 engine_id = usage.engine_id if usage else None
         try:
-            tickets = admission.acquire(feature, f"task:{self.request.id}", engine_id)
+            holder = orphan_tickets.task_holder(self.request.id, self.request.hostname)
+            tickets = admission.acquire(feature, holder, engine_id)
         except Exception as exc:
             # Reject/requeue before executing; never turn an authority failure into local fallback.
             raise Reject("Maintenance admission unavailable", requeue=True) from exc

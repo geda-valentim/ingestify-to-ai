@@ -3,6 +3,7 @@ import time
 from datetime import datetime, timedelta
 from uuid import uuid4
 from sqlalchemy import update
+from sqlalchemy.exc import SQLAlchemyError
 from shared.config import get_settings
 from shared.database import SessionLocal
 from shared.engine_control import service, registry
@@ -15,6 +16,9 @@ from shared.engine_control.models import (
     ControlAdmission,
 )
 from shared.models import Engine, EngineUsage
+from workers.engine_control import orphan_tickets
+
+ORPHAN_RECONCILE_SECONDS = 10
 
 
 class Cancelled(Exception):
@@ -157,8 +161,15 @@ class Context:
                 usage_id, error_code="ENGINE_MAINTENANCE", session_factory=self.Session
             )
         end = time.monotonic() + plan["drain_timeout_seconds"]
+        next_reconcile, first_seen, usages = 0.0, {}, 0
         while time.monotonic() < end:
             self.check()
+            if time.monotonic() >= next_reconcile:
+                # Tickets of killed processes never reach their `finally`.
+                released = orphan_tickets.release_dead(self.Session, plan["resources"], first_seen)
+                if released:
+                    self.event("draining", f"Liberados tickets de processos encerrados: {released}")
+                next_reconcile = time.monotonic() + ORPHAN_RECONCILE_SECONDS
             with self.Session() as db:
                 tickets = (
                     db.query(ControlAdmission)
@@ -179,6 +190,13 @@ class Context:
                 if not tickets and not usages:
                     return
             time.sleep(0.5)
+        # Residual state for the admin. A database failure here never replaces
+        # DRAIN_TIMEOUT; a cancel or a lost lease still wins, as anywhere else.
+        try:
+            count, holders = orphan_tickets.residual(self.Session, plan["resources"])
+            self.event("draining", f"Drenagem esgotada: {count} tickets abertos {holders}, {usages} usos em execução")
+        except SQLAlchemyError:
+            pass
         raise TimeoutError("DRAIN_TIMEOUT")
 
     def close(self):

@@ -106,6 +106,92 @@ journalctl -u ingestify-engine-host-agent -n 50 --no-pager
 
 O agente volta a registrar `Agent recovered` quando o heartbeat é aceito.
 
+## Drenagem que termina em `DRAIN_TIMEOUT`
+
+Durante a drenagem, o runner libera sozinho o ticket de admissão de uma task cujo
+processo morreu, desde que o nó Celery que a executava responda sem ela. Dois casos
+ficam sem essa prova, e a drenagem espera até o timeout:
+
+- tickets gravados antes desta versão, com holder `task:<id>` sem pid nem nó;
+- o container do worker foi recriado com a task em execução (deploy, `--force-recreate`):
+  o nó antigo nunca mais responde.
+
+O evento final da operação lista quantos tickets ficaram abertos e os holders mais
+antigos. Este procedimento é **provisório**, até existir o cancelamento forçado pelo
+painel. Ele só libera um ticket com prova de que nenhum processo vivo executa aquela task.
+Se qualquer passo não confirmar, não libere: recuse e tente a operação de novo mais tarde.
+
+1. **Liste os tickets abertos** dos recursos da operação (só leitura; as chaves estão no
+   plano da operação). Anote `id`, `holder` e o task id, que é o trecho entre `task:` e o
+   primeiro `|`, se houver:
+
+   ```sql
+   SELECT id, resource_key, holder, created_at
+   FROM engine_control_admissions
+   WHERE released_at IS NULL AND resource_key IN ('<chave 1>', '<chave 2>');
+   ```
+
+2. **Liste os containers dos serviços Celery** da instalação, com os mesmos `-f` do
+   registro, em qualquer estado. O nome do nó de cada um termina com o id curto do
+   container (`<fila>@<id>`). Só estes serviços são Celery; `worker-live` e
+   `worker-control-watchdog` não são e ficam de fora:
+
+   ```bash
+   docker compose <os mesmos -f> ps -a --format '{{.Service}} {{.ID}} {{.State}}' \
+     | grep -E '^(worker|worker-audio|worker-vision|worker-remote|worker-dispatch|worker-control) ' \
+     > /tmp/celery-containers.txt
+   cat /tmp/celery-containers.txt
+   ```
+
+   Se a instalação tem workers em mais de um host, rode isto em cada host e junte as
+   listas no mesmo arquivo. O passo 3 recusa um nó que responde sem estar na lista.
+
+3. **Pergunte a todos os nós quais tasks estão ativas** e confira, para cada task id do
+   passo 1, que a lista não está vazia, que nenhum container está pausado ou reiniciando,
+   que todo container em execução respondeu, que nenhum nó fora da lista respondeu e que
+   ninguém executa a task:
+
+   ```bash
+   # <serviço>: qualquer um da lista do passo 2 em execução (por exemplo, worker-control)
+   docker compose <os mesmos -f> exec -T <serviço> \
+     celery -A workers.celery_app inspect active --json --timeout 10 > /tmp/celery-active.json
+   python3 - /tmp/celery-active.json /tmp/celery-containers.txt '<task id>' <<'PY'
+   import json, sys
+   rows = [line.split() for line in open(sys.argv[2]) if line.strip()]
+   if not rows or any(len(r) != 3 for r in rows):
+       sys.exit("NÃO LIBERE: lista de containers vazia ou ilegível (confira diretório, -p e -f)")
+   stuck = [r for r in rows if r[2] not in ("running", "exited", "dead")]
+   if stuck:
+       sys.exit(f"NÃO LIBERE: containers pausados ou em transição {stuck}")
+   replies = json.load(open(sys.argv[1]))
+   if not isinstance(replies, dict) or any(not isinstance(t, list) for t in replies.values()):
+       sys.exit("NÃO LIBERE: resposta do inspect com erro ou em formato inesperado")
+   containers = {r[1][:12] for r in rows if r[2] == "running"}
+   answered = {node.split("@", 1)[1][:12] for node in replies}
+   silent, unknown = containers - answered, answered - containers
+   running = [n for n, tasks in replies.items() if any(t.get("id") == sys.argv[3] for t in tasks)]
+   if silent or unknown or running:
+       sys.exit(f"NÃO LIBERE: sem resposta={sorted(silent)} fora da lista={sorted(unknown)} executando={running}")
+   print("todos os containers responderam e nenhum executa a task")
+   PY
+   ```
+
+   Um container que não responde (ocupado num pool `solo`, travado, broker fora) não prova
+   nada: espere e repita o passo 3. Um nó fora da lista indica outro host ou outra
+   instalação no mesmo broker: complete a lista do passo 2. Não libere com base em quanto
+   tempo o ticket está aberto.
+
+4. **Só com a confirmação do passo 3**, libere pelos `id` anotados no passo 1, nunca por
+   chave de recurso. Confira que o número de linhas afetadas é o de tickets daquela task:
+
+   ```sql
+   UPDATE engine_control_admissions
+   SET released_at = UTC_TIMESTAMP()
+   WHERE id IN ('<id 1>', '<id 2>') AND released_at IS NULL;
+   ```
+
+Depois, rode a operação de novo pelo painel.
+
 ## Re-registrar o host
 
 Use após mudar manifests compose, serviços permitidos, imagens ou GPUs. É uma
