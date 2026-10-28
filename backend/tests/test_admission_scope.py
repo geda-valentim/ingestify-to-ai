@@ -4,17 +4,18 @@ Without a profile, a feature is admitted only on its own services (any host, no 
 document conversion is not refused, nor does it hold a drain, because transcription's dedicated
 service is in maintenance. A feature with a profile keeps the profile's keys.
 """
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import pytest
 
 from shared.engine_control import admission
-from shared.engine_control.models import ControlResource, RuntimeProfile
+from shared.engine_control.models import ControlResource, EngineOperation, OperationPlan, RuntimeProfile
 from shared.models import Engine
 from tests.test_engine_control import world  # noqa: F401  (fixture)
 
 ROWS = ["local:h1:service:worker", "local:h1:service:worker-audio", "local:h1:service:worker-vision",
-        "local:h2:service:worker", "local:h2:service:worker-audio", "local:h1:gpu:GPU-0"]
+        "local:h2:service:worker", "local:h2:service:worker-audio", "local:h1:gpu:GPU-0",
+        "local:a:b:service:worker", "LOCAL:h3:service:worker"]  # match the LIKE, not the key shape
 
 
 @pytest.fixture
@@ -77,3 +78,30 @@ def test_the_service_map_moved_to_shared_keeps_its_old_path():
     from workers.engine_control import local
 
     assert local.SERVICES is local_services.SERVICES
+
+
+def _operation(db, feature, trigger=None):
+    """An operation of `feature` holding every row, as a local plan locks all its keys."""
+    body = {"feature": feature, "type": "cooldown", **({"trigger": trigger} if trigger else {})}
+    at = datetime(2026, 10, 28)
+    db.add(OperationPlan(id="p", engine_id="l", actor_id="a", engine_version=0, body=body, hash="h",
+                         expires_at=at + timedelta(hours=1)))
+    db.add(EngineOperation(id="op", engine_id="l", actor_id="a", plan_id="p", idempotency_key="k",
+                           request_hash="r", deadline=at + timedelta(hours=1), reserved_usd=0))
+    for r in db.query(ControlResource):
+        r.operation_id = "op"
+    db.commit()
+
+
+def test_an_automatic_operation_of_another_feature_does_not_block_placement(local):
+    with local() as db:
+        _operation(db, "transcription", trigger="idle_policy")
+        e = db.get(Engine, "l")
+        assert not admission.placement_blocked(db, e, "document_conversion")
+        assert admission.placement_blocked(db, e, "transcription")
+
+
+def test_a_human_operation_of_another_feature_still_blocks_placement(local):
+    with local() as db:
+        _operation(db, "transcription")
+        assert admission.placement_blocked(db, db.get(Engine, "l"), "document_conversion")

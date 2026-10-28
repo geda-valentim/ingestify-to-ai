@@ -8,6 +8,8 @@ from shared.engine_control.local_services import admission_services, is_service_
 from shared.engine_control.models import (
     ControlResource,
     ControlAdmission,
+    EngineOperation,
+    OperationPlan,
     RuntimeProfile,
 )
 from shared.engine_control.service import ControlError, locked_engine, now
@@ -26,7 +28,7 @@ def resource_rows(db, engine, feature, lock=True):
         if engine.adapter_type == "local":
             services = admission_services(feature)
             like = or_(*(ControlResource.key.like(f"local:%:service:{s}") for s in sorted(services)))
-            return [r for r in _lockable(  # locked in SQL only on these rows; exact match below
+            return [r for r in _lockable(  # the LIKE narrows in SQL; the exact match is below
                 db.query(ControlResource)
                 .filter(ControlResource.owner_engine_id == engine.id, like)
                 .order_by(ControlResource.key),
@@ -131,10 +133,26 @@ def placement_blocked(db, engine, feature):
     if not get_settings().engine_control_enabled:
         return False
     rows = resource_rows(db, engine, feature)
+    held = {}
     return any(
         r.gate_closed
-        or r.operation_id
+        or (r.operation_id and _holds_placement(db, r.operation_id, feature, held))
         or (r.applied or {}).get("feature_modes", {}).get(feature)
         in ("standby", "stopped")
         for r in rows
     )
+
+
+def _holds_placement(db, operation_id, feature, held):
+    """An automatic operation (a plan with `trigger`) of another feature only locks the shared keys:
+    its effect acts on its own dedicated service (spec 0007 §4.6). One primary-key read per
+    operation, only for a locked row; a missing plan keeps blocking."""
+    if operation_id not in held:
+        body = (
+            db.query(OperationPlan.body)
+            .join(EngineOperation, EngineOperation.plan_id == OperationPlan.id)
+            .filter(EngineOperation.id == operation_id)
+            .scalar()
+        ) or {}
+        held[operation_id] = not (body.get("trigger") and body.get("feature") not in (None, feature))
+    return held[operation_id]
