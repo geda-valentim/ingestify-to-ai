@@ -1,7 +1,10 @@
 """Admission and maintenance use the same SQL resource locks. No fail-open."""
 
 from uuid import uuid4
+
+from sqlalchemy import or_
 from shared.config import get_settings
+from shared.engine_control.local_services import admission_services, is_service_key
 from shared.engine_control.models import (
     ControlResource,
     ControlAdmission,
@@ -18,14 +21,17 @@ def resource_rows(db, engine, feature, lock=True):
 
     p = latest_profile(db, engine.id, feature)
     if not p:
-        # Generic tasks can execute multiple features in the same managed service.
+        # Without a profile, only the feature's own services (any host): a document conversion is
+        # not refused because transcription's dedicated service is draining (spec 0007 §4.6).
         if engine.adapter_type == "local":
-            return _lockable(
+            services = admission_services(feature)
+            like = or_(*(ControlResource.key.like(f"local:%:service:{s}") for s in sorted(services)))
+            return [r for r in _lockable(  # locked in SQL only on these rows; exact match below
                 db.query(ControlResource)
-                .filter_by(owner_engine_id=engine.id)
+                .filter(ControlResource.owner_engine_id == engine.id, like)
                 .order_by(ControlResource.key),
                 lock,
-            ).all()
+            ).all() if is_service_key(r.key, services)]
         return []
     driver = registry.create(engine.adapter_type)
     keys = set(driver.resource_keys(engine, feature, p.profile))
