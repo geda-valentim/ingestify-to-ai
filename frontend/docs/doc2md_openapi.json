@@ -5782,6 +5782,67 @@
         "x-access": "engine-host"
       }
     },
+    "/projects": {
+      "get": {
+        "tags": [
+          "Projects"
+        ],
+        "summary": "Listar projetos com contagens",
+        "description": "Os projetos do usuário, com contagens de jobs MAIN, os mais recentes primeiro\n(`last_job_at` desc, depois nome). `?include=folders` traz as pastas de cada\nprojeto, com contagem.\n\nAs contagens vêm de um único `GROUP BY project_id, folder_id, status`.",
+        "operationId": "list_projects_projects_get",
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "include",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "`folders` inclui as pastas de cada projeto",
+              "title": "Include"
+            },
+            "description": "`folders` inclui as pastas de cada projeto"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectListResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "x-access": "user"
+      }
+    },
     "/projects/resolve": {
       "get": {
         "tags": [
@@ -5881,139 +5942,6 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/NameResolveResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        },
-        "x-access": "user"
-      }
-    },
-    "/projects": {
-      "get": {
-        "tags": [
-          "Projects",
-          "Projects"
-        ],
-        "summary": "Listar projetos com contagens, limites e uso",
-        "description": "Os projetos do usuário, com contagens de jobs MAIN e `folder_count`, os mais\nrecentes primeiro (`last_job_at` desc, depois nome). `?include=folders` traz as\npastas de cada projeto, com contagem.\n\n`limits` são os da instalação (`0` = sem limite) e `usage.projects` é quantos\nprojetos do usuário contam para o `PROJECT_LIMIT`, arquivados inclusive.",
-        "operationId": "list_projects_projects_get",
-        "security": [
-          {
-            "bearerAuth": []
-          },
-          {
-            "apiKeyAuth": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "include",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "`folders` inclui as pastas de cada projeto",
-              "title": "Include"
-            },
-            "description": "`folders` inclui as pastas de cada projeto"
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProjectListResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        },
-        "x-access": "user"
-      }
-    },
-    "/projects/{project_id}": {
-      "get": {
-        "tags": [
-          "Projects",
-          "Projects"
-        ],
-        "summary": "Projeto com limites e uso",
-        "description": "O resumo do projeto (o mesmo item de `GET /projects`), os `limits` da instalação\ne o uso: `usage.folders` são as pastas do projeto, `usage.projects` os projetos\ndo usuário que chama. Com `limits` em `0` (sem limite), o uso vem do mesmo jeito.\nProjeto alheio ou inexistente: 404.",
-        "operationId": "get_project_projects__project_id__get",
-        "security": [
-          {
-            "bearerAuth": []
-          },
-          {
-            "apiKeyAuth": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "project_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Project Id"
-            }
-          },
-          {
-            "name": "include",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "`folders` inclui as pastas do projeto",
-              "title": "Include"
-            },
-            "description": "`folders` inclui as pastas do projeto"
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProjectDetailResponse"
                 }
               }
             }
@@ -15323,26 +15251,6 @@
         ],
         "title": "ProfileUpdate"
       },
-      "ProjectDetailResponse": {
-        "properties": {
-          "project": {
-            "$ref": "#/components/schemas/ProjectSummary"
-          },
-          "limits": {
-            "$ref": "#/components/schemas/ProjectLimits"
-          },
-          "usage": {
-            "$ref": "#/components/schemas/ProjectUsage"
-          }
-        },
-        "type": "object",
-        "required": [
-          "project",
-          "limits",
-          "usage"
-        ],
-        "title": "ProjectDetailResponse"
-      },
       "ProjectFolderSummary": {
         "properties": {
           "id": {
@@ -15397,16 +15305,12 @@
           },
           "limits": {
             "$ref": "#/components/schemas/ProjectLimits"
-          },
-          "usage": {
-            "$ref": "#/components/schemas/ProjectUsage"
           }
         },
         "type": "object",
         "required": [
           "projects",
-          "limits",
-          "usage"
+          "limits"
         ],
         "title": "ProjectListResponse"
       },
@@ -15484,11 +15388,6 @@
             ],
             "title": "Last Job At"
           },
-          "folder_count": {
-            "type": "integer",
-            "title": "Folder Count",
-            "description": "Pastas do projeto, todas, contadas como o FOLDER_LIMIT conta"
-          },
           "api_keys": {
             "items": {
               "$ref": "#/components/schemas/ProjectRef"
@@ -15522,36 +15421,9 @@
           "root_job_count",
           "failed_count",
           "active_count",
-          "folder_count",
           "api_keys"
         ],
         "title": "ProjectSummary"
-      },
-      "ProjectUsage": {
-        "properties": {
-          "projects": {
-            "type": "integer",
-            "title": "Projects",
-            "description": "Projetos do usuário que chama (dono da API key), arquivados inclusive, contados como o PROJECT_LIMIT conta"
-          },
-          "folders": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Folders",
-            "description": "Pastas deste projeto (só no detalhe)"
-          }
-        },
-        "type": "object",
-        "required": [
-          "projects"
-        ],
-        "title": "ProjectUsage"
       },
       "Publish": {
         "properties": {
