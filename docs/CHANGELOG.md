@@ -30,7 +30,11 @@ de erro muda de `code` (abaixo, com a migração).
     visão;
   - `IDLE_COOLDOWN_PERMISSION_REQUIRED` (403): falta uma das permissões acima;
   - `AUTOMATIC_EFFECT_NOT_APPLIED` e `IDLE_POLICY_NOT_OPTED_IN`: resultado de operações
-    automáticas, que aparecem no histórico de operações.
+    automáticas no histórico de operações. Só aparecem quando a política chegar; neste
+    release nenhuma operação automática é criada.
+- **Origem da operação (#130):** a resposta das operações de engine traz `trigger`: `null`
+  para a operação de um admin, `"idle_policy"` ou `"wakeup"` para as automáticas (que só
+  existirão com a política).
 
 **Correções**
 - **Drenagem com processo morto (#129):** o ticket de admissão de uma task cujo processo
