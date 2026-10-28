@@ -292,14 +292,14 @@ anteriores a `22dd189` não têm). Sem a flag, ele grava a imagem do container e
 gerenciado não recriado ainda mantém, e não a recém-construída. Use o script atual, tirado do
 commit anterior ao rollback (`HEAD before` na mensagem do script, ou `git rev-parse HEAD`
 antes de voltar). Ele importa `engine_host_services` (que não existe nos checkouts anteriores
-a ele) e `engine_host_agent`: extraia os três juntos, do mesmo commit, num diretório temporário,
+a ele): extraia os dois juntos, do mesmo commit, num diretório temporário,
 e rode de lá a partir da raiz do checkout, com `--cwd` apontando para ela. Os `--manifest` e o
 `--identities` relativos continuam relativos ao checkout:
 
 ```bash
 tmp="$(mktemp -d)"
 git archive <commit anterior ao rollback> scripts/register_engine_host.py \
-  scripts/engine_host_agent.py scripts/engine_host_services.py | tar -x -C "$tmp"
+  scripts/engine_host_services.py | tar -x -C "$tmp"
 python3 "$tmp/scripts/register_engine_host.py" --cwd "$PWD" <argumentos originais> --use-built-image
 rm -rf "$tmp"
 ```

@@ -64,7 +64,13 @@ from fastapi.routing import APIRoute, APIWebSocketRoute
 # cgroup and pipeline-init fields; DOCLING_INIT_PIPELINE preloads the PDF pipeline).
 # Otherwise fixes: POST/GET /api-keys answer without the trailing slash (the 307 lost the
 # proxy root_path); the converter cache evicts before building; Docling versions pinned.
-API_VERSION = "1.14.0"
+# 1.15.0: minor (engine admin routes answer a control-guard refusal with its own 409 code:
+# RUNTIME_OPERATION_REQUIRED, CLEANUP_CREDENTIAL_REQUIRED, OPERATION_CONFLICT; optional
+# idle_cooldown on the local runtime profile with IDLE_COOLDOWN_NOT_SUPPORTED,
+# IDLE_COOLDOWN_PERMISSION_REQUIRED, AUTOMATIC_EFFECT_NOT_APPLIED, IDLE_POLICY_NOT_OPTED_IN).
+# Otherwise fixes: drains release tickets of dead task processes; admission tickets indexed;
+# deploy and host registration honour compose profiles; host token created 0600.
+API_VERSION = "1.15.0"
 
 API_DESCRIPTION = """
 API assíncrona que converte documentos (PDF, DOCX, HTML, PPTX, XLSX...) em Markdown,
