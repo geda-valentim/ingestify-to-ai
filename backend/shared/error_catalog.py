@@ -178,6 +178,11 @@ _PT = {
         "iniciar esta engine: as operações automáticas rodam com o seu acesso.",
         ["request_access"],
     ),
+    "AUTOMATIC_EFFECT_NOT_APPLIED": (
+        "A recuperação provou que o efeito desta operação automática não aconteceu: ela foi "
+        "encerrada sem repeti-lo. A política de ociosidade planeja de novo se ainda for o caso.",
+        [],
+    ),
     "IDLE_POLICY_NOT_OPTED_IN": (
         "Esta operação automática não corresponde ao desligamento por ociosidade ativo nesta "
         "engine (revisão aplicada, ator ou feature diferentes).",

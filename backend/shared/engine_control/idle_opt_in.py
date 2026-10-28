@@ -22,7 +22,7 @@ IDLE_PERMISSIONS = (
 )
 AUTOMATIC = {"idle_policy": "cooldown", "wakeup": "start"}  # trigger -> the only type it may plan
 # The recovery of an automatic operation proved its effect never happened: failed, nothing repeated.
-NOT_APPLIED = {"code": "AUTOMATIC_EFFECT_NOT_APPLIED", "message": "O efeito não aconteceu; nada foi repetido."}
+NOT_APPLIED = {"code": "AUTOMATIC_EFFECT_NOT_APPLIED"}  # message and next steps: the error catalog
 
 
 class OptIn(NamedTuple):

@@ -586,6 +586,8 @@ def test_a_recovery_proving_the_effect_never_happened_ends_failed_without_replay
     with control_world() as s:
         row = s.get(EngineOperation, op_id)
         assert (row.state, row.error["code"]) == ("failed", "AUTOMATIC_EFFECT_NOT_APPLIED")
+        shown = service.operation_view(row)["error"]  # explained by the catalog, like other codes
+        assert shown["human_message"] and "next_steps" in shown
     assert calls == ["observe"] and _locked(control_world) == 0
 
 
