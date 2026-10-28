@@ -89,7 +89,7 @@ def _sessions(seconds, _pid):
 
     from shared.database import SessionLocal, engine, engine_options
 
-    if engine.dialect.name != "mysql":
+    if engine.dialect.name not in ("mysql", "mariadb"):  # InnoDB's lock wait, on either
         return SessionLocal
     # Waiting for a free connection is capped like a lock wait: never longer than the config's.
     timeout = min(engine_options()["pool_timeout"], seconds)

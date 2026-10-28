@@ -82,14 +82,14 @@ class TestShortLockWaits:
 
         assert executed == ["SET SESSION innodb_lock_wait_timeout = 5", "closed"]
 
-    @pytest.fixture
-    def mysql(self, monkeypatch):
-        """The shared engine pointing at MySQL (never connected here)."""
+    @pytest.fixture(params=["mysql+pymysql", "mariadb+pymysql"])
+    def mysql(self, monkeypatch, request):
+        """The shared engine pointing at MySQL or MariaDB (never connected here)."""
         from sqlalchemy import create_engine
 
         from shared import database
 
-        main = create_engine("mysql+pymysql://user:pw@db.invalid/app", **database.engine_options())
+        main = create_engine(f"{request.param}://user:pw@db.invalid/app", **database.engine_options())
         monkeypatch.setattr(database, "engine", main)
         tick_guard._sessions.cache_clear()
         yield main
