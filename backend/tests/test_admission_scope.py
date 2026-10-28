@@ -16,8 +16,7 @@ from tests.test_engine_control import world  # noqa: F401  (fixture)
 
 ROWS = ["local:h1:service:worker", "local:h1:service:worker-audio", "local:h1:service:worker-vision",
         "local:h2:service:worker", "local:h2:service:worker-audio", "local:h1:gpu:GPU-0",
-        "local:h:3:service:worker",  # a host id with ":" is still a host
-        "LOCAL:h3:service:worker"]  # matches a case-insensitive LIKE, not the key shape
+        "local:h:3:service:worker"]  # a host id with ":" is still a host
 
 
 @pytest.fixture
@@ -47,8 +46,10 @@ def test_without_a_profile_a_feature_is_admitted_on_its_own_services_only(local)
         assert _keys(db, "transcription") == ["local:h1:service:worker", "local:h1:service:worker-audio",
                                               "local:h2:service:worker", "local:h2:service:worker-audio",
                                               "local:h:3:service:worker"]
+        # h2 and h:3 have no worker-vision row yet: every row there (its first profile's drain)
         assert _keys(db, "vision") == ["local:h1:service:worker", "local:h1:service:worker-vision",
-                                       "local:h2:service:worker", "local:h:3:service:worker"]
+                                       "local:h2:service:worker", "local:h2:service:worker-audio",
+                                       "local:h:3:service:worker"]
 
 
 def test_a_feature_without_a_service_of_its_own_keeps_every_row(local):
@@ -140,3 +141,24 @@ def test_without_its_service_row_yet_a_feature_keeps_every_row(world):  # noqa: 
     with world() as db:
         held = {t.resource_key for t in db.query(ControlAdmission).filter(ControlAdmission.id.in_(tickets))}
     assert "local:h1:gpu:GPU-0" in held
+
+
+def test_a_host_without_the_canonical_row_keeps_every_row_of_that_host(world):  # noqa: F811
+    """The canonical row exists on another host only (a CLI deploy's `unregistered`): on h1 the
+    document still holds the GPU, which the drain of its first profile on h1 waits for."""
+    with world() as db:
+        db.add(Engine(id="l", slug="local", display_name="Local", adapter_type="local",
+                      config={"features": {}}, deployments={}, version=0))
+        for key in ("local:unregistered:service:worker", "local:h1:gpu:G", "local:h1:service:worker-live",
+                    "legacy-key"):
+            db.add(ControlResource(key=key, owner_engine_id="l"))
+        db.commit()
+        assert _keys(db, "document_conversion") == ["legacy-key", "local:h1:gpu:G", "local:h1:service:worker-live",
+                                                    "local:unregistered:service:worker"]  # no fail-open
+
+
+def test_the_host_of_a_key():
+    from shared.engine_control.local_services import key_host
+
+    assert [key_host(k) for k in ("local:h1:gpu:G", "local:h:3:service:worker", "LOCAL:h:service:w", "x")] == \
+        ["h1", "h:3", None, None]

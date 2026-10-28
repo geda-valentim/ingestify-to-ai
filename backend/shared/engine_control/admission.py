@@ -2,9 +2,8 @@
 
 from uuid import uuid4
 
-from sqlalchemy import or_
 from shared.config import get_settings
-from shared.engine_control.local_services import SERVICES, admission_services, is_service_key
+from shared.engine_control.local_services import SERVICES, admission_services, is_service_key, key_host
 from shared.engine_control.models import (
     ControlResource,
     ControlAdmission,
@@ -23,18 +22,11 @@ def resource_rows(db, engine, feature, lock=True):
 
     p = latest_profile(db, engine.id, feature)
     if not p:
-        # Without a profile, only the feature's own services (any host): a document conversion is
-        # not refused because transcription's dedicated service is draining (spec 0007 §4.6).
+        # Without a profile, the feature's own services where they exist: a document conversion
+        # is not refused because transcription's dedicated service is draining (spec 0007 §4.6).
         if engine.adapter_type != "local":
             return []
-        services = admission_services(feature)
-        rows = db.query(ControlResource).filter(ControlResource.owner_engine_id == engine.id)
-        own = services and _service_rows(rows, services, lock=False)
-        if not own or not any(is_service_key(r.key, {SERVICES[feature]}) for r in own):
-            # No service of its own, or its service has no row yet (its first profile would
-            # drain only what holds a ticket): every row, as before.
-            return _lockable(rows.order_by(ControlResource.key), lock).all()
-        return _service_rows(rows, services, lock)
+        return _rows_without_profile(db, engine, feature, lock)
     driver = registry.create(engine.adapter_type)
     keys = set(driver.resource_keys(engine, feature, p.profile))
     applied = (
@@ -54,11 +46,18 @@ def resource_rows(db, engine, feature, lock=True):
     ).all()
 
 
-def _service_rows(rows, services, lock):
-    like = or_(*(ControlResource.key.like(f"local:%:service:{s}") for s in sorted(services)))
-    # The LIKE narrows in SQL; the exact match on the key shape is below.
-    return [r for r in _lockable(rows.filter(like).order_by(ControlResource.key), lock).all()
-            if is_service_key(r.key, services)]
+def _rows_without_profile(db, engine, feature, lock):
+    """The feature's own service rows on the hosts where its canonical service already has a
+    row, and every row of the hosts where it has none yet: the drain of its first profile there
+    waits for the work already running. A key of another shape is kept (no fail-open)."""
+    rows = db.query(ControlResource).filter(ControlResource.owner_engine_id == engine.id)
+    services = admission_services(feature)
+    if services is None:  # a feature without a service of its own: every row, as before
+        return _lockable(rows.order_by(ControlResource.key), lock).all()
+    every = [r.key for r in rows]  # no lock: the engine row is locked by every writer of these
+    ready = {key_host(k) for k in every if is_service_key(k, {SERVICES[feature]})}
+    keys = [k for k in every if key_host(k) not in ready or is_service_key(k, services)]
+    return _lockable(rows.filter(ControlResource.key.in_(keys)).order_by(ControlResource.key), lock).all()
 
 
 def _lockable(query, lock):

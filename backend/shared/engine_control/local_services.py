@@ -27,3 +27,9 @@ def is_service_key(key, services):
     """`local:<host>:service:<name>` of one of `services`, on any host (a host id may hold ":")."""
     parts = key.split(":")
     return len(parts) >= 4 and parts[0] == "local" and parts[-2] == "service" and parts[-1] in services
+
+
+def key_host(key):
+    """The host of a local resource key (`local:<host>:<kind>:<name>`), or None for another shape."""
+    parts = key.split(":")
+    return ":".join(parts[1:-2]) if len(parts) >= 4 and parts[0] == "local" else None
