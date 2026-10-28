@@ -7,7 +7,7 @@ from shared.admin import is_effective_admin
 from shared.engine_control import catalog, registry
 from shared.engine_control.contracts import RuntimeSettings
 from shared.engine_control import service as control
-from shared.engine_control.idle_opt_in import IDLE_FEATURES
+from shared.access.profile_views import revision_view  # noqa: F401  (re-exported)
 from shared.access import policy
 from shared.access.models import (
     ExecutionProfile,
@@ -42,18 +42,6 @@ def get_profile(db, id, actor, permission="execution_profiles.read", lock=False)
         raise control.ControlError("PROFILE_NOT_FOUND", 404)
     policy.authorize(db, actor, permission, profile=p)
     return p
-
-
-def revision_view(r):
-    return dict(
-        id=r.id,
-        revision=r.revision,
-        settings=r.settings,
-        warm_for_seconds=r.warm_for_seconds,
-        model_fingerprint=r.model_fingerprint,
-        content_hash=r.content_hash,
-        published_at=r.published_at,
-    )
 
 
 def view(db, p, actor, details=False):
@@ -132,9 +120,7 @@ def normalize(adapter, feature, body):
     settings = body.settings.model_dump(mode="json")
     if settings["warm_until"] is not None:
         raise control.ControlError("USE_WARM_DURATION", 422)
-    if settings["idle_cooldown"] and (adapter != "local" or feature not in IDLE_FEATURES):
-        # fail on save, not later on bind (spec 0007 §4.6)
-        raise control.ControlError("IDLE_COOLDOWN_NOT_SUPPORTED", 422, feature=feature)
+    control.idle_opt_in.refuse_unsupported(adapter, feature, settings)  # on save, not on bind (0007 §4.6)
     d = registry.descriptor(adapter, settings["adapter_version"])
     if feature not in d["features"]:
         raise control.ControlError("FEATURE_NOT_SUPPORTED", 422)

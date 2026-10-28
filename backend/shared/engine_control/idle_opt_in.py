@@ -30,6 +30,14 @@ class OptIn(NamedTuple):
     revision: int  # pass it as PlanRequest.profile_revision: never the newer, unapplied desire
 
 
+def refuse_unsupported(adapter_type, feature, runtime):
+    """On save of an execution profile: idle_cooldown=true only for local transcription/vision."""
+    from shared.engine_control.service import ControlError
+
+    if (runtime or {}).get("idle_cooldown") and (adapter_type != "local" or feature not in IDLE_FEATURES):
+        raise ControlError("IDLE_COOLDOWN_NOT_SUPPORTED", 422, feature=feature)
+
+
 def _qualifies(engine, feature):
     from shared.engine_control.service import ControlError
 

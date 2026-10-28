@@ -34,8 +34,7 @@ from shared.models import ROOT_SLOT, AdminAudit, Engine, User
 from shared.admin import is_effective_admin
 from shared.engine_control import catalog, registry
 from shared.engine_control import service as control
-from shared.engine_control.contracts import comparable_settings
-from shared.engine_control.contracts import RuntimeSettings
+from shared.engine_control.contracts import RuntimeSettings, comparable_settings
 from shared.engine_control.models import ControlHost
 from shared.access import contracts as C, policy, service
 from shared.access.models import EngineAttributes, ExecutionProfile, ExecutionRevision
