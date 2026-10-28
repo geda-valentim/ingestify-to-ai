@@ -204,6 +204,8 @@ EN = {
     "REGISTERED_MANIFEST_CHANGED": "The registered docker compose files changed, and the host agent refuses to operate. Register the host again (scripts/register_engine_host.py).",
     "RESOURCE_OWNED_BY_ANOTHER_ENGINE": "This profile's resource already belongs to another engine.",
     "RESOURCE_OWNERSHIP_CONFLICT": "Another engine claimed the same resource at the same time. Reload.",
+    "IDLE_COOLDOWN_NOT_SUPPORTED": "Idle cooldown is only available on a local engine, for transcription and vision.",
+    "IDLE_COOLDOWN_PERMISSION_REQUIRED": "To turn on idle cooldown you must be able to plan, cool down and start this engine: the automatic operations run with your access.",
     "RUNTIME_OPERATION_REQUIRED": "This engine is managed by the control plane: runtime changes go through an execution profile and a reviewed operation, not through direct editing.",
     "RUNTIME_PROFILE_EXISTS": "The engine already has a desired profile{for_feature}; the automatic binding does not replace it.",
     "RUNTIME_PROFILE_NOT_FOUND": "There is no desired execution profile{for_feature} on this engine (or it is outside your scope).",

@@ -1450,3 +1450,21 @@ def test_effect_metadata_records_executor_scope_and_only_confirmed_success_resol
         assert (
             op.cost_confirmed is False
         ), "Admission confirmation cannot invent provider billing confirmation"
+
+
+def test_a_revision_published_before_a_runtime_field_existed_still_binds(world):
+    # idle_cooldown (spec 0007 §4.6) was added to RuntimeSettings after revisions were published;
+    # the stored settings lack the key, the freshly validated ones carry its default
+    with world() as db:
+        p = published(db)
+        rev = db.get(ExecutionRevision, p["latest_published_revision_id"])
+        rev.settings = {k: v for k, v in rev.settings.items() if k != "idle_cooldown"}
+        db.commit()
+        service.bind(
+            db,
+            db.get(Engine, "engine-a"),
+            C.Bind(version=0, feature="transcription", revision_id=rev.id),
+            "bootstrap",
+        )
+        bound = db.query(RuntimeProfile).filter_by(engine_id="engine-a", feature="transcription").one()
+        assert bound.profile["idle_cooldown"] is False

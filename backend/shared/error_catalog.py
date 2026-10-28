@@ -169,6 +169,15 @@ _PT = {
         "perfil de execução e uma operação revisada, não pela edição direta.",
         ["bind_profile"],
     ),
+    "IDLE_COOLDOWN_NOT_SUPPORTED": (
+        "O desligamento por ociosidade só vale em engine local, para transcrição e visão.",
+        ["fix_input"],
+    ),
+    "IDLE_COOLDOWN_PERMISSION_REQUIRED": (
+        "Para ligar o desligamento por ociosidade você precisa poder planejar, desligar e "
+        "iniciar esta engine: as operações automáticas rodam com o seu acesso.",
+        ["request_access"],
+    ),
     "TEST_CONNECTION_FIRST": (
         "A conexão com o provedor ainda não foi verificada. Use “Testar conexão” nesta engine; "
         "depois vincule um perfil de execução.",
