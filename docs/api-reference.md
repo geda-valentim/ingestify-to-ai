@@ -2,7 +2,7 @@
 
 Gerado do OpenAPI da aplicação por `scripts/generate_api_docs.py`. Não edite este arquivo à mão.
 
-API `1.14.0`: **142 operações HTTP** e **1 WebSocket(s)**.
+API `1.14.0`: **143 operações HTTP** e **1 WebSocket(s)**.
 
 Base pública de desenvolvimento: `https://dev.ingestify.ai/api`. Os caminhos abaixo são relativos à base.
 
@@ -140,9 +140,10 @@ Guias de imagem: [PT](https://dev.ingestify.ai/pt/docs/images) / [EN](https://de
 | GET | `/internal/engine-hosts/{host_id}/operations/{op_id}/check` | X-Engine-Host-Token do host | Verificar se a operação ainda vale |
 | POST | `/internal/engine-hosts/{host_id}/operations/{op_id}/events` | X-Engine-Host-Token do host | Enviar evento da operação |
 | POST | `/internal/engine-hosts/{host_id}/operations/{op_id}/result` | X-Engine-Host-Token do host | Enviar resultado da operação |
-| GET | `/projects` | JWT ou API key | Listar projetos com contagens |
 | GET | `/projects/resolve` | JWT ou API key | Resolver nome de projeto |
 | GET | `/projects/{project_id}/folders/resolve` | JWT ou API key | Resolver nome de pasta do projeto |
+| GET | `/projects` | JWT ou API key | Listar projetos com contagens, limites e uso |
+| GET | `/projects/{project_id}` | JWT ou API key | Projeto com limites e uso |
 | GET | `/transcribe/live/sessions/availability` | JWT ou API key | Disponibilidade da transcrição ao vivo |
 | POST | `/transcribe/live/sessions` | JWT ou API key | Criar sessão de transcrição ao vivo |
 | GET | `/transcribe/live/sessions/{job_id}` | JWT ou API key | Estado da sessão ao vivo |
@@ -342,31 +343,6 @@ Respostas declaradas:
 
 Projetos e pastas que organizam os jobs; resolução de nomes para *get-or-add*.
 
-### GET /projects
-
-Listar projetos com contagens
-
-Autorização: **JWT ou API key**. Operation ID: `list_projects_projects_get`.
-
-Os projetos do usuário, com contagens de jobs MAIN, os mais recentes primeiro
-(`last_job_at` desc, depois nome). `?include=folders` traz as pastas de cada
-projeto, com contagem.
-
-As contagens vêm de um único `GROUP BY project_id, folder_id, status`.
-
-Parâmetros:
-
-| Nome | Local | Obrigatório | Tipo | Padrões/limites | Descrição |
-| --- | --- | --- | --- | --- | --- |
-| `include` | query | não | string / null |  | `folders` inclui as pastas de cada projeto |
-
-Respostas declaradas:
-
-| Status | Content-Type | Esquema | Descrição |
-| --- | --- | --- | --- |
-| 200 | application/json | [ProjectListResponse](#model-projectlistresponse) | Successful Response |
-| 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
-
 ### GET /projects/resolve
 
 Resolver nome de projeto
@@ -412,6 +388,57 @@ Respostas declaradas:
 | Status | Content-Type | Esquema | Descrição |
 | --- | --- | --- | --- |
 | 200 | application/json | [NameResolveResponse](#model-nameresolveresponse) | Successful Response |
+| 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
+
+### GET /projects
+
+Listar projetos com contagens, limites e uso
+
+Autorização: **JWT ou API key**. Operation ID: `list_projects_projects_get`.
+
+Os projetos do usuário, com contagens de jobs MAIN e `folder_count`, os mais
+recentes primeiro (`last_job_at` desc, depois nome). `?include=folders` traz as
+pastas de cada projeto, com contagem.
+
+`limits` são os da instalação (`0` = sem limite) e `usage.projects` é quantos
+projetos do usuário contam para o `PROJECT_LIMIT`, arquivados inclusive.
+
+Parâmetros:
+
+| Nome | Local | Obrigatório | Tipo | Padrões/limites | Descrição |
+| --- | --- | --- | --- | --- | --- |
+| `include` | query | não | string / null |  | `folders` inclui as pastas de cada projeto |
+
+Respostas declaradas:
+
+| Status | Content-Type | Esquema | Descrição |
+| --- | --- | --- | --- |
+| 200 | application/json | [ProjectListResponse](#model-projectlistresponse) | Successful Response |
+| 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
+
+### GET /projects/{project_id}
+
+Projeto com limites e uso
+
+Autorização: **JWT ou API key**. Operation ID: `get_project_projects__project_id__get`.
+
+O resumo do projeto (o mesmo item de `GET /projects`), os `limits` da instalação
+e o uso: `usage.folders` são as pastas do projeto, `usage.projects` os projetos
+do usuário que chama. Com `limits` em `0` (sem limite), o uso vem do mesmo jeito.
+Projeto alheio ou inexistente: 404.
+
+Parâmetros:
+
+| Nome | Local | Obrigatório | Tipo | Padrões/limites | Descrição |
+| --- | --- | --- | --- | --- | --- |
+| `project_id` | path | sim | string |  |  |
+| `include` | query | não | string / null |  | `folders` inclui as pastas do projeto |
+
+Respostas declaradas:
+
+| Status | Content-Type | Esquema | Descrição |
+| --- | --- | --- | --- |
+| 200 | application/json | [ProjectDetailResponse](#model-projectdetailresponse) | Successful Response |
 | 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
 
 ## Conversion
@@ -14193,6 +14220,41 @@ Esquema JSON completo:
 }
 ```
 
+<a id="model-projectdetailresponse"></a>
+
+### ProjectDetailResponse
+
+| Campo | Obrigatório | Tipo | Padrões/limites | Descrição |
+| --- | --- | --- | --- | --- |
+| `project` | sim | [ProjectSummary](#model-projectsummary) |  |  |
+| `limits` | sim | [ProjectLimits](#model-projectlimits) |  |  |
+| `usage` | sim | [ProjectUsage](#model-projectusage) |  |  |
+
+Esquema JSON completo:
+
+```json
+{
+  "properties": {
+    "project": {
+      "$ref": "#/components/schemas/ProjectSummary"
+    },
+    "limits": {
+      "$ref": "#/components/schemas/ProjectLimits"
+    },
+    "usage": {
+      "$ref": "#/components/schemas/ProjectUsage"
+    }
+  },
+  "type": "object",
+  "required": [
+    "project",
+    "limits",
+    "usage"
+  ],
+  "title": "ProjectDetailResponse"
+}
+```
+
 <a id="model-projectfoldersummary"></a>
 
 ### ProjectFolderSummary
@@ -14273,6 +14335,7 @@ Esquema JSON completo:
 | --- | --- | --- | --- | --- |
 | `projects` | sim | array de [ProjectSummary](#model-projectsummary) |  |  |
 | `limits` | sim | [ProjectLimits](#model-projectlimits) |  |  |
+| `usage` | sim | [ProjectUsage](#model-projectusage) |  |  |
 
 Esquema JSON completo:
 
@@ -14288,12 +14351,16 @@ Esquema JSON completo:
     },
     "limits": {
       "$ref": "#/components/schemas/ProjectLimits"
+    },
+    "usage": {
+      "$ref": "#/components/schemas/ProjectUsage"
     }
   },
   "type": "object",
   "required": [
     "projects",
-    "limits"
+    "limits",
+    "usage"
   ],
   "title": "ProjectListResponse"
 }
@@ -14349,6 +14416,7 @@ Esquema JSON completo:
 | `failed_count` | sim | integer |  |  |
 | `active_count` | sim | integer |  | Jobs queued or processing |
 | `last_job_at` | não | string (date-time) / null |  |  |
+| `folder_count` | sim | integer |  | Pastas do projeto, todas, contadas como o FOLDER_LIMIT conta |
 | `api_keys` | sim | array de [ProjectRef](#model-projectref) |  | API keys bound to this project |
 | `folders` | não | array de [ProjectFolderSummary](#model-projectfoldersummary) / null |  | Only with ?include=folders |
 
@@ -14410,6 +14478,11 @@ Esquema JSON completo:
       ],
       "title": "Last Job At"
     },
+    "folder_count": {
+      "type": "integer",
+      "title": "Folder Count",
+      "description": "Pastas do projeto, todas, contadas como o FOLDER_LIMIT conta"
+    },
     "api_keys": {
       "items": {
         "$ref": "#/components/schemas/ProjectRef"
@@ -14443,9 +14516,50 @@ Esquema JSON completo:
     "root_job_count",
     "failed_count",
     "active_count",
+    "folder_count",
     "api_keys"
   ],
   "title": "ProjectSummary"
+}
+```
+
+<a id="model-projectusage"></a>
+
+### ProjectUsage
+
+| Campo | Obrigatório | Tipo | Padrões/limites | Descrição |
+| --- | --- | --- | --- | --- |
+| `projects` | sim | integer |  | Projetos do usuário que chama (dono da API key), arquivados inclusive, contados como o PROJECT_LIMIT conta |
+| `folders` | não | integer / null |  | Pastas deste projeto (só no detalhe) |
+
+Esquema JSON completo:
+
+```json
+{
+  "properties": {
+    "projects": {
+      "type": "integer",
+      "title": "Projects",
+      "description": "Projetos do usuário que chama (dono da API key), arquivados inclusive, contados como o PROJECT_LIMIT conta"
+    },
+    "folders": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Folders",
+      "description": "Pastas deste projeto (só no detalhe)"
+    }
+  },
+  "type": "object",
+  "required": [
+    "projects"
+  ],
+  "title": "ProjectUsage"
 }
 ```
 
