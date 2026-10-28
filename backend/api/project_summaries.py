@@ -94,6 +94,10 @@ def summarize(db: Session, scope: Scope, projects: List[Project], with_folders: 
     A fixed number of queries whatever the number of projects: one `GROUP BY
     project_id, folder_id, status` over the jobs, one over the folders, the keys,
     and the folders themselves with `?include=folders`.
+
+    Jobs, keys and the listed folders are the caller's (`scope.of`); `folder_count` is every
+    folder of the project, as FOLDER_LIMIT counts them. They differ only on a project read by
+    someone other than its owner (where 0016/0017 widen `scope.of`).
     """
     ids = [p.id for p in projects]
     stats = {p.id: {"job_count": 0, "root_job_count": 0, "failed_count": 0, "active_count": 0,
@@ -161,7 +165,7 @@ def summarize(db: Session, scope: Scope, projects: List[Project], with_folders: 
     response_model_exclude_unset=True,
     summary="Listar projetos com contagens, limites e uso",
 )
-async def list_projects(
+def list_projects(  # plain def (threadpool): blocking DB reads
     include: Optional[str] = Query(None, description="`folders` inclui as pastas de cada projeto"),
     scope: Scope = Depends(visible(Project, "projects.read")),
     db: Session = Depends(get_db),
@@ -190,7 +194,7 @@ async def list_projects(
     response_model_exclude_unset=True,
     summary="Projeto com limites e uso",
 )
-async def get_project(
+def get_project(  # plain def (threadpool): blocking DB reads
     include: Optional[str] = Query(None, description="`folders` inclui as pastas do projeto"),
     project: Project = Depends(authorized(Project, "projects.read")),
     user: User = Depends(get_current_active_user),

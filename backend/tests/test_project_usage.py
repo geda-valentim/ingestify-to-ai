@@ -5,7 +5,6 @@ GET /projects, and GET /projects/{project_id} with `{project, limits, usage}`.
 Authentication is the real one (JWT and X-API-Key through shared/auth.py). The usage is
 counted by the same functions as the PROJECT_LIMIT / FOLDER_LIMIT refusals.
 """
-import asyncio
 from datetime import datetime
 
 import pytest
@@ -95,7 +94,7 @@ def test_another_users_project_or_a_missing_one_is_404(client, world, headers):
 def test_usage_projects_is_the_callers_never_the_owners(db, world):  # noqa: F811
     _, _, theirs = world  # Bob's project (3 projects), as a project shared with Alice would be read
     alice = db.get(User, ALICE)
-    body = asyncio.run(project_summaries.get_project(include=None, project=theirs, user=alice, db=db))
+    body = project_summaries.get_project(include=None, project=theirs, user=alice, db=db)
     assert body.usage.projects == 2  # Alice's count: the owner's (3) would leak how many Bob has
     assert body.usage.folders == 2
 
