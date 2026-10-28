@@ -15743,6 +15743,11 @@
             "title": "Warmup Mode",
             "default": "on_start"
           },
+          "idle_cooldown": {
+            "type": "boolean",
+            "title": "Idle Cooldown",
+            "default": false
+          },
           "warm_until": {
             "anyOf": [
               {
