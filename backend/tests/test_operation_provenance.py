@@ -69,3 +69,31 @@ def test_an_observation_stored_before_the_source_was_kept_is_unknown(world):  # 
     assert views["old"]["observed"] == {"ready_replicas": 1}
     assert views["old"]["observed_feature"] is None and views["old"]["observed_operation_type"] is None
     assert (views["locked"]["operation_feature"], views["locked"]["operation_type"]) == ("vision", "cooldown")
+
+
+def test_end_to_end_a_vision_test_on_the_shared_resource_keeps_the_transcription_row(world, monkeypatch):  # noqa: F811
+    # the test adapter maps every feature to the same resource: a second feature, test-only
+    from shared.engine_control import registry
+
+    d = registry.descriptor("test-vm")
+    monkeypatch.setitem(d, "features", ["transcription", "vision"])
+    monkeypatch.setitem(d, "actions", ["scale", "drain_stop", "test"])
+    p = prepared(world)
+    with world() as db:
+        op = service.enqueue(db, p["plan_id"], p["plan_hash"], "scale", "admin", True)
+        gen = service.claim(db, op["operation_id"], "one")
+        service.publish_applied(db, op["operation_id"], gen, {})
+        service.finish(db, op["operation_id"], gen, "succeeded", {"ready_replicas": 2}, safe=True)
+        e = db.get(Engine, "e")
+        from shared.engine_control.contracts import PlanRequest
+
+        t = service.create_plan(db, e, PlanRequest(type="test", feature="vision", engine_version=e.version,
+                                                   max_usd="0.1"), "admin")
+        op = service.enqueue(db, t["plan_id"], t["plan_hash"], "vision-test", "admin", True)
+        gen = service.claim(db, op["operation_id"], "one")
+        service.publish_applied(db, op["operation_id"], gen, {})  # test: publishes nothing
+        service.finish(db, op["operation_id"], gen, "succeeded", {"ready_replicas": 7}, safe=True)
+        (resource,) = service.runtime_status(db, db.get(Engine, "e"))["resources"]
+    assert resource["applied"]["feature"] == "transcription"  # the applied revision did not move
+    assert resource["observed"] == {"ready_replicas": 7}
+    assert (resource["observed_feature"], resource["observed_operation_type"]) == ("vision", "test")
