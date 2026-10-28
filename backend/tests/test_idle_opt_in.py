@@ -254,3 +254,13 @@ def test_the_history_is_not_read(db, monkeypatch):
     assert idle_opt_in.opt_in(db, "l", "transcription") == ("admin-a", 1)
     history = [sql for sql in statements if "engine_operations" in sql and "WHERE engine_operations.id" not in sql]
     assert history == [], history
+
+
+def test_the_reference_names_the_opt_in_operation(db):
+    """Where the idle policy writes its notes, found without a search."""
+    rev = _revision(db, 1, idle=True)
+    _operation(db, rev, "apply_profile", "admin-a")
+    first = db.query(EngineOperation).one().id
+    _operation(db, rev, "cooldown", "admin-a", finished=T0 + timedelta(minutes=5))
+
+    assert idle_opt_in.opt_in_reference(db, "l", "transcription") == (first, ("admin-a", 1))

@@ -153,7 +153,14 @@ def opt_in(db, engine_id: str, feature: str) -> Optional[OptIn]:
     Read from the resources' applied state and then by primary key, never from the
     operation history: it runs on every tick of the idle policy. A resource without the
     reference (written before it existed) has no opt-in until the profile is applied
-    again; references that disagree fail closed. None: the policy does nothing."""
+    again; references that disagree fail closed. None: the policy does nothing.
+    """
+    found = opt_in_reference(db, engine_id, feature)
+    return found[1] if found else None
+
+
+def opt_in_reference(db, engine_id: str, feature: str):
+    """(id of the apply_profile operation that opted in, OptIn), or None: see opt_in()."""
     applied = (
         db.query(RuntimeProfile)
         .filter_by(engine_id=engine_id, feature=feature)
@@ -178,4 +185,4 @@ def opt_in(db, engine_id: str, feature: str) -> Optional[OptIn]:
     if (op is None or op.state != "succeeded" or op.actor_id != actor or op.engine_id != engine_id
             or plan is None or plan.profile_id != applied.id or (plan.body or {}).get("type") != "apply_profile"):
         return None
-    return OptIn(actor, applied.revision)
+    return op.id, OptIn(actor, applied.revision)
