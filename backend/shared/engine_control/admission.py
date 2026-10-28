@@ -1,10 +1,14 @@
 """Admission and maintenance use the same SQL resource locks. No fail-open."""
 
 from uuid import uuid4
+
 from shared.config import get_settings
+from shared.engine_control.local_services import SERVICES, admission_services, is_service_key, key_host
 from shared.engine_control.models import (
     ControlResource,
     ControlAdmission,
+    EngineOperation,
+    OperationPlan,
     RuntimeProfile,
 )
 from shared.engine_control.service import ControlError, locked_engine, now
@@ -18,15 +22,11 @@ def resource_rows(db, engine, feature, lock=True):
 
     p = latest_profile(db, engine.id, feature)
     if not p:
-        # Generic tasks can execute multiple features in the same managed service.
-        if engine.adapter_type == "local":
-            return _lockable(
-                db.query(ControlResource)
-                .filter_by(owner_engine_id=engine.id)
-                .order_by(ControlResource.key),
-                lock,
-            ).all()
-        return []
+        # Without a profile, the feature's own services where they exist: a document conversion
+        # is not refused because transcription's dedicated service is draining (spec 0007 §4.6).
+        if engine.adapter_type != "local":
+            return []
+        return _rows_without_profile(db, engine, feature, lock)
     driver = registry.create(engine.adapter_type)
     keys = set(driver.resource_keys(engine, feature, p.profile))
     applied = (
@@ -46,8 +46,26 @@ def resource_rows(db, engine, feature, lock=True):
     ).all()
 
 
+def _rows_without_profile(db, engine, feature, lock):
+    """The feature's own service rows on every host, plus, on the hosts where its canonical
+    service has no row yet, the rows that are no service (the GPU): the drain of its first
+    profile there waits for the work already running. Another feature's dedicated service is
+    never taken; a key of another shape is (no fail-open)."""
+    rows = db.query(ControlResource).filter(ControlResource.owner_engine_id == engine.id)
+    # One locked read: a row loaded earlier in this session would keep a stale gate.
+    every = _lockable(rows.order_by(ControlResource.key), lock).all()
+    services = admission_services(feature)
+    if services is None:  # a feature without a service of its own: every row, as before
+        return every
+    ready = {key_host(r.key) for r in every if is_service_key(r.key, {SERVICES[feature]})}
+    return [r for r in every
+            if is_service_key(r.key, services) or (key_host(r.key) not in ready and not is_service_key(r.key))]
+
+
 def _lockable(query, lock):
-    return query.with_for_update() if lock else query
+    # populate_existing: a row the session loaded before the lock keeps no stale gate or lock
+    # (and an unflushed edit of one is overwritten: callers do not edit these rows first).
+    return query.with_for_update().populate_existing() if lock else query
 
 
 def _find_engine(db, engine_id):
@@ -125,10 +143,26 @@ def placement_blocked(db, engine, feature):
     if not get_settings().engine_control_enabled:
         return False
     rows = resource_rows(db, engine, feature)
+    held = {}
     return any(
         r.gate_closed
-        or r.operation_id
+        or (r.operation_id and _holds_placement(db, r.operation_id, feature, held))
         or (r.applied or {}).get("feature_modes", {}).get(feature)
         in ("standby", "stopped")
         for r in rows
     )
+
+
+def _holds_placement(db, operation_id, feature, held):
+    """An automatic operation (a plan with `trigger`) of another feature only locks the shared keys:
+    its effect acts on its own dedicated service (spec 0007 §4.6). One primary-key read per
+    operation, only for a locked row; a missing plan keeps blocking."""
+    if operation_id not in held:
+        body = (
+            db.query(OperationPlan.body)
+            .join(EngineOperation, EngineOperation.plan_id == OperationPlan.id)
+            .filter(EngineOperation.id == operation_id)
+            .scalar()
+        ) or {}
+        held[operation_id] = not (body.get("trigger") and body.get("feature") not in (None, feature))
+    return held[operation_id]
