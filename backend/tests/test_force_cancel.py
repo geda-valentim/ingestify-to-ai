@@ -354,4 +354,6 @@ def test_the_migration_required_message_names_the_explicit_migration():
 
     for lang in ("pt", "en"):
         message = error_catalog.detail("ENGINE_CONTROL_MIGRATION_REQUIRED", lang=lang)["message"]
-        assert "migrate_0007_engine_control" in message, lang
+        # what runbook step 2 runs inside the API container (the script is not in that image)
+        assert "engine-control-bootstrap" in message and "shared.engine_control.migration" in message, lang
+        assert "scripts/" not in message, lang

@@ -69,7 +69,7 @@ EN = {
         "Execution profiles and access scopes are turned off on this installation "
         "(IAM_MODE is not enforce)."
     ),
-    "ENGINE_CONTROL_MIGRATION_REQUIRED": "This needs the explicit engine-control migration (step 2 of the bootstrap runbook: scripts/migrate_0007_engine_control.py, idempotent). An alembic upgrade does not apply it.",
+    "ENGINE_CONTROL_MIGRATION_REQUIRED": "This needs the explicit engine-control migration, which is idempotent: step 2 of the engine-control-bootstrap runbook (upgrade(engine) from shared.engine_control.migration, in the API environment). On an existing installation an alembic upgrade does not apply it.",
     "ACCESS_SCHEMA_NOT_READY": "The access tables have not been migrated yet. Run the backend migrations and try again.",
     "FEATURE_NOT_SUPPORTED": "This adapter does not offer this feature.",
     "FEATURE_UNSUPPORTED": "This adapter does not offer this feature.",
