@@ -17,7 +17,7 @@ from shared.engine_control.models import (
 )
 from shared.models import EngineUsage
 from workers.engine_control import orphan_tickets
-from workers.engine_control.local import SERVICES
+from shared.engine_control.local_services import SERVICES
 
 ORPHAN_RECONCILE_SECONDS = 10
 

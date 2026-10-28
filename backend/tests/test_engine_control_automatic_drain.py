@@ -12,7 +12,7 @@ import pytest
 
 from shared.engine_control import admission, registry, service
 from shared.engine_control.contracts import PlanRequest
-from shared.engine_control.models import ControlResource, EngineOperation, OperationPlan
+from shared.engine_control.models import ControlResource, EngineOperation, OperationPlan, RuntimeProfile
 from shared.models import Engine, EngineUsage
 from tests.test_engine_control_orphan_tickets import Session, _open, _ticket  # noqa: F401  (fixture)
 from workers.engine_control import orphan_tickets, runner
@@ -44,21 +44,20 @@ def no_broker(monkeypatch):
 
 
 @pytest.fixture
-def local(Session):
-    registry.register(
-        "drain-local",
-        dict(type="drain-local", actions=["scale"], features=list(KEYS), execution_mode="remote_runner",
+def local(Session, monkeypatch):
+    """A `local` engine (admission's no-profile rule applies) with the test adapter's keys."""
+    monkeypatch.setitem(registry._registry, ("local", 1), (
+        dict(type="local", actions=["scale"], features=list(KEYS), execution_mode="remote_runner",
              credential_fields=[], fields=[], provider_fields=[]),
         Adapter,
-    )
+    ))
     with Session() as db:
-        db.get(Engine, "e").adapter_type = "drain-local"
+        db.get(Engine, "e").adapter_type = "local"
         db.commit()
         for feature in KEYS:
             e = db.get(Engine, "e")
             service.save_profile(db, e, feature, dict(PROFILE), e.version, "admin")
     yield Session
-    registry._registry.pop(("drain-local", 1))
 
 
 def _drain(Session, trigger, timeout_seconds=2):
@@ -69,10 +68,12 @@ def _drain(Session, trigger, timeout_seconds=2):
                                                       max_usd="0"), "admin")
         op = service.enqueue(db, plan["plan_id"], plan["plan_hash"], "k", "admin", True)
         generation = service.claim(db, op["operation_id"], "test")
-        body = dict(db.get(OperationPlan, plan["plan_id"]).body, drain_timeout_seconds=timeout_seconds)
+        stored = db.get(OperationPlan, plan["plan_id"])
+        if trigger:  # as an automatic plan would carry it (placement reads the stored plan)
+            stored.body = dict(stored.body, trigger=trigger)
+            db.commit()
+        body = dict(stored.body, drain_timeout_seconds=timeout_seconds)
     assert sorted(body["resources"]) == sorted(KEYS["transcription"])
-    if trigger:
-        body["trigger"] = trigger
     ctx = runner.Context(op["operation_id"], generation, Session)
     try:
         ctx.drain(body)
@@ -141,6 +142,31 @@ class TestAutomaticPlan:
         _drain(local, "idle_policy")
 
         assert not set(tickets) & _open(local)
+
+
+    def test_a_document_without_a_profile_is_admitted_and_placed(self, local):
+        """Admission without a profile takes only the feature's own services (backend, spec 0007 §4.6)."""
+        with local() as db:
+            db.query(RuntimeProfile).filter_by(feature="document_conversion").delete()
+            db.commit()
+        document = _ticket(local, "task:doc", resource=GENERIC)
+
+        _drain(local, "idle_policy")
+
+        assert document in _open(local)
+        assert admission.acquire("document_conversion", "task:doc-2", "e", local)
+        with local() as db:
+            e = db.get(Engine, "e")
+            assert not admission.placement_blocked(db, e, "document_conversion")
+            assert admission.placement_blocked(db, e, "transcription")
+
+    def test_placement_of_documents_stays_open_during_the_automatic_operation(self, local):
+        _drain(local, "idle_policy")
+
+        with local() as db:
+            e = db.get(Engine, "e")
+            assert not admission.placement_blocked(db, e, "document_conversion"), "only the shared keys are locked"
+            assert admission.placement_blocked(db, e, "transcription")
 
 
 class TestHumanPlan:

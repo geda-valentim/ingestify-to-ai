@@ -251,6 +251,18 @@ class TestWakeup:
 
         assert _decide(Session, depth=0) is None
 
+    def test_another_feature_writing_the_shared_row_does_not_block_the_wakeup(self, Session):
+        """Vision's operations also write the generic worker's row: only the dedicated row tells
+        who changed this feature last (spec 0007, 4.6)."""
+        _applied(Session, mode="standby")
+        with Session() as db:
+            db.get(ControlResource, GENERIC).applied = {
+                "type": "drain_stop", "trigger": None, "operation_id": "vision-op",
+                "feature_modes": {"vision": "stopped"}}
+            db.commit()
+
+        assert _decide(Session, depth=3) == "start"
+
     def test_a_drain_stop_by_another_admin_after_the_idle_cooldown_is_not_undone(self, Session):
         _applied(Session, mode="stopped", last=("drain_stop", None, "admin-b", 1))
 

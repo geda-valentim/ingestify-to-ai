@@ -45,7 +45,8 @@ from shared.engine_control.models import (
 )
 from shared.models import Engine, FeatureRoute, JobDispatch
 from workers.engine_control import idle_notes, idle_signals
-from workers.engine_control.local import SERVICES, LocalControlAdapter
+from shared.engine_control.local_services import SERVICES
+from workers.engine_control.local import LocalControlAdapter
 
 logger = logging.getLogger(__name__)
 
