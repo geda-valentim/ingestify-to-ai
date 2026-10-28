@@ -2,6 +2,77 @@
 
 > **Registro histórico (2025-10).** Não é mantido; para mudanças posteriores use `git log`. Observação: `workers/tasks_old.py`, citado abaixo, não existe (há um `workers/tasks.py.backup`). Exceção: mudanças de comportamento intencionais que uma spec manda registrar aqui entram na seção abaixo.
 
+## 2026-10: códigos próprios nas recusas do controle de engines e opt-in do desligamento por ociosidade (API 1.15.0)
+
+**Por que é minor:** há códigos de erro novos que o cliente pode tratar e um campo opcional
+novo no perfil de execução local. Nenhum campo ou endpoint existente é removido; uma resposta
+de erro muda de `code` (abaixo, com a migração).
+
+**Mudança de comportamento: recusas do controle de engines (#126, spec 0007)**
+- As rotas de admin de engine respondiam toda recusa do controle de engines como 409
+  `VERSION_CONFLICT`, com o motivo só no texto. Agora o 409 traz o `code` do motivo:
+  `RUNTIME_OPERATION_REQUIRED` (salve um perfil de execução e execute um plano),
+  `CLEANUP_CREDENTIAL_REQUIRED` (confirme o cooldown antes de trocar ou remover credenciais) e
+  `OPERATION_CONFLICT` (o recurso está sob uma operação ativa ou incerta).
+- `POST /admin/engines/{id}/reset-health` deixava a recusa escapar como **500** sem `code`;
+  agora responde o mesmo 409 com `code`.
+- **Migração:** quem lia o prefixo do texto de um `VERSION_CONFLICT` deve ler o `code`. O
+  `VERSION_CONFLICT` continua valendo para conflito de versão de verdade. O front não dependia
+  do formato antigo.
+
+**Novo (spec 0007)**
+- **Opt-in do desligamento por ociosidade (#130):** o perfil de execução local de transcrição
+  e de visão aceita `idle_cooldown` (booleano, padrão `false`). Quem liga precisa poder
+  planejar, desligar e iniciar a engine, porque as operações automáticas rodam com o acesso
+  dele. Neste release o campo só é validado e gravado: a política que desliga e religa a
+  engine sozinha vem num release seguinte. Códigos novos:
+  - `IDLE_COOLDOWN_NOT_SUPPORTED` (422): engine não local, ou feature fora de transcrição e
+    visão;
+  - `IDLE_COOLDOWN_PERMISSION_REQUIRED` (403): falta uma das permissões acima;
+  - `AUTOMATIC_EFFECT_NOT_APPLIED` e `IDLE_POLICY_NOT_OPTED_IN`: resultado de operações
+    automáticas, que aparecem no histórico de operações.
+
+**Correções**
+- **Drenagem com processo morto (#129):** o ticket de admissão de uma task cujo processo
+  morreu (OOM, SIGKILL, restart do container) ficava aberto, e toda drenagem daquele recurso
+  esperava até o timeout. A drenagem agora libera os tickets de processos encerrados. Os
+  tickets passam a registrar o pid e o nó de quem os pegou.
+- **Índice dos tickets de admissão (#127):** consultas de tickets abertos e da última
+  liberação por recurso usam um índice novo `(resource_key, released_at)`.
+- **Deploy e registro do host com profiles do compose (#118–#121):** `make deploy BUILD_LIVE=1`
+  constrói e acompanha o `worker-live` mesmo sem o profile `live` ativo; o deploy avisa quando
+  o `compose build` pularia um serviço sem `build:`; o registro do host aceita `worker-live`,
+  `worker-dispatch` e `worker-remote` com os profiles deles e recusa `--use-built-image` para
+  o que o deploy não constrói; o agente do host passa o `--profile` explícito.
+- **Token do host (#122, #123):** o arquivo de configuração do host, que guarda o token de
+  máquina, nasce com modo 0600; um registro que falha no meio não deixa configuração nem
+  token órfãos.
+- **Frontend (#125, #128):** configuração do ESLint (o lint roda na checagem, não no build da
+  imagem) e limpeza dos erros e avisos que ela apontou. Sem mudança de comportamento.
+
+**Correções deste CHANGELOG**
+- No 1.14.0, o limite de janela que impede os serviços de subir é o **maior ou igual** a
+  `CELERY_VISIBILITY_TIMEOUT_SECONDS`.
+- No 1.14.0, `make deploy BUILD_LIVE=1` não construía o `worker-live` quando o profile `live`
+  não estava ativo; o #118 corrige isso.
+
+**Rollout**
+- **Imagens:** o frontend precisa de rebuild (`package.json` e o OpenAPI embutido mudaram).
+  API e workers não mudaram de dependência; o `make deploy` os recria.
+- **Migration (#127):** em instalação existente, rode de novo o `upgrade(engine)` do controle
+  de engines (passo 1 de `docs/runbooks/engine-control-bootstrap.md`) e confira o índice
+  `ix_control_admissions_resource_released`. Nada avisa a falta dele. O DDL espera no máximo
+  30 s pelo lock de metadados; se desistir, rode de novo.
+- **Agente do host:** o `make deploy` não o reinicia. Depois do deploy:
+  `systemctl restart ingestify-engine-host-agent` (#121).
+- **Tickets antigos (#129):** tickets gravados antes deste release têm holder `task:<id>` sem
+  pid nem nó e não são liberados automaticamente. Depois do deploy, rode a consulta só de
+  leitura do runbook de bootstrap (seção "Drenagem que termina em `DRAIN_TIMEOUT`"); libere
+  à mão só depois do inspect por nó. O próprio deploy pode criar tickets assim.
+- **Serviços gerenciados:** se o compose ou as imagens deles mudaram, re-registre o host com
+  `register_engine_host.py --use-built-image` e rode `apply_profile`.
+- **Modal:** nenhum arquivo do fingerprint mudou; não há redeploy.
+
 ## 2026-10: telemetria e reciclagem do Docling, pré-carga do pipeline e /api-keys sem barra (API 1.14.0)
 
 **Por que é minor:** as linhas de `GET /admin/docling/cold-starts` ganham campos opcionais.
@@ -38,7 +109,7 @@ Nenhum campo, código de erro ou endpoint existente muda; o resto são correçõ
   `DOCLING_WINDOW_TIME_LIMIT_SECONDS` (#104), `ADMISSION_MAX_PAGES_PER_PDF`,
   `ADMISSION_MAX_PAGES_PER_CLIENT`, `ADMISSION_MAX_WAITING_PER_CLIENT` e
   `ADMISSION_GLOBAL_SLOTS` (#106). **Não defina nenhuma:** `0` num `ADMISSION_*` ou um limite
-  de janela maior que `CELERY_VISIBILITY_TIMEOUT_SECONDS` impedem os serviços de subir. O
+  de janela maior ou igual a `CELERY_VISIBILITY_TIMEOUT_SECONDS` impedem os serviços de subir. O
   heartbeat do worker publica a `concurrency` (#105).
 - Operação: `make deploy` (#107, #111; runbook em `docs/runbooks/deploy.md`, #112) e benchmark
   HTTP do Docling (#114).
@@ -710,7 +781,7 @@ Só documentação e metadados: nenhuma rota, status, campo ou esquema mudou
 
 ## 2026-10: Spec 0019 — usuário root na primeira inicialização
 
-Ver specs/0019.
+Ver a spec 0019.
 
 - **A primeira conta cadastrada numa instalação sem nenhum usuário vira root** (`users.root_slot = 1`,
   `is_admin = true`), único por índice único e irrevogável pela aplicação. Migration
@@ -724,7 +795,7 @@ Ver specs/0019.
 
 ## 2026-10: Spec 0018 — IAM: convergência do RBAC/ABAC de engines (0009)
 
-Ver specs/0018 e a
+Ver a spec 0018 e a
 [seção 6 do runbook](runbooks/execution-profiles-access.md#6-convergência-no-iam-spec-0018).
 
 - **Grants de engines viram `iam_bindings`** da família `engines`, com o **mesmo id** do grant
@@ -774,7 +845,7 @@ Ver specs/0018 e a
 
 ## 2026-10: Spec 0014 — IAM: núcleo de decisão e papéis de plataforma
 
-Ver specs/0014.
+Ver a spec 0014.
 
 - **`IAM_MODE`** (`off` | `shadow` | `enforce`, padrão `off`). Em `off` as rotas da API decidem
   pela regra legada (`is_effective_admin`, dono do recurso) e os bindings ficam inertes; `shadow`
