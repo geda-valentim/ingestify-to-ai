@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -13,7 +13,8 @@ from shared.access.models import EngineAttributes
 from shared.database import Base
 from shared.engine_control import idle_opt_in, service
 from shared.engine_control.contracts import PlanRequest, TriggeredPlanRequest
-from shared.engine_control.models import EngineOperation, OperationPlan, RuntimeProfile
+from shared.engine_control.applied_state import OPT_IN_KEYS
+from shared.engine_control.models import ControlResource, EngineOperation, OperationPlan, RuntimeProfile
 from shared.models import AdminAudit, Engine
 from tests.test_engine_control import prepared, profile  # noqa: F401
 from tests.test_engine_control import world as control_world  # noqa: F401  (fixture)
@@ -205,10 +206,51 @@ def test_a_published_but_unfinished_application_of_another_revision_breaks_the_c
     assert idle_opt_in.opt_in(db, "l", "transcription") is None
 
 
-def test_an_application_in_the_same_second_fails_closed(db):
+def test_an_application_in_the_same_second_still_breaks_the_chain(db):
     x = _revision(db, 1, idle=True, applied_at=T0)
     _operation(db, x, "apply_profile", "admin-a", finished=T0)
-    _revision(db, 2, idle=False, applied_at=T0)  # same instant: cannot tell which came last
+    y = _revision(db, 2, idle=False, applied_at=T0)  # same instant: the resources' last write tells
+    _operation(db, y, "apply_profile", "admin-b", finished=T0)
     x.applied_at = T0 + timedelta(seconds=1)
+    _operation(db, x, "start", "operator-b", finished=T0 + timedelta(seconds=1))
+    assert idle_opt_in.opt_in(db, "l", "transcription") is None
+
+
+# --- read from the applied state by primary key, failing closed ----------------------------
+
+
+def test_a_resource_applied_before_the_reference_existed_has_no_opt_in(db):
+    rev = _revision(db, 1, idle=True)
+    _operation(db, rev, "apply_profile", "admin-a")
+    for row in db.query(ControlResource):
+        row.applied = {k: v for k, v in row.applied.items() if k not in OPT_IN_KEYS}
+    db.flush()
+    assert idle_opt_in.opt_in(db, "l", "transcription") is None, "the admin applies the profile again"
+
+
+def test_resources_that_disagree_fail_closed(db):
+    rev = _revision(db, 1, idle=True)
+    _operation(db, rev, "apply_profile", "admin-a")
+    row = db.query(ControlResource).one()
+    db.add(ControlResource(key="test:l:gpu", owner_engine_id="l", applied=dict(row.applied, opt_in_actor="admin-b")))
     db.flush()
     assert idle_opt_in.opt_in(db, "l", "transcription") is None
+
+
+def test_a_reference_to_an_operation_that_did_not_succeed_is_no_opt_in(db):
+    rev = _revision(db, 1, idle=True)
+    _operation(db, rev, "apply_profile", "admin-a", state="needs_attention")  # published, never finished
+    assert idle_opt_in.opt_in(db, "l", "transcription") is None
+
+
+def test_the_history_is_not_read(db, monkeypatch):
+    """Every tick asks: resources, then the opt-in's operation and plan by primary key only."""
+    rev = _revision(db, 1, idle=True)
+    _operation(db, rev, "apply_profile", "admin-a")
+    for n in range(30):  # the policy's own operations pile up; none is looked at
+        _operation(db, rev, "cooldown" if n % 2 else "start", "admin-a", finished=T0 + timedelta(minutes=n + 1))
+    statements = []
+    event.listen(db.get_bind(), "before_cursor_execute", lambda *a: statements.append(a[2]))
+    assert idle_opt_in.opt_in(db, "l", "transcription") == ("admin-a", 1)
+    history = [sql for sql in statements if "engine_operations" in sql and "WHERE engine_operations.id" not in sql]
+    assert history == [], history

@@ -12,7 +12,8 @@ from shared.access.models import EngineAttributes
 from shared.database import Base
 from shared.engine_control import idle_opt_in, service
 from shared.engine_control.contracts import PlanRequest, TriggeredPlanRequest
-from shared.engine_control.models import EngineOperation, OperationPlan, RuntimeProfile
+from shared.engine_control.applied_state import applied_state
+from shared.engine_control.models import ControlResource, EngineOperation, OperationPlan, RuntimeProfile
 from shared.models import AdminAudit, Engine
 from tests.test_engine_control import prepared, profile  # noqa: F401
 from tests.test_engine_control import world as control_world  # noqa: F401  (fixture)
@@ -63,13 +64,23 @@ def _revision(db, revision, idle, applied_at=T0):
 
 
 def _operation(db, revision_row, type_, actor, state="succeeded", finished=T0, engine_id="l"):
+    """An operation on `revision_row`, published to the engine's resources as publish_applied
+    does (not for test/reconcile), whatever its final state: call them in the order they ran."""
     plan = OperationPlan(engine_id=engine_id, actor_id=actor, engine_version=0, profile_id=revision_row.id,
                          body={"type": type_, "feature": "transcription"}, hash="h", expires_at=T0)
     db.add(plan)
     db.flush()
-    db.add(EngineOperation(engine_id=engine_id, actor_id=actor, plan_id=plan.id, idempotency_key=plan.id,
-                           request_hash="r", state=state, deadline=T0, finished_at=finished))
+    op = EngineOperation(engine_id=engine_id, actor_id=actor, plan_id=plan.id, idempotency_key=plan.id,
+                         request_hash="r", state=state, deadline=T0, finished_at=finished)
+    db.add(op)
     db.flush()
+    if type_ not in ("test", "reconcile"):
+        rows = db.query(ControlResource).filter_by(owner_engine_id=engine_id).all() or [
+            ControlResource(key=f"test:{engine_id}:service", owner_engine_id=engine_id)]
+        for row in rows:
+            row.applied = applied_state(row.applied, revision_row, plan.body, op.id, actor)
+            db.add(row)
+        db.flush()
 
 
 def _local_opt_in(control_world, monkeypatch, actor="admin"):

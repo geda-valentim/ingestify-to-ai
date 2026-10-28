@@ -12,7 +12,7 @@ deactivated or demoted since the opt-in no longer lends their identity).
 
 from typing import NamedTuple, Optional
 
-from shared.engine_control.models import EngineOperation, OperationPlan, RuntimeProfile
+from shared.engine_control.models import ControlResource, EngineOperation, OperationPlan, RuntimeProfile
 
 IDLE_FEATURES = frozenset({"transcription", "vision"})
 # Two authorities, each checkable against one grant: cool down, and start again.
@@ -146,10 +146,14 @@ def check_before_effect(db, op_id) -> None:
 def opt_in(db, engine_id: str, feature: str) -> Optional[OptIn]:
     """Who the automatic operations of this feature run as, and on which revision: the actor
     of the latest successful apply_profile of the currently applied revision, when that
-    revision opted in and no other revision was applied (published, whatever became of its
-    operation) at or after that apply_profile finished. Re-applying an old opted-in revision by
-    any other type (a start by someone else) does not revive its opt-in; a tie fails closed.
-    None: the policy does nothing."""
+    revision opted in and nothing else was applied since (applied_state keeps the reference
+    only while the same revision stays applied, so re-applying an old opted-in revision by
+    any other type does not revive it).
+
+    Read from the resources' applied state and then by primary key, never from the
+    operation history: it runs on every tick of the idle policy. A resource without the
+    reference (written before it existed) has no opt-in until the profile is applied
+    again; references that disagree fail closed. None: the policy does nothing."""
     applied = (
         db.query(RuntimeProfile)
         .filter_by(engine_id=engine_id, feature=feature)
@@ -159,21 +163,19 @@ def opt_in(db, engine_id: str, feature: str) -> Optional[OptIn]:
     )
     if applied is None or not (applied.profile or {}).get("idle_cooldown"):
         return None
-    granted = (
-        db.query(EngineOperation.actor_id, EngineOperation.finished_at)
-        .join(OperationPlan, OperationPlan.id == EngineOperation.plan_id)
-        .filter(EngineOperation.engine_id == engine_id, EngineOperation.state == "succeeded",
-                OperationPlan.profile_id == applied.id,
-                OperationPlan.body["type"].as_string() == "apply_profile")
-        .order_by(EngineOperation.finished_at.desc())
-        .first()
-    )
-    if granted is None or granted.finished_at is None:
+    # One row per resource of the engine (a handful), not a history.
+    rows = db.query(ControlResource.applied).filter(ControlResource.owner_engine_id == engine_id).all()
+    refs = {
+        ((row.applied or {}).get("opt_in_operation_id"), (row.applied or {}).get("opt_in_actor"))
+        for row in rows
+        if (row.applied or {}).get("profile_id") == applied.id
+    }
+    if len(refs) != 1:
         return None
-    since = (
-        db.query(RuntimeProfile.id)
-        .filter(RuntimeProfile.engine_id == engine_id, RuntimeProfile.feature == feature,
-                RuntimeProfile.id != applied.id, RuntimeProfile.applied_at >= granted.finished_at)
-        .first()
-    )
-    return None if since else OptIn(granted.actor_id, applied.revision)
+    op_id, actor = refs.pop()
+    op = db.get(EngineOperation, op_id) if op_id else None
+    plan = db.get(OperationPlan, op.plan_id) if op else None
+    if (op is None or op.state != "succeeded" or op.actor_id != actor or op.engine_id != engine_id
+            or plan is None or plan.profile_id != applied.id or (plan.body or {}).get("type") != "apply_profile"):
+        return None
+    return OptIn(actor, applied.revision)
