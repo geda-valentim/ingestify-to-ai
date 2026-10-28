@@ -373,13 +373,17 @@ class ModalControlAdapter:
             if e.status == "active":
                 e.status = "paused"
                 e.version += 1
+            from shared.engine_control.models import OperationPlan
+            from shared.engine_control.operation_view import observation
+
+            body = db.get(OperationPlan, op.plan_id).body
             for resource in db.query(ControlResource).filter_by(
                 maintenance_operation_id=op_id
             ):
-                resource.observed = {
-                    "replicas_alive": 0,
-                    "ready_replicas": 0,
-                    "cold": True,
-                }
+                # the watchdog's budget stop, not the operation that opened the maintenance
+                resource.observed = observation(
+                    {"replicas_alive": 0, "ready_replicas": 0, "cold": True}, op,
+                    dict(body or {}, type="maintenance_expired"),
+                )
                 resource.observed_at = datetime.utcnow()
             db.commit()

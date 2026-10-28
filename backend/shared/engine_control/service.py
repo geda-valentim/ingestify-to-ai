@@ -24,7 +24,11 @@ from shared.engine_control import registry, catalog, idle_opt_in
 from shared.engines import budget
 from shared.engines.redact import redact
 from shared import error_catalog
-from shared.engine_control.operation_view import operation_view  # noqa: F401  (re-exported)
+from shared.engine_control.operation_view import (  # noqa: F401  (operation_view re-exported)
+    observation,
+    operation_view,
+    resource_views,
+)
 
 
 class ControlError(Exception):
@@ -756,6 +760,7 @@ def finish(db, op_id, generation, state, result=None, error=None, safe=False):
             db.query(EffectAdmission).filter_by(
                 operation_id=op_id, generation=generation
             ).update({"state": "confirmed"})
+        body = db.get(OperationPlan, op.plan_id).body
         for r in (
             db.query(ControlResource)
             .filter_by(operation_id=op_id)
@@ -765,7 +770,7 @@ def finish(db, op_id, generation, state, result=None, error=None, safe=False):
             r.operation_id = None
             r.gate_closed = False
             if state == "succeeded":
-                r.observed = op.result
+                r.observed = observation(op.result, op, body)
                 r.observed_at = now()
         if not op.effect_started:
             op.reserved_usd = 0
@@ -893,17 +898,7 @@ def runtime_status(db, engine):
     return dict(
         desired=latest,
         applied=[profile_view(p) for p in profiles_ if p.applied_at],
-        resources=[
-            dict(
-                key=r.key,
-                maintenance=r.gate_closed,
-                operation_id=r.operation_id,
-                applied=r.applied,
-                observed=r.observed,
-                observed_at=r.observed_at,
-            )
-            for r in resources
-        ],
+        resources=resource_views(db, resources),
     )
 
 
