@@ -3,15 +3,30 @@
 drain's own rule (workers/engine_control/orphan_tickets). Registered once at import.
 """
 
+import threading
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 
 from shared.engine_control import force_cancel
 
 INSPECT_TIMEOUT_SECONDS = 2.0  # end to end: connection, publish, retries and replies
 # The inspect runs here with a hard wall-clock deadline: Celery's own timeout only bounds the
-# wait for replies, not reaching a broker that is down. Two workers at most: with the broker
-# hung, later plans queue behind them and time out as "unknown" too, threads never pile up.
+# wait for replies, not reaching a broker that is down. Two inspects in flight at most: with
+# both slots held by a hung broker, a new plan answers "unknown" at once, without queueing
+# work (the executor's queue is unbounded); a slot is freed only when its inspect returns.
 _pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="force-cancel-probe")
+_slots = threading.BoundedSemaphore(2)
+
+
+def _inspect(active_by_node, nodes):
+    if not _slots.acquire(blocking=False):
+        raise FutureTimeout("both probe slots are held by earlier inspects")
+    try:
+        future = _pool.submit(active_by_node, nodes, timeout=INSPECT_TIMEOUT_SECONDS)
+    except Exception:
+        _slots.release()
+        raise
+    future.add_done_callback(lambda _: _slots.release())
+    return future.result(timeout=INSPECT_TIMEOUT_SECONDS)
 
 
 def holder_verdicts(holders):
@@ -23,8 +38,7 @@ def holder_verdicts(holders):
     parsed = {h: parse_task_holder(h) for h in holders}
     nodes = {p[2] for p in parsed.values() if p}
     try:
-        future = _pool.submit(active_by_node, nodes, timeout=INSPECT_TIMEOUT_SECONDS) if nodes else None
-        active, answered = (future.result(timeout=INSPECT_TIMEOUT_SECONDS) if future else {}), True
+        active, answered = (_inspect(active_by_node, nodes) if nodes else {}), True
     except (FutureTimeout, Exception):
         active, answered = {}, False
     out = {}

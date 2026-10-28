@@ -392,3 +392,31 @@ def test_a_replay_is_authorized_before_it_returns_the_operation(world, probe, mo
         with pytest.raises(service.ControlError) as e:
             service.enqueue(db, plan["plan_id"], plan["plan_hash"], "k", "admin", confirm_force_cancel="test-vm:1")
     assert e.value.code == "ACCESS_DENIED"  # not the earlier operation's view
+
+
+def test_a_hung_broker_never_queues_more_probes(monkeypatch):
+    import threading
+    import time
+
+    import api.force_cancel_probe as probe_module
+    import workers.engine_control.orphan_tickets as g1
+    from api.force_cancel_probe import INSPECT_TIMEOUT_SECONDS, holder_verdicts
+
+    calls, release = [], threading.Event()
+
+    def hung(nodes, timeout):
+        calls.append(nodes)
+        release.wait(10)  # held until the end of the test
+        return {}
+
+    monkeypatch.setattr(g1, "active_by_node", hung)
+    try:
+        started = time.monotonic()
+        verdicts = [holder_verdicts(["task:x|1|celery@a"])["task:x|1|celery@a"]["verdict"] for _ in range(5)]
+        elapsed = time.monotonic() - started
+    finally:
+        release.set()
+    assert verdicts == ["unknown"] * 5
+    assert len(calls) <= 2  # never more inspects than slots, nothing waits in a queue
+    assert elapsed < 2 * INSPECT_TIMEOUT_SECONDS + 1  # only the calls that got a slot waited
+    assert probe_module._pool._work_queue.qsize() == 0
