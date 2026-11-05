@@ -18,7 +18,10 @@ que a API ainda está com esse valor; habilitar exige o bootstrap abaixo.
    instalações que criaram as tabelas durante o desenvolvimento da spec 0007.
    Preserva dados, operações em voo e gates de admissão. Rode-a de novo em instalações
    existentes ao atualizar (é idempotente): ela acrescenta índices novos às tabelas que já
-   existem, como `ix_control_admissions_resource_released`, usado pela política de ociosidade.
+   existem, como `ix_control_admissions_resource_released`, usado pela política de ociosidade,
+   e colunas novas, como `engine_control_admissions.release_reason` (o cancelamento forçado
+   responde 503 `ENGINE_CONTROL_MIGRATION_REQUIRED` até ela existir; o resto funciona sem ela).
+   O `alembic upgrade` não aplica estas mudanças: rode a migração explícita.
    O índice é criado online, mas espera um lock de metadados curto; a migração desiste depois
    de 30 s em vez de enfileirar a admissão das tasks atrás de uma transação longa. Se ela
    falhar com `Lock wait timeout exceeded`, nada ficou pela metade: rode de novo fora de pico.

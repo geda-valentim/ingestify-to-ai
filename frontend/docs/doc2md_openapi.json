@@ -10966,6 +10966,17 @@
             "type": "boolean",
             "title": "Confirm Paid Operation",
             "default": false
+          },
+          "confirm_force_cancel": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confirm Force Cancel"
           }
         },
         "additionalProperties": false,

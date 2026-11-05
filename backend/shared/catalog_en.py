@@ -69,6 +69,7 @@ EN = {
         "Execution profiles and access scopes are turned off on this installation "
         "(IAM_MODE is not enforce)."
     ),
+    "ENGINE_CONTROL_MIGRATION_REQUIRED": "This needs the explicit engine-control migration, which is idempotent: step 2 of the engine-control-bootstrap runbook (upgrade(engine) from shared.engine_control.migration, in the API environment). On an existing installation an alembic upgrade does not apply it.",
     "ACCESS_SCHEMA_NOT_READY": "The access tables have not been migrated yet. Run the backend migrations and try again.",
     "FEATURE_NOT_SUPPORTED": "This adapter does not offer this feature.",
     "FEATURE_UNSUPPORTED": "This adapter does not offer this feature.",
@@ -204,6 +205,8 @@ EN = {
     "REGISTERED_MANIFEST_CHANGED": "The registered docker compose files changed, and the host agent refuses to operate. Register the host again (scripts/register_engine_host.py).",
     "RESOURCE_OWNED_BY_ANOTHER_ENGINE": "This profile's resource already belongs to another engine.",
     "RESOURCE_OWNERSHIP_CONFLICT": "Another engine claimed the same resource at the same time. Reload.",
+    "FORCE_CANCEL_NOTHING_TO_RELEASE": "There is no open admission ticket on this feature's resources: nothing to release.",
+    "FORCE_CANCEL_CONFIRMATION_REQUIRED": "Confirm by typing exactly the requested text (the engine name and the plan's number of tickets).",
     "IDLE_COOLDOWN_NOT_SUPPORTED": "Idle cooldown is only available on a local engine, for transcription and vision.",
     "IDLE_COOLDOWN_PERMISSION_REQUIRED": "To turn on idle cooldown you must be able to plan, cool down and start this engine: the automatic operations run with your access.",
     "AUTOMATIC_EFFECT_NOT_APPLIED": "The recovery proved this automatic operation's effect never happened: it was closed without repeating it. The idle policy plans again if still needed.",

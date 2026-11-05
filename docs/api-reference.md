@@ -3420,6 +3420,7 @@ Content-Type: `application/json`. Esquema: [Execute](#model-execute).
 | `plan_id` | sim | string |  |  |
 | `plan_hash` | sim | string |  |  |
 | `confirm_paid_operation` | não | boolean | default=false |  |
+| `confirm_force_cancel` | não | string / null |  |  |
 
 Respostas declaradas:
 
@@ -8680,6 +8681,7 @@ Esquema JSON completo:
 | `plan_id` | sim | string |  |  |
 | `plan_hash` | sim | string |  |  |
 | `confirm_paid_operation` | não | boolean | default=false |  |
+| `confirm_force_cancel` | não | string / null |  |  |
 
 Esquema JSON completo:
 
@@ -8698,6 +8700,17 @@ Esquema JSON completo:
       "type": "boolean",
       "title": "Confirm Paid Operation",
       "default": false
+    },
+    "confirm_force_cancel": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Confirm Force Cancel"
     }
   },
   "additionalProperties": false,

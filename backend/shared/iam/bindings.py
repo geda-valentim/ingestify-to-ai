@@ -427,7 +427,7 @@ def grant_engine(
         delegation = delegation.model_dump(mode="json")
     if delegation and (
         role != "access_admin"
-        or not set(delegation["permissions"]).issubset(policy.PERMISSIONS)
+        or not set(delegation["permissions"]).issubset(policy.PERMISSIONS - policy.NEVER_DELEGATED)
     ):
         raise _control_error("DELEGATION_INVALID", 422)
     parent = access._delegator(db, actor, ps, revision.constraints, expiry, delegation, lock=True)

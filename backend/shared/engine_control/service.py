@@ -20,10 +20,11 @@ from shared.engine_control.models import (
     ControlHost,
 )
 from shared.engine_control.contracts import RuntimeSettings, TERMINAL, comparable_settings
-from shared.engine_control import registry, catalog, idle_opt_in
+from shared.engine_control import registry, catalog, force_cancel, idle_opt_in
 from shared.engines import budget
 from shared.engines.redact import redact
 from shared import error_catalog
+from shared.engine_control.operation_events import events  # noqa: F401  (re-exported)
 from shared.engine_control.operation_view import operation_view  # noqa: F401  (re-exported)
 
 
@@ -423,6 +424,9 @@ def _host_context(db, engine_id, feature):
 def create_plan(db, engine, req, actor):
     from shared.access import policy
 
+    if req.type == force_cancel.FORCE_CANCEL:  # no adapter, no capability: its own plan
+        return force_cancel.create_plan(db, engine, req, actor)
+
     if policy.enabled():
         policy.epoch(db, True)
     engine = locked_engine(db, engine.id)
@@ -547,8 +551,12 @@ def create_plan(db, engine, req, actor):
     )
 
 
-def enqueue(db, plan_id, plan_hash, key, actor, confirm_paid=False):
+def enqueue(db, plan_id, plan_hash, key, actor, confirm_paid=False, confirm_force_cancel=None):
     from shared.access import policy
+
+    forced = db.get(OperationPlan, plan_id)
+    if forced is not None and forced.body.get("type") == force_cancel.FORCE_CANCEL:
+        return force_cancel.enqueue(db, forced, plan_hash, key, actor, confirm_force_cancel)
 
     if policy.enabled():
         policy.epoch(db, True)
@@ -642,20 +650,20 @@ def enqueue(db, plan_id, plan_hash, key, actor, confirm_paid=False):
     )
     db.add(op)
     db.add(OperationOutbox(operation_id=op_id))
-    db.flush()
-    append_event(db, op, "operation.accepted", {"message": "Operação aceita"})
-    db.add(
-        AdminAudit(
-            actor_user_id=actor,
-            auth_method="jwt",
-            action="engine.operation_created",
-            target_type="engine",
-            target_id=e.id,
-            before=None,
-            after={"operation_id": op_id, "type": plan.body["type"], "trigger": plan.body.get("trigger")},
+    try:  # a raced key is refused on the flush or on the commit
+        db.flush()
+        append_event(db, op, "operation.accepted", {"message": "Operação aceita"})
+        db.add(
+            AdminAudit(
+                actor_user_id=actor,
+                auth_method="jwt",
+                action="engine.operation_created",
+                target_type="engine",
+                target_id=e.id,
+                before=None,
+                after={"operation_id": op_id, "type": plan.body["type"], "trigger": plan.body.get("trigger")},
+            )
         )
-    )
-    try:
         db.commit()
     except IntegrityError:
         db.rollback()
@@ -810,36 +818,6 @@ def request_cancel(db, op_id, actor=None):
         append_event(db, op, "cancel.requested", {"message": "Cancelamento solicitado"})
         db.commit()
     return operation_view(op)
-
-
-def events(db, op_id, after=0, limit=100):
-    op = db.get(EngineOperation, op_id)
-    if not op:
-        raise ControlError("OPERATION_NOT_FOUND", 404)
-    rows = (
-        db.query(OperationEvent)
-        .filter(OperationEvent.operation_id == op_id, OperationEvent.seq > after)
-        .order_by(OperationEvent.seq)
-        .limit(limit + 1)
-        .all()
-    )
-    more = len(rows) > limit
-    rows = rows[:limit]
-    return dict(
-        events=[
-            dict(
-                seq=x.seq,
-                type=x.type,
-                stage=x.stage,
-                payload=x.payload,
-                at=x.created_at,
-            )
-            for x in rows
-        ],
-        next=rows[-1].seq if rows else after,
-        has_more=more,
-        state=op.state,
-    )
 
 
 def publish_applied(db, op_id, generation, observed):
