@@ -99,6 +99,8 @@ PLATFORM_ROUTES = {
     "GET /admin/engines/status": ("platform.routing.read", False),
     "PUT /admin/routing/{feature}": ("platform.routing.update", True),
     "DELETE /admin/routing/{feature}": ("platform.routing.update", True),
+    "GET /admin/users": ("platform.users.read", False),
+    "GET /admin/users/{user_id}": ("platform.users.read", False),
 }
 # The unified bindings API (spec 0018 §4.5): `binding_admin`, kind
 # `iam_or_engine_access` — the platform permission or the 0009

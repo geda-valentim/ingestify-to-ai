@@ -95,6 +95,9 @@ _PLATFORM = [
     Permission("platform.routing.read", "platform", PLATFORM, False),
     Permission("platform.routing.update", "platform", PLATFORM, True),
     Permission("platform.audit.read", "platform", PLATFORM, False),
+    # Every user's email, API key metadata and usage: GET /admin/users*.
+    # platform_admin only; kept out of platform_auditor on purpose.
+    Permission("platform.users.read", "platform", PLATFORM, False),
     # Checked per remote placement by the dispatcher. It is a use, not an
     # administrative change: auditing it would write one row per page.
     Permission("engines.remote.use", "platform", PLATFORM, False),
@@ -158,8 +161,8 @@ ROLES: Dict[str, Role] = {
         ),
         Role(
             "platform_auditor",
-            _reads("platform.") | {"iam.bindings.read"},
-            "Read-only: every platform.*.read and iam.bindings.read",
+            (_reads("platform.") - {"platform.users.read"}) | {"iam.bindings.read"},
+            "Read-only: every platform.*.read except platform.users.read, and iam.bindings.read",
         ),
         Role(
             "remote_engine_user",

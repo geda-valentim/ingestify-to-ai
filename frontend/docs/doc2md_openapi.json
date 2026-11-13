@@ -775,6 +775,173 @@
         "x-access": "admin"
       }
     },
+    "/admin/users": {
+      "get": {
+        "tags": [
+          "Admin - Users"
+        ],
+        "summary": "Listar usuários com uso",
+        "description": "Todos os usuários (ativos e inativos) com um resumo de uso: jobs por status, bytes enviados, páginas,\núltimo job, chaves utilizáveis, projetos e último uso de chave. O uso conta só jobs de nível superior.\nUsuários sem o campo de ordenação vão para o fim. `orphan_jobs` conta jobs cujo dono foi apagado.",
+        "operationId": "list_users_admin_users_get",
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 255
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filtra por e-mail ou username (contém, sem caixa)",
+              "title": "Q"
+            },
+            "description": "Filtra por e-mail ou username (contém, sem caixa)"
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "created_at",
+                "last_job_at",
+                "jobs_total",
+                "bytes_uploaded"
+              ],
+              "type": "string",
+              "default": "last_job_at",
+              "title": "Sort"
+            }
+          },
+          {
+            "name": "order",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "asc",
+                "desc"
+              ],
+              "type": "string",
+              "default": "desc",
+              "title": "Order"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Offset"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminUserList"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "x-access": "admin"
+      }
+    },
+    "/admin/users/{user_id}": {
+      "get": {
+        "tags": [
+          "Admin - Users"
+        ],
+        "summary": "Detalhar usuário",
+        "description": "O resumo do usuário mais as API keys (metadados, nunca o segredo nem o hash), os projetos com pastas e\njobs, o uso por tipo de fonte e nos últimos 30 dias, e os bindings de IAM ativos dele. Bindings de engines\naparecem só para quem os veria em `GET /admin/iam/bindings` (autoridade de engines e sessão de login).",
+        "operationId": "get_user_admin_users__user_id__get",
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "User Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminUserDetail"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "x-access": "admin"
+      }
+    },
     "/images/faces/capabilities": {
       "get": {
         "tags": [
@@ -7675,6 +7842,434 @@
         ],
         "title": "APIKeyResponse",
         "description": "Schema for API key response (after creation)"
+      },
+      "AdminUserApiKey": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "is_active": {
+            "type": "boolean",
+            "title": "Is Active"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "last_used_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Used At"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          },
+          "expired": {
+            "type": "boolean",
+            "title": "Expired"
+          },
+          "project_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "is_active",
+          "expired"
+        ],
+        "title": "AdminUserApiKey"
+      },
+      "AdminUserDetail": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "username": {
+            "type": "string",
+            "title": "Username"
+          },
+          "email": {
+            "type": "string",
+            "title": "Email"
+          },
+          "is_active": {
+            "type": "boolean",
+            "title": "Is Active"
+          },
+          "is_admin": {
+            "type": "boolean",
+            "title": "Is Admin"
+          },
+          "is_root": {
+            "type": "boolean",
+            "title": "Is Root"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "api_keys_active": {
+            "type": "integer",
+            "title": "Api Keys Active"
+          },
+          "projects_total": {
+            "type": "integer",
+            "title": "Projects Total"
+          },
+          "jobs_total": {
+            "type": "integer",
+            "title": "Jobs Total"
+          },
+          "jobs_by_status": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Jobs By Status"
+          },
+          "bytes_uploaded": {
+            "type": "integer",
+            "title": "Bytes Uploaded"
+          },
+          "pages_total": {
+            "type": "integer",
+            "title": "Pages Total"
+          },
+          "last_job_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Job At"
+          },
+          "last_api_key_used_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Api Key Used At"
+          },
+          "api_keys": {
+            "items": {
+              "$ref": "#/components/schemas/AdminUserApiKey"
+            },
+            "type": "array",
+            "title": "Api Keys"
+          },
+          "projects": {
+            "items": {
+              "$ref": "#/components/schemas/AdminUserProject"
+            },
+            "type": "array",
+            "title": "Projects"
+          },
+          "usage": {
+            "$ref": "#/components/schemas/AdminUserUsage"
+          },
+          "iam_bindings": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Iam Bindings"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "username",
+          "email",
+          "is_active",
+          "is_admin",
+          "is_root",
+          "api_keys_active",
+          "projects_total",
+          "jobs_total",
+          "jobs_by_status",
+          "bytes_uploaded",
+          "pages_total",
+          "api_keys",
+          "projects",
+          "usage",
+          "iam_bindings"
+        ],
+        "title": "AdminUserDetail"
+      },
+      "AdminUserList": {
+        "properties": {
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "orphan_jobs": {
+            "type": "integer",
+            "title": "Orphan Jobs"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/AdminUserSummary"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "total",
+          "orphan_jobs",
+          "items"
+        ],
+        "title": "AdminUserList"
+      },
+      "AdminUserProject": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "archived": {
+            "type": "boolean",
+            "title": "Archived"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "folder_count": {
+            "type": "integer",
+            "title": "Folder Count"
+          },
+          "jobs_total": {
+            "type": "integer",
+            "title": "Jobs Total"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "archived",
+          "folder_count",
+          "jobs_total"
+        ],
+        "title": "AdminUserProject"
+      },
+      "AdminUserRecentUsage": {
+        "properties": {
+          "jobs": {
+            "type": "integer",
+            "title": "Jobs"
+          },
+          "bytes": {
+            "type": "integer",
+            "title": "Bytes"
+          },
+          "pages": {
+            "type": "integer",
+            "title": "Pages"
+          }
+        },
+        "type": "object",
+        "required": [
+          "jobs",
+          "bytes",
+          "pages"
+        ],
+        "title": "AdminUserRecentUsage"
+      },
+      "AdminUserSummary": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "username": {
+            "type": "string",
+            "title": "Username"
+          },
+          "email": {
+            "type": "string",
+            "title": "Email"
+          },
+          "is_active": {
+            "type": "boolean",
+            "title": "Is Active"
+          },
+          "is_admin": {
+            "type": "boolean",
+            "title": "Is Admin"
+          },
+          "is_root": {
+            "type": "boolean",
+            "title": "Is Root"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "api_keys_active": {
+            "type": "integer",
+            "title": "Api Keys Active"
+          },
+          "projects_total": {
+            "type": "integer",
+            "title": "Projects Total"
+          },
+          "jobs_total": {
+            "type": "integer",
+            "title": "Jobs Total"
+          },
+          "jobs_by_status": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Jobs By Status"
+          },
+          "bytes_uploaded": {
+            "type": "integer",
+            "title": "Bytes Uploaded"
+          },
+          "pages_total": {
+            "type": "integer",
+            "title": "Pages Total"
+          },
+          "last_job_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Job At"
+          },
+          "last_api_key_used_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Api Key Used At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "username",
+          "email",
+          "is_active",
+          "is_admin",
+          "is_root",
+          "api_keys_active",
+          "projects_total",
+          "jobs_total",
+          "jobs_by_status",
+          "bytes_uploaded",
+          "pages_total"
+        ],
+        "title": "AdminUserSummary"
+      },
+      "AdminUserUsage": {
+        "properties": {
+          "by_source_type": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "By Source Type"
+          },
+          "last_30_days": {
+            "$ref": "#/components/schemas/AdminUserRecentUsage"
+          }
+        },
+        "type": "object",
+        "required": [
+          "by_source_type",
+          "last_30_days"
+        ],
+        "title": "AdminUserUsage"
       },
       "AlignmentMetadata": {
         "properties": {
@@ -16856,6 +17451,10 @@
     {
       "name": "Admin & Monitoring",
       "description": "Administração da plataforma: estatísticas, jobs travados, retry em massa, limpeza e saúde do broker e do monitoramento."
+    },
+    {
+      "name": "Admin - Users",
+      "description": "Visão dos usuários para o administrador da plataforma (`platform.users.read`): uso, projetos, API keys e bindings de cada um. Só leitura."
     },
     {
       "name": "Admin - Engines",

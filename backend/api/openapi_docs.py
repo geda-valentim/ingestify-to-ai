@@ -238,6 +238,7 @@ OPENAPI_TAGS = [
     {"name": "API Keys", "description": "Criar, listar, vincular a um projeto e revogar API keys (requer JWT)."},
     {"name": "IAM", "description": "Catálogo de permissões, verificação das permissões do chamador e vínculos (bindings) de papéis de plataforma e de engines."},
     {"name": "Admin & Monitoring", "description": "Administração da plataforma: estatísticas, jobs travados, retry em massa, limpeza e saúde do broker e do monitoramento."},
+    {"name": "Admin - Users", "description": "Visão dos usuários para o administrador da plataforma (`platform.users.read`): uso, projetos, API keys e bindings de cada um. Só leitura."},
     {"name": "Admin - Engines", "description": "Engines de processamento: cadastro, funcionalidades, GPUs, orçamento, credenciais, testes, benchmarks e rotas por funcionalidade."},
     {"name": "Admin - Engine control", "description": "Controle de runtime das engines: adaptadores, capacidades, perfis de runtime, planos e operações (com eventos e stream SSE)."},
     {"name": "Admin - Execution profiles and access", "description": "Perfis de execução (revisões, publicação, vínculo) e acesso às engines: políticas, papéis, concessões, atributos de ambiente e principais."},

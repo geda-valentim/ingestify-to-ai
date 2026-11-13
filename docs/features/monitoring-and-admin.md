@@ -42,7 +42,7 @@ permissão de plataforma indicada abaixo, concedida por um binding de plataforma
 (`/admin/access`, aba Concessões); o admin de bootstrap continua com todas. Papéis de
 engines, administrados na mesma tela desde a
 spec 0018, não dão acesso a
-estas rotas. Não há UI no frontend para as rotas abaixo.
+estas rotas. As rotas de monitoramento abaixo não têm UI no frontend; as de usuários têm (Admin → Usuários).
 
 | Método e caminho | O que faz |
 |---|---|
@@ -59,6 +59,23 @@ estas rotas. Não há UI no frontend para as rotas abaixo.
 ```bash
 curl -H "Authorization: Bearer $ADMIN_TOKEN" http://localhost:8000/admin/stats
 ```
+
+### Usuários (`platform.users.read`)
+
+Visão só de leitura de todos os usuários. `platform.users.read` é concedida só pelo papel
+`platform_admin` (e, portanto, ao admin de bootstrap e ao root); o `platform_auditor` e o
+`platform_operator` não a têm, porque a resposta traz e-mails e as API keys de todos.
+
+| Método e caminho | O que faz |
+|---|---|
+| `GET /admin/users?q=&sort=&order=&limit=50&offset=0` | Todos os usuários (ativos e inativos) com o resumo de uso: jobs por status, bytes enviados, páginas, último job, chaves utilizáveis (ativas e não expiradas), projetos e último uso de chave. `q` filtra por e-mail ou username; `sort` = `created_at`, `last_job_at` (padrão), `jobs_total` ou `bytes_uploaded`; quem não tem o campo vai para o fim. `orphan_jobs` conta jobs cujo dono foi apagado. |
+| `GET /admin/users/{user_id}` | O resumo mais as API keys (metadados; nunca o segredo nem o hash), os projetos com pastas e jobs, o uso por tipo de fonte e nos últimos 30 dias, e os bindings de IAM ativos. `404 USER_NOT_FOUND`. |
+
+O uso conta só jobs `MAIN`, os mesmos que o usuário vê em `GET /jobs`, e `jobs_by_status` usa os
+nomes de status da API (`queued`, `processing`, `completed`, `failed`, `partial`, `cancelled`). Com `q`,
+`orphan_jobs` vale 0. Bindings de engines só aparecem no detalhe para uma sessão de login com autoridade
+de engines, e só os que a decisão 0009 mantém ativos, como em `GET /admin/iam/bindings`. Nenhuma das duas
+rotas grava nada.
 
 ## Tarefas periódicas
 
