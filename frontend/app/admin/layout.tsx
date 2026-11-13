@@ -13,6 +13,7 @@ import {
   Server,
   SlidersHorizontal,
   Shield,
+  Users,
 } from "lucide-react";
 import { authApi } from "@/lib/api";
 import { useAuthStore } from "@/lib/store/auth";
@@ -34,6 +35,7 @@ const TABS = [
   { href: "/admin/gpus", label: "GPUs", icon: MemoryStick },
   { href: "/admin/routing", label: "Routing", icon: Route },
   { href: "/admin/status", label: "Status", icon: Activity },
+  { href: "/admin/users", label: "Usuários", icon: Users },
 ];
 
 /**

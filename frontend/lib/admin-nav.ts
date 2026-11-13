@@ -19,6 +19,8 @@ export const ADMIN_SECTION_PERMISSIONS: Record<
   "/admin/gpus": null,
   "/admin/routing": "platform.routing.read",
   "/admin/status": "platform.routing.read",
+  // Spec 0024: every user's email, keys and usage; platform_admin only.
+  "/admin/users": "platform.users.read",
 };
 
 type Viewer = Pick<UserResponse, "is_admin" | "permissions"> | null | undefined;

@@ -1251,8 +1251,8 @@ print(desired)  # Desired snapshot only; review an operation plan to apply it.`,
           [
             x("platform_auditor", "platform_auditor"),
             x(
-              "Somente leitura: todo platform.*.read e iam.bindings.read.",
-              "Read-only: every platform.*.read and iam.bindings.read.",
+              "Somente leitura: todo platform.*.read, exceto platform.users.read (e-mails, chaves e uso de todos os usuários), e iam.bindings.read.",
+              "Read-only: every platform.*.read except platform.users.read (every user's email, keys and usage), and iam.bindings.read.",
             ),
           ],
           [

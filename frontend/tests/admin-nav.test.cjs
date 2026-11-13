@@ -26,6 +26,8 @@ assert.deepEqual(
   sections(viewer(["platform.stats.read", "platform.routing.read", "platform.jobs.read"])),
   ["/admin/routing", "/admin/status"],
 );
+// platform_admin by binding: every section that is not admin only, Usuários included.
+assert.equal(canOpenAdminSection(viewer(["platform.users.read"]), "/admin/users"), true);
 // platform_auditor: the bindings list (Acesso) and the read-only platform views.
 assert.deepEqual(
   sections(viewer(["platform.routing.read", "iam.bindings.read", "platform.audit.read"])),
