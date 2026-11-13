@@ -55,6 +55,10 @@ ADMIN_CATALOG = {
         {"en": "Job {job_id} not found.", "pt": "Job {job_id} não encontrado."},
         [],
     ),
+    "USER_NOT_FOUND": (
+        {"en": "User {user_id} not found.", "pt": "Usuário {user_id} não encontrado."},
+        [],
+    ),
     "BROKER_MESSAGE_NOT_ORPHANED": (
         {
             "en": "The latest monitoring check did not flag this message as orphaned; wait for the next check.",

@@ -15,6 +15,7 @@ from api.routes import router
 from api.auth_routes import router as auth_router
 from api.apikey_routes import router as apikey_router
 from api.admin_routes import router as admin_router
+from api.admin_users_routes import router as admin_users_router
 from api.image_routes import router as image_router
 from api.face_routes import router as face_router
 from api.datalake_routes import router as datalake_router, job_router as datalake_job_router
@@ -344,6 +345,7 @@ async def shutdown_event():
 app.include_router(auth_router, prefix="/auth", tags=["Authentication"])
 app.include_router(apikey_router, prefix="/api-keys", tags=["API Keys"])
 app.include_router(admin_router)  # Admin routes (already has /admin prefix)
+app.include_router(admin_users_router)  # /admin/users, /admin/users/{user_id}
 app.include_router(face_router)
 app.include_router(datalake_router)
 app.include_router(datalake_job_router)

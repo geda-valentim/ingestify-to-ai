@@ -107,7 +107,7 @@ EXPECTED_ROLES = {
         "platform.stats.read", "platform.jobs.read", "platform.jobs.recover",
         "platform.jobs.cleanup", "platform.monitoring.read", "platform.broker.requeue",
         "platform.settings.read", "platform.settings.update", "platform.routing.read",
-        "platform.routing.update", "platform.audit.read", "engines.remote.use",
+        "platform.routing.update", "platform.audit.read", "platform.users.read", "engines.remote.use",
         "iam.bindings.read", "iam.bindings.manage",
     },
     "platform_operator": {
@@ -129,6 +129,11 @@ def test_managed_roles_are_exactly_the_spec_table():
 
 def test_cleanup_belongs_only_to_platform_admin():
     assert catalog.roles_granting("platform.jobs.cleanup") == ("platform_admin",)
+
+
+def test_user_directory_belongs_only_to_platform_admin():
+    # Every user's email, keys and usage: never through the read-only auditor role.
+    assert catalog.roles_granting("platform.users.read") == ("platform_admin",)
 
 
 def test_catalog_is_closed_and_disjoint_from_0009():

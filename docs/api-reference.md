@@ -2,7 +2,7 @@
 
 Gerado do OpenAPI da aplicação por `scripts/generate_api_docs.py`. Não edite este arquivo à mão.
 
-API `1.15.0`: **142 operações HTTP** e **1 WebSocket(s)**.
+API `1.15.0`: **144 operações HTTP** e **1 WebSocket(s)**.
 
 Base pública de desenvolvimento: `https://dev.ingestify.ai/api`. Os caminhos abaixo são relativos à base.
 
@@ -41,6 +41,8 @@ Guias de imagem: [PT](https://dev.ingestify.ai/pt/docs/images) / [EN](https://de
 | GET | `/admin/broker/unacked` | Administrador (JWT ou API key) | Listar mensagens não confirmadas do broker |
 | GET | `/admin/docling/cold-starts` | Administrador (JWT ou API key) | Cold starts do Docling por hora e por worker |
 | POST | `/admin/broker/unacked/{delivery_tag}/requeue` | Administrador (JWT ou API key) | Reenfileirar mensagem órfã do broker |
+| GET | `/admin/users` | Administrador (JWT ou API key) | Listar usuários com uso |
+| GET | `/admin/users/{user_id}` | Administrador (JWT ou API key) | Detalhar usuário |
 | GET | `/images/faces/capabilities` | JWT ou API key | Modelos, parâmetros e prontidão da análise facial |
 | POST | `/images/faces` | JWT ou API key | Detectar rostos e expressões (JSON base64) |
 | POST | `/images/faces/upload` | JWT ou API key | Detectar rostos e expressões (multipart) |
@@ -2780,6 +2782,60 @@ Respostas declaradas:
 | 200 | application/json | object | Successful Response |
 | 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
 
+## Admin - Users
+
+Visão dos usuários para o administrador da plataforma (`platform.users.read`): uso, projetos, API keys e bindings de cada um. Só leitura.
+
+### GET /admin/users
+
+Listar usuários com uso
+
+Autorização: **Administrador (JWT ou API key)**. Operation ID: `list_users_admin_users_get`.
+
+Todos os usuários (ativos e inativos) com um resumo de uso: jobs por status, bytes enviados, páginas,
+último job, chaves utilizáveis, projetos e último uso de chave. O uso conta só jobs de nível superior.
+Usuários sem o campo de ordenação vão para o fim. `orphan_jobs` conta jobs cujo dono foi apagado.
+
+Parâmetros:
+
+| Nome | Local | Obrigatório | Tipo | Padrões/limites | Descrição |
+| --- | --- | --- | --- | --- | --- |
+| `q` | query | não | string / null |  | Filtra por e-mail ou username (contém, sem caixa) |
+| `sort` | query | não | string | default="last_job_at"; enum=["created_at", "last_job_at", "jobs_total", "bytes_uploaded"] |  |
+| `order` | query | não | string | default="desc"; enum=["asc", "desc"] |  |
+| `limit` | query | não | integer | default=50; minimum=1; maximum=200 |  |
+| `offset` | query | não | integer | default=0; minimum=0 |  |
+
+Respostas declaradas:
+
+| Status | Content-Type | Esquema | Descrição |
+| --- | --- | --- | --- |
+| 200 | application/json | [AdminUserList](#model-adminuserlist) | Successful Response |
+| 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
+
+### GET /admin/users/{user_id}
+
+Detalhar usuário
+
+Autorização: **Administrador (JWT ou API key)**. Operation ID: `get_user_admin_users__user_id__get`.
+
+O resumo do usuário mais as API keys (metadados, nunca o segredo nem o hash), os projetos com pastas e
+jobs, o uso por tipo de fonte e nos últimos 30 dias, e os bindings de IAM ativos dele. Bindings de engines
+aparecem só para quem os veria em `GET /admin/iam/bindings` (autoridade de engines e sessão de login).
+
+Parâmetros:
+
+| Nome | Local | Obrigatório | Tipo | Padrões/limites | Descrição |
+| --- | --- | --- | --- | --- | --- |
+| `user_id` | path | sim | string |  |  |
+
+Respostas declaradas:
+
+| Status | Content-Type | Esquema | Descrição |
+| --- | --- | --- | --- |
+| 200 | application/json | [AdminUserDetail](#model-adminuserdetail) | Successful Response |
+| 422 | application/json | [HTTPValidationError](#model-httpvalidationerror) | Validation Error |
+
 ## Admin - Engines
 
 Engines de processamento: cadastro, funcionalidades, GPUs, orçamento, credenciais, testes, benchmarks e rotas por funcionalidade.
@@ -4574,6 +4630,574 @@ Esquema JSON completo:
   ],
   "title": "APIKeyResponse",
   "description": "Schema for API key response (after creation)"
+}
+```
+
+<a id="model-adminuserapikey"></a>
+
+### AdminUserApiKey
+
+| Campo | Obrigatório | Tipo | Padrões/limites | Descrição |
+| --- | --- | --- | --- | --- |
+| `id` | sim | string |  |  |
+| `name` | não | string / null |  |  |
+| `is_active` | sim | boolean |  |  |
+| `created_at` | não | string / null |  |  |
+| `last_used_at` | não | string / null |  |  |
+| `expires_at` | não | string / null |  |  |
+| `expired` | sim | boolean |  |  |
+| `project_id` | não | string / null |  |  |
+
+Esquema JSON completo:
+
+```json
+{
+  "properties": {
+    "id": {
+      "type": "string",
+      "title": "Id"
+    },
+    "name": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Name"
+    },
+    "is_active": {
+      "type": "boolean",
+      "title": "Is Active"
+    },
+    "created_at": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Created At"
+    },
+    "last_used_at": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Last Used At"
+    },
+    "expires_at": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Expires At"
+    },
+    "expired": {
+      "type": "boolean",
+      "title": "Expired"
+    },
+    "project_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Project Id"
+    }
+  },
+  "type": "object",
+  "required": [
+    "id",
+    "is_active",
+    "expired"
+  ],
+  "title": "AdminUserApiKey"
+}
+```
+
+<a id="model-adminuserdetail"></a>
+
+### AdminUserDetail
+
+| Campo | Obrigatório | Tipo | Padrões/limites | Descrição |
+| --- | --- | --- | --- | --- |
+| `id` | sim | string |  |  |
+| `username` | sim | string |  |  |
+| `email` | sim | string |  |  |
+| `is_active` | sim | boolean |  |  |
+| `is_admin` | sim | boolean |  |  |
+| `is_root` | sim | boolean |  |  |
+| `created_at` | não | string / null |  |  |
+| `api_keys_active` | sim | integer |  |  |
+| `projects_total` | sim | integer |  |  |
+| `jobs_total` | sim | integer |  |  |
+| `jobs_by_status` | sim | object | additionalProperties={"type": "integer"} |  |
+| `bytes_uploaded` | sim | integer |  |  |
+| `pages_total` | sim | integer |  |  |
+| `last_job_at` | não | string / null |  |  |
+| `last_api_key_used_at` | não | string / null |  |  |
+| `api_keys` | sim | array de [AdminUserApiKey](#model-adminuserapikey) |  |  |
+| `projects` | sim | array de [AdminUserProject](#model-adminuserproject) |  |  |
+| `usage` | sim | [AdminUserUsage](#model-adminuserusage) |  |  |
+| `iam_bindings` | sim | array de object |  |  |
+
+Esquema JSON completo:
+
+```json
+{
+  "properties": {
+    "id": {
+      "type": "string",
+      "title": "Id"
+    },
+    "username": {
+      "type": "string",
+      "title": "Username"
+    },
+    "email": {
+      "type": "string",
+      "title": "Email"
+    },
+    "is_active": {
+      "type": "boolean",
+      "title": "Is Active"
+    },
+    "is_admin": {
+      "type": "boolean",
+      "title": "Is Admin"
+    },
+    "is_root": {
+      "type": "boolean",
+      "title": "Is Root"
+    },
+    "created_at": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Created At"
+    },
+    "api_keys_active": {
+      "type": "integer",
+      "title": "Api Keys Active"
+    },
+    "projects_total": {
+      "type": "integer",
+      "title": "Projects Total"
+    },
+    "jobs_total": {
+      "type": "integer",
+      "title": "Jobs Total"
+    },
+    "jobs_by_status": {
+      "additionalProperties": {
+        "type": "integer"
+      },
+      "type": "object",
+      "title": "Jobs By Status"
+    },
+    "bytes_uploaded": {
+      "type": "integer",
+      "title": "Bytes Uploaded"
+    },
+    "pages_total": {
+      "type": "integer",
+      "title": "Pages Total"
+    },
+    "last_job_at": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Last Job At"
+    },
+    "last_api_key_used_at": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Last Api Key Used At"
+    },
+    "api_keys": {
+      "items": {
+        "$ref": "#/components/schemas/AdminUserApiKey"
+      },
+      "type": "array",
+      "title": "Api Keys"
+    },
+    "projects": {
+      "items": {
+        "$ref": "#/components/schemas/AdminUserProject"
+      },
+      "type": "array",
+      "title": "Projects"
+    },
+    "usage": {
+      "$ref": "#/components/schemas/AdminUserUsage"
+    },
+    "iam_bindings": {
+      "items": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "type": "array",
+      "title": "Iam Bindings"
+    }
+  },
+  "type": "object",
+  "required": [
+    "id",
+    "username",
+    "email",
+    "is_active",
+    "is_admin",
+    "is_root",
+    "api_keys_active",
+    "projects_total",
+    "jobs_total",
+    "jobs_by_status",
+    "bytes_uploaded",
+    "pages_total",
+    "api_keys",
+    "projects",
+    "usage",
+    "iam_bindings"
+  ],
+  "title": "AdminUserDetail"
+}
+```
+
+<a id="model-adminuserlist"></a>
+
+### AdminUserList
+
+| Campo | Obrigatório | Tipo | Padrões/limites | Descrição |
+| --- | --- | --- | --- | --- |
+| `total` | sim | integer |  |  |
+| `orphan_jobs` | sim | integer |  |  |
+| `items` | sim | array de [AdminUserSummary](#model-adminusersummary) |  |  |
+
+Esquema JSON completo:
+
+```json
+{
+  "properties": {
+    "total": {
+      "type": "integer",
+      "title": "Total"
+    },
+    "orphan_jobs": {
+      "type": "integer",
+      "title": "Orphan Jobs"
+    },
+    "items": {
+      "items": {
+        "$ref": "#/components/schemas/AdminUserSummary"
+      },
+      "type": "array",
+      "title": "Items"
+    }
+  },
+  "type": "object",
+  "required": [
+    "total",
+    "orphan_jobs",
+    "items"
+  ],
+  "title": "AdminUserList"
+}
+```
+
+<a id="model-adminuserproject"></a>
+
+### AdminUserProject
+
+| Campo | Obrigatório | Tipo | Padrões/limites | Descrição |
+| --- | --- | --- | --- | --- |
+| `id` | sim | string |  |  |
+| `name` | sim | string |  |  |
+| `archived` | sim | boolean |  |  |
+| `created_at` | não | string / null |  |  |
+| `folder_count` | sim | integer |  |  |
+| `jobs_total` | sim | integer |  |  |
+
+Esquema JSON completo:
+
+```json
+{
+  "properties": {
+    "id": {
+      "type": "string",
+      "title": "Id"
+    },
+    "name": {
+      "type": "string",
+      "title": "Name"
+    },
+    "archived": {
+      "type": "boolean",
+      "title": "Archived"
+    },
+    "created_at": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Created At"
+    },
+    "folder_count": {
+      "type": "integer",
+      "title": "Folder Count"
+    },
+    "jobs_total": {
+      "type": "integer",
+      "title": "Jobs Total"
+    }
+  },
+  "type": "object",
+  "required": [
+    "id",
+    "name",
+    "archived",
+    "folder_count",
+    "jobs_total"
+  ],
+  "title": "AdminUserProject"
+}
+```
+
+<a id="model-adminuserrecentusage"></a>
+
+### AdminUserRecentUsage
+
+| Campo | Obrigatório | Tipo | Padrões/limites | Descrição |
+| --- | --- | --- | --- | --- |
+| `jobs` | sim | integer |  |  |
+| `bytes` | sim | integer |  |  |
+| `pages` | sim | integer |  |  |
+
+Esquema JSON completo:
+
+```json
+{
+  "properties": {
+    "jobs": {
+      "type": "integer",
+      "title": "Jobs"
+    },
+    "bytes": {
+      "type": "integer",
+      "title": "Bytes"
+    },
+    "pages": {
+      "type": "integer",
+      "title": "Pages"
+    }
+  },
+  "type": "object",
+  "required": [
+    "jobs",
+    "bytes",
+    "pages"
+  ],
+  "title": "AdminUserRecentUsage"
+}
+```
+
+<a id="model-adminusersummary"></a>
+
+### AdminUserSummary
+
+| Campo | Obrigatório | Tipo | Padrões/limites | Descrição |
+| --- | --- | --- | --- | --- |
+| `id` | sim | string |  |  |
+| `username` | sim | string |  |  |
+| `email` | sim | string |  |  |
+| `is_active` | sim | boolean |  |  |
+| `is_admin` | sim | boolean |  |  |
+| `is_root` | sim | boolean |  |  |
+| `created_at` | não | string / null |  |  |
+| `api_keys_active` | sim | integer |  |  |
+| `projects_total` | sim | integer |  |  |
+| `jobs_total` | sim | integer |  |  |
+| `jobs_by_status` | sim | object | additionalProperties={"type": "integer"} |  |
+| `bytes_uploaded` | sim | integer |  |  |
+| `pages_total` | sim | integer |  |  |
+| `last_job_at` | não | string / null |  |  |
+| `last_api_key_used_at` | não | string / null |  |  |
+
+Esquema JSON completo:
+
+```json
+{
+  "properties": {
+    "id": {
+      "type": "string",
+      "title": "Id"
+    },
+    "username": {
+      "type": "string",
+      "title": "Username"
+    },
+    "email": {
+      "type": "string",
+      "title": "Email"
+    },
+    "is_active": {
+      "type": "boolean",
+      "title": "Is Active"
+    },
+    "is_admin": {
+      "type": "boolean",
+      "title": "Is Admin"
+    },
+    "is_root": {
+      "type": "boolean",
+      "title": "Is Root"
+    },
+    "created_at": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Created At"
+    },
+    "api_keys_active": {
+      "type": "integer",
+      "title": "Api Keys Active"
+    },
+    "projects_total": {
+      "type": "integer",
+      "title": "Projects Total"
+    },
+    "jobs_total": {
+      "type": "integer",
+      "title": "Jobs Total"
+    },
+    "jobs_by_status": {
+      "additionalProperties": {
+        "type": "integer"
+      },
+      "type": "object",
+      "title": "Jobs By Status"
+    },
+    "bytes_uploaded": {
+      "type": "integer",
+      "title": "Bytes Uploaded"
+    },
+    "pages_total": {
+      "type": "integer",
+      "title": "Pages Total"
+    },
+    "last_job_at": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Last Job At"
+    },
+    "last_api_key_used_at": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Last Api Key Used At"
+    }
+  },
+  "type": "object",
+  "required": [
+    "id",
+    "username",
+    "email",
+    "is_active",
+    "is_admin",
+    "is_root",
+    "api_keys_active",
+    "projects_total",
+    "jobs_total",
+    "jobs_by_status",
+    "bytes_uploaded",
+    "pages_total"
+  ],
+  "title": "AdminUserSummary"
+}
+```
+
+<a id="model-adminuserusage"></a>
+
+### AdminUserUsage
+
+| Campo | Obrigatório | Tipo | Padrões/limites | Descrição |
+| --- | --- | --- | --- | --- |
+| `by_source_type` | sim | object | additionalProperties={"type": "integer"} |  |
+| `last_30_days` | sim | [AdminUserRecentUsage](#model-adminuserrecentusage) |  |  |
+
+Esquema JSON completo:
+
+```json
+{
+  "properties": {
+    "by_source_type": {
+      "additionalProperties": {
+        "type": "integer"
+      },
+      "type": "object",
+      "title": "By Source Type"
+    },
+    "last_30_days": {
+      "$ref": "#/components/schemas/AdminUserRecentUsage"
+    }
+  },
+  "type": "object",
+  "required": [
+    "by_source_type",
+    "last_30_days"
+  ],
+  "title": "AdminUserUsage"
 }
 ```
 
