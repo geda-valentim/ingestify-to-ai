@@ -71,3 +71,21 @@ def test_binding_whose_parent_delegation_was_revoked_is_left_out(world, api):  #
         row.revoked_at = datetime.utcnow()
         db.commit()
     assert _roles(api()) == []
+
+
+def test_reading_with_engines_authority_writes_and_locks_nothing(world, api):  # noqa: F811
+    from sqlalchemy import event
+
+    with world() as db:
+        grant(db, actor="observer", role="observer")
+        engine = db.get_bind()
+    seen = []
+    listener = lambda conn, cursor, statement, *a: seen.append(statement)  # noqa: E731
+    event.listen(engine, "before_cursor_execute", listener)
+    try:
+        assert _roles(api()) == [("engines", "observer")]
+    finally:
+        event.remove(engine, "before_cursor_execute", listener)
+    assert seen, "the route ran no SQL at all"
+    writes = [s for s in seen if s.lstrip().split()[0].upper() in ("INSERT", "UPDATE", "DELETE")]
+    assert not writes and not [s for s in seen if "FOR UPDATE" in s.upper()]

@@ -42,7 +42,7 @@ permissão de plataforma indicada abaixo, concedida por um binding de plataforma
 (`/admin/access`, aba Concessões); o admin de bootstrap continua com todas. Papéis de
 engines, administrados na mesma tela desde a
 spec 0018, não dão acesso a
-estas rotas. Não há UI no frontend para as rotas abaixo.
+estas rotas. As rotas de monitoramento abaixo não têm UI no frontend; as de usuários têm (Admin → Usuários).
 
 | Método e caminho | O que faz |
 |---|---|
