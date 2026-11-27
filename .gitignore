@@ -38,6 +38,17 @@ env/
 .env
 .env.local
 .env.*.local
+# Qualquer outra variante (.env.bak-*, .env.prod...) costuma ser cópia com segredos reais.
+.env.*
+!.env.example
+
+# Backups locais de configuração (ex.: docker-compose.override.yml.bak-memlimit-20261011)
+*.bak
+*.bak-*
+
+# Ferramentas locais da equipe de agentes (dados pessoais e log operacional; não vão para o repo público)
+docs/equipe-agentes/
+Makefile.local
 
 # Temporary files and directories
 tmp/
@@ -74,6 +85,8 @@ test_*.pdf
 # Claude Code
 .claude/
 CLAUDE.md
+# Equivalente do CLAUDE.md para outros agentes; aqui só leva regras do host.
+AGENTS.md
 
 # Node.js / Frontend
 node_modules
