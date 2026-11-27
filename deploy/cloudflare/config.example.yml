@@ -1,0 +1,8 @@
+# Replace TUNNEL_UUID; store the real configuration and credentials outside Git.
+tunnel: TUNNEL_UUID
+credentials-file: /var/lib/cloudflared-ingestify/TUNNEL_UUID.json
+metrics: 127.0.0.1:49313
+ingress:
+  - hostname: dev.ingestify.ai
+    service: http://127.0.0.1:8180
+  - service: http_status:404

@@ -186,14 +186,10 @@ make deploy
 
 ### Não versionados: decisão do operador
 
-O script não toca nestes itens e o `git pull` os ignora. Decida antes do deploy se cada um
-fica, é versionado ou é removido:
-
-- `AGENTS.md`
-- `deploy/cloudflare/`
-- `docker-compose.tunnel.yml`
-- `docker-compose.override.yml.bak-memlimit-20261011`
-- `docker-compose.tunnel.yml.bak-memlimit-20261011`
+`deploy/cloudflare/` e `docker-compose.tunnel.yml` agora são versionados. O `.gitignore`
+cobre os arquivos que só existem no host: `AGENTS.md`, `Makefile.local`, cópias de `.env`
+(`.env.*`, exceto `.env.example`) e backups `*.bak` / `*.bak-*`. O script não toca neles e o
+`git pull` não os altera. Não versione cópias de `.env`: elas carregam segredos reais.
 
 ## Deploy interrompido
 

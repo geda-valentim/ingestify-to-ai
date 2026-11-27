@@ -37,7 +37,7 @@ help: ## Show this help message
 	@echo "$(CYAN)Ingestify - Docker Compose Commands$(NC)"
 	@echo ""
 	@echo "$(GREEN)Main Commands:$(NC)"
-	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
+	@grep -hE '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
 		awk 'BEGIN {FS = ":.*?## "}; {printf "  $(CYAN)%-20s$(NC) %s\n", $$1, $$2}'
 	@echo ""
 	@echo "$(YELLOW)Examples:$(NC)"
@@ -428,3 +428,6 @@ frontend-restart: ## Restart only frontend
 	@docker compose restart frontend
 
 all-restart: api-restart worker-restart frontend-restart ## Restart all app services
+
+# Targets só desta máquina (ex.: equipe de agentes). Arquivo ignorado pelo git.
+-include Makefile.local
